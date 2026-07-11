@@ -38,7 +38,7 @@ research status --run-id <run_id>
 
 **P0 — Research Engine v0.1** (in progress): tabular competitions only.
 
-See [docs/MILESTONES.md](docs/MILESTONES.md) for the full roadmap and [docs/P0_SCOPE.md](docs/P0_SCOPE.md) for what is and isn't in scope.
+See [docs/MILESTONES.md](docs/MILESTONES.md) for the roadmap, P0 scope, and pending tasks, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module design.
 
 ## Repository Layout
 
