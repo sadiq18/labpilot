@@ -8,16 +8,20 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from labpilot.baseline.selector import BaselineChoice
 from labpilot.config import LLMConfig
 from labpilot.kaggle.client import SubmissionResult
+from labpilot.llm.client import LLMClient, create_llm_client
 from labpilot.profiler.tabular import DatasetProfile
 
 logger = logging.getLogger(__name__)
+
+_ENV_VAR_BY_PROVIDER = {"openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY"}
 
 
 class ReflectionGenerator:
     """Generate a post-run reflection with next-step recommendations."""
 
-    def __init__(self, config: LLMConfig) -> None:
+    def __init__(self, config: LLMConfig, llm_client: LLMClient | None = None) -> None:
         self.config = config
+        self.llm_client = llm_client if llm_client is not None else create_llm_client(config)
         self.prompts_dir = Path(__file__).parent / "prompts"
         self.env = Environment(
             loader=FileSystemLoader(self.prompts_dir),
@@ -33,8 +37,8 @@ class ReflectionGenerator:
         metrics: dict[str, float],
         submission: SubmissionResult,
     ) -> str:
-        template = self.env.get_template("reflection_user.j2")
-        prompt = template.render(
+        system = (self.prompts_dir / "reflection_system.md").read_text()
+        user = self.env.get_template("reflection_user.j2").render(
             run_id=run_id,
             competition=competition,
             profile=profile,
@@ -42,12 +46,27 @@ class ReflectionGenerator:
             metrics=metrics,
             submission=submission,
         )
-        # TODO: call LLM provider using self.config
-        logger.info(
-            "Generating reflection for run '%s' (LLM call not yet configured; using fallback).",
-            run_id,
-        )
-        return self._fallback_reflection(run_id, competition, metrics, prompt)
+
+        if self.llm_client is not None:
+            logger.info("Generating reflection for run '%s' via LLM.", run_id)
+            try:
+                return self.llm_client.complete(system, user)
+            except Exception:
+                # A reflection is a helpful enhancement, not a hard
+                # requirement — any failure here (bad key, network, rate
+                # limit, unknown model) must degrade to the fallback text,
+                # never crash the `write_reflection` pipeline stage.
+                logger.warning(
+                    "LLM reflection generation failed for run '%s'; using fallback template text.",
+                    run_id,
+                    exc_info=True,
+                )
+        else:
+            logger.info(
+                "Generating reflection for run '%s' (no LLM configured; using fallback).",
+                run_id,
+            )
+        return self._fallback_reflection(run_id, competition, metrics, f"{system}\n\n---\n\n{user}")
 
     def save(self, run_dir: Path, content: str) -> Path:
         output = run_dir / "reflection.md"
@@ -66,10 +85,11 @@ class ReflectionGenerator:
         self, run_id: str, competition: str, metrics: dict[str, float], prompt: str
     ) -> str:
         metric_lines = "\n".join(f"- {k}: {v}" for k, v in metrics.items()) or "- none logged"
+        env_var = _ENV_VAR_BY_PROVIDER.get(self.config.provider.strip().lower(), "OPENAI_API_KEY")
         return (
             f"# Reflection: {competition}\n\n"
             f"**Run ID:** {run_id}\n\n"
-            f"> LLM generation not yet configured. Set OPENAI_API_KEY to enable.\n\n"
+            f"> LLM generation not available. Set {env_var} to enable.\n\n"
             f"## Run Summary\n\n"
             f"Completed baseline pipeline for `{competition}`.\n\n"
             f"## Metrics\n\n{metric_lines}\n\n"

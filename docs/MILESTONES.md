@@ -40,7 +40,7 @@ titanic` (parse → download → profile → brief) followed by `research build 
 |-----------|--------|
 | Command | `research run --competition <slug>` |
 | Problem types | Tabular only (classification + regression) |
-| Human input | Kaggle API credentials + LLM API key |
+| Human input | Kaggle API credentials (+ optional LLM API key for AI-generated brief/reflection) |
 | Runtime | 1–4 hours unattended |
 | Proof | Real Kaggle competitions complete the full loop |
 
@@ -128,7 +128,7 @@ tracking, reflection with next-step recommendations.
 | Data download | Kaggle API download, unzip, and per-competition cache |
 | Dataset profiler | Detects train/test/submission roles, target, and ID (patterns overridable per competition) |
 | Baseline selection | Infers problem type from the target's numeric-ness/cardinality when not otherwise specified; fixed metric key per problem type |
-| Brief / reflection | Fallback text only — no LLM calls |
+| Brief / reflection | LLM-backed (OpenAI or Gemini, provider-agnostic client); falls back to template text if no key/package is available or the call fails |
 | Code generation | Works — renders Jinja2 templates |
 | Training | Fold-fitted preprocessing + LightGBM (binary/multi-class classification + regression) |
 | CV evaluation | Validates a real `cv_<metric>` from training |
@@ -170,8 +170,11 @@ git history on this branch for details.
 
 ## P0 Remaining Work
 
-- LLM-backed brief/reflection (`OpenAI` call in `BriefGenerator.generate()` /
-  `ReflectionGenerator.generate()` — currently accurate but template-based fallback text)
+None currently tracked. The last open item, LLM-backed brief/reflection, now calls OpenAI or
+Gemini through a provider-agnostic client (`llm/client.py`) — configurable via `LLMConfig`/
+`LABPILOT_LLM_PROVIDER` — and still degrades to the existing template-based text if no key or
+optional package is available, or the call itself fails, so the "no manual setup required"
+guarantee holds either way.
 
 ---
 

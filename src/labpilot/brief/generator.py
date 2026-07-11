@@ -5,16 +5,20 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from labpilot.competition.models import CompetitionSpec
 from labpilot.config import LLMConfig
+from labpilot.llm.client import LLMClient, create_llm_client
 from labpilot.profiler.tabular import DatasetProfile
 
 logger = logging.getLogger(__name__)
+
+_ENV_VAR_BY_PROVIDER = {"openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY"}
 
 
 class BriefGenerator:
     """Generate an AI research brief from competition + dataset profile."""
 
-    def __init__(self, config: LLMConfig) -> None:
+    def __init__(self, config: LLMConfig, llm_client: LLMClient | None = None) -> None:
         self.config = config
+        self.llm_client = llm_client if llm_client is not None else create_llm_client(config)
         self.prompts_dir = Path(__file__).parent / "prompts"
         self.env = Environment(
             loader=FileSystemLoader(self.prompts_dir),
@@ -28,13 +32,31 @@ class BriefGenerator:
         return f"{system}\n\n---\n\n{user}"
 
     def generate(self, competition: CompetitionSpec, profile: DatasetProfile) -> str:
-        prompt = self.build_prompt(competition, profile)
-        # TODO: call LLM provider (OpenAI / Anthropic) using self.config
-        logger.info(
-            "Generating research brief for '%s' (LLM call not yet configured; using fallback).",
-            competition.slug,
+        system = (self.prompts_dir / "brief_system.md").read_text()
+        user = self.env.get_template("brief_user.j2").render(
+            competition=competition, profile=profile
         )
-        return self._fallback_brief(competition, profile, prompt)
+
+        if self.llm_client is not None:
+            logger.info("Generating research brief for '%s' via LLM.", competition.slug)
+            try:
+                return self.llm_client.complete(system, user)
+            except Exception:
+                # A brief is a helpful enhancement, not a hard requirement —
+                # any failure here (bad key, network, rate limit, unknown
+                # model) must degrade to the fallback text, never crash the
+                # `generate_brief` pipeline stage.
+                logger.warning(
+                    "LLM brief generation failed for '%s'; using fallback template text.",
+                    competition.slug,
+                    exc_info=True,
+                )
+        else:
+            logger.info(
+                "Generating research brief for '%s' (no LLM configured; using fallback).",
+                competition.slug,
+            )
+        return self._fallback_brief(competition, profile, f"{system}\n\n---\n\n{user}")
 
     def save(self, run_dir: Path, competition: CompetitionSpec, profile: DatasetProfile) -> Path:
         brief = self.generate(competition, profile)
@@ -46,9 +68,10 @@ class BriefGenerator:
     def _fallback_brief(
         self, competition: CompetitionSpec, profile: DatasetProfile, prompt: str
     ) -> str:
+        env_var = _ENV_VAR_BY_PROVIDER.get(self.config.provider.strip().lower(), "OPENAI_API_KEY")
         return (
             f"# Research Brief: {competition.title or competition.slug}\n\n"
-            f"> LLM generation not yet configured. Set OPENAI_API_KEY to enable.\n\n"
+            f"> LLM generation not available. Set {env_var} to enable.\n\n"
             f"## Problem Summary\n\n"
             f"Competition `{competition.slug}` with {profile.row_count} rows and "
             f"{profile.column_count} columns.\n\n"
