@@ -32,6 +32,12 @@ console = Console()
 
 StageHandler = Callable[[Path, RunManifest, AppConfig], list[str]]
 
+# The two halves `research init` and `research build` split the full
+# pipeline into: init resolves *what* to run (competition + data + brief),
+# build actually runs it (baseline through reflection). `research run` still
+# does both halves in one call for the default one-command experience.
+INIT_STAGES = ["parse_competition", "download_data", "profile_dataset", "generate_brief"]
+
 
 class Pipeline:
     """Linear stage orchestrator for the P0 research loop."""
@@ -67,6 +73,37 @@ class Pipeline:
         }
 
     def run(self, competition: str, run_dir: Path | None = None) -> RunManifest:
+        """Run every configured stage, start to finish, in one call."""
+        manifest, resolved_run_dir, all_stages = self._start(competition, run_dir)
+        return self._execute(resolved_run_dir, manifest, all_stages, all_stages)
+
+    def init(self, competition: str, run_dir: Path | None = None) -> RunManifest:
+        """Run only the init half: parse → download → profile → brief.
+
+        Leaves the run in `partial` status, ready for `build()` (or
+        `resume()`) to run the remaining stages once the resolved brief/
+        baseline choice has been reviewed.
+        """
+        manifest, resolved_run_dir, all_stages = self._start(competition, run_dir)
+        stages_to_run = [name for name in all_stages if name in INIT_STAGES]
+        if not stages_to_run:
+            raise ValueError("No init stages are configured; check config.pipeline.stages.")
+        return self._execute(resolved_run_dir, manifest, stages_to_run, all_stages)
+
+    def build(self, run_id: str) -> RunManifest:
+        """Run the build half (baseline through reflection) of an already-`init`'d run."""
+        return self._continue(run_id, require_done=INIT_STAGES)
+
+    def resume(self, run_id: str) -> RunManifest:
+        """Resume a run from its first failed/incomplete stage.
+
+        Stages already `completed` or `skipped` are left as-is; everything
+        else (`failed`, stuck `running` from a killed process, or never
+        reached) is re-executed in pipeline order.
+        """
+        return self._continue(run_id)
+
+    def _start(self, competition: str, run_dir: Path | None) -> tuple[RunManifest, Path, list[str]]:
         run_id = generate_run_id(competition)
         # Resolved to absolute: the training stage runs the generated script
         # as a subprocess with its cwd set to the run's pipeline directory,
@@ -82,30 +119,35 @@ class Pipeline:
         )
         save_manifest(resolved_run_dir, manifest)
 
-        stages = self.config.pipeline.stages or list(self.handlers.keys())
-        return self._execute(resolved_run_dir, manifest, stages, stages)
+        all_stages = self.config.pipeline.stages or list(self.handlers.keys())
+        return manifest, resolved_run_dir, all_stages
 
-    def resume(self, run_id: str) -> RunManifest:
-        """Resume a run from its first failed/incomplete stage.
-
-        Stages already `completed` or `skipped` are left as-is; everything
-        else (`failed`, stuck `running` from a killed process, or never
-        reached) is re-executed in pipeline order.
-        """
+    def _continue(self, run_id: str, require_done: list[str] | None = None) -> RunManifest:
         resolved_run_dir = (self.config.runs_dir / run_id).resolve()
         manifest = load_manifest(resolved_run_dir)
         all_stages = self.config.pipeline.stages or list(self.handlers.keys())
 
         done = {StageStatus.COMPLETED, StageStatus.SKIPPED}
         finished_names = {record.name for record in manifest.stages if record.status in done}
-        remaining = [name for name in all_stages if name not in finished_names]
 
+        if require_done:
+            missing = [
+                name for name in require_done if name in all_stages and name not in finished_names
+            ]
+            if missing:
+                raise ValueError(
+                    f"Run '{run_id}' hasn't finished its init stage(s) yet: {missing}. "
+                    "Run `research init --competition <slug>` first (or `research run` "
+                    "for the full pipeline in one call)."
+                )
+
+        remaining = [name for name in all_stages if name not in finished_names]
         if not remaining:
-            console.print(f"[green]Run '{run_id}' has nothing left to resume.[/green]")
+            console.print(f"[green]Run '{run_id}' has nothing left to do.[/green]")
             return manifest
 
         console.print(
-            f"Resuming '{run_id}' from stage [cyan]{remaining[0]}[/cyan] "
+            f"Continuing '{run_id}' from stage [cyan]{remaining[0]}[/cyan] "
             f"({len(all_stages) - len(remaining)}/{len(all_stages)} already done).\n"
         )
         manifest.status = StageStatus.RUNNING
@@ -161,7 +203,11 @@ class Pipeline:
                 console.print(f"  [red]✘[/red] {stage_name}: {exc}")
                 raise
 
-        manifest.status = StageStatus.COMPLETED
+        # Only claim the whole run is `completed` if this call's stages
+        # actually reached the end of the pipeline; `init()` deliberately
+        # stops partway through, and that must not read as "done".
+        reached_the_end = bool(all_stages) and all_stages[-1] in stages
+        manifest.status = StageStatus.COMPLETED if reached_the_end else StageStatus.PARTIAL
         save_manifest(resolved_run_dir, manifest)
         return manifest
 

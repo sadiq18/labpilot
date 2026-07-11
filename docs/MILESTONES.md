@@ -23,6 +23,11 @@ After a few hours, a complete run should produce:
 ✔ Wrote reflection
 ```
 
+For a reviewable two-step alternative — pause after the brief to sanity-check the resolved
+competition/dataset before spending time training — split it into `research init --competition
+titanic` (parse → download → profile → brief) followed by `research build --run-id <id>` (baseline
+→ code → train → evaluate → submission → upload → log → reflection).
+
 ---
 
 ## Milestone Roadmap
@@ -117,8 +122,8 @@ tracking, reflection with next-step recommendations.
 
 | Layer | Status |
 |-------|--------|
-| CLI + orchestrator | Wired — all 12 stages run in sequence; `run`, `resume`, `status`, `list-runs`, `doctor` commands; global `--verbose`/`--quiet` |
-| Manifest / status | Crash-safe — always records failure, even on `SystemExit`; `resume` re-runs only failed/incomplete stages |
+| CLI + orchestrator | Wired — all 12 stages run in sequence; `run`, `init`, `build`, `resume`, `status`, `list-runs`, `doctor` commands; global `--verbose`/`--quiet` |
+| Manifest / status | Crash-safe — always records failure, even on `SystemExit`; `resume` re-runs only failed/incomplete stages; `init`/`build` split the pipeline into a reviewable two-step workflow |
 | Competition parser | Auto-resolves title/description/metric from the Kaggle API; a local `configs/competitions/<slug>.yaml` is an optional override, not a requirement |
 | Data download | Kaggle API download, unzip, and per-competition cache |
 | Dataset profiler | Detects train/test/submission roles, target, and ID (patterns overridable per competition) |
