@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 import zipfile
 from pathlib import Path
 from typing import Any, Protocol
@@ -54,21 +55,29 @@ class KaggleClient:
 
         logger.info("Authenticating with the Kaggle API.")
         self._configure_environment()
+        auth_error = RuntimeError(
+            "Kaggle authentication failed. Set KAGGLE_API_TOKEN, or configure "
+            "~/.kaggle/access_token (legacy KAGGLE_USERNAME/KAGGLE_KEY also work)."
+        )
         try:
+            # kaggle>=2.0 checks for credentials as soon as this module is
+            # imported and calls sys.exit(1) (raising SystemExit, not a
+            # regular Exception) if none are configured, so both the import
+            # and the explicit authenticate() call below need to guard
+            # against SystemExit, not just Exception/ImportError.
             from kaggle.api.kaggle_api_extended import KaggleApi
         except ImportError as exc:
             raise RuntimeError(
                 'Kaggle support is not installed. Run: pip install -e ".[dev,llm]"'
             ) from exc
+        except SystemExit as exc:
+            raise auth_error from exc
 
         api = KaggleApi()
         try:
             api.authenticate()
-        except Exception as exc:
-            raise RuntimeError(
-                "Kaggle authentication failed. Set KAGGLE_API_TOKEN, or configure "
-                "~/.kaggle/access_token (legacy KAGGLE_USERNAME/KAGGLE_KEY also work)."
-            ) from exc
+        except (Exception, SystemExit) as exc:
+            raise auth_error from exc
         self._api = api
         logger.info("Kaggle authentication succeeded.")
         return api
@@ -127,12 +136,54 @@ class KaggleClient:
 
         status = getattr(response, "status", None) or "submitted"
         logger.info("Submission to '%s' completed with status '%s'.", competition, status)
+
+        public_score = self._poll_public_score(api, competition, submission_message)
+        result_status = "scored" if public_score is not None else str(status)
         return SubmissionResult(
             competition=competition,
             submission_path=str(submission_path),
-            status=str(status),
+            status=result_status,
+            public_score=public_score,
             message=submission_message,
         )
+
+    def _poll_public_score(self, api: Any, competition: str, message: str) -> float | None:
+        """Poll for the public leaderboard score of the submission just made.
+
+        Kaggle scores submissions asynchronously, so the response from
+        `competition_submit` never carries a score. We poll
+        `competition_submissions` (newest first) for the matching submission
+        until it finishes scoring or `submission_poll_timeout` elapses.
+        """
+        deadline = time.monotonic() + self.config.submission_poll_timeout
+        while True:
+            try:
+                submissions = api.competition_submissions(competition)
+            except Exception:
+                logger.warning("Unable to poll submission status for '%s'.", competition)
+                return None
+
+            latest = submissions[0] if submissions else None
+            if latest is not None and getattr(latest, "description", None) == message:
+                score = getattr(latest, "public_score", None)
+                if score not in (None, ""):
+                    try:
+                        return float(score)
+                    except (TypeError, ValueError):
+                        return None
+                status_name = getattr(getattr(latest, "status", None), "name", None)
+                if status_name and status_name not in ("PENDING", "SUBMISSION_STATUS_UNSPECIFIED"):
+                    # Finished (e.g. COMPLETE/ERROR) without a score to report.
+                    return None
+
+            if time.monotonic() >= deadline:
+                logger.info(
+                    "Timed out after %ss waiting for '%s' to finish scoring.",
+                    self.config.submission_poll_timeout,
+                    competition,
+                )
+                return None
+            time.sleep(self.config.submission_poll_interval)
 
     @staticmethod
     def save_result(run_dir: Path, result: SubmissionResult) -> Path:

@@ -141,39 +141,45 @@ See [Future (Explicitly Deferred)](#future-explicitly-deferred) above.
 | Training | Fold-fitted preprocessing + LightGBM binary classifier |
 | CV evaluation | Validates real `cv_accuracy` from training |
 | Submission | Validated against sample columns, row count, and labels |
-| Kaggle upload | Real API upload, explicit `--submit` opt-in |
+| Kaggle upload | Real API upload with leaderboard score polling, explicit `--submit` opt-in |
 | Experiment logging | Works |
-| Tests | Unit tests plus a mocked end-to-end pipeline run (validated against Titanic) |
+| Tests | Unit tests plus mocked end-to-end pipeline runs for both classification and regression |
 
 ---
 
 ## P0 Pending Tasks
 
-### Required before P0 is complete
+### P0 is complete
 
-#### 1. Credentialed smoke run on a real competition
+The core loop has been credentialed-smoke-tested end-to-end on two real Kaggle competitions:
 
-- Join the target competition and accept its rules on Kaggle
-- Create its local contract (`configs/competitions/<slug>.yaml`, see the README in that folder)
-- Configure `KAGGLE_API_TOKEN` (preferred) or legacy username/key credentials
-- Run once without `--submit` and inspect `metrics.json` and `submission.csv`
-- Run separately with `--submit` and verify Kaggle accepts the file
-- Poll and persist the public leaderboard score
+- **Titanic** (tabular classification) — real download, training, local submission, `--submit`
+  upload accepted by Kaggle, and a persisted public score (`0.72488`).
+- **House Prices - Advanced Regression Techniques** (tabular regression) — same, proving the
+  regression baseline path and generic competition-contract resolution on a second, unrelated
+  competition. Real download, training, local submission, `--submit` upload accepted by Kaggle,
+  and a persisted public score (`0.13259`).
 
-#### 2. LLM brief and reflection
+Both runs exercised every P0 stage (parse → download → profile → brief → baseline → code →
+train → evaluate → submission → upload → log → reflection) without manual code edits.
 
-Both generators have `TODO` and use fallback markdown. Implement:
+Bugs found and fixed along the way (see git history for details): a relative `run_dir` was
+double-resolved when the generated script ran as a subprocess; `kaggle>=2.0` raises `SystemExit`
+(not a catchable `Exception`) on missing credentials, which used to leave a run's manifest stuck
+at `"running"` forever; the regression template guessed its target column instead of using the
+inferred contract and used a train/test-inconsistent category encoding; `SubmissionValidator`
+always required an integer target, which is wrong for regression; and `mean_squared_error(...,
+squared=False)` no longer exists in current scikit-learn. `KaggleClient.upload_submission` also
+did not poll for the leaderboard score, which is why it's persisted now.
 
-- OpenAI call in `BriefGenerator.generate()`
-- OpenAI call in `ReflectionGenerator.generate()`
-
-#### 3. Generalization and CLI ergonomics
+### Generalization and CLI ergonomics (deferred to P1/P3, not blockers)
 
 - Automatic competition metadata resolution from the Kaggle URL/slug (remove the need for a
   hand-written local contract file)
+- LLM-backed brief/reflection (`OpenAI` call in `BriefGenerator.generate()` /
+  `ReflectionGenerator.generate()` — currently accurate but template-based fallback text)
 - Multi-class classification support
 - `--resume --run-id <id>` — restart from failed stage
-- Public leaderboard score polling
 - `--verbose`/`--quiet` flag to control log level across all major classes
 - Clearer environment diagnostics for Python and LightGBM
 
@@ -181,17 +187,19 @@ Both generators have `TODO` and use fallback markdown. Implement:
 
 ## Completed Executable-Baseline Slice
 
-Validated end-to-end against Titanic; nothing below is Titanic-specific.
+Validated end-to-end against two independent, real competitions (Titanic and House Prices);
+nothing below is specific to either one.
 
 ```
 ✓ Python 3.11+ project environment and macOS libomp setup
 ✓ Kaggle download, archive extraction, and per-competition cache
 ✓ Train/test/sample submission detection (overridable file-name patterns)
 ✓ Target, ID, metric, and submission contract
-✓ Fold-fitted preprocessing and LightGBM training
-✓ Real CV accuracy and fail-hard artifact validation
+✓ Fold-fitted preprocessing and LightGBM training (classification + regression)
+✓ Real CV score and fail-hard artifact validation
 ✓ Correct local submission generation
-✓ Opt-in Kaggle upload with --submit
+✓ Opt-in Kaggle upload with --submit, accepted by Kaggle on both competitions
+✓ Public leaderboard score polled and persisted after upload
 ✓ Mocked end-to-end tests for local and submitted modes
 ```
 
@@ -199,8 +207,8 @@ Validated end-to-end against Titanic; nothing below is Titanic-specific.
 
 ## P0 Validation Checklist
 
-Before declaring P0 complete on one contest (checked items validated with Titanic
-as the exercising example; the checks themselves are competition-agnostic):
+All items validated for real, with credentials, on two independent competitions
+(Titanic and House Prices):
 
 ```
 [x] uv sync --extra dev succeeds
@@ -210,11 +218,13 @@ as the exercising example; the checks themselves are competition-agnostic):
 [x] metrics.json has real cv_<metric>
 [x] submission.csv row count and columns match the sample
 [x] Upload is skipped unless --submit is provided
-[ ] Credentialed Kaggle download succeeds
-[ ] Kaggle accepts the submission
-[ ] submission_result.json has a public score
-[ ] reflection.md references actual metrics
+[x] Credentialed Kaggle download succeeds
+[x] Kaggle accepts the submission
+[x] submission_result.json has a public score
+[x] reflection.md references actual metrics
 ```
+
+**P0 — Research Engine v0.1 (Core Loop Proof) is complete.**
 
 ---
 
