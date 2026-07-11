@@ -14,11 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class ReflectionGenerator:
-    """Generate a post-run reflection with next-step recommendations.
-
-    # TODO: control the verbosity of this class's logging via a future CLI
-    # --verbose/--quiet flag (see docs/MILESTONES.md).
-    """
+    """Generate a post-run reflection with next-step recommendations."""
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config

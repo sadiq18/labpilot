@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from labpilot.baseline.selector import BaselineSelector
-from labpilot.competition.models import CompetitionSpec
+from labpilot.competition.models import CompetitionSpec, MetricSpec, ProblemType
 from labpilot.config import ProfilerConfig
 from labpilot.profiler.tabular import DatasetProfile, TabularProfiler
 
@@ -43,6 +43,26 @@ def test_baseline_selector_defaults():
 
     assert choice.problem_type == "tabular_classification"
     assert choice.template_name == "tabular_classification"
+    assert choice.metric_name == "accuracy"
+
+
+def test_baseline_selector_metric_name_ignores_mismatched_competition_metric():
+    """The P0 regression template only ever writes `cv_rmse`, so the metric
+    key used for evaluation must come from the fixed per-problem-type
+    default, not from whatever a competition's (possibly auto-resolved)
+    metadata says — otherwise a real Kaggle metric like RMSLE would make an
+    otherwise-correct run fail at the evaluate_cv stage.
+    """
+    competition = CompetitionSpec(
+        slug="house-prices",
+        problem_type=ProblemType.TABULAR_REGRESSION,
+        evaluation_metric=MetricSpec(name="rmsle", direction="minimize"),
+    )
+    profile = DatasetProfile(competition="house-prices", row_count=100, column_count=5)
+
+    choice = BaselineSelector().select(competition, profile)
+
+    assert choice.metric_name == "rmse"
 
 
 def test_profile_directory_infers_titanic_contract(titanic_data_dir: Path):

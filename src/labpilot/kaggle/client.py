@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
+from labpilot.competition.models import CompetitionMetadata
 from labpilot.config import KaggleConfig
 
 logger = logging.getLogger(__name__)
@@ -29,13 +30,11 @@ class KaggleGateway(Protocol):
         self, competition: str, submission_path: Path, message: str | None = None
     ) -> SubmissionResult: ...
 
+    def fetch_competition_metadata(self, competition: str) -> CompetitionMetadata | None: ...
+
 
 class KaggleClient:
-    """Download data and upload submissions through Kaggle's official API.
-
-    # TODO: control the verbosity of this class's logging via a future CLI
-    # --verbose/--quiet flag (see docs/MILESTONES.md).
-    """
+    """Download data and upload submissions through Kaggle's official API."""
 
     def __init__(self, config: KaggleConfig, api: Any | None = None) -> None:
         self.config = config
@@ -184,6 +183,57 @@ class KaggleClient:
                 )
                 return None
             time.sleep(self.config.submission_poll_interval)
+
+    def fetch_competition_metadata(self, competition: str) -> CompetitionMetadata | None:
+        """Best-effort lookup of a competition's title/description/metric.
+
+        Used by `CompetitionParser` to auto-resolve a competition contract
+        when no local override file exists. Returns None (rather than
+        raising) on any failure — auth issues, no network, or an unknown
+        slug — since this is an enhancement, not a hard requirement; the
+        parser falls back to a bare-minimum contract when this is None.
+        """
+        try:
+            api = self.authenticate()
+            response = api.competitions_list(search=competition)
+        except Exception:
+            logger.warning(
+                "Could not resolve metadata for '%s' from the Kaggle API.",
+                competition,
+                exc_info=True,
+            )
+            return None
+
+        candidates = list(getattr(response, "competitions", None) or [])
+        if not candidates:
+            return None
+
+        match = next(
+            (c for c in candidates if self._ref_slug(getattr(c, "ref", "")) == competition.lower()),
+            candidates[0] if len(candidates) == 1 else None,
+        )
+        if match is None:
+            logger.info(
+                "Kaggle search for '%s' returned %d ambiguous result(s); skipping auto-metadata.",
+                competition,
+                len(candidates),
+            )
+            return None
+
+        return CompetitionMetadata(
+            slug=competition,
+            title=getattr(match, "title", "") or "",
+            description=getattr(match, "description", "") or "",
+            category=getattr(match, "category", "") or "",
+            evaluation_metric_raw=getattr(match, "evaluation_metric", "") or "",
+        )
+
+    @staticmethod
+    def _ref_slug(ref: str) -> str:
+        """`ref` is a full competition URL (e.g. ".../competitions/titanic"),
+        not a bare slug, so pull the slug back out to compare against
+        the `--competition` string the pipeline was invoked with."""
+        return ref.strip().rstrip("/").rsplit("/", 1)[-1].lower()
 
     @staticmethod
     def save_result(run_dir: Path, result: SubmissionResult) -> Path:

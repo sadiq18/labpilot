@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from labpilot.competition.models import CompetitionMetadata
 from labpilot.config import AppConfig
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.orchestrator.manifest import StageStatus
@@ -26,6 +27,9 @@ class FakeKaggleGateway:
         self, competition: str, submission_path: Path, message: str | None = None
     ) -> SubmissionResult:
         raise NotImplementedError
+
+    def fetch_competition_metadata(self, competition: str) -> CompetitionMetadata | None:
+        return None
 
 
 def test_regression_pipeline_generates_valid_submission(

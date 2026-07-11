@@ -17,6 +17,21 @@ class MetricSpec(BaseModel):
     description: str = ""
 
 
+class CompetitionMetadata(BaseModel):
+    """Raw metadata resolved from the Kaggle API for a competition slug.
+
+    This is intentionally smaller than `CompetitionSpec` — it's what
+    `CompetitionMetadataFetcher` implementations return, before it gets
+    turned into a `CompetitionSpec` by `CompetitionParser`.
+    """
+
+    slug: str
+    title: str = ""
+    description: str = ""
+    category: str = ""
+    evaluation_metric_raw: str = ""
+
+
 class CompetitionSpec(BaseModel):
     slug: str
     title: str = ""
@@ -33,8 +48,8 @@ class CompetitionSpec(BaseModel):
 
     # Optional overrides for competitions whose file names don't follow the
     # "train*/test*/*submission*" convention the profiler assumes by default.
-    # TODO: resolve these automatically from the Kaggle competition page/API
-    # instead of requiring a local override.
+    # The Kaggle API's competition search doesn't expose file names, so this
+    # still requires a local override (see configs/competitions/README.md).
     train_file_pattern: str = "train"
     test_file_pattern: str = "test"
     submission_file_pattern: str = "submission"

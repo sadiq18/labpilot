@@ -46,11 +46,11 @@ After a few hours, a complete run should produce:
 - CV score is logged and aligns with the competition metric direction
 - Submission uploads successfully via Kaggle API with a persisted leaderboard score
 - Reflection cites actual run metrics and suggests 3–5 concrete next steps
-- The loop generalizes to a new competition via a local config, not hardcoded logic
+- The loop generalizes to an unseen competition with no hand-written local config
 
 **Explicit P0 constraint:** One baseline per problem type, no search, no agents, no memory across runs.
 
-**Validation competitions:** any tabular binary/multi-class classification or regression competition with a train/test/sample-submission split — see `configs/competitions/README.md` for how a new competition's contract is supplied locally.
+**Validation competitions:** any tabular binary/multi-class classification or regression competition with a train/test/sample-submission split. A local contract (`configs/competitions/README.md`) is an optional override, not a requirement — see [P0 Validation Status](#p0-validation-status).
 
 ---
 
@@ -117,20 +117,21 @@ tracking, reflection with next-step recommendations.
 
 | Layer | Status |
 |-------|--------|
-| CLI + orchestrator | Wired — all 12 stages run in sequence |
-| Manifest / status | Crash-safe — always records failure, even on `SystemExit` |
-| Competition parser | Reads a local, per-competition contract (`configs/competitions/<slug>.yaml`) |
+| CLI + orchestrator | Wired — all 12 stages run in sequence; `run`, `resume`, `status`, `list-runs`, `doctor` commands; global `--verbose`/`--quiet` |
+| Manifest / status | Crash-safe — always records failure, even on `SystemExit`; `resume` re-runs only failed/incomplete stages |
+| Competition parser | Auto-resolves title/description/metric from the Kaggle API; a local `configs/competitions/<slug>.yaml` is an optional override, not a requirement |
 | Data download | Kaggle API download, unzip, and per-competition cache |
 | Dataset profiler | Detects train/test/submission roles, target, and ID (patterns overridable per competition) |
+| Baseline selection | Infers problem type from the target's dtype/cardinality when not otherwise specified; fixed metric key per problem type |
 | Brief / reflection | Fallback text only — no LLM calls |
-| Baseline selection | Works from competition and dataset contracts |
 | Code generation | Works — renders Jinja2 templates |
 | Training | Fold-fitted preprocessing + LightGBM (classification + regression) |
 | CV evaluation | Validates a real `cv_<metric>` from training |
 | Submission | Validated against sample columns, row count, and labels (metric-aware) |
 | Kaggle upload | Real API upload with leaderboard score polling, explicit `--submit` opt-in |
 | Experiment logging | Works |
-| Tests | Unit tests plus mocked end-to-end pipeline runs for both classification and regression |
+| Environment diagnostics | `research doctor` checks Python version, LightGBM import, Kaggle credentials |
+| Tests | Unit tests plus mocked end-to-end pipeline runs for classification, regression, resume, and auto-metadata resolution |
 
 ---
 
@@ -147,25 +148,25 @@ Both runs exercised every stage (parse → download → profile → brief → ba
 evaluate → submission → upload → log → reflection) with no manual code edits, and Kaggle accepted
 and scored the `--submit` upload on both.
 
+**Generalization is also validated for real:** with no local `configs/competitions/titanic.yaml`
+at all, `research run --competition titanic` still completes the full loop — title, description,
+and evaluation metric are resolved live from the Kaggle API, and the classification problem type
+is correctly inferred from the profiled `Survived` column.
+
 Proving this end-to-end surfaced and fixed several real bugs (relative run-path resolution,
-leaderboard-score polling, crash-safe manifests, regression-template hardening, and an RMSE
-compatibility fix) — see git history on this branch for details.
+leaderboard-score polling, crash-safe manifests, regression-template hardening, an RMSE
+compatibility fix, a `cv_<metric>` key that could mismatch a competition's real evaluation metric,
+and a numeric-label target being misread as regression once inference — rather than a hand-written
+`problem_type` — was actually exercised) — see git history on this branch for details.
 
 ---
 
-## P0 Remaining Work: Generalization & CLI Ergonomics
+## P0 Remaining Work
 
-The core loop is proven, but P0 isn't done until the engine stops depending on
-competition-specific hand-holding:
-
-- Automatic competition metadata resolution from the Kaggle URL/slug (remove the need for a
-  hand-written local contract file)
 - LLM-backed brief/reflection (`OpenAI` call in `BriefGenerator.generate()` /
   `ReflectionGenerator.generate()` — currently accurate but template-based fallback text)
-- Multi-class classification support
-- `--resume --run-id <id>` — restart from failed stage
-- `--verbose`/`--quiet` flag to control log level across all major classes
-- Clearer environment diagnostics for Python and LightGBM
+- Multi-class classification support (the classification template and submission validator
+  currently assume a binary target)
 
 ---
 
@@ -178,11 +179,15 @@ One template per tabular type — no search, no AutoML:
 | Classification | LightGBM | Fold-fitted imputation + ordinal encoding | Stratified 5-fold |
 | Regression | LightGBM | Same preprocessing | 5-fold |
 
-Template selection rules:
+Template selection rules (`baseline.selector.BaselineSelector._infer_problem_type`):
 
 ```
-if target is categorical and n_classes <= 20:
+if competition.problem_type is explicitly set:
+    → use it as-is (local config override)
+elif target dtype is object/category/bool:
     → tabular_classification
+elif target has <= 20 distinct values AND not every row's value is unique:
+    → tabular_classification  # e.g. Titanic's 0/1 Survived, stored as int
 elif target is numeric:
     → tabular_regression
 else:

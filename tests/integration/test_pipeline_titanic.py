@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from labpilot.competition.models import CompetitionMetadata
 from labpilot.config import AppConfig
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.orchestrator.manifest import StageStatus
@@ -37,6 +38,11 @@ class FakeKaggleGateway:
             status="submitted",
             message=message or "test submission",
         )
+
+    def fetch_competition_metadata(self, competition: str) -> CompetitionMetadata | None:
+        # Not exercised here: `competition_configs_dir` always provides a
+        # local contract, so the parser never needs to auto-resolve.
+        return None
 
 
 @pytest.mark.parametrize("submit", [False, True])

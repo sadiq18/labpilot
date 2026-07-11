@@ -37,11 +37,7 @@ class DatasetProfile(BaseModel):
 
 
 class TabularProfiler:
-    """Profile tabular competition datasets.
-
-    # TODO: control the verbosity of this class's logging via a future CLI
-    # --verbose/--quiet flag (see docs/MILESTONES.md).
-    """
+    """Profile tabular competition datasets."""
 
     def __init__(self, config: ProfilerConfig) -> None:
         self.config = config

@@ -24,6 +24,9 @@ class CountingGateway:
     def upload_submission(self, *args, **kwargs):
         raise NotImplementedError
 
+    def fetch_competition_metadata(self, competition: str):
+        return None
+
 
 def test_download_uses_cache_on_second_call(tmp_path: Path):
     gateway = CountingGateway({"train.csv": "id,target\n1,0\n"})

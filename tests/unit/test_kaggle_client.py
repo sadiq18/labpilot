@@ -80,6 +80,61 @@ def test_upload_polls_and_persists_public_score(tmp_path: Path):
     assert result.public_score == 0.775
 
 
+def test_fetch_competition_metadata_matches_by_ref():
+    class ListingApi(FakeApi):
+        def competitions_list(self, search: str) -> SimpleNamespace:
+            # Kaggle's real API returns `ref` as a full URL, not a bare slug.
+            competition = SimpleNamespace(
+                ref="https://www.kaggle.com/competitions/titanic",
+                title="Titanic - Machine Learning from Disaster",
+                description="Predict survival on the Titanic.",
+                category="Getting Started",
+                evaluation_metric="Categorization Accuracy",
+            )
+            unrelated = SimpleNamespace(
+                ref="https://www.kaggle.com/competitions/spaceship-titanic",
+                title="Spaceship Titanic",
+            )
+            return SimpleNamespace(competitions=[competition, unrelated])
+
+    client = KaggleClient(KaggleConfig(), api=ListingApi())
+
+    metadata = client.fetch_competition_metadata("titanic")
+
+    assert metadata is not None
+    assert metadata.title == "Titanic - Machine Learning from Disaster"
+    assert metadata.evaluation_metric_raw == "Categorization Accuracy"
+    assert metadata.category == "Getting Started"
+
+
+def test_fetch_competition_metadata_returns_none_when_no_match():
+    class ListingApi(FakeApi):
+        def competitions_list(self, search: str) -> SimpleNamespace:
+            unrelated = SimpleNamespace(
+                ref="https://www.kaggle.com/competitions/some-other-competition",
+                title="Unrelated",
+            )
+            other = SimpleNamespace(
+                ref="https://www.kaggle.com/competitions/yet-another-one",
+                title="Also unrelated",
+            )
+            return SimpleNamespace(competitions=[unrelated, other])
+
+    client = KaggleClient(KaggleConfig(), api=ListingApi())
+
+    assert client.fetch_competition_metadata("titanic") is None
+
+
+def test_fetch_competition_metadata_returns_none_on_error():
+    class FailingApi(FakeApi):
+        def competitions_list(self, search: str) -> SimpleNamespace:
+            raise RuntimeError("network down")
+
+    client = KaggleClient(KaggleConfig(), api=FailingApi())
+
+    assert client.fetch_competition_metadata("titanic") is None
+
+
 def test_upload_gives_up_after_timeout_without_score(tmp_path: Path):
     api = FakeApi(
         submission_snapshots=[

@@ -6,12 +6,11 @@ from rich.console import Console
 from rich.table import Table
 
 from labpilot.config import load_config
+from labpilot.diagnostics import check_environment, print_diagnostics_report
 from labpilot.orchestrator.manifest import StageStatus
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
 
-# TODO: expose a --verbose/--quiet flag on `research` to control this level
-# at runtime instead of a fixed default (see docs/MILESTONES.md).
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 app = typer.Typer(
     name="research",
@@ -19,6 +18,20 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+
+@app.callback()
+def main(
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable debug logging for every stage."
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Only log warnings and errors."),
+) -> None:
+    """LabPilot — one-command Kaggle competition research engine."""
+    if verbose and quiet:
+        raise typer.BadParameter("--verbose and --quiet are mutually exclusive.")
+    level = logging.DEBUG if verbose else logging.WARNING if quiet else logging.INFO
+    logging.getLogger("labpilot").setLevel(level)
 
 
 @app.command()
@@ -44,6 +57,8 @@ def run(
     ),
 ) -> None:
     """Run the full research pipeline for a Kaggle competition."""
+    _fail_fast_on_bad_environment()
+
     config = load_config(config_path)
     if runs_dir:
         config.runs_dir = runs_dir
@@ -57,6 +72,58 @@ def run(
     console.print(
         f"[green]Reflection:[/green] {config.runs_dir / manifest.run_id / 'reflection.md'}"
     )
+
+
+@app.command()
+def resume(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Run ID to resume"),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    competitions_dir: Path | None = typer.Option(
+        None,
+        "--competitions-dir",
+        help="Directory containing local per-competition contracts. See run --help.",
+    ),
+    submit: bool = typer.Option(
+        False,
+        "--submit",
+        help="Upload the validated submission to Kaggle (disabled by default)",
+    ),
+) -> None:
+    """Resume a run from its first failed or incomplete stage.
+
+    Stages already marked completed or skipped are left untouched; everything
+    else (failed, still "running" from a killed process, or never reached) is
+    re-executed in pipeline order.
+    """
+    _fail_fast_on_bad_environment()
+
+    config = load_config(config_path)
+    console.print(f"[bold]LabPilot[/bold] — resuming run [cyan]{run_id}[/cyan]\n")
+
+    pipeline = Pipeline(config, submit=submit, configs_dir=competitions_dir)
+    manifest = pipeline.resume(run_id)
+
+    console.print(f"\n[green]Run complete:[/green] {config.runs_dir / manifest.run_id}")
+
+
+@app.command()
+def doctor() -> None:
+    """Check that the local environment has everything LabPilot needs."""
+    results = check_environment()
+    all_ok = print_diagnostics_report(results, console)
+    if not all_ok:
+        raise typer.Exit(code=1)
+
+
+def _fail_fast_on_bad_environment() -> None:
+    results = check_environment()
+    if all(result.ok for result in results):
+        return
+    console.print("[red]Environment check failed — run `research doctor` for details.[/red]")
+    print_diagnostics_report(results, console)
+    raise typer.Exit(code=1)
 
 
 @app.command()
