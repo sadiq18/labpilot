@@ -9,7 +9,7 @@ from labpilot.baseline.selector import BaselineChoice, BaselineSelector
 from labpilot.brief.generator import BriefGenerator
 from labpilot.codegen.renderer import CodeRenderer
 from labpilot.codegen.validators import validate_pipeline
-from labpilot.competition.models import CompetitionSpec
+from labpilot.competition.models import CompetitionSpec, ProblemType
 from labpilot.competition.parser import CompetitionParser
 from labpilot.config import AppConfig
 from labpilot.data.downloader import DataDownloader
@@ -112,7 +112,12 @@ class Pipeline:
                 manifest.mark_completed(stage_name, artifacts)
                 save_manifest(resolved_run_dir, manifest)
                 console.print(f"  [green]✔[/green] {stage_name}")
-            except Exception as exc:
+            except BaseException as exc:
+                # Catches BaseException (not just Exception) so the manifest
+                # never gets stuck showing "running" forever — some
+                # dependencies (e.g. kaggle>=2.0 on auth failure) raise
+                # SystemExit instead of a normal exception, and Ctrl-C
+                # (KeyboardInterrupt) should also leave an honest record.
                 manifest.mark_failed(stage_name, str(exc))
                 save_manifest(resolved_run_dir, manifest)
                 console.print(f"  [red]✘[/red] {stage_name}: {exc}")
@@ -230,13 +235,18 @@ class Pipeline:
         profile = load_profile(run_dir)
         if not profile.target_column:
             raise ValueError("Dataset profile is missing target_column.")
+        choice = BaselineChoice.model_validate_json((run_dir / "baseline_choice.json").read_text())
+        # Only classification targets are label integers (e.g. Titanic's 0/1
+        # Survived); regression targets (e.g. House Prices' SalePrice) are
+        # continuous, so this check must not run for them.
+        require_integer_target = choice.problem_type == ProblemType.TABULAR_CLASSIFICATION
         validator = SubmissionValidator()
         result = validator.validate(
             submission_path,
             expected_rows=profile.test_row_count,
             expected_columns=profile.submission_columns,
             target_column=profile.target_column,
-            require_integer_target=True,
+            require_integer_target=require_integer_target,
         )
         if not result.valid:
             raise ValueError(f"Invalid submission: {result.errors}")

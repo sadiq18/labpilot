@@ -1,4 +1,5 @@
 import zipfile
+from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -6,9 +7,22 @@ from labpilot.config import KaggleConfig
 from labpilot.kaggle.client import KaggleClient
 
 
+class FakeStatus(Enum):
+    PENDING = "pending"
+    COMPLETE = "complete"
+
+
+class FakeSubmission(SimpleNamespace):
+    pass
+
+
 class FakeApi:
-    def __init__(self) -> None:
+    def __init__(self, submission_snapshots: list[list[FakeSubmission]] | None = None) -> None:
         self.submissions: list[tuple[str, str, str]] = []
+        # Each call to competition_submissions pops the next snapshot, so
+        # tests can simulate Kaggle's asynchronous scoring finishing after
+        # a few polls. Defaults to no history (empty list forever).
+        self._snapshots = list(submission_snapshots or [])
 
     def competition_download_files(
         self,
@@ -31,6 +45,13 @@ class FakeApi:
         self.submissions.append((file_name, message, competition))
         return SimpleNamespace(status="pending")
 
+    def competition_submissions(self, competition: str) -> list[FakeSubmission]:
+        if not self._snapshots:
+            return []
+        if len(self._snapshots) > 1:
+            return self._snapshots.pop(0)
+        return self._snapshots[0]
+
 
 def test_download_unzips_competition_files(tmp_path: Path):
     client = KaggleClient(KaggleConfig(), api=FakeApi())
@@ -41,13 +62,38 @@ def test_download_unzips_competition_files(tmp_path: Path):
     assert not (tmp_path / "titanic.zip").exists()
 
 
-def test_upload_uses_official_api(tmp_path: Path):
-    api = FakeApi()
-    client = KaggleClient(KaggleConfig(submit_message="baseline"), api=api)
+def test_upload_polls_and_persists_public_score(tmp_path: Path):
+    pending = FakeSubmission(description="baseline", status=FakeStatus.PENDING, public_score=None)
+    complete = FakeSubmission(
+        description="baseline", status=FakeStatus.COMPLETE, public_score="0.775"
+    )
+    api = FakeApi(submission_snapshots=[[pending], [complete]])
+    config = KaggleConfig(submit_message="baseline", submission_poll_interval=0)
+    client = KaggleClient(config, api=api)
     submission = tmp_path / "submission.csv"
     submission.write_text("PassengerId,Survived\n1,0\n")
 
     result = client.upload_submission("titanic", submission)
 
-    assert result.status == "pending"
     assert api.submissions == [(str(submission), "baseline", "titanic")]
+    assert result.status == "scored"
+    assert result.public_score == 0.775
+
+
+def test_upload_gives_up_after_timeout_without_score(tmp_path: Path):
+    api = FakeApi(
+        submission_snapshots=[
+            [FakeSubmission(description="baseline", status=FakeStatus.PENDING, public_score=None)],
+        ]
+    )
+    config = KaggleConfig(
+        submit_message="baseline", submission_poll_interval=0, submission_poll_timeout=0
+    )
+    client = KaggleClient(config, api=api)
+    submission = tmp_path / "submission.csv"
+    submission.write_text("PassengerId,Survived\n1,0\n")
+
+    result = client.upload_submission("titanic", submission)
+
+    assert result.public_score is None
+    assert result.status == "pending"

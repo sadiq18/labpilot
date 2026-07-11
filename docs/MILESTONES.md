@@ -29,7 +29,7 @@ After a few hours, a complete run should produce:
 
 ### P0 — Research Engine v0.1 (Core Loop Proof)
 
-**Goal:** Prove the full pipeline works end-to-end for **one competition archetype** (tabular classification/regression).
+**Goal:** Prove the full pipeline works end-to-end for **one competition archetype** (tabular classification/regression), then generalize it beyond a single hardcoded competition.
 
 | Dimension | Target |
 |-----------|--------|
@@ -37,22 +37,20 @@ After a few hours, a complete run should produce:
 | Problem types | Tabular only (classification + regression) |
 | Human input | Kaggle API credentials + LLM API key |
 | Runtime | 1–4 hours unattended |
-| Proof | 1 real Kaggle competition completes full loop |
+| Proof | Real Kaggle competitions complete the full loop |
 
 **Success criteria:**
 
 - Single command runs start-to-finish without manual code edits
 - All 8 P0 capabilities produce real artifacts on disk
 - CV score is logged and aligns with the competition metric direction
-- Submission uploads successfully via Kaggle API
+- Submission uploads successfully via Kaggle API with a persisted leaderboard score
 - Reflection cites actual run metrics and suggests 3–5 concrete next steps
+- The loop generalizes to a new competition via a local config, not hardcoded logic
 
 **Explicit P0 constraint:** One baseline per problem type, no search, no agents, no memory across runs.
 
-**Validation competition:** any tabular binary/multi-class classification competition with a
-train/test/sample-submission split. Titanic is used as the first end-to-end validation target
-because it is small and free of licensing friction, but nothing in the design is Titanic-specific
-— see `configs/competitions/README.md` for how a new competition's contract is supplied locally.
+**Validation competitions:** any tabular binary/multi-class classification or regression competition with a train/test/sample-submission split — see `configs/competitions/README.md` for how a new competition's contract is supplied locally.
 
 ---
 
@@ -82,8 +80,6 @@ because it is small and free of licensing friction, but nothing in the design is
 
 **Goal:** Reliable tool for repeated competition use.
 
-- Retry/resume from failed pipeline stages
-- Leaderboard polling and score tracking
 - Multi-competition project workspace
 - Config overrides (`--config`, `--dry-run`, `--submit`)
 - CI-tested templates per problem type
@@ -109,20 +105,11 @@ Build these only after the core loop is proven:
 
 ## P0 Scope
 
-### In Scope
+**In scope:** one-command competition init, automatic dataset profiling, AI-generated research
+brief, baseline template selection, training and evaluation, Kaggle submission, experiment
+tracking, reflection with next-step recommendations.
 
-- One-command competition initialization
-- Automatic dataset profiling
-- AI-generated research brief
-- Baseline template selection
-- Training and evaluation
-- Kaggle submission
-- Experiment tracking
-- Reflection report with next-step recommendations
-
-### Out of Scope
-
-See [Future (Explicitly Deferred)](#future-explicitly-deferred) above.
+**Out of scope:** see [Future (Explicitly Deferred)](#future-explicitly-deferred) above.
 
 ---
 
@@ -131,90 +118,54 @@ See [Future (Explicitly Deferred)](#future-explicitly-deferred) above.
 | Layer | Status |
 |-------|--------|
 | CLI + orchestrator | Wired — all 12 stages run in sequence |
-| Manifest / status | Works, including skipped upload stages |
+| Manifest / status | Crash-safe — always records failure, even on `SystemExit` |
 | Competition parser | Reads a local, per-competition contract (`configs/competitions/<slug>.yaml`) |
-| Data download | Kaggle API download, unzip, and per-competition cache implemented |
+| Data download | Kaggle API download, unzip, and per-competition cache |
 | Dataset profiler | Detects train/test/submission roles, target, and ID (patterns overridable per competition) |
 | Brief / reflection | Fallback text only — no LLM calls |
 | Baseline selection | Works from competition and dataset contracts |
 | Code generation | Works — renders Jinja2 templates |
-| Training | Fold-fitted preprocessing + LightGBM binary classifier |
-| CV evaluation | Validates real `cv_accuracy` from training |
-| Submission | Validated against sample columns, row count, and labels |
-| Kaggle upload | Real API upload, explicit `--submit` opt-in |
+| Training | Fold-fitted preprocessing + LightGBM (classification + regression) |
+| CV evaluation | Validates a real `cv_<metric>` from training |
+| Submission | Validated against sample columns, row count, and labels (metric-aware) |
+| Kaggle upload | Real API upload with leaderboard score polling, explicit `--submit` opt-in |
 | Experiment logging | Works |
-| Tests | Unit tests plus a mocked end-to-end pipeline run (validated against Titanic) |
+| Tests | Unit tests plus mocked end-to-end pipeline runs for both classification and regression |
 
 ---
 
-## P0 Pending Tasks
+## P0 Validation Status
 
-### Required before P0 is complete
+Credentialed and validated for real, on two independent Kaggle competitions:
 
-#### 1. Credentialed smoke run on a real competition
+| Competition | Type | CV score | Public score |
+|-------------|------|----------|---------------|
+| Titanic | classification | `cv_accuracy` 0.7306 | 0.72488 |
+| House Prices | regression | `cv_rmse` 30573.96 | 0.13259 |
 
-- Join the target competition and accept its rules on Kaggle
-- Create its local contract (`configs/competitions/<slug>.yaml`, see the README in that folder)
-- Configure `KAGGLE_API_TOKEN` (preferred) or legacy username/key credentials
-- Run once without `--submit` and inspect `metrics.json` and `submission.csv`
-- Run separately with `--submit` and verify Kaggle accepts the file
-- Poll and persist the public leaderboard score
+Both runs exercised every stage (parse → download → profile → brief → baseline → code → train →
+evaluate → submission → upload → log → reflection) with no manual code edits, and Kaggle accepted
+and scored the `--submit` upload on both.
 
-#### 2. LLM brief and reflection
+Proving this end-to-end surfaced and fixed several real bugs (relative run-path resolution,
+leaderboard-score polling, crash-safe manifests, regression-template hardening, and an RMSE
+compatibility fix) — see git history on this branch for details.
 
-Both generators have `TODO` and use fallback markdown. Implement:
+---
 
-- OpenAI call in `BriefGenerator.generate()`
-- OpenAI call in `ReflectionGenerator.generate()`
+## P0 Remaining Work: Generalization & CLI Ergonomics
 
-#### 3. Generalization and CLI ergonomics
+The core loop is proven, but P0 isn't done until the engine stops depending on
+competition-specific hand-holding:
 
 - Automatic competition metadata resolution from the Kaggle URL/slug (remove the need for a
   hand-written local contract file)
+- LLM-backed brief/reflection (`OpenAI` call in `BriefGenerator.generate()` /
+  `ReflectionGenerator.generate()` — currently accurate but template-based fallback text)
 - Multi-class classification support
 - `--resume --run-id <id>` — restart from failed stage
-- Public leaderboard score polling
 - `--verbose`/`--quiet` flag to control log level across all major classes
 - Clearer environment diagnostics for Python and LightGBM
-
----
-
-## Completed Executable-Baseline Slice
-
-Validated end-to-end against Titanic; nothing below is Titanic-specific.
-
-```
-✓ Python 3.11+ project environment and macOS libomp setup
-✓ Kaggle download, archive extraction, and per-competition cache
-✓ Train/test/sample submission detection (overridable file-name patterns)
-✓ Target, ID, metric, and submission contract
-✓ Fold-fitted preprocessing and LightGBM training
-✓ Real CV accuracy and fail-hard artifact validation
-✓ Correct local submission generation
-✓ Opt-in Kaggle upload with --submit
-✓ Mocked end-to-end tests for local and submitted modes
-```
-
----
-
-## P0 Validation Checklist
-
-Before declaring P0 complete on one contest (checked items validated with Titanic
-as the exercising example; the checks themselves are competition-agnostic):
-
-```
-[x] uv sync --extra dev succeeds
-[x] Mocked run downloads the 3 dataset file roles (train/test/sample submission)
-[x] profile.json correctly infers the target and ID columns
-[x] pipeline/train.py runs without manual edits
-[x] metrics.json has real cv_<metric>
-[x] submission.csv row count and columns match the sample
-[x] Upload is skipped unless --submit is provided
-[ ] Credentialed Kaggle download succeeds
-[ ] Kaggle accepts the submission
-[ ] submission_result.json has a public score
-[ ] reflection.md references actual metrics
-```
 
 ---
 

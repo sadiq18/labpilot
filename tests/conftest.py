@@ -41,6 +41,35 @@ def titanic_data_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def generic_regression_data_dir(tmp_path: Path) -> Path:
+    """A synthetic, competition-agnostic tabular regression dataset."""
+    data_dir = tmp_path / "regression-fixture"
+    data_dir.mkdir()
+
+    train = pd.DataFrame(
+        {
+            "id": range(1, 21),
+            "size": [i * 10.5 for i in range(1, 21)],
+            "category": ["a", "b", "c"] * 6 + ["a", "b"],
+            "target": [i * 1000.0 + 500.33 for i in range(1, 21)],
+        }
+    )
+    test = pd.DataFrame(
+        {
+            "id": range(21, 26),
+            "size": [i * 10.5 for i in range(21, 26)],
+            "category": ["a", "b", "c", "a", "b"],
+        }
+    )
+    sample_submission = pd.DataFrame({"id": test["id"], "target": [0.0] * len(test)})
+
+    train.to_csv(data_dir / "train.csv", index=False)
+    test.to_csv(data_dir / "test.csv", index=False)
+    sample_submission.to_csv(data_dir / "sample_submission.csv", index=False)
+    return data_dir
+
+
+@pytest.fixture
 def competition_configs_dir(tmp_path: Path) -> Path:
     """A local, non-committed directory of competition contracts for tests.
 
@@ -60,5 +89,16 @@ def competition_configs_dir(tmp_path: Path) -> Path:
         "submission_columns:\n"
         "  - PassengerId\n"
         "  - Survived\n"
+    )
+    (configs_dir / "generic-regression-competition.yaml").write_text(
+        "title: Generic Regression Competition\n"
+        "description: A synthetic, competition-agnostic regression fixture.\n"
+        "problem_type: tabular_regression\n"
+        "evaluation_metric:\n"
+        "  name: rmse\n"
+        "  direction: minimize\n"
+        "submission_columns:\n"
+        "  - id\n"
+        "  - target\n"
     )
     return configs_dir
