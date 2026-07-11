@@ -1,0 +1,22 @@
+# Run: {{ run_id }}
+# Competition: {{ competition }}
+
+## Metrics
+{% for name, value in metrics.items() %}
+- {{ name }}: {{ value }}
+{% endfor %}
+
+## Baseline
+- Template: {{ baseline.template_name }}
+- Problem type: {{ baseline.problem_type }}
+- Rationale: {{ baseline.rationale }}
+
+## Dataset
+- Rows: {{ profile.row_count }}
+- Columns: {{ profile.column_count }}
+
+## Submission
+- Status: {{ submission.status }}
+- Public score: {{ submission.public_score or "N/A" }}
+
+Write the reflection report for this run.

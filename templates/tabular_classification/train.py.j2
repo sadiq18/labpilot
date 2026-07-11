@@ -1,0 +1,92 @@
+"""P0 tabular classification baseline using LightGBM."""
+
+import json
+from pathlib import Path
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import LabelEncoder
+
+DATA_DIR = Path("{{ data_dir }}")
+OUTPUT_DIR = Path("{{ output_dir }}")
+CV_FOLDS = {{ cv_folds }}
+RANDOM_SEED = {{ random_seed }}
+
+
+def load_data() -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    train_files = list(DATA_DIR.glob("train*.csv"))
+    test_files = list(DATA_DIR.glob("test*.csv"))
+    if not train_files:
+        raise FileNotFoundError(f"No train CSV found in {DATA_DIR}")
+    train = pd.read_csv(train_files[0])
+    test = pd.read_csv(test_files[0]) if test_files else None
+    return train, test
+
+
+def preprocess(df: pd.DataFrame, target_col: str | None = None) -> pd.DataFrame:
+    result = df.copy()
+    for col in result.select_dtypes(include=["object", "category"]).columns:
+        if col != target_col:
+            result[col] = result[col].astype("category").cat.codes
+    for col in result.select_dtypes(include=[np.number]).columns:
+        if col != target_col:
+            result[col] = result[col].fillna(result[col].median())
+    return result
+
+
+def main() -> None:
+    train, test = load_data()
+    target_col = train.columns[-1]
+    if target_col in ("id", "Id", "ID"):
+        target_col = train.columns[-2]
+
+    le = LabelEncoder()
+    y = le.fit_transform(train[target_col])
+    X = preprocess(train.drop(columns=[target_col]), target_col=None)
+
+    oof = np.zeros(len(train))
+    models = []
+    skf = StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_SEED)
+
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+
+        model = lgb.LGBMClassifier(
+            n_estimators=300,
+            learning_rate=0.05,
+            random_state=RANDOM_SEED,
+            verbose=-1,
+        )
+        model.fit(X_train, y_train)
+        oof[val_idx] = model.predict_proba(X_val)[:, 1]
+        models.append(model)
+
+    cv_score = roc_auc_score(y, oof) if len(np.unique(y)) == 2 else 0.0
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"oof": oof}).to_csv(OUTPUT_DIR / "oof.csv", index=False)
+
+    metrics = {"cv_auc": float(cv_score), "cv_folds": CV_FOLDS}
+    (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2))
+
+    models_dir = OUTPUT_DIR / "models"
+    models_dir.mkdir(exist_ok=True)
+    for i, model in enumerate(models):
+        model.booster_.save_model(str(models_dir / f"fold_{i}.txt"))
+
+    if test is not None:
+        X_test = preprocess(test, target_col=None)
+        preds = np.mean([m.predict_proba(X_test)[:, 1] for m in models], axis=0)
+        id_col = "id" if "id" in test.columns else test.columns[0]
+        submission = pd.DataFrame({id_col: test[id_col], target_col: preds})
+        submission.to_csv(OUTPUT_DIR / "submission.csv", index=False)
+
+    print(f"CV AUC: {cv_score:.4f}")
+
+
+if __name__ == "__main__":
+    main()

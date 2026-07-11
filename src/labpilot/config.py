@@ -1,0 +1,64 @@
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class LLMConfig(BaseModel):
+    provider: str = "openai"
+    model: str = "gpt-4o-mini"
+    temperature: float = 0.3
+
+
+class TrainingConfig(BaseModel):
+    cv_folds: int = 5
+    random_seed: int = 42
+
+
+class ProfilerConfig(BaseModel):
+    max_rows_sample: int = 100_000
+    categorical_cardinality_threshold: int = 50
+
+
+class KaggleConfig(BaseModel):
+    download_unzip: bool = True
+    submit_message: str = "labpilot baseline submission"
+
+
+class PipelineConfig(BaseModel):
+    stages: list[str] = Field(default_factory=list)
+
+
+class AppConfig(BaseModel):
+    runs_dir: Path = Path("runs")
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    training: TrainingConfig = Field(default_factory=TrainingConfig)
+    profiler: ProfilerConfig = Field(default_factory=ProfilerConfig)
+    kaggle: KaggleConfig = Field(default_factory=KaggleConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    kaggle_username: str = ""
+    kaggle_key: str = ""
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    labpilot_runs_dir: str = "runs"
+    labpilot_llm_model: str = ""
+
+
+def load_config(path: Path | None = None) -> AppConfig:
+    config_path = path or Path("configs/default.yaml")
+    if not config_path.exists():
+        return AppConfig()
+
+    with config_path.open() as f:
+        raw = yaml.safe_load(f) or {}
+
+    if "runs_dir" in raw:
+        raw["runs_dir"] = Path(raw["runs_dir"])
+
+    return AppConfig.model_validate(raw)

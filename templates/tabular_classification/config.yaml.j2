@@ -1,0 +1,7 @@
+competition: {{ competition }}
+problem_type: tabular_classification
+cv_folds: {{ cv_folds }}
+random_seed: {{ random_seed }}
+model: lightgbm
+target_column: {{ choice.target_column or "auto" }}
+id_column: {{ choice.id_column or "auto" }}

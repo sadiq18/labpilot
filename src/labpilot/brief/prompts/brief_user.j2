@@ -1,0 +1,28 @@
+# Competition: {{ competition.slug }}
+
+**Title:** {{ competition.title }}
+
+**Metric:** {{ competition.evaluation_metric.name if competition.evaluation_metric else "unknown" }}
+**Direction:** {{ competition.evaluation_metric.direction if competition.evaluation_metric else "maximize" }}
+
+## Description
+{{ competition.description }}
+
+## Dataset Profile
+- Rows: {{ profile.row_count }}
+- Columns: {{ profile.column_count }}
+- Files: {{ profile.files | join(", ") }}
+
+### Columns
+{% for col in profile.columns %}
+- {{ col.name }} ({{ col.dtype }}, {{ col.null_pct }}% null, {{ col.unique_count }} unique)
+{% endfor %}
+
+{% if profile.warnings %}
+### Warnings
+{% for warning in profile.warnings %}
+- {{ warning }}
+{% endfor %}
+{% endif %}
+
+Write the research brief for this competition.
