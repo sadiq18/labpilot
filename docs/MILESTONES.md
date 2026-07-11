@@ -127,16 +127,16 @@ tracking, reflection with next-step recommendations.
 | Competition parser | Auto-resolves title/description/metric from the Kaggle API; a local `configs/competitions/<slug>.yaml` is an optional override, not a requirement |
 | Data download | Kaggle API download, unzip, and per-competition cache |
 | Dataset profiler | Detects train/test/submission roles, target, and ID (patterns overridable per competition) |
-| Baseline selection | Infers problem type from the target's dtype/cardinality when not otherwise specified; fixed metric key per problem type |
+| Baseline selection | Infers problem type from the target's numeric-ness/cardinality when not otherwise specified; fixed metric key per problem type |
 | Brief / reflection | Fallback text only — no LLM calls |
 | Code generation | Works — renders Jinja2 templates |
-| Training | Fold-fitted preprocessing + LightGBM (classification + regression) |
+| Training | Fold-fitted preprocessing + LightGBM (binary/multi-class classification + regression) |
 | CV evaluation | Validates a real `cv_<metric>` from training |
-| Submission | Validated against sample columns, row count, and labels (metric-aware) |
+| Submission | Validated against sample columns, row count, and labels (metric- and dtype-aware) |
 | Kaggle upload | Real API upload with leaderboard score polling, explicit `--submit` opt-in |
 | Experiment logging | Works |
 | Environment diagnostics | `research doctor` checks Python version, LightGBM import, Kaggle credentials |
-| Tests | Unit tests plus mocked end-to-end pipeline runs for classification, regression, resume, and auto-metadata resolution |
+| Tests | Unit tests plus mocked end-to-end pipeline runs for binary/multi-class classification, regression, resume, and auto-metadata resolution |
 
 ---
 
@@ -161,8 +161,10 @@ is correctly inferred from the profiled `Survived` column.
 Proving this end-to-end surfaced and fixed several real bugs (relative run-path resolution,
 leaderboard-score polling, crash-safe manifests, regression-template hardening, an RMSE
 compatibility fix, a `cv_<metric>` key that could mismatch a competition's real evaluation metric,
-and a numeric-label target being misread as regression once inference — rather than a hand-written
-`problem_type` — was actually exercised) — see git history on this branch for details.
+a numeric-label target being misread as regression once inference — rather than a hand-written
+`problem_type` — was actually exercised, and a pandas-3.0 dtype-naming change (plain string columns
+report as dtype `"str"`, not `"object"`) that silently broke categorical-vs-numeric detection) — see
+git history on this branch for details.
 
 ---
 
@@ -170,8 +172,6 @@ and a numeric-label target being misread as regression once inference — rather
 
 - LLM-backed brief/reflection (`OpenAI` call in `BriefGenerator.generate()` /
   `ReflectionGenerator.generate()` — currently accurate but template-based fallback text)
-- Multi-class classification support (the classification template and submission validator
-  currently assume a binary target)
 
 ---
 
@@ -181,7 +181,7 @@ One template per tabular type — no search, no AutoML:
 
 | Type | Model | Features | CV |
 |------|-------|----------|-----|
-| Classification | LightGBM | Fold-fitted imputation + ordinal encoding | Stratified 5-fold |
+| Classification | LightGBM | Fold-fitted imputation + ordinal encoding; binary or multi-class | Stratified 5-fold |
 | Regression | LightGBM | Same preprocessing | 5-fold |
 
 Template selection rules (`baseline.selector.BaselineSelector._infer_problem_type`):
@@ -189,8 +189,8 @@ Template selection rules (`baseline.selector.BaselineSelector._infer_problem_typ
 ```
 if competition.problem_type is explicitly set:
     → use it as-is (local config override)
-elif target dtype is object/category/bool:
-    → tabular_classification
+elif target is not numeric (string/category/bool):
+    → tabular_classification  # any number of classes, e.g. species names
 elif target has <= 20 distinct values AND not every row's value is unique:
     → tabular_classification  # e.g. Titanic's 0/1 Survived, stored as int
 elif target is numeric:

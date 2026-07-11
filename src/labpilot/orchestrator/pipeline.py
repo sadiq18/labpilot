@@ -323,10 +323,20 @@ class Pipeline:
         if not profile.target_column:
             raise ValueError("Dataset profile is missing target_column.")
         choice = BaselineChoice.model_validate_json((run_dir / "baseline_choice.json").read_text())
-        # Only classification targets are label integers (e.g. Titanic's 0/1
-        # Survived); regression targets (e.g. House Prices' SalePrice) are
-        # continuous, so this check must not run for them.
-        require_integer_target = choice.problem_type == ProblemType.TABULAR_CLASSIFICATION
+        # Integer-label validation only makes sense for classification targets
+        # that are *numerically* encoded (e.g. Titanic's 0/1 Survived, or a
+        # digit-class target). Regression targets are continuous, and a
+        # classification target can just as easily be string labels (e.g.
+        # multi-class species names) — neither should be forced through an
+        # integer check.
+        target_column_profile = next(
+            (column for column in profile.columns if column.name == profile.target_column),
+            None,
+        )
+        target_is_numeric = bool(target_column_profile and target_column_profile.is_numeric)
+        require_integer_target = (
+            choice.problem_type == ProblemType.TABULAR_CLASSIFICATION and target_is_numeric
+        )
         validator = SubmissionValidator()
         result = validator.validate(
             submission_path,
