@@ -94,7 +94,11 @@ finished yet.
 
 Resumes a run from its first failed or incomplete stage. Stages already `completed` or
 `skipped` are left untouched; everything else (failed, stuck "running" from a killed process,
-or never reached) is re-executed in pipeline order.
+or never reached) is re-executed in pipeline order. One exception: if the run finished with
+`upload_submission` left as `skipped` (i.e. it ran without `--submit`) and you now pass
+`--submit`, that stage is re-run for real instead of staying skipped — so `research resume
+--run-id <id> --submit` is the command to upload a submission after the fact, without
+re-running the rest of an already-completed pipeline.
 
 | Option | Description |
 |--------|-------------|

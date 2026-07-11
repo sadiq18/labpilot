@@ -138,6 +138,18 @@ class Pipeline:
         done = {StageStatus.COMPLETED, StageStatus.SKIPPED}
         finished_names = {record.name for record in manifest.stages if record.status in done}
 
+        # A `skipped` `upload_submission` means "nothing was uploaded" (the
+        # prior call didn't pass `--submit`), not "this stage is finished" —
+        # so if the caller now passes `--submit`, it must be re-run for real
+        # instead of staying silently skipped forever.
+        upload_record = manifest.stage("upload_submission")
+        if (
+            self.submit
+            and upload_record is not None
+            and upload_record.status == StageStatus.SKIPPED
+        ):
+            finished_names.discard("upload_submission")
+
         if require_done:
             missing = [
                 name for name in require_done if name in all_stages and name not in finished_names
@@ -211,10 +223,18 @@ class Pipeline:
                 console.print(f"  [red]✘[/red] {stage_name}: {exc}")
                 raise
 
-        # Only claim the whole run is `completed` if this call's stages
-        # actually reached the end of the pipeline; `init()` deliberately
-        # stops partway through, and that must not read as "done".
-        reached_the_end = bool(all_stages) and all_stages[-1] in stages
+        # Only claim the whole run is `completed` once every stage in the
+        # full pipeline is finished — checked against the manifest's actual
+        # state, not just whether this call's `stages` list happens to end
+        # with the last stage name. That distinction matters for a targeted
+        # re-run like `resume --submit` on an already-finished run: it only
+        # (re-)executes `upload_submission`, but the run as a whole is still
+        # complete once that single stage lands. `init()` still correctly
+        # reads as `partial`, since stages after the brief were never run at
+        # all and so have no manifest record yet.
+        done = {StageStatus.COMPLETED, StageStatus.SKIPPED}
+        finished_names = {record.name for record in manifest.stages if record.status in done}
+        reached_the_end = bool(all_stages) and all(name in finished_names for name in all_stages)
         manifest.status = StageStatus.COMPLETED if reached_the_end else StageStatus.PARTIAL
         save_manifest(resolved_run_dir, manifest)
         return manifest
