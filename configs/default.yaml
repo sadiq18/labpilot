@@ -1,0 +1,33 @@
+runs_dir: runs
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  temperature: 0.3
+
+training:
+  cv_folds: 5
+  random_seed: 42
+
+profiler:
+  max_rows_sample: 100_000
+  categorical_cardinality_threshold: 50
+
+kaggle:
+  download_unzip: true
+  submit_message: "labpilot baseline submission"
+
+pipeline:
+  stages:
+    - parse_competition
+    - download_data
+    - profile_dataset
+    - generate_brief
+    - select_baseline
+    - generate_code
+    - train_model
+    - evaluate_cv
+    - generate_submission
+    - upload_submission
+    - log_experiment
+    - write_reflection
