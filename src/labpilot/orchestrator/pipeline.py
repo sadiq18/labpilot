@@ -68,7 +68,10 @@ class Pipeline:
 
     def run(self, competition: str, run_dir: Path | None = None) -> RunManifest:
         run_id = generate_run_id(competition)
-        resolved_run_dir = run_dir or self.config.runs_dir / run_id
+        # Resolved to absolute: the training stage runs the generated script
+        # as a subprocess with its cwd set to the run's pipeline directory,
+        # so a relative run_dir would be re-resolved against that new cwd.
+        resolved_run_dir = (run_dir or self.config.runs_dir / run_id).resolve()
         resolved_run_dir.mkdir(parents=True, exist_ok=True)
 
         manifest = RunManifest(

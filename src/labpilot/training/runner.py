@@ -15,8 +15,11 @@ class TrainingRunner:
     """
 
     def __init__(self, run_dir: Path) -> None:
-        self.run_dir = run_dir
-        self.pipeline_dir = run_dir / "pipeline"
+        # Resolved defensively: the script runs as a subprocess with
+        # cwd=pipeline_dir, so a relative run_dir would get re-resolved
+        # against that new cwd and double up (e.g. "runs/x/pipeline/runs/x/pipeline/train.py").
+        self.run_dir = Path(run_dir).resolve()
+        self.pipeline_dir = self.run_dir / "pipeline"
         self.train_script = self.pipeline_dir / "train.py"
 
     def run(self, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
