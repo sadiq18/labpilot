@@ -1,25 +1,36 @@
 from pathlib import Path
 
-from labpilot.competition.models import CompetitionSpec, MetricSpec, ProblemType
+import yaml
+
+from labpilot.competition.models import CompetitionSpec
 
 
 class CompetitionParser:
     """Fetch and parse Kaggle competition metadata."""
 
-    def __init__(self, competition_slug: str) -> None:
+    def __init__(self, competition_slug: str, configs_dir: Path | None = None) -> None:
         self.competition_slug = competition_slug
+        self.configs_dir = (
+            configs_dir or Path(__file__).resolve().parents[3] / "configs" / "competitions"
+        )
 
     def parse(self) -> CompetitionSpec:
-        # TODO: integrate Kaggle API + page scrape for full metadata
-        return CompetitionSpec(
-            slug=self.competition_slug,
-            title=self.competition_slug.replace("-", " ").title(),
-            description="Competition description will be fetched from Kaggle.",
-            evaluation_metric=MetricSpec(name="unknown", direction="maximize"),
-            problem_type=ProblemType.UNKNOWN,
-            data_url=f"https://www.kaggle.com/competitions/{self.competition_slug}/data",
-            rules_url=f"https://www.kaggle.com/competitions/{self.competition_slug}/rules",
+        config_path = self.configs_dir / f"{self.competition_slug}.yaml"
+        if not config_path.is_file():
+            raise ValueError(
+                f"Competition '{self.competition_slug}' is not supported in P0. "
+                f"Expected metadata at {config_path}."
+            )
+
+        raw = yaml.safe_load(config_path.read_text()) or {}
+        raw["slug"] = self.competition_slug
+        raw.setdefault(
+            "data_url", f"https://www.kaggle.com/competitions/{self.competition_slug}/data"
         )
+        raw.setdefault(
+            "rules_url", f"https://www.kaggle.com/competitions/{self.competition_slug}/rules"
+        )
+        return CompetitionSpec.model_validate(raw)
 
     def save(self, run_dir: Path) -> Path:
         spec = self.parse()

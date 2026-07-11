@@ -82,7 +82,7 @@ After a few hours, a complete run should produce:
 - Retry/resume from failed pipeline stages
 - Leaderboard polling and score tracking
 - Multi-competition project workspace
-- Config overrides (`--config`, `--dry-run`, `--skip-upload`)
+- Config overrides (`--config`, `--dry-run`, `--submit`)
 - CI-tested templates per problem type
 
 ---
@@ -128,132 +128,64 @@ See [Future (Explicitly Deferred)](#future-explicitly-deferred) above.
 | Layer | Status |
 |-------|--------|
 | CLI + orchestrator | Wired — all 12 stages run in sequence |
-| Manifest / status | Works |
-| Competition parser | Stub — placeholder metadata only |
-| Data download | Stub — writes `README.txt`, no real data |
-| Dataset profiler | Partial — profiles largest CSV, no target/id detection |
+| Manifest / status | Works, including skipped upload stages |
+| Competition parser | Titanic metadata contract implemented |
+| Data download | Kaggle API download and unzip implemented |
+| Dataset profiler | Detects train/test/submission roles, target, and ID |
 | Brief / reflection | Fallback text only — no LLM calls |
-| Baseline selection | Works — defaults to `tabular_classification` |
+| Baseline selection | Works from competition and dataset contracts |
 | Code generation | Works — renders Jinja2 templates |
-| Training | Template exists — target/submission logic is fragile |
-| CV evaluation | Stub — does not compute metrics |
-| Submission | Stub — writes fake row if training did not produce one |
-| Kaggle upload | Stub — status `"pending"`, no API call |
+| Training | Fold-fitted preprocessing + LightGBM binary classifier |
+| CV evaluation | Validates real `cv_accuracy` from training |
+| Submission | Validated against sample columns, row count, and labels |
+| Kaggle upload | Real API upload, explicit `--submit` opt-in |
 | Experiment logging | Works |
-| Tests | 2 unit tests only — no integration test |
+| Tests | Unit tests plus mocked end-to-end Titanic pipeline |
 
 ---
 
 ## P0 Pending Tasks
 
-### Blockers (must fix for a real run)
+### Required before P0 is complete
 
-#### 1. Kaggle data download
+#### 1. Credentialed Titanic smoke run
 
-`DataDownloader` is a placeholder. Implement:
+- Join Titanic and accept its rules on Kaggle
+- Configure `KAGGLE_API_TOKEN` (preferred) or legacy username/key credentials
+- Run once without `--submit` and inspect `metrics.json` and `submission.csv`
+- Run separately with `--submit` and verify Kaggle accepts the file
+- Poll and persist the public leaderboard score
 
-- `KaggleApi.competition_download_files(competition, path, force=True)`
-- Unzip into `runs/<id>/data/raw/`
-- Wire `KAGGLE_USERNAME` / `KAGGLE_KEY` from `.env` (or write `~/.kaggle/kaggle.json`)
-
-#### 2. Kaggle submission upload
-
-`KaggleClient.upload_submission` returns a fake result. Implement:
-
-- `api.competition_submit(submission_path, message, competition)`
-- Optionally poll for public leaderboard score
-- Persist real `submission_result.json`
-
-#### 3. Target and ID column detection
-
-The profiler never sets `target_column` or `id_column`. Implement:
-
-- Identify `train*.csv`, `test*.csv`, `sample_submission*.csv` separately (do not profile the largest CSV)
-- Infer target from columns in train but not in test, or from `sample_submission.csv`
-- Infer ID column from the first column of `sample_submission.csv`
-- Pass detected columns into `baseline_choice.json` and training templates
-
-#### 4. Training template target heuristic
-
-Templates assume target = last column. For Titanic, last column is `Embarked`, not `Survived`. Implement:
-
-- Render `target_col` and `id_col` from `BaselineChoice` into templates
-- Use `sample_submission.csv` column names for the submission file
-- Handle multi-class (not only binary `predict_proba[:, 1]`)
-
-#### 5. Remove stub evaluate/submission stages
-
-`evaluate_cv` and `generate_submission` write placeholder data when artifacts are missing, masking failures. Implement:
-
-- `evaluate_cv`: read `metrics.json` from training, fail if missing or invalid
-- `generate_submission`: use `SubmissionFormatter` with correct columns; fail if pipeline did not produce predictions
-- Remove placeholder fallbacks
-
-#### 6. Competition metadata (minimum viable)
-
-Parser returns `problem_type: unknown` and `metric: unknown`. Implement:
-
-- Competition-specific config for the first target (e.g. `configs/competitions/titanic.yaml`), or
-- Kaggle API + page scrape for metric and submission format
-
-#### 7. Environment setup
-
-- `pyproject.toml` requires Python ≥3.11
-- LightGBM on macOS may need `libomp` (`brew install libomp`)
-- Package must be installable before any real run
-
----
-
-### Important (not blockers, but required for P0 "done")
-
-#### 8. LLM brief and reflection
+#### 2. LLM brief and reflection
 
 Both generators have `TODO` and use fallback markdown. Implement:
 
 - OpenAI call in `BriefGenerator.generate()`
 - OpenAI call in `ReflectionGenerator.generate()`
-- Read `OPENAI_API_KEY` from `Settings` (class exists but is unused)
 
-#### 9. Credentials integration
+#### 3. Generalization and CLI ergonomics
 
-`Settings` with env vars exists but `load_config()` never uses them. Implement:
-
-- Merge YAML config + `.env` settings in one place
-- Validate credentials at CLI startup with clear error messages
-
-#### 10. Integration test
-
-Only manifest and profiler unit tests exist. Add:
-
-- Fixture with synthetic `train.csv` / `test.csv` / `sample_submission.csv`
-- Full pipeline test with mocked Kaggle API
-- Optional `--dry-run` mode that skips upload
-
-#### 11. CLI ergonomics
-
-- `--skip-upload` — train locally without submitting
+- Generic competition metadata resolution beyond Titanic
+- Multi-class classification support
 - `--resume --run-id <id>` — restart from failed stage
-- Pre-flight check: credentials, Python version, competition slug
+- Public leaderboard score polling
+- Clearer environment diagnostics for Python and LightGBM
 
 ---
 
-## Suggested Implementation Order
+## Completed Executable-Titanic Slice
 
 ```
-1. Fix Python env + pip install
-2. Kaggle download
-3. Train/test/sample file detection
-4. Target + ID + submission format
-5. Fix training template rendering
-6. Remove stub evaluate/submission stages
-7. Kaggle upload
-8. End-to-end test on Titanic
-9. LLM brief + reflection
-10. Generic competition parser
+✓ Python 3.11+ project environment and macOS libomp setup
+✓ Kaggle download and archive extraction
+✓ Train/test/sample submission detection
+✓ Target, ID, metric, and submission contract
+✓ Fold-fitted preprocessing and LightGBM training
+✓ Real CV accuracy and fail-hard artifact validation
+✓ Correct local submission generation
+✓ Opt-in Kaggle upload with --submit
+✓ Mocked end-to-end tests for local and submitted modes
 ```
-
-**Minimum for a real Kaggle submission:** steps 1–7.  
-**Minimum to call P0 done:** steps 1–9.
 
 ---
 
@@ -262,13 +194,14 @@ Only manifest and profiler unit tests exist. Add:
 Before declaring P0 complete on one contest:
 
 ```
-[ ] pip install -e ".[dev,llm]" succeeds
-[ ] KAGGLE_USERNAME + KAGGLE_KEY in .env work
-[ ] research run --competition titanic downloads 3 CSVs
-[ ] profile.json has target=Survived, id=PassengerId
-[ ] pipeline/train.py runs without manual edits
-[ ] metrics.json has real cv_auc (not 0.0 placeholder)
-[ ] submission.csv has 418 rows, correct columns
+[x] uv sync --extra dev succeeds
+[x] Mocked run downloads the 3 Titanic CSV roles
+[x] profile.json has target=Survived, id=PassengerId
+[x] pipeline/train.py runs without manual edits
+[x] metrics.json has real cv_accuracy
+[x] submission.csv row count and columns match the sample
+[x] Upload is skipped unless --submit is provided
+[ ] Credentialed Kaggle download succeeds
 [ ] Kaggle accepts the submission
 [ ] submission_result.json has a public score
 [ ] reflection.md references actual metrics
@@ -282,7 +215,7 @@ One template per tabular type — no search, no AutoML:
 
 | Type | Model | Features | CV |
 |------|-------|----------|-----|
-| Classification | LightGBM | Label-encode categoricals, median impute numerics | Stratified 5-fold |
+| Classification | LightGBM | Fold-fitted imputation + ordinal encoding | Stratified 5-fold |
 | Regression | LightGBM | Same preprocessing | 5-fold |
 
 Template selection rules:

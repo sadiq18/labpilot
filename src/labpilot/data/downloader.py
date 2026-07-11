@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from labpilot.config import KaggleConfig
+from labpilot.kaggle.client import KaggleClient, KaggleGateway
 
 
 class DataLayout:
@@ -24,18 +25,21 @@ class DataLayout:
 class DataDownloader:
     """Download competition data via the Kaggle API."""
 
-    def __init__(self, competition_slug: str, config: KaggleConfig) -> None:
+    def __init__(
+        self,
+        competition_slug: str,
+        config: KaggleConfig,
+        client: KaggleGateway | None = None,
+    ) -> None:
         self.competition_slug = competition_slug
         self.config = config
+        self.client = client or KaggleClient(config)
 
     def download(self, run_dir: Path) -> Path:
         layout = DataLayout(run_dir)
         layout.ensure()
 
-        # TODO: call kaggle.competition_download_files and unzip
-        readme = layout.raw_dir / "README.txt"
-        readme.write_text(
-            f"Placeholder for {self.competition_slug} data.\n"
-            "Implement Kaggle API download in DataDownloader.download().\n"
-        )
+        self.client.download_competition(self.competition_slug, layout.raw_dir)
+        if not layout.list_raw_files():
+            raise RuntimeError(f"No data files downloaded for {self.competition_slug}.")
         return layout.raw_dir

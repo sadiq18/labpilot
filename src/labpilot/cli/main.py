@@ -23,6 +23,11 @@ def run(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
     runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    submit: bool = typer.Option(
+        False,
+        "--submit",
+        help="Upload the validated submission to Kaggle (disabled by default)",
+    ),
 ) -> None:
     """Run the full research pipeline for a Kaggle competition."""
     config = load_config(config_path)
@@ -31,11 +36,13 @@ def run(
 
     console.print(f"[bold]LabPilot[/bold] — starting run for [cyan]{competition}[/cyan]\n")
 
-    pipeline = Pipeline(config)
+    pipeline = Pipeline(config, submit=submit)
     manifest = pipeline.run(competition)
 
     console.print(f"\n[green]Run complete:[/green] {config.runs_dir / manifest.run_id}")
-    console.print(f"[green]Reflection:[/green] {config.runs_dir / manifest.run_id / 'reflection.md'}")
+    console.print(
+        f"[green]Reflection:[/green] {config.runs_dir / manifest.run_id / 'reflection.md'}"
+    )
 
 
 @app.command()

@@ -1,91 +1,164 @@
-"""P0 tabular classification baseline using LightGBM."""
+"""Generated P0 tabular classification baseline using LightGBM."""
 
 import json
 from pathlib import Path
 
+import joblib
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import accuracy_score
 from sklearn.model_selection import StratifiedKFold
-from sklearn.preprocessing import LabelEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import LabelEncoder, OrdinalEncoder
 
-DATA_DIR = Path("{{ data_dir }}")
-OUTPUT_DIR = Path("{{ output_dir }}")
+DATA_DIR = Path({{ data_dir | tojson }})
+OUTPUT_DIR = Path({{ output_dir | tojson }})
+TRAIN_FILE = {{ choice.train_file | tojson }}
+TEST_FILE = {{ choice.test_file | tojson }}
+SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
+TARGET_COLUMN = {{ choice.target_column | tojson }}
+ID_COLUMN = {{ choice.id_column | tojson }}
 CV_FOLDS = {{ cv_folds }}
 RANDOM_SEED = {{ random_seed }}
 
 
-def load_data() -> tuple[pd.DataFrame, pd.DataFrame | None]:
-    train_files = list(DATA_DIR.glob("train*.csv"))
-    test_files = list(DATA_DIR.glob("test*.csv"))
-    if not train_files:
-        raise FileNotFoundError(f"No train CSV found in {DATA_DIR}")
-    train = pd.read_csv(train_files[0])
-    test = pd.read_csv(test_files[0]) if test_files else None
-    return train, test
+def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    required = {
+        "training": TRAIN_FILE,
+        "test": TEST_FILE,
+        "sample submission": SAMPLE_SUBMISSION_FILE,
+    }
+    missing_roles = [role for role, name in required.items() if not name]
+    if missing_roles:
+        raise ValueError(f"Missing file metadata for: {', '.join(missing_roles)}")
+
+    return (
+        pd.read_csv(DATA_DIR / TRAIN_FILE),
+        pd.read_csv(DATA_DIR / TEST_FILE),
+        pd.read_csv(DATA_DIR / SAMPLE_SUBMISSION_FILE),
+    )
 
 
-def preprocess(df: pd.DataFrame, target_col: str | None = None) -> pd.DataFrame:
-    result = df.copy()
-    for col in result.select_dtypes(include=["object", "category"]).columns:
-        if col != target_col:
-            result[col] = result[col].astype("category").cat.codes
-    for col in result.select_dtypes(include=[np.number]).columns:
-        if col != target_col:
-            result[col] = result[col].fillna(result[col].median())
-    return result
+def build_model(X: pd.DataFrame) -> Pipeline:
+    numeric_columns = list(X.select_dtypes(include=[np.number, "bool"]).columns)
+    categorical_columns = [column for column in X.columns if column not in numeric_columns]
+
+    transformers = []
+    if numeric_columns:
+        transformers.append(
+            (
+                "numeric",
+                SimpleImputer(strategy="median"),
+                numeric_columns,
+            )
+        )
+    if categorical_columns:
+        transformers.append(
+            (
+                "categorical",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
+                        (
+                            "encoder",
+                            OrdinalEncoder(
+                                handle_unknown="use_encoded_value",
+                                unknown_value=-1,
+                            ),
+                        ),
+                    ]
+                ),
+                categorical_columns,
+            )
+        )
+
+    preprocessor = ColumnTransformer(transformers=transformers)
+    classifier = lgb.LGBMClassifier(
+        n_estimators=300,
+        learning_rate=0.05,
+        random_state=RANDOM_SEED,
+        verbose=-1,
+    )
+    return Pipeline(steps=[("preprocess", preprocessor), ("model", classifier)])
 
 
 def main() -> None:
-    train, test = load_data()
-    target_col = train.columns[-1]
-    if target_col in ("id", "Id", "ID"):
-        target_col = train.columns[-2]
+    train, test, sample_submission = load_data()
+    if not TARGET_COLUMN or TARGET_COLUMN not in train.columns:
+        raise ValueError(f"Target column is invalid: {TARGET_COLUMN!r}")
+    if not ID_COLUMN or ID_COLUMN not in test.columns:
+        raise ValueError(f"ID column is invalid: {ID_COLUMN!r}")
 
-    le = LabelEncoder()
-    y = le.fit_transform(train[target_col])
-    X = preprocess(train.drop(columns=[target_col]), target_col=None)
+    feature_columns = [column for column in train.columns if column != TARGET_COLUMN]
+    missing_test_columns = [column for column in feature_columns if column not in test.columns]
+    if missing_test_columns:
+        raise ValueError(f"Test data is missing feature columns: {missing_test_columns}")
 
-    oof = np.zeros(len(train))
-    models = []
-    skf = StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_SEED)
-
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
-        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-        y_train, y_val = y[train_idx], y[val_idx]
-
-        model = lgb.LGBMClassifier(
-            n_estimators=300,
-            learning_rate=0.05,
-            random_state=RANDOM_SEED,
-            verbose=-1,
+    X = train[feature_columns]
+    X_test = test[feature_columns]
+    encoder = LabelEncoder()
+    y = encoder.fit_transform(train[TARGET_COLUMN])
+    if len(encoder.classes_) != 2:
+        raise ValueError(
+            f"P0 classification template supports binary targets, got {len(encoder.classes_)} classes."
         )
-        model.fit(X_train, y_train)
-        oof[val_idx] = model.predict_proba(X_val)[:, 1]
+
+    smallest_class = int(np.bincount(y).min())
+    folds = min(CV_FOLDS, smallest_class)
+    if folds < 2:
+        raise ValueError("Each target class needs at least two rows for cross-validation.")
+
+    oof_probability = np.zeros(len(train), dtype=float)
+    oof_label = np.zeros(len(train), dtype=int)
+    test_probabilities = []
+    models = []
+    splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=RANDOM_SEED)
+
+    for train_idx, val_idx in splitter.split(X, y):
+        model = build_model(X.iloc[train_idx])
+        model.fit(X.iloc[train_idx], y[train_idx])
+        fold_probability = model.predict_proba(X.iloc[val_idx])[:, 1]
+        oof_probability[val_idx] = fold_probability
+        oof_label[val_idx] = (fold_probability >= 0.5).astype(int)
+        test_probabilities.append(model.predict_proba(X_test)[:, 1])
         models.append(model)
 
-    cv_score = roc_auc_score(y, oof) if len(np.unique(y)) == 2 else 0.0
+    cv_accuracy = accuracy_score(y, oof_label)
+    predicted_codes = (np.mean(test_probabilities, axis=0) >= 0.5).astype(int)
+    predicted_labels = encoder.inverse_transform(predicted_codes)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"oof": oof}).to_csv(OUTPUT_DIR / "oof.csv", index=False)
+    pd.DataFrame(
+        {
+            ID_COLUMN: train[ID_COLUMN],
+            "actual": train[TARGET_COLUMN],
+            "prediction": encoder.inverse_transform(oof_label),
+            "probability": oof_probability,
+        }
+    ).to_csv(OUTPUT_DIR / "oof.csv", index=False)
 
-    metrics = {"cv_auc": float(cv_score), "cv_folds": CV_FOLDS}
+    metrics = {"cv_accuracy": float(cv_accuracy), "cv_folds": folds}
     (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
     models_dir = OUTPUT_DIR / "models"
     models_dir.mkdir(exist_ok=True)
-    for i, model in enumerate(models):
-        model.booster_.save_model(str(models_dir / f"fold_{i}.txt"))
+    for index, model in enumerate(models):
+        joblib.dump(model, models_dir / f"fold_{index}.joblib")
 
-    if test is not None:
-        X_test = preprocess(test, target_col=None)
-        preds = np.mean([m.predict_proba(X_test)[:, 1] for m in models], axis=0)
-        id_col = "id" if "id" in test.columns else test.columns[0]
-        submission = pd.DataFrame({id_col: test[id_col], target_col: preds})
-        submission.to_csv(OUTPUT_DIR / "submission.csv", index=False)
+    if len(sample_submission) != len(test):
+        raise ValueError(
+            "Sample submission and test data row counts differ: "
+            f"{len(sample_submission)} != {len(test)}"
+        )
+    submission = sample_submission.copy()
+    submission[ID_COLUMN] = test[ID_COLUMN].to_numpy()
+    submission[TARGET_COLUMN] = predicted_labels
+    submission.to_csv(OUTPUT_DIR / "submission.csv", index=False)
 
-    print(f"CV AUC: {cv_score:.4f}")
+    print(f"CV accuracy: {cv_accuracy:.4f}")
 
 
 if __name__ == "__main__":

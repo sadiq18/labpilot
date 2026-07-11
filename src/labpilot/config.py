@@ -24,6 +24,9 @@ class ProfilerConfig(BaseModel):
 class KaggleConfig(BaseModel):
     download_unzip: bool = True
     submit_message: str = "labpilot baseline submission"
+    api_token: str = Field(default="", exclude=True, repr=False)
+    username: str = Field(default="", exclude=True, repr=False)
+    key: str = Field(default="", exclude=True, repr=False)
 
 
 class PipelineConfig(BaseModel):
@@ -42,6 +45,7 @@ class AppConfig(BaseModel):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    kaggle_api_token: str = ""
     kaggle_username: str = ""
     kaggle_key: str = ""
     openai_api_key: str = ""
@@ -52,13 +56,23 @@ class Settings(BaseSettings):
 
 def load_config(path: Path | None = None) -> AppConfig:
     config_path = path or Path("configs/default.yaml")
-    if not config_path.exists():
-        return AppConfig()
-
-    with config_path.open() as f:
-        raw = yaml.safe_load(f) or {}
+    raw = {}
+    if config_path.exists():
+        with config_path.open() as f:
+            raw = yaml.safe_load(f) or {}
 
     if "runs_dir" in raw:
         raw["runs_dir"] = Path(raw["runs_dir"])
 
-    return AppConfig.model_validate(raw)
+    config = AppConfig.model_validate(raw)
+    settings = Settings()
+
+    config.kaggle.api_token = settings.kaggle_api_token
+    config.kaggle.username = settings.kaggle_username
+    config.kaggle.key = settings.kaggle_key
+    if settings.labpilot_runs_dir != "runs":
+        config.runs_dir = Path(settings.labpilot_runs_dir)
+    if settings.labpilot_llm_model:
+        config.llm.model = settings.labpilot_llm_model
+
+    return config
