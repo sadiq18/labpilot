@@ -1,6 +1,11 @@
+import logging
+import shutil
 from pathlib import Path
 
 from labpilot.config import KaggleConfig
+from labpilot.kaggle.client import KaggleClient, KaggleGateway
+
+logger = logging.getLogger(__name__)
 
 
 class DataLayout:
@@ -16,26 +21,67 @@ class DataLayout:
         self.processed_dir.mkdir(parents=True, exist_ok=True)
 
     def list_raw_files(self) -> list[Path]:
-        if not self.raw_dir.exists():
-            return []
-        return sorted(p for p in self.raw_dir.rglob("*") if p.is_file())
+        return list_files(self.raw_dir)
+
+
+def list_files(directory: Path) -> list[Path]:
+    if not directory.exists():
+        return []
+    return sorted(p for p in directory.rglob("*") if p.is_file())
 
 
 class DataDownloader:
-    """Download competition data via the Kaggle API."""
+    """Download competition data via the Kaggle API.
 
-    def __init__(self, competition_slug: str, config: KaggleConfig) -> None:
+    Downloads are cached on disk per competition slug (`KaggleConfig.cache_dir`)
+    so that re-running the same competition across multiple research runs does
+    not re-download identical data from Kaggle every time.
+    """
+
+    def __init__(
+        self,
+        competition_slug: str,
+        config: KaggleConfig,
+        client: KaggleGateway | None = None,
+    ) -> None:
         self.competition_slug = competition_slug
         self.config = config
+        self.client = client or KaggleClient(config)
+
+    @property
+    def cache_dir(self) -> Path:
+        return self.config.cache_dir / self.competition_slug
 
     def download(self, run_dir: Path) -> Path:
         layout = DataLayout(run_dir)
         layout.ensure()
 
-        # TODO: call kaggle.competition_download_files and unzip
-        readme = layout.raw_dir / "README.txt"
-        readme.write_text(
-            f"Placeholder for {self.competition_slug} data.\n"
-            "Implement Kaggle API download in DataDownloader.download().\n"
-        )
+        cache_dir = self.cache_dir
+        cached_files = list_files(cache_dir)
+        if cached_files:
+            logger.info(
+                "Reusing cached data for '%s' from %s (%d files); skipping download.",
+                self.competition_slug,
+                cache_dir,
+                len(cached_files),
+            )
+        else:
+            logger.info(
+                "Downloading data for '%s' into cache %s.", self.competition_slug, cache_dir
+            )
+            self.client.download_competition(self.competition_slug, cache_dir)
+            if not list_files(cache_dir):
+                raise RuntimeError(f"No data files downloaded for {self.competition_slug}.")
+
+        self._sync_from_cache(cache_dir, layout.raw_dir)
+        if not layout.list_raw_files():
+            raise RuntimeError(f"No data files available for {self.competition_slug}.")
         return layout.raw_dir
+
+    def _sync_from_cache(self, cache_dir: Path, raw_dir: Path) -> None:
+        for cached_file in list_files(cache_dir):
+            relative = cached_file.relative_to(cache_dir)
+            destination = raw_dir / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if not destination.exists():
+                shutil.copy2(cached_file, destination)

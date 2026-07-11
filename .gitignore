@@ -13,6 +13,15 @@ venv/
 # Run artifacts
 runs/
 
+# Kaggle download cache (shared across runs, safe to delete)
+.cache/
+
+# Per-competition contracts are created locally (see configs/competitions/README.md)
+# and are not committed, so the engine stays generic across competitions.
+configs/competitions/*.yaml
+configs/competitions/*.yml
+!configs/competitions/README.md
+
 # IDE
 .idea/
 .vscode/

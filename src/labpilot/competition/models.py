@@ -1,10 +1,9 @@
-from enum import Enum
-from pathlib import Path
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class ProblemType(str, Enum):
+class ProblemType(StrEnum):
     TABULAR_CLASSIFICATION = "tabular_classification"
     TABULAR_REGRESSION = "tabular_regression"
     TEXT_CLASSIFICATION = "text_classification"
@@ -25,8 +24,17 @@ class CompetitionSpec(BaseModel):
     evaluation_metric: MetricSpec | None = None
     problem_type: ProblemType = ProblemType.UNKNOWN
     submission_format: str = ""
+    submission_columns: list[str] = Field(default_factory=list)
     rules_url: str = ""
     data_url: str = ""
     deadline: str | None = None
     tags: list[str] = Field(default_factory=list)
     raw_html: str = ""
+
+    # Optional overrides for competitions whose file names don't follow the
+    # "train*/test*/*submission*" convention the profiler assumes by default.
+    # TODO: resolve these automatically from the Kaggle competition page/API
+    # instead of requiring a local override.
+    train_file_pattern: str = "train"
+    test_file_pattern: str = "test"
+    submission_file_pattern: str = "submission"

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -6,9 +7,15 @@ from labpilot.competition.models import CompetitionSpec
 from labpilot.config import LLMConfig
 from labpilot.profiler.tabular import DatasetProfile
 
+logger = logging.getLogger(__name__)
+
 
 class BriefGenerator:
-    """Generate an AI research brief from competition + dataset profile."""
+    """Generate an AI research brief from competition + dataset profile.
+
+    # TODO: control the verbosity of this class's logging via a future CLI
+    # --verbose/--quiet flag (see docs/MILESTONES.md).
+    """
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
@@ -27,12 +34,17 @@ class BriefGenerator:
     def generate(self, competition: CompetitionSpec, profile: DatasetProfile) -> str:
         prompt = self.build_prompt(competition, profile)
         # TODO: call LLM provider (OpenAI / Anthropic) using self.config
+        logger.info(
+            "Generating research brief for '%s' (LLM call not yet configured; using fallback).",
+            competition.slug,
+        )
         return self._fallback_brief(competition, profile, prompt)
 
     def save(self, run_dir: Path, competition: CompetitionSpec, profile: DatasetProfile) -> Path:
         brief = self.generate(competition, profile)
         output = run_dir / "brief.md"
         output.write_text(brief)
+        logger.info("Saved research brief to %s", output)
         return output
 
     def _fallback_brief(

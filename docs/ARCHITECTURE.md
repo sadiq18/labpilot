@@ -79,7 +79,7 @@ runs/<run_id>/
 └── reflection.md              # Post-run analysis + next steps
 ```
 
-Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-143022-titanic`).
+Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-143022-<slug>`).
 
 ---
 
@@ -98,6 +98,7 @@ Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-1430
 Commands:
 
 - `research run --competition <slug>` — full pipeline
+- `research run --competition <slug> --submit` — full pipeline plus Kaggle upload
 - `research status --run-id <id>` — inspect stage progress
 - `research list-runs` — list all runs
 
@@ -109,9 +110,13 @@ Commands:
 | **Responsibility** | Fetch and structure competition metadata |
 | **Input** | Competition slug |
 | **Output** | `competition.json` (`CompetitionSpec`) |
-| **P0 status** | Stub — returns placeholder metadata |
+| **P0 status** | Implemented via a local, per-competition contract at `configs/competitions/<slug>.yaml` |
 
-`CompetitionSpec` fields: `slug`, `title`, `description`, `evaluation_metric`, `problem_type`, `submission_format`, `data_url`, `rules_url`, `deadline`, `tags`.
+`CompetitionSpec` fields include `slug`, `title`, `evaluation_metric`, `problem_type`,
+`submission_columns`, URLs, deadline, and tags. Competitions without a local contract
+file fail clearly in P0. See `configs/competitions/README.md` for the schema; long
+term this should be resolved automatically from the Kaggle URL/slug instead of a
+locally authored file.
 
 ### 3. Data Manager
 
@@ -121,7 +126,7 @@ Commands:
 | **Responsibility** | Download and organize competition datasets |
 | **Input** | Competition slug, Kaggle credentials |
 | **Output** | `data/raw/`, `data/processed/` |
-| **P0 status** | Stub — writes placeholder `README.txt` |
+| **P0 status** | Implemented through the official Kaggle API |
 
 ### 4. Dataset Profiler
 
@@ -131,9 +136,10 @@ Commands:
 | **Responsibility** | Schema, stats, distributions, target/id detection |
 | **Input** | `data/raw/` paths |
 | **Output** | `profile.json`, `profile.md` |
-| **P0 status** | Partial — profiles largest CSV; no target/id detection yet |
+| **P0 status** | Implemented for one train, test, and sample-submission CSV |
 
-`DatasetProfile` fields: `files`, `row_count`, `column_count`, `columns[]`, `target_column`, `id_column`, `warnings`.
+`DatasetProfile` records file roles, train/test row counts, column profiles,
+`target_column`, `id_column`, and the expected submission columns.
 
 ### 5. Research Brief Generator
 
@@ -177,7 +183,7 @@ Templates live in `templates/` (not inside the Python package). The renderer pas
 | **Responsibility** | Execute generated pipeline as subprocess |
 | **Input** | `pipeline/train.py` |
 | **Output** | `models/`, `oof.csv`, `metrics.json`, `training.log` |
-| **P0 status** | Implemented — subprocess runner works; template logic needs hardening |
+| **P0 status** | Implemented with fold-fitted preprocessing and serialized models |
 
 ### 9. Evaluator
 
@@ -187,7 +193,7 @@ Templates live in `templates/` (not inside the Python package). The renderer pas
 | **Responsibility** | CV metrics aligned to competition metric |
 | **Input** | OOF predictions, metric spec |
 | **Output** | `metrics.json` |
-| **P0 status** | Metrics library exists; pipeline stage is stub |
+| **P0 status** | Validates the metric artifact produced by training |
 
 Supported metrics: AUC, log loss, accuracy, RMSE.
 
@@ -199,7 +205,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 | **Responsibility** | Format and validate submission file |
 | **Input** | Predictions, id/target columns |
 | **Output** | `submission.csv` |
-| **P0 status** | Validator works; pipeline stage is stub |
+| **P0 status** | Validates schema, row count, nulls, and integer labels |
 
 ### 11. Kaggle Client
 
@@ -209,7 +215,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 | **Responsibility** | Upload submission, fetch score |
 | **Input** | `submission.csv`, competition slug |
 | **Output** | `submission_result.json` |
-| **P0 status** | Stub — no API call |
+| **P0 status** | Implemented; upload requires explicit `--submit` |
 
 ### 12. Experiment Tracker
 
@@ -264,11 +270,14 @@ labpilot/
 │   └── tabular_regression/
 │
 ├── configs/
-│   └── default.yaml           # Default pipeline + training config
+│   ├── default.yaml           # Default pipeline + training config
+│   └── competitions/
+│       ├── README.md          # Contract schema; files below are not committed
+│       └── <slug>.yaml        # Created locally per competition, git-ignored
 │
 ├── tests/
 │   ├── unit/
-│   └── fixtures/              # Synthetic competition data (planned)
+│   └── integration/           # Mocked end-to-end pipeline run
 │
 └── docs/
     ├── ARCHITECTURE.md        # This file
@@ -286,13 +295,15 @@ Configuration merges two sources:
 
 | Variable | Purpose |
 |----------|---------|
-| `KAGGLE_USERNAME` | Kaggle API username |
-| `KAGGLE_KEY` | Kaggle API key |
+| `KAGGLE_API_TOKEN` | Preferred Kaggle API token |
+| `KAGGLE_USERNAME` | Legacy Kaggle API username |
+| `KAGGLE_KEY` | Legacy Kaggle API key |
 | `OPENAI_API_KEY` | LLM for brief + reflection |
 | `LABPILOT_RUNS_DIR` | Override runs directory |
 | `LABPILOT_LLM_MODEL` | Override LLM model name |
 
-`Settings` (pydantic-settings) reads `.env`. `load_config()` reads YAML. Credential wiring between the two is pending — see [MILESTONES.md](MILESTONES.md).
+`Settings` reads `.env`; `load_config()` merges environment credentials and overrides
+into the YAML-backed application config. Secrets are excluded from serialized config output.
 
 ---
 
@@ -302,13 +313,13 @@ Templates are Jinja2 files in `templates/`, rendered into `runs/<id>/pipeline/`.
 
 | Template | Model | CV | Metric |
 |----------|-------|-----|--------|
-| `tabular_classification` | LightGBM classifier | StratifiedKFold (5) | AUC |
+| `tabular_classification` | LightGBM binary classifier | StratifiedKFold (5) | Accuracy |
 | `tabular_regression` | LightGBM regressor | KFold (5) | RMSE |
 
 Preprocessing in all templates:
 
-- Label-encode categorical columns
-- Median-impute numeric nulls
+- Fold-fitted ordinal encoding with unknown-category handling
+- Fold-fitted numeric median and categorical most-frequent imputation
 - No feature engineering beyond defaults
 
 Templates are executed as a subprocess with `cwd=pipeline/`. Paths to `data/raw/` and the run output directory are injected at render time.

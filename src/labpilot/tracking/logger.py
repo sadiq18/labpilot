@@ -1,11 +1,18 @@
+import logging
 from pathlib import Path
 from typing import Any
 
 from labpilot.tracking.store import ExperimentRecord, ExperimentStore
 
+logger = logging.getLogger(__name__)
+
 
 class ExperimentLogger:
-    """Log experiment params, metrics, and artifact paths."""
+    """Log experiment params, metrics, and artifact paths.
+
+    # TODO: control the verbosity of this class's logging via a future CLI
+    # --verbose/--quiet flag (see docs/MILESTONES.md).
+    """
 
     def __init__(self, run_dir: Path) -> None:
         self.store = ExperimentStore(run_dir)
@@ -27,4 +34,6 @@ class ExperimentLogger:
             artifacts=artifacts or [],
             notes=notes,
         )
-        return self.store.save(record)
+        path = self.store.save(record)
+        logger.info("Logged experiment record for run '%s' to %s", run_id, path)
+        return path

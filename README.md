@@ -13,26 +13,32 @@ After a few hours, LabPilot produces:
 - AI-generated research brief
 - Baseline training pipeline
 - Cross-validated model + metrics
-- Kaggle submission (uploaded)
+- Validated Kaggle submission (local by default)
 - Experiment log
 - Reflection report with next-step recommendations
 
 ## Quick Start
 
 ```bash
-# Install (editable dev mode)
-pip install -e ".[dev,llm]"
+# Create a Python 3.11+ environment and install dependencies
+uv sync --extra dev
 
 # Configure credentials
 cp .env.example .env
-# Edit .env with your Kaggle + LLM API keys
+# Set KAGGLE_API_TOKEN in .env
 
-# Run a competition
-research run --competition titanic
+# Download Titanic data, train, evaluate, and generate submission.csv
+uv run research run --competition titanic
+
+# Upload only after inspecting the local submission
+uv run research run --competition titanic --submit
 
 # Check run status
-research status --run-id <run_id>
+uv run research status --run-id <run_id>
 ```
+
+You must join the competition and accept its rules on Kaggle before downloading data.
+On macOS, LightGBM also requires `brew install libomp`.
 
 ## Project Status
 

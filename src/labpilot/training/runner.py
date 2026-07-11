@@ -1,11 +1,18 @@
 import json
+import logging
 import subprocess
 import sys
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 
 class TrainingRunner:
-    """Execute the generated training pipeline as a subprocess."""
+    """Execute the generated training pipeline as a subprocess.
+
+    # TODO: control the verbosity of this class's logging via a future CLI
+    # --verbose/--quiet flag (see docs/MILESTONES.md).
+    """
 
     def __init__(self, run_dir: Path) -> None:
         self.run_dir = run_dir
@@ -16,7 +23,8 @@ class TrainingRunner:
         if not self.train_script.exists():
             raise FileNotFoundError(f"Training script not found: {self.train_script}")
 
-        return subprocess.run(
+        logger.info("Running training script %s", self.train_script)
+        result = subprocess.run(
             [sys.executable, str(self.train_script)],
             cwd=self.pipeline_dir,
             capture_output=True,
@@ -24,6 +32,8 @@ class TrainingRunner:
             timeout=timeout,
             check=False,
         )
+        logger.info("Training script finished with return code %d", result.returncode)
+        return result
 
     def collect_artifacts(self) -> dict[str, Path]:
         artifacts: dict[str, Path] = {}

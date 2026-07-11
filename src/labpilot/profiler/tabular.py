@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -5,6 +6,8 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 from labpilot.config import ProfilerConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ColumnProfile(BaseModel):
@@ -20,16 +23,25 @@ class ColumnProfile(BaseModel):
 class DatasetProfile(BaseModel):
     competition: str
     files: list[str] = Field(default_factory=list)
+    train_file: str | None = None
+    test_file: str | None = None
+    sample_submission_file: str | None = None
     row_count: int = 0
+    test_row_count: int = 0
     column_count: int = 0
     columns: list[ColumnProfile] = Field(default_factory=list)
     target_column: str | None = None
     id_column: str | None = None
+    submission_columns: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
 class TabularProfiler:
-    """Profile tabular competition datasets."""
+    """Profile tabular competition datasets.
+
+    # TODO: control the verbosity of this class's logging via a future CLI
+    # --verbose/--quiet flag (see docs/MILESTONES.md).
+    """
 
     def __init__(self, config: ProfilerConfig) -> None:
         self.config = config
@@ -48,7 +60,9 @@ class TabularProfiler:
                     null_count=null_count,
                     null_pct=round(null_count / max(len(df), 1) * 100, 2),
                     unique_count=int(series.nunique(dropna=True)),
-                    stats=self._numeric_stats(series) if pd.api.types.is_numeric_dtype(series) else {},
+                    stats=self._numeric_stats(series)
+                    if pd.api.types.is_numeric_dtype(series)
+                    else {},
                 )
             )
 
@@ -60,20 +74,97 @@ class TabularProfiler:
             columns=columns,
         )
 
-    def profile_directory(self, data_dir: Path, competition: str) -> DatasetProfile:
+    def profile_directory(
+        self,
+        data_dir: Path,
+        competition: str,
+        train_pattern: str = "train",
+        test_pattern: str = "test",
+        submission_pattern: str = "submission",
+    ) -> DatasetProfile:
+        # File-role detection is a naming-convention heuristic. `train_pattern`,
+        # `test_pattern`, and `submission_pattern` let a competition's local
+        # config (`configs/competitions/<slug>.yaml`) override the defaults
+        # when a dataset doesn't follow the "train*/test*/*submission*"
+        # convention.
+        # TODO: fetch the real file roles from the Kaggle competition
+        # portal/API automatically instead of relying on name matching.
+        logger.info("Profiling dataset directory %s for '%s'", data_dir, competition)
         csv_files = sorted(data_dir.rglob("*.csv"))
         if not csv_files:
-            return DatasetProfile(
-                competition=competition,
-                warnings=["No CSV files found in data directory."],
+            raise FileNotFoundError(f"No CSV files found in {data_dir}.")
+
+        train_path = self._single_file(
+            [path for path in csv_files if path.name.lower().startswith(train_pattern.lower())],
+            "training",
+        )
+        test_path = self._single_file(
+            [path for path in csv_files if path.name.lower().startswith(test_pattern.lower())],
+            "test",
+        )
+        sample_path = self._single_file(
+            [path for path in csv_files if submission_pattern.lower() in path.name.lower()],
+            "sample submission",
+        )
+
+        train_columns = list(pd.read_csv(train_path, nrows=0).columns)
+        test_columns = list(pd.read_csv(test_path, nrows=0).columns)
+        submission = pd.read_csv(sample_path, nrows=self.config.max_rows_sample)
+        submission_columns = list(submission.columns)
+
+        target_candidates = [column for column in train_columns if column not in test_columns]
+        if len(target_candidates) != 1:
+            raise ValueError(
+                "Unable to infer one target column from train/test schemas; "
+                f"found {target_candidates or 'none'}."
+            )
+        target_column = target_candidates[0]
+
+        id_candidates = [
+            column
+            for column in submission_columns
+            if column in train_columns and column in test_columns and column != target_column
+        ]
+        if not id_candidates:
+            raise ValueError("Unable to infer an ID column from the sample submission.")
+        id_column = id_candidates[0]
+
+        expected_submission_columns = [id_column, target_column]
+        if submission_columns != expected_submission_columns:
+            raise ValueError(
+                "Sample submission schema does not match the inferred ID and target columns: "
+                f"expected {expected_submission_columns}, got {submission_columns}."
             )
 
-        # Profile the largest CSV as the primary training file
-        primary = max(csv_files, key=lambda p: p.stat().st_size)
-        profile = self.profile_file(primary)
+        profile = self.profile_file(train_path)
         profile.competition = competition
         profile.files = [str(p.relative_to(data_dir)) for p in csv_files]
+        profile.train_file = str(train_path.relative_to(data_dir))
+        profile.test_file = str(test_path.relative_to(data_dir))
+        profile.sample_submission_file = str(sample_path.relative_to(data_dir))
+        profile.test_row_count = sum(
+            len(chunk) for chunk in pd.read_csv(test_path, usecols=[id_column], chunksize=10_000)
+        )
+        profile.target_column = target_column
+        profile.id_column = id_column
+        profile.submission_columns = submission_columns
+        for column in profile.columns:
+            column.is_target_candidate = column.name == target_column
+        logger.info(
+            "Profiled '%s': target=%s, id=%s, train_rows=%d, test_rows=%d",
+            competition,
+            target_column,
+            id_column,
+            profile.row_count,
+            profile.test_row_count,
+        )
         return profile
+
+    def _single_file(self, matches: list[Path], role: str) -> Path:
+        if len(matches) != 1:
+            names = [path.name for path in matches]
+            raise ValueError(f"Expected one {role} CSV, found {len(matches)}: {names}")
+        return matches[0]
 
     def _numeric_stats(self, series: pd.Series) -> dict[str, Any]:
         return {

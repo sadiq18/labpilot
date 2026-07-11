@@ -29,9 +29,7 @@ def render_markdown(profile: DatasetProfile) -> str:
     ]
 
     for col in profile.columns:
-        lines.append(
-            f"| {col.name} | {col.dtype} | {col.null_pct}% | {col.unique_count} |"
-        )
+        lines.append(f"| {col.name} | {col.dtype} | {col.null_pct}% | {col.unique_count} |")
 
     if profile.warnings:
         lines.extend(["", "## Warnings", ""])

@@ -1,12 +1,12 @@
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class StageStatus(str, Enum):
+class StageStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -26,8 +26,8 @@ class StageRecord(BaseModel):
 class RunManifest(BaseModel):
     run_id: str
     competition: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
     status: StageStatus = StageStatus.PENDING
     stages: list[StageRecord] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -41,24 +41,32 @@ class RunManifest(BaseModel):
     def mark_running(self, name: str) -> None:
         record = self._get_or_create(name)
         record.status = StageStatus.RUNNING
-        record.started_at = datetime.now(timezone.utc)
-        self.updated_at = datetime.now(timezone.utc)
+        record.started_at = datetime.now()
+        self.updated_at = datetime.now()
 
     def mark_completed(self, name: str, artifacts: list[str] | None = None) -> None:
         record = self._get_or_create(name)
         record.status = StageStatus.COMPLETED
-        record.finished_at = datetime.now(timezone.utc)
+        record.finished_at = datetime.now()
         if artifacts:
             record.artifacts = artifacts
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now()
 
     def mark_failed(self, name: str, error: str) -> None:
         record = self._get_or_create(name)
         record.status = StageStatus.FAILED
-        record.finished_at = datetime.now(timezone.utc)
+        record.finished_at = datetime.now()
         record.error = error
         self.status = StageStatus.FAILED
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now()
+
+    def mark_skipped(self, name: str, artifacts: list[str] | None = None) -> None:
+        record = self._get_or_create(name)
+        record.status = StageStatus.SKIPPED
+        record.finished_at = datetime.now()
+        if artifacts:
+            record.artifacts = artifacts
+        self.updated_at = datetime.now()
 
     def _get_or_create(self, name: str) -> StageRecord:
         record = self.stage(name)
@@ -69,7 +77,7 @@ class RunManifest(BaseModel):
 
 
 def generate_run_id(competition: str) -> str:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     slug = competition.replace("/", "-").lower()
     return f"{timestamp}-{slug}"
 
