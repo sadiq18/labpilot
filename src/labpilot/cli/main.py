@@ -56,7 +56,12 @@ def run(
         help="Upload the validated submission to Kaggle (disabled by default)",
     ),
 ) -> None:
-    """Run the full research pipeline for a Kaggle competition."""
+    """Run the full research pipeline for a Kaggle competition.
+
+    For a two-step workflow that pauses after the brief to review the
+    resolved competition/baseline choice before training, use `research
+    init` followed by `research build` instead.
+    """
     _fail_fast_on_bad_environment()
 
     config = load_config(config_path)
@@ -75,10 +80,86 @@ def run(
 
 
 @app.command()
+def init(
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    competitions_dir: Path | None = typer.Option(
+        None,
+        "--competitions-dir",
+        help=(
+            "Directory containing local per-competition contracts "
+            "(<slug>.yaml). Defaults to configs/competitions. See "
+            "configs/competitions/README.md."
+        ),
+    ),
+) -> None:
+    """Run just the init half: parse competition → download data → profile → brief.
+
+    Stops before any baseline is chosen or trained, so you can inspect
+    competition.json/profile.json/brief.md and then run `research build
+    --run-id <id>` to continue.
+    """
+    _fail_fast_on_bad_environment(skip_lightgbm=True)
+
+    config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
+
+    console.print(f"[bold]LabPilot[/bold] — initializing run for [cyan]{competition}[/cyan]\n")
+
+    pipeline = Pipeline(config, configs_dir=competitions_dir)
+    manifest = pipeline.init(competition)
+
+    run_dir = config.runs_dir / manifest.run_id
+    console.print(f"\n[green]Init complete:[/green] {run_dir}")
+    console.print(f"[green]Brief:[/green] {run_dir / 'brief.md'}")
+    console.print(f"\nNext: [cyan]research build --run-id {manifest.run_id}[/cyan]")
+
+
+@app.command()
+def build(
+    run_id: str = typer.Option(
+        ..., "--run-id", "-r", help="Run ID to build (from `research init`)"
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(
+        None, "--runs-dir", help="Override runs directory (must match the `init` call's)"
+    ),
+    submit: bool = typer.Option(
+        False,
+        "--submit",
+        help="Upload the validated submission to Kaggle (disabled by default)",
+    ),
+) -> None:
+    """Run the build half of an already-`init`'d run: baseline through reflection."""
+    _fail_fast_on_bad_environment()
+
+    config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
+    console.print(f"[bold]LabPilot[/bold] — building run [cyan]{run_id}[/cyan]\n")
+
+    pipeline = Pipeline(config, submit=submit)
+    manifest = _continue_or_exit(pipeline.build, run_id)
+
+    run_dir = config.runs_dir / manifest.run_id
+    console.print(f"\n[green]Build complete:[/green] {run_dir}")
+    console.print(f"[green]Reflection:[/green] {run_dir / 'reflection.md'}")
+
+
+@app.command()
 def resume(
     run_id: str = typer.Option(..., "--run-id", "-r", help="Run ID to resume"),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(
+        None, "--runs-dir", help="Override runs directory (must match the original run's)"
     ),
     competitions_dir: Path | None = typer.Option(
         None,
@@ -100,12 +181,29 @@ def resume(
     _fail_fast_on_bad_environment()
 
     config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
     console.print(f"[bold]LabPilot[/bold] — resuming run [cyan]{run_id}[/cyan]\n")
 
     pipeline = Pipeline(config, submit=submit, configs_dir=competitions_dir)
-    manifest = pipeline.resume(run_id)
+    manifest = _continue_or_exit(pipeline.resume, run_id)
 
     console.print(f"\n[green]Run complete:[/green] {config.runs_dir / manifest.run_id}")
+
+
+def _continue_or_exit(action, run_id: str):
+    """Shared error handling for `build`/`resume`: turn a missing run or an
+    unmet precondition (e.g. `build` before `init` finished) into a clean
+    one-line error instead of a raw traceback.
+    """
+    try:
+        return action(run_id)
+    except FileNotFoundError:
+        console.print(f"[red]Run not found:[/red] {run_id} (check --runs-dir).")
+        raise typer.Exit(code=1) from None
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
 
 
 @app.command()
@@ -117,8 +215,13 @@ def doctor() -> None:
         raise typer.Exit(code=1)
 
 
-def _fail_fast_on_bad_environment() -> None:
-    results = check_environment()
+def _fail_fast_on_bad_environment(skip_lightgbm: bool = False) -> None:
+    # `research init` never touches LightGBM (no baseline is trained), so a
+    # broken/missing install on this machine shouldn't block it — only
+    # `build`/`run`/`resume`, which actually train a model, need to check.
+    results = [
+        r for r in check_environment() if not (skip_lightgbm and r.name == "LightGBM import")
+    ]
     if all(result.ok for result in results):
         return
     console.print("[red]Environment check failed — run `research doctor` for details.[/red]")
@@ -132,9 +235,12 @@ def status(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
 ) -> None:
     """Show the status of a research run."""
     config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
     manifest = find_manifest(config, run_id)
 
     table = Table(title=f"Run: {manifest.run_id}")
@@ -162,9 +268,12 @@ def list_runs(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
 ) -> None:
     """List all research runs."""
     config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
     runs_root = config.runs_dir
 
     if not runs_root.exists():
@@ -176,11 +285,20 @@ def list_runs(
     table.add_column("Competition")
     table.add_column("Status")
 
+    status_styles = {
+        StageStatus.COMPLETED: "green",
+        StageStatus.FAILED: "red",
+        StageStatus.RUNNING: "yellow",
+        StageStatus.PARTIAL: "cyan",
+    }
     for run_dir in sorted(runs_root.iterdir(), reverse=True):
         manifest_path = run_dir / "manifest.json"
         if manifest_path.exists():
             manifest = find_manifest(config, run_dir.name)
-            table.add_row(manifest.run_id, manifest.competition, manifest.status.value)
+            style = status_styles.get(manifest.status, "dim")
+            table.add_row(
+                manifest.run_id, manifest.competition, f"[{style}]{manifest.status.value}[/{style}]"
+            )
 
     console.print(table)
 

@@ -12,6 +12,11 @@ class StageStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    # RunManifest-level only (never set on an individual StageRecord): all
+    # requested stages finished without error, but they didn't reach the end
+    # of the full pipeline — e.g. `research init` stops after generate_brief,
+    # leaving the run ready for `research build` to continue.
+    PARTIAL = "partial"
 
 
 class StageRecord(BaseModel):
