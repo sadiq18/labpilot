@@ -17,6 +17,12 @@ class ColumnProfile(BaseModel):
     null_pct: float = 0.0
     unique_count: int = 0
     is_target_candidate: bool = False
+    # Computed once here via `pd.api.types`, rather than re-derived downstream
+    # by matching against `dtype` strings — pandas' own dtype names aren't
+    # stable across versions (e.g. pandas 3.0 reports plain string columns as
+    # dtype "str", not "object"), so string-matching `dtype` for "is this
+    # categorical?" silently breaks when that changes.
+    is_numeric: bool = False
     stats: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -49,6 +55,13 @@ class TabularProfiler:
         for col in df.columns:
             series = df[col]
             null_count = int(series.isna().sum())
+            # Bool is numeric by pandas' own `is_numeric_dtype`, but a 0/1 (or
+            # True/False) column reads as a class label, not a quantity — so
+            # it's treated as categorical here, matching how it's always been
+            # handled for classification-target inference.
+            is_numeric = pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(
+                series
+            )
             columns.append(
                 ColumnProfile(
                     name=col,
@@ -56,9 +69,8 @@ class TabularProfiler:
                     null_count=null_count,
                     null_pct=round(null_count / max(len(df), 1) * 100, 2),
                     unique_count=int(series.nunique(dropna=True)),
-                    stats=self._numeric_stats(series)
-                    if pd.api.types.is_numeric_dtype(series)
-                    else {},
+                    is_numeric=is_numeric,
+                    stats=self._numeric_stats(series) if is_numeric else {},
                 )
             )
 

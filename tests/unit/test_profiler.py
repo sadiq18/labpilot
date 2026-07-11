@@ -35,6 +35,38 @@ def test_tabular_profiler(sample_csv: Path):
     assert len(profile.columns) == 4
 
 
+def test_column_profile_is_numeric_flag(sample_csv: Path):
+    """`is_numeric` must reflect actual numeric-ness rather than a fixed set
+    of dtype-string spellings — pandas has changed how it spells "this is a
+    plain string column" across versions (e.g. "object" vs "str"), so
+    anything downstream that needs "is this categorical?" should read this
+    flag instead of re-deriving it from `ColumnProfile.dtype`.
+    """
+    profiler = TabularProfiler.__new__(TabularProfiler)
+    profiler.config = type("C", (), {"max_rows_sample": 1000})()
+
+    profile = TabularProfiler.profile_file(profiler, sample_csv)
+    by_name = {column.name: column for column in profile.columns}
+
+    assert by_name["id"].is_numeric is True
+    assert by_name["feature_a"].is_numeric is True
+    assert by_name["feature_b"].is_numeric is False
+    assert by_name["target"].is_numeric is True
+
+
+def test_column_profile_treats_bool_as_non_numeric(tmp_path: Path):
+    df = pd.DataFrame({"id": [1, 2, 3, 4], "flag": [True, False, True, False]})
+    path = tmp_path / "bool.csv"
+    df.to_csv(path, index=False)
+
+    profiler = TabularProfiler.__new__(TabularProfiler)
+    profiler.config = type("C", (), {"max_rows_sample": 1000})()
+    profile = TabularProfiler.profile_file(profiler, path)
+
+    flag = next(column for column in profile.columns if column.name == "flag")
+    assert flag.is_numeric is False
+
+
 def test_baseline_selector_defaults():
     competition = CompetitionSpec(slug="titanic")
     profile = DatasetProfile(competition="titanic", row_count=891, column_count=12)
@@ -63,6 +95,30 @@ def test_baseline_selector_metric_name_ignores_mismatched_competition_metric():
     choice = BaselineSelector().select(competition, profile)
 
     assert choice.metric_name == "rmse"
+
+
+def test_baseline_selector_infers_classification_for_string_multiclass_target():
+    """A string-labeled target with many classes must still be read as
+    classification, not regression — this is the scenario that first
+    surfaced the pandas 3.0 "str" dtype vs "object" mismatch (see
+    `test_column_profile_is_numeric_flag`).
+    """
+    from labpilot.profiler.tabular import ColumnProfile
+
+    competition = CompetitionSpec(slug="species-competition")
+    profile = DatasetProfile(
+        competition="species-competition",
+        row_count=18,
+        column_count=3,
+        target_column="species",
+        columns=[
+            ColumnProfile(name="species", dtype="str", unique_count=3, is_numeric=False),
+        ],
+    )
+
+    choice = BaselineSelector().select(competition, profile)
+
+    assert choice.problem_type == "tabular_classification"
 
 
 def test_profile_directory_infers_titanic_contract(titanic_data_dir: Path):

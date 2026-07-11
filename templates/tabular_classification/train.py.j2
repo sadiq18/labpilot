@@ -101,33 +101,36 @@ def main() -> None:
     X_test = test[feature_columns]
     encoder = LabelEncoder()
     y = encoder.fit_transform(train[TARGET_COLUMN])
-    if len(encoder.classes_) != 2:
-        raise ValueError(
-            f"P0 classification template supports binary targets, got {len(encoder.classes_)} classes."
-        )
+    num_classes = len(encoder.classes_)
+    if num_classes < 2:
+        raise ValueError(f"Classification target needs at least two classes, got {num_classes}.")
 
     smallest_class = int(np.bincount(y).min())
     folds = min(CV_FOLDS, smallest_class)
     if folds < 2:
         raise ValueError("Each target class needs at least two rows for cross-validation.")
 
-    oof_probability = np.zeros(len(train), dtype=float)
-    oof_label = np.zeros(len(train), dtype=int)
-    test_probabilities = []
+    # A shared (n_rows, num_classes) layout — rather than a single positive-
+    # class probability column — is what lets this same code path handle
+    # binary and multi-class targets identically: the predicted label is
+    # always just the argmax column, whether there are 2 classes or 20.
+    oof_proba = np.zeros((len(train), num_classes), dtype=float)
+    test_proba = np.zeros((len(test), num_classes), dtype=float)
     models = []
     splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=RANDOM_SEED)
 
     for train_idx, val_idx in splitter.split(X, y):
         model = build_model(X.iloc[train_idx])
         model.fit(X.iloc[train_idx], y[train_idx])
-        fold_probability = model.predict_proba(X.iloc[val_idx])[:, 1]
-        oof_probability[val_idx] = fold_probability
-        oof_label[val_idx] = (fold_probability >= 0.5).astype(int)
-        test_probabilities.append(model.predict_proba(X_test)[:, 1])
+        # Index by `model.classes_` (not raw column position) in case a fold's
+        # training split ever ends up missing a rare class.
+        oof_proba[np.ix_(val_idx, model.classes_)] = model.predict_proba(X.iloc[val_idx])
+        test_proba[:, model.classes_] += model.predict_proba(X_test)
         models.append(model)
 
-    cv_accuracy = accuracy_score(y, oof_label)
-    predicted_codes = (np.mean(test_probabilities, axis=0) >= 0.5).astype(int)
+    oof_codes = oof_proba.argmax(axis=1)
+    cv_accuracy = accuracy_score(y, oof_codes)
+    predicted_codes = (test_proba / folds).argmax(axis=1)
     predicted_labels = encoder.inverse_transform(predicted_codes)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -135,12 +138,14 @@ def main() -> None:
         {
             ID_COLUMN: train[ID_COLUMN],
             "actual": train[TARGET_COLUMN],
-            "prediction": encoder.inverse_transform(oof_label),
-            "probability": oof_probability,
+            "prediction": encoder.inverse_transform(oof_codes),
+            # Probability of the predicted class, not just "the positive
+            # class" — meaningful for both binary and multi-class targets.
+            "confidence": oof_proba.max(axis=1),
         }
     ).to_csv(OUTPUT_DIR / "oof.csv", index=False)
 
-    metrics = {"cv_accuracy": float(cv_accuracy), "cv_folds": folds}
+    metrics = {"cv_accuracy": float(cv_accuracy), "cv_folds": folds, "num_classes": num_classes}
     (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
     models_dir = OUTPUT_DIR / "models"

@@ -70,6 +70,43 @@ def generic_regression_data_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def multiclass_data_dir(tmp_path: Path) -> Path:
+    """A synthetic 3-class dataset with *string* labels (unlike Titanic's
+    numeric binary target), to exercise multi-class support end-to-end.
+    """
+    data_dir = tmp_path / "multiclass-fixture"
+    data_dir.mkdir()
+
+    species = ["setosa", "versicolor", "virginica"]
+    rows_per_class = 6
+    train_species = species * rows_per_class
+    train = pd.DataFrame(
+        {
+            "id": range(1, len(train_species) + 1),
+            "petal_length": [1.4 + 0.1 * i for i in range(len(train_species))],
+            "petal_width": [0.2 + 0.05 * i for i in range(len(train_species))],
+            "color": (["pale", "bright"] * (len(train_species) // 2 + 1))[: len(train_species)],
+            "species": train_species,
+        }
+    )
+    test_species = species * 2
+    test = pd.DataFrame(
+        {
+            "id": range(len(train_species) + 1, len(train_species) + len(test_species) + 1),
+            "petal_length": [1.5 + 0.2 * i for i in range(len(test_species))],
+            "petal_width": [0.3 + 0.04 * i for i in range(len(test_species))],
+            "color": (["pale", "bright"] * (len(test_species) // 2 + 1))[: len(test_species)],
+        }
+    )
+    sample_submission = pd.DataFrame({"id": test["id"], "species": ["setosa"] * len(test)})
+
+    train.to_csv(data_dir / "train.csv", index=False)
+    test.to_csv(data_dir / "test.csv", index=False)
+    sample_submission.to_csv(data_dir / "sample_submission.csv", index=False)
+    return data_dir
+
+
+@pytest.fixture
 def competition_configs_dir(tmp_path: Path) -> Path:
     """A local, non-committed directory of competition contracts for tests.
 
@@ -100,5 +137,16 @@ def competition_configs_dir(tmp_path: Path) -> Path:
         "submission_columns:\n"
         "  - id\n"
         "  - target\n"
+    )
+    (configs_dir / "generic-multiclass-competition.yaml").write_text(
+        "title: Generic Multi-Class Competition\n"
+        "description: A synthetic, competition-agnostic multi-class classification fixture.\n"
+        "problem_type: tabular_classification\n"
+        "evaluation_metric:\n"
+        "  name: accuracy\n"
+        "  direction: maximize\n"
+        "submission_columns:\n"
+        "  - id\n"
+        "  - species\n"
     )
     return configs_dir

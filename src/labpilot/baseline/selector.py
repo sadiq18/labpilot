@@ -85,12 +85,11 @@ class BaselineSelector:
         if profile.target_column:
             target = next((c for c in profile.columns if c.name == profile.target_column), None)
             if target:
-                looks_categorical = target.dtype in ("object", "category", "bool")
                 looks_like_discrete_labels = (
                     target.unique_count <= MAX_CLASSIFICATION_CARDINALITY
                     and target.unique_count < profile.row_count
                 )
-                if looks_categorical or looks_like_discrete_labels:
+                if not target.is_numeric or looks_like_discrete_labels:
                     return ProblemType.TABULAR_CLASSIFICATION.value
                 return ProblemType.TABULAR_REGRESSION.value
 
