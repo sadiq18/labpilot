@@ -12,11 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class CodeRenderer:
-    """Render baseline training code from Jinja2 templates.
-
-    # TODO: control the verbosity of this class's logging via a future CLI
-    # --verbose/--quiet flag (see docs/MILESTONES.md).
-    """
+    """Render baseline training code from Jinja2 templates."""
 
     def __init__(self, training_config: TrainingConfig) -> None:
         self.training_config = training_config

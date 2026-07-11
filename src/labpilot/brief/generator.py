@@ -11,11 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class BriefGenerator:
-    """Generate an AI research brief from competition + dataset profile.
-
-    # TODO: control the verbosity of this class's logging via a future CLI
-    # --verbose/--quiet flag (see docs/MILESTONES.md).
-    """
+    """Generate an AI research brief from competition + dataset profile."""
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config

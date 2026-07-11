@@ -8,11 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class ExperimentLogger:
-    """Log experiment params, metrics, and artifact paths.
-
-    # TODO: control the verbosity of this class's logging via a future CLI
-    # --verbose/--quiet flag (see docs/MILESTONES.md).
-    """
+    """Log experiment params, metrics, and artifact paths."""
 
     def __init__(self, run_dir: Path) -> None:
         self.store = ExperimentStore(run_dir)

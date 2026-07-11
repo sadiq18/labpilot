@@ -8,11 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class TrainingRunner:
-    """Execute the generated training pipeline as a subprocess.
-
-    # TODO: control the verbosity of this class's logging via a future CLI
-    # --verbose/--quiet flag (see docs/MILESTONES.md).
-    """
+    """Execute the generated training pipeline as a subprocess."""
 
     def __init__(self, run_dir: Path) -> None:
         # Resolved defensively: the script runs as a subprocess with

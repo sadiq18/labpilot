@@ -9,6 +9,26 @@ from labpilot.profiler.tabular import DatasetProfile
 
 logger = logging.getLogger(__name__)
 
+# P0 has exactly one template per problem type, and each template's generated
+# training script always writes a single hardcoded `cv_<metric>` key to
+# metrics.json (see templates/*/train.py.j2). The metric a competition
+# actually uses on Kaggle (e.g. RMSLE, F1, AUC) is informational only in P0 —
+# `_evaluate_cv` must look for the key the template really produces, not
+# whatever a competition's metadata happens to say, or evaluation would fail
+# for otherwise-correct runs.
+DEFAULT_METRIC_BY_PROBLEM_TYPE: dict[str, str] = {
+    ProblemType.TABULAR_CLASSIFICATION.value: "accuracy",
+    ProblemType.TABULAR_REGRESSION.value: "rmse",
+}
+
+# A target is treated as classification if it's non-numeric, OR numeric with
+# few enough distinct values that they read as class labels rather than a
+# continuous quantity (e.g. Titanic's 0/1 `Survived`, stored as int64).
+# Requiring at least one repeated value (`unique_count < row_count`) keeps
+# small regression datasets where every row happens to have a unique target
+# (common with only a handful of rows) from being misread as classification.
+MAX_CLASSIFICATION_CARDINALITY = 20
+
 
 class BaselineChoice(BaseModel):
     problem_type: str
@@ -24,11 +44,7 @@ class BaselineChoice(BaseModel):
 
 
 class BaselineSelector:
-    """Rule-based baseline template selection for P0.
-
-    # TODO: control the verbosity of this class's logging via a future CLI
-    # --verbose/--quiet flag (see docs/MILESTONES.md).
-    """
+    """Rule-based baseline template selection for P0."""
 
     def select(self, competition: CompetitionSpec, profile: DatasetProfile) -> BaselineChoice:
         problem_type = self._infer_problem_type(competition, profile)
@@ -37,10 +53,12 @@ class BaselineSelector:
         if template is None:
             raise ValueError(f"No baseline template for problem type: {problem_type}")
 
+        metric_name = DEFAULT_METRIC_BY_PROBLEM_TYPE.get(problem_type, "accuracy")
         logger.info(
-            "Selected baseline template '%s' for problem type '%s'.",
+            "Selected baseline template '%s' for problem type '%s' (metric key: cv_%s).",
             template.name,
             problem_type,
+            metric_name,
         )
         return BaselineChoice(
             problem_type=problem_type,
@@ -52,9 +70,7 @@ class BaselineSelector:
             test_file=profile.test_file,
             sample_submission_file=profile.sample_submission_file,
             submission_columns=profile.submission_columns,
-            metric_name=(
-                competition.evaluation_metric.name if competition.evaluation_metric else "accuracy"
-            ),
+            metric_name=metric_name,
         )
 
     def save(self, run_dir: Path, choice: BaselineChoice) -> Path:
@@ -68,9 +84,14 @@ class BaselineSelector:
 
         if profile.target_column:
             target = next((c for c in profile.columns if c.name == profile.target_column), None)
-            if target and target.dtype in ("object", "category", "bool"):
-                return ProblemType.TABULAR_CLASSIFICATION.value
             if target:
+                looks_categorical = target.dtype in ("object", "category", "bool")
+                looks_like_discrete_labels = (
+                    target.unique_count <= MAX_CLASSIFICATION_CARDINALITY
+                    and target.unique_count < profile.row_count
+                )
+                if looks_categorical or looks_like_discrete_labels:
+                    return ProblemType.TABULAR_CLASSIFICATION.value
                 return ProblemType.TABULAR_REGRESSION.value
 
         # Default P0 assumption: tabular classification

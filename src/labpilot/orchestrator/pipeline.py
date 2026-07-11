@@ -83,13 +83,51 @@ class Pipeline:
         save_manifest(resolved_run_dir, manifest)
 
         stages = self.config.pipeline.stages or list(self.handlers.keys())
-        total = len(stages)
+        return self._execute(resolved_run_dir, manifest, stages, stages)
 
-        for index, stage_name in enumerate(stages, start=1):
+    def resume(self, run_id: str) -> RunManifest:
+        """Resume a run from its first failed/incomplete stage.
+
+        Stages already `completed` or `skipped` are left as-is; everything
+        else (`failed`, stuck `running` from a killed process, or never
+        reached) is re-executed in pipeline order.
+        """
+        resolved_run_dir = (self.config.runs_dir / run_id).resolve()
+        manifest = load_manifest(resolved_run_dir)
+        all_stages = self.config.pipeline.stages or list(self.handlers.keys())
+
+        done = {StageStatus.COMPLETED, StageStatus.SKIPPED}
+        finished_names = {record.name for record in manifest.stages if record.status in done}
+        remaining = [name for name in all_stages if name not in finished_names]
+
+        if not remaining:
+            console.print(f"[green]Run '{run_id}' has nothing left to resume.[/green]")
+            return manifest
+
+        console.print(
+            f"Resuming '{run_id}' from stage [cyan]{remaining[0]}[/cyan] "
+            f"({len(all_stages) - len(remaining)}/{len(all_stages)} already done).\n"
+        )
+        manifest.status = StageStatus.RUNNING
+        save_manifest(resolved_run_dir, manifest)
+        return self._execute(resolved_run_dir, manifest, remaining, all_stages)
+
+    def _execute(
+        self,
+        resolved_run_dir: Path,
+        manifest: RunManifest,
+        stages: list[str],
+        all_stages: list[str],
+    ) -> RunManifest:
+        competition = manifest.competition
+        total = len(all_stages)
+
+        for stage_name in stages:
             handler = self.handlers.get(stage_name)
             if handler is None:
                 raise ValueError(f"Unknown pipeline stage: {stage_name}")
 
+            index = all_stages.index(stage_name) + 1
             console.print(f"[bold][{index}/{total}][/bold] {stage_name}...")
             if stage_name == "upload_submission" and not self.submit:
                 result = SubmissionResult(
@@ -130,7 +168,11 @@ class Pipeline:
     def _parse_competition(
         self, run_dir: Path, manifest: RunManifest, config: AppConfig
     ) -> list[str]:
-        parser = CompetitionParser(manifest.competition, configs_dir=self.configs_dir)
+        parser = CompetitionParser(
+            manifest.competition,
+            configs_dir=self.configs_dir,
+            metadata_fetcher=self.kaggle_client,
+        )
         path = parser.save(run_dir)
         return [str(path)]
 
@@ -212,13 +254,12 @@ class Pipeline:
         if not metrics_path.exists():
             raise FileNotFoundError("Training did not produce metrics.json.")
 
-        competition = CompetitionSpec.model_validate_json(
-            (run_dir / "competition.json").read_text()
-        )
-        metric_name = (
-            competition.evaluation_metric.name if competition.evaluation_metric else "accuracy"
-        )
-        expected_key = f"cv_{metric_name}"
+        # The metric key to look for comes from the baseline choice (i.e. the
+        # metric the selected template actually writes), not from the
+        # competition's real evaluation metric — see
+        # baseline.selector.DEFAULT_METRIC_BY_PROBLEM_TYPE.
+        choice = BaselineChoice.model_validate_json((run_dir / "baseline_choice.json").read_text())
+        expected_key = f"cv_{choice.metric_name}"
         metrics = json.loads(metrics_path.read_text())
         score = metrics.get(expected_key)
         if not isinstance(score, (int, float)):

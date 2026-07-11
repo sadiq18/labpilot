@@ -1,8 +1,13 @@
-# Competition contracts (local only)
+# Competition contracts (local, optional overrides)
 
-LabPilot is meant to work for *any* Kaggle competition, so this repository does
-not ship any competition-specific data. Instead, each competition's contract
-lives in a local, untracked file:
+LabPilot works for *any* Kaggle competition without a hand-written file. When
+you run `research run --competition <slug>`, LabPilot automatically resolves
+title, description, and evaluation metric from the Kaggle API, and infers the
+problem type (classification vs. regression) and file roles (train/test/
+sample submission) directly from the downloaded data.
+
+A local, untracked file still exists for the cases automatic resolution can't
+cover:
 
 ```
 configs/competitions/<slug>.yaml
@@ -11,11 +16,19 @@ configs/competitions/<slug>.yaml
 `<slug>` is the Kaggle competition slug you pass to `--competition`
 (e.g. the slug in `https://www.kaggle.com/competitions/<slug>`).
 
-These files are git-ignored on purpose — see the pending "generic competition
-metadata resolution" task in `docs/MILESTONES.md`. The long-term direction is
-for the CLI/agent to resolve this contract automatically from the Kaggle URL
-or slug (via the Kaggle API/portal). Until that lands, create the file
-yourself for whatever competition you are running.
+Use one when you need to:
+
+- Override file-naming patterns for a competition whose files don't follow
+  the `train*` / `test*` / `*submission*` convention the profiler assumes.
+- Force a specific `problem_type` if the automatic inference from the target
+  column's dtype/cardinality guesses wrong for an unusual dataset.
+- Pin a `title`/`description` for the brief and reflection when the
+  Kaggle-search-based lookup can't find or disambiguate the competition
+  (very generic slugs sometimes match dozens of unrelated public
+  competitions and are skipped rather than risk resolving to the wrong one).
+
+These files are git-ignored on purpose — every user's local overrides are
+their own.
 
 ## Schema
 
@@ -42,6 +55,8 @@ test_file_pattern: test
 submission_file_pattern: submission
 ```
 
-Only `problem_type`, `evaluation_metric`, and `submission_columns` are used by
-the pipeline today; the rest is informational context passed to the brief and
-reflection generators.
+Only `problem_type` and `evaluation_metric.name` actually change pipeline
+behavior (problem type selects the baseline template; the evaluation metric
+is informational only — P0's templates always report `cv_accuracy` or
+`cv_rmse` regardless of the competition's real metric). Everything else is
+context passed to the brief and reflection generators.
