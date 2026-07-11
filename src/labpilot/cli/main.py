@@ -1,12 +1,15 @@
 import logging
+import sys
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.prompt import Confirm
 from rich.table import Table
 
-from labpilot.config import load_config
+from labpilot.config import LLMConfig, load_config
 from labpilot.diagnostics import check_environment, print_diagnostics_report
+from labpilot.llm.client import LLMClient, create_llm_client
 from labpilot.orchestrator.manifest import StageStatus
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
 
@@ -55,6 +58,12 @@ def run(
         "--submit",
         help="Upload the validated submission to Kaggle (disabled by default)",
     ),
+    assume_yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompts, e.g. proceed without LLM if unavailable",
+    ),
 ) -> None:
     """Run the full research pipeline for a Kaggle competition.
 
@@ -67,10 +76,11 @@ def run(
     config = load_config(config_path)
     if runs_dir:
         config.runs_dir = runs_dir
+    llm_client = _check_llm_or_confirm(config.llm, assume_yes)
 
     console.print(f"[bold]LabPilot[/bold] — starting run for [cyan]{competition}[/cyan]\n")
 
-    pipeline = Pipeline(config, submit=submit, configs_dir=competitions_dir)
+    pipeline = Pipeline(config, submit=submit, configs_dir=competitions_dir, llm_client=llm_client)
     manifest = pipeline.run(competition)
 
     console.print(f"\n[green]Run complete:[/green] {config.runs_dir / manifest.run_id}")
@@ -95,6 +105,12 @@ def init(
             "configs/competitions/README.md."
         ),
     ),
+    assume_yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompts, e.g. proceed without LLM if unavailable",
+    ),
 ) -> None:
     """Run just the init half: parse competition → download data → profile → brief.
 
@@ -107,10 +123,11 @@ def init(
     config = load_config(config_path)
     if runs_dir:
         config.runs_dir = runs_dir
+    llm_client = _check_llm_or_confirm(config.llm, assume_yes)
 
     console.print(f"[bold]LabPilot[/bold] — initializing run for [cyan]{competition}[/cyan]\n")
 
-    pipeline = Pipeline(config, configs_dir=competitions_dir)
+    pipeline = Pipeline(config, configs_dir=competitions_dir, llm_client=llm_client)
     manifest = pipeline.init(competition)
 
     run_dir = config.runs_dir / manifest.run_id
@@ -135,6 +152,12 @@ def build(
         "--submit",
         help="Upload the validated submission to Kaggle (disabled by default)",
     ),
+    assume_yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompts, e.g. proceed without LLM if unavailable",
+    ),
 ) -> None:
     """Run the build half of an already-`init`'d run: baseline through reflection."""
     _fail_fast_on_bad_environment()
@@ -142,9 +165,10 @@ def build(
     config = load_config(config_path)
     if runs_dir:
         config.runs_dir = runs_dir
+    llm_client = _check_llm_or_confirm(config.llm, assume_yes)
     console.print(f"[bold]LabPilot[/bold] — building run [cyan]{run_id}[/cyan]\n")
 
-    pipeline = Pipeline(config, submit=submit)
+    pipeline = Pipeline(config, submit=submit, llm_client=llm_client)
     manifest = _continue_or_exit(pipeline.build, run_id)
 
     run_dir = config.runs_dir / manifest.run_id
@@ -171,6 +195,12 @@ def resume(
         "--submit",
         help="Upload the validated submission to Kaggle (disabled by default)",
     ),
+    assume_yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompts, e.g. proceed without LLM if unavailable",
+    ),
 ) -> None:
     """Resume a run from its first failed or incomplete stage.
 
@@ -183,9 +213,10 @@ def resume(
     config = load_config(config_path)
     if runs_dir:
         config.runs_dir = runs_dir
+    llm_client = _check_llm_or_confirm(config.llm, assume_yes)
     console.print(f"[bold]LabPilot[/bold] — resuming run [cyan]{run_id}[/cyan]\n")
 
-    pipeline = Pipeline(config, submit=submit, configs_dir=competitions_dir)
+    pipeline = Pipeline(config, submit=submit, configs_dir=competitions_dir, llm_client=llm_client)
     manifest = _continue_or_exit(pipeline.resume, run_id)
 
     console.print(f"\n[green]Run complete:[/green] {config.runs_dir / manifest.run_id}")
@@ -204,6 +235,38 @@ def _continue_or_exit(action, run_id: str):
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from None
+
+
+def _check_llm_or_confirm(config: LLMConfig, assume_yes: bool) -> LLMClient | None:
+    """Check LLM availability once up front instead of silently falling
+    back mid-run: warn when no provider is available, and let an
+    interactive user opt out before spending 1-4 hours on a run that will
+    only produce template-text briefs/reflections.
+
+    Non-interactive runs (CI, scripts, `--yes`) never block on a prompt —
+    they just warn and proceed, preserving the "unattended for hours"
+    promise. A missing LLM is never treated as a hard failure the way
+    `_fail_fast_on_bad_environment` treats a broken Python/LightGBM/Kaggle
+    setup, since an LLM is optional by design.
+    """
+    client = create_llm_client(config)
+    if client is not None:
+        return client
+
+    console.print(
+        "[yellow]No LLM provider available[/yellow] (missing OPENAI_API_KEY/GEMINI_API_KEY, "
+        "or the optional package isn't installed) — brief.md/reflection.md will use "
+        "template fallback text instead of AI-generated content."
+    )
+    if assume_yes or not sys.stdin.isatty():
+        console.print("Proceeding without LLM.")
+        return None
+
+    if Confirm.ask("Continue without LLM-generated brief/reflection?", default=True):
+        return None
+
+    console.print("[red]Aborted.[/red]")
+    raise typer.Exit(code=1)
 
 
 @app.command()

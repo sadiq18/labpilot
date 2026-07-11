@@ -26,6 +26,9 @@ uv sync --extra dev
 # Configure credentials
 cp .env.example .env
 # Set KAGGLE_API_TOKEN in .env
+# Optionally set OPENAI_API_KEY (or GEMINI_API_KEY, with LABPILOT_LLM_PROVIDER=gemini)
+# for AI-generated brief.md/reflection.md — omit both and LabPilot falls back to
+# template-only text instead of failing.
 
 # Sanity-check your environment (Python, LightGBM, Kaggle credentials)
 uv run research doctor
@@ -64,6 +67,7 @@ baseline → code → train → evaluate → submission → upload → log → r
 | `--runs-dir` | Override the runs directory |
 | `--competitions-dir` | Directory with local per-competition contracts (`<slug>.yaml`); see [configs/competitions/README.md](configs/competitions/README.md) |
 | `--submit` | Upload the validated submission to Kaggle (disabled by default) |
+| `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
 
 ### `research init --competition <slug>`
 
@@ -84,6 +88,7 @@ finished yet.
 | `--config` | Path to config file (default: `configs/default.yaml`) |
 | `--runs-dir` | Override the runs directory (must match the `init` call's) |
 | `--submit` | Upload the validated submission to Kaggle (disabled by default) |
+| `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
 
 ### `research resume --run-id <id>`
 
@@ -98,6 +103,13 @@ or never reached) is re-executed in pipeline order.
 | `--runs-dir` | Override the runs directory (must match the original run's) |
 | `--competitions-dir` | Directory with local per-competition contracts |
 | `--submit` | Upload the validated submission to Kaggle (disabled by default) |
+| `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
+
+`run`/`init`/`build`/`resume` all check LLM availability once up front (before doing any work):
+if neither `OPENAI_API_KEY` nor `GEMINI_API_KEY` is set (or the matching optional package isn't
+installed), they print a warning and ask for confirmation before continuing with template-only
+`brief.md`/`reflection.md` — pass `--yes` to skip the prompt (also skipped automatically for
+non-interactive/CI runs).
 
 ### `research doctor`
 

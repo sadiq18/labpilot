@@ -149,7 +149,7 @@ locally authored file.
 | **Responsibility** | AI problem framing, risks, strategy |
 | **Input** | `CompetitionSpec` + `DatasetProfile` |
 | **Output** | `brief.md` |
-| **P0 status** | Fallback only — LLM call not wired |
+| **P0 status** | Implemented — OpenAI or Gemini via `llm/client.py`; falls back to template text if no key/package/call succeeds |
 
 ### 6. Baseline Selector
 
@@ -235,7 +235,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 | **Responsibility** | Post-mortem + next-step recommendations |
 | **Input** | Full run context (profile, metrics, submission result) |
 | **Output** | `reflection.md` |
-| **P0 status** | Fallback only — LLM call not wired |
+| **P0 status** | Implemented — OpenAI or Gemini via `llm/client.py`; falls back to template text if no key/package/call succeeds |
 
 ---
 
@@ -255,6 +255,7 @@ labpilot/
 │   ├── data/                  # Download + directory layout
 │   ├── profiler/              # Tabular EDA + profile reports
 │   ├── brief/                 # Research brief generation + prompts
+│   ├── llm/                   # Provider-agnostic LLM client (OpenAI, Gemini)
 │   ├── baseline/              # Template registry + selector
 │   ├── codegen/               # Jinja2 renderer + syntax validation
 │   ├── training/              # Subprocess runner + artifact collection
@@ -298,9 +299,16 @@ Configuration merges two sources:
 | `KAGGLE_API_TOKEN` | Preferred Kaggle API token |
 | `KAGGLE_USERNAME` | Legacy Kaggle API username |
 | `KAGGLE_KEY` | Legacy Kaggle API key |
-| `OPENAI_API_KEY` | LLM for brief + reflection |
+| `OPENAI_API_KEY` | LLM key when `llm.provider` is `openai` (default) |
+| `GEMINI_API_KEY` | LLM key when `llm.provider` is `gemini` |
 | `LABPILOT_RUNS_DIR` | Override runs directory |
+| `LABPILOT_LLM_PROVIDER` | Override `llm.provider` (`openai` \| `gemini`) |
 | `LABPILOT_LLM_MODEL` | Override LLM model name |
+
+Neither `OPENAI_API_KEY` nor `GEMINI_API_KEY` is required — `create_llm_client()` (see
+`llm/client.py`) returns `None` when no key is set for the configured provider, or when the
+matching optional package (`openai` / `google-genai`, both in the `llm` extra) isn't installed,
+and `BriefGenerator`/`ReflectionGenerator` fall back to template-only text instead of failing.
 
 `Settings` reads `.env`; `load_config()` merges environment credentials and overrides
 into the YAML-backed application config. Secrets are excluded from serialized config output.
@@ -335,7 +343,7 @@ Templates are executed as a subprocess with `cwd=pipeline/`. Paths to `data/raw/
 | Schemas | Pydantic v2 | Module contracts |
 | Templates | Jinja2 | Baseline codegen |
 | ML | LightGBM + scikit-learn | Fast tabular baselines |
-| LLM | OpenAI API | Brief + reflection only |
+| LLM | OpenAI or Gemini API | Brief + reflection only; optional, falls back to templates |
 | Kaggle | `kaggle` Python API | Download + submit |
 | Tracking | Local JSON (P0) | No MLflow dependency |
 | Testing | pytest | Per-module + integration |
@@ -347,7 +355,7 @@ Templates are executed as a subprocess with `cwd=pipeline/`. Paths to `data/raw/
 
 1. **Linear pipeline, not agents** — fixed DAG; orchestrator calls modules in order.
 2. **Artifacts over state** — every stage writes files; easy to inspect and resume.
-3. **Templates over generation** — LLM writes brief/reflection; training code comes from Jinja2 templates.
+3. **Templates over generation** — LLM optionally writes brief/reflection (falls back to template text without one); training code always comes from Jinja2 templates.
 4. **Subprocess training** — generated `pipeline/` runs in isolation; failures are contained.
 5. **Fail loud, log everything** — manifest records per-stage status; no silent fallbacks.
 6. **One competition archetype first** — tabular proves the loop; expand in P1.

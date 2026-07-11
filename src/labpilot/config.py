@@ -4,11 +4,21 @@ import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Shared with `labpilot.llm.client.create_llm_client()`: if a user switches
+# `llm.provider` without also overriding `llm.model`, this is what resolves
+# to a real model name for that provider instead of silently sending an
+# OpenAI-flavored default (e.g. "gpt-4o-mini") to a different API.
+DEFAULT_MODEL_BY_PROVIDER: dict[str, str] = {
+    "openai": "gpt-4o-mini",
+    "gemini": "gemini-3.5-flash",
+}
+
 
 class LLMConfig(BaseModel):
     provider: str = "openai"
     model: str = "gpt-4o-mini"
     temperature: float = 0.3
+    api_key: str = Field(default="", exclude=True, repr=False)
 
 
 class TrainingConfig(BaseModel):
@@ -59,7 +69,9 @@ class Settings(BaseSettings):
     kaggle_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    gemini_api_key: str = ""
     labpilot_runs_dir: str = "runs"
+    labpilot_llm_provider: str = ""
     labpilot_llm_model: str = ""
 
 
@@ -81,7 +93,21 @@ def load_config(path: Path | None = None) -> AppConfig:
     config.kaggle.key = settings.kaggle_key
     if settings.labpilot_runs_dir != "runs":
         config.runs_dir = Path(settings.labpilot_runs_dir)
+
+    if settings.labpilot_llm_provider:
+        config.llm.provider = settings.labpilot_llm_provider
     if settings.labpilot_llm_model:
         config.llm.model = settings.labpilot_llm_model
+    elif "model" not in raw.get("llm", {}):
+        # No explicit model in the config file or env — resolve the right
+        # default for whichever provider ended up configured, instead of
+        # leaving LLMConfig's dataclass default (an OpenAI model name) in
+        # place for a provider it doesn't apply to.
+        config.llm.model = DEFAULT_MODEL_BY_PROVIDER.get(config.llm.provider, config.llm.model)
+
+    config.llm.api_key = {
+        "openai": settings.openai_api_key,
+        "gemini": settings.gemini_api_key,
+    }.get(config.llm.provider.strip().lower(), "")
 
     return config

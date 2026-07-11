@@ -14,6 +14,7 @@ from labpilot.competition.parser import CompetitionParser
 from labpilot.config import AppConfig
 from labpilot.data.downloader import DataDownloader
 from labpilot.kaggle.client import KaggleClient, KaggleGateway, SubmissionResult
+from labpilot.llm.client import LLMClient, create_llm_client
 from labpilot.orchestrator.manifest import (
     RunManifest,
     StageStatus,
@@ -48,9 +49,16 @@ class Pipeline:
         kaggle_client: KaggleGateway | None = None,
         submit: bool = False,
         configs_dir: Path | None = None,
+        llm_client: LLMClient | None = None,
     ) -> None:
         self.config = config
         self.kaggle_client = kaggle_client or KaggleClient(config.kaggle)
+        # `llm_client` is deliberately allowed to resolve to `None` here (an
+        # LLM is optional in P0) — `create_llm_client` never raises, it just
+        # returns `None` when there's no key/package, and BriefGenerator /
+        # ReflectionGenerator both treat `None` as "use fallback template
+        # text" rather than an error.
+        self.llm_client = llm_client if llm_client is not None else create_llm_client(config.llm)
         self.submit = submit
         # Overrides where competition contracts (configs/competitions/<slug>.yaml)
         # are read from. Defaults to the package location; tests and callers
@@ -254,7 +262,7 @@ class Pipeline:
             (run_dir / "competition.json").read_text()
         )
         profile = load_profile(run_dir)
-        generator = BriefGenerator(config.llm)
+        generator = BriefGenerator(config.llm, self.llm_client)
         path = generator.save(run_dir, competition, profile)
         return [str(path)]
 
@@ -385,7 +393,7 @@ class Pipeline:
         submission = SubmissionResult.model_validate_json(
             (run_dir / "submission_result.json").read_text()
         )
-        generator = ReflectionGenerator(config.llm)
+        generator = ReflectionGenerator(config.llm, self.llm_client)
         metrics = generator.load_metrics(run_dir)
         content = generator.generate(
             run_id=manifest.run_id,
