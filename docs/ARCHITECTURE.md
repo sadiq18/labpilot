@@ -79,7 +79,7 @@ runs/<run_id>/
 └── reflection.md              # Post-run analysis + next steps
 ```
 
-Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-143022-titanic`).
+Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-143022-<slug>`).
 
 ---
 
@@ -110,10 +110,13 @@ Commands:
 | **Responsibility** | Fetch and structure competition metadata |
 | **Input** | Competition slug |
 | **Output** | `competition.json` (`CompetitionSpec`) |
-| **P0 status** | Implemented for Titanic via `configs/competitions/titanic.yaml` |
+| **P0 status** | Implemented via a local, per-competition contract at `configs/competitions/<slug>.yaml` |
 
 `CompetitionSpec` fields include `slug`, `title`, `evaluation_metric`, `problem_type`,
-`submission_columns`, URLs, deadline, and tags. Unknown competitions fail clearly in P0.
+`submission_columns`, URLs, deadline, and tags. Competitions without a local contract
+file fail clearly in P0. See `configs/competitions/README.md` for the schema; long
+term this should be resolved automatically from the Kaggle URL/slug instead of a
+locally authored file.
 
 ### 3. Data Manager
 
@@ -269,11 +272,12 @@ labpilot/
 ├── configs/
 │   ├── default.yaml           # Default pipeline + training config
 │   └── competitions/
-│       └── titanic.yaml       # P0 competition contract
+│       ├── README.md          # Contract schema; files below are not committed
+│       └── <slug>.yaml        # Created locally per competition, git-ignored
 │
 ├── tests/
 │   ├── unit/
-│   └── integration/           # Mocked end-to-end Titanic run
+│   └── integration/           # Mocked end-to-end pipeline run
 │
 └── docs/
     ├── ARCHITECTURE.md        # This file

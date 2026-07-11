@@ -38,3 +38,27 @@ def titanic_data_dir(tmp_path: Path) -> Path:
     test.to_csv(data_dir / "test.csv", index=False)
     sample_submission.to_csv(data_dir / "gender_submission.csv", index=False)
     return data_dir
+
+
+@pytest.fixture
+def competition_configs_dir(tmp_path: Path) -> Path:
+    """A local, non-committed directory of competition contracts for tests.
+
+    Competition contracts are never committed to the repo (see
+    configs/competitions/README.md), so tests create their own here instead
+    of depending on a file in the working tree.
+    """
+    configs_dir = tmp_path / "competition-configs"
+    configs_dir.mkdir()
+    (configs_dir / "titanic.yaml").write_text(
+        "title: Titanic - Machine Learning from Disaster\n"
+        "description: Predict which passengers survived the Titanic shipwreck.\n"
+        "problem_type: tabular_classification\n"
+        "evaluation_metric:\n"
+        "  name: accuracy\n"
+        "  direction: maximize\n"
+        "submission_columns:\n"
+        "  - PassengerId\n"
+        "  - Survived\n"
+    )
+    return configs_dir

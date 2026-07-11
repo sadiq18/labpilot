@@ -43,14 +43,21 @@ class FakeKaggleGateway:
 def test_titanic_pipeline_generates_valid_submission(
     tmp_path: Path,
     titanic_data_dir: Path,
+    competition_configs_dir: Path,
     submit: bool,
 ):
     gateway = FakeKaggleGateway(titanic_data_dir)
     config = AppConfig()
     config.training.cv_folds = 2
+    config.kaggle.cache_dir = tmp_path / "kaggle-cache"
     run_dir = tmp_path / f"run-{submit}"
 
-    manifest = Pipeline(config, kaggle_client=gateway, submit=submit).run(
+    manifest = Pipeline(
+        config,
+        kaggle_client=gateway,
+        submit=submit,
+        configs_dir=competition_configs_dir,
+    ).run(
         "titanic",
         run_dir=run_dir,
     )

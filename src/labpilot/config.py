@@ -24,6 +24,9 @@ class ProfilerConfig(BaseModel):
 class KaggleConfig(BaseModel):
     download_unzip: bool = True
     submit_message: str = "labpilot baseline submission"
+    # Shared across runs and keyed by competition slug, so re-running the same
+    # competition doesn't re-download identical data every time.
+    cache_dir: Path = Path(".cache/kaggle")
     api_token: str = Field(default="", exclude=True, repr=False)
     username: str = Field(default="", exclude=True, repr=False)
     key: str = Field(default="", exclude=True, repr=False)

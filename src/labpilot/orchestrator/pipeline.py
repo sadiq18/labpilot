@@ -41,10 +41,16 @@ class Pipeline:
         config: AppConfig,
         kaggle_client: KaggleGateway | None = None,
         submit: bool = False,
+        configs_dir: Path | None = None,
     ) -> None:
         self.config = config
         self.kaggle_client = kaggle_client or KaggleClient(config.kaggle)
         self.submit = submit
+        # Overrides where competition contracts (configs/competitions/<slug>.yaml)
+        # are read from. Defaults to the package location; tests and callers
+        # that don't want to depend on a locally created file can point this
+        # at a temporary directory instead.
+        self.configs_dir = configs_dir
         self.handlers: dict[str, StageHandler] = {
             "parse_competition": self._parse_competition,
             "download_data": self._download_data,
@@ -116,7 +122,7 @@ class Pipeline:
     def _parse_competition(
         self, run_dir: Path, manifest: RunManifest, config: AppConfig
     ) -> list[str]:
-        parser = CompetitionParser(manifest.competition)
+        parser = CompetitionParser(manifest.competition, configs_dir=self.configs_dir)
         path = parser.save(run_dir)
         return [str(path)]
 
@@ -132,9 +138,18 @@ class Pipeline:
     def _profile_dataset(
         self, run_dir: Path, manifest: RunManifest, config: AppConfig
     ) -> list[str]:
+        competition = CompetitionSpec.model_validate_json(
+            (run_dir / "competition.json").read_text()
+        )
         profiler = TabularProfiler(config.profiler)
         data_dir = run_dir / "data" / "raw"
-        profile = profiler.profile_directory(data_dir, manifest.competition)
+        profile = profiler.profile_directory(
+            data_dir,
+            manifest.competition,
+            train_pattern=competition.train_file_pattern,
+            test_pattern=competition.test_file_pattern,
+            submission_pattern=competition.submission_file_pattern,
+        )
         json_path, md_path = write_profile(run_dir, profile)
         return [str(json_path), str(md_path)]
 

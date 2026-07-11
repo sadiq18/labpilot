@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -5,6 +6,8 @@ from pydantic import BaseModel, Field
 from labpilot.baseline.registry import get_template
 from labpilot.competition.models import CompetitionSpec, ProblemType
 from labpilot.profiler.tabular import DatasetProfile
+
+logger = logging.getLogger(__name__)
 
 
 class BaselineChoice(BaseModel):
@@ -21,7 +24,11 @@ class BaselineChoice(BaseModel):
 
 
 class BaselineSelector:
-    """Rule-based baseline template selection for P0."""
+    """Rule-based baseline template selection for P0.
+
+    # TODO: control the verbosity of this class's logging via a future CLI
+    # --verbose/--quiet flag (see docs/MILESTONES.md).
+    """
 
     def select(self, competition: CompetitionSpec, profile: DatasetProfile) -> BaselineChoice:
         problem_type = self._infer_problem_type(competition, profile)
@@ -30,6 +37,11 @@ class BaselineSelector:
         if template is None:
             raise ValueError(f"No baseline template for problem type: {problem_type}")
 
+        logger.info(
+            "Selected baseline template '%s' for problem type '%s'.",
+            template.name,
+            problem_type,
+        )
         return BaselineChoice(
             problem_type=problem_type,
             template_name=template.name,

@@ -1,4 +1,5 @@
 import ast
+import logging
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -7,14 +8,21 @@ from labpilot.baseline.registry import BaselineTemplate
 from labpilot.baseline.selector import BaselineChoice
 from labpilot.config import TrainingConfig
 
+logger = logging.getLogger(__name__)
+
 
 class CodeRenderer:
-    """Render baseline training code from Jinja2 templates."""
+    """Render baseline training code from Jinja2 templates.
+
+    # TODO: control the verbosity of this class's logging via a future CLI
+    # --verbose/--quiet flag (see docs/MILESTONES.md).
+    """
 
     def __init__(self, training_config: TrainingConfig) -> None:
         self.training_config = training_config
 
     def render(self, template: BaselineTemplate, choice: BaselineChoice, run_dir: Path) -> Path:
+        logger.info("Rendering template '%s' into %s/pipeline", template.name, run_dir)
         env = Environment(
             loader=FileSystemLoader(template.template_dir),
             autoescape=select_autoescape(default=False),
@@ -36,6 +44,7 @@ class CodeRenderer:
             rendered_name = template_file.name.removesuffix(".j2")
             rendered = env.get_template(template_file.name).render(**context)
             (pipeline_dir / rendered_name).write_text(rendered)
+            logger.debug("Rendered %s", pipeline_dir / rendered_name)
 
         return pipeline_dir
 

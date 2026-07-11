@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import typer
@@ -7,6 +8,10 @@ from rich.table import Table
 from labpilot.config import load_config
 from labpilot.orchestrator.manifest import StageStatus
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
+
+# TODO: expose a --verbose/--quiet flag on `research` to control this level
+# at runtime instead of a fixed default (see docs/MILESTONES.md).
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 app = typer.Typer(
     name="research",
@@ -23,6 +28,15 @@ def run(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
     runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    competitions_dir: Path | None = typer.Option(
+        None,
+        "--competitions-dir",
+        help=(
+            "Directory containing local per-competition contracts "
+            "(<slug>.yaml). Defaults to configs/competitions. See "
+            "configs/competitions/README.md."
+        ),
+    ),
     submit: bool = typer.Option(
         False,
         "--submit",
@@ -36,7 +50,7 @@ def run(
 
     console.print(f"[bold]LabPilot[/bold] — starting run for [cyan]{competition}[/cyan]\n")
 
-    pipeline = Pipeline(config, submit=submit)
+    pipeline = Pipeline(config, submit=submit, configs_dir=competitions_dir)
     manifest = pipeline.run(competition)
 
     console.print(f"\n[green]Run complete:[/green] {config.runs_dir / manifest.run_id}")

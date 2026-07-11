@@ -58,3 +58,33 @@ def test_profile_directory_infers_titanic_contract(titanic_data_dir: Path):
     assert profile.id_column == "PassengerId"
     assert profile.submission_columns == ["PassengerId", "Survived"]
     assert profile.test_row_count == 4
+
+
+def test_profile_directory_honors_custom_file_patterns(tmp_path: Path):
+    data_dir = tmp_path / "custom-fixture"
+    data_dir.mkdir()
+
+    # File names don't start with "train"/"test", so the default patterns
+    # would fail to find them; a competition-specific override should still
+    # let the profiler resolve the correct roles.
+    training = pd.DataFrame({"id": [1, 2, 3], "label": [0, 1, 0]})
+    scoring = pd.DataFrame({"id": [4, 5]})
+    submission = pd.DataFrame({"id": [4, 5], "label": [0, 0]})
+
+    training.to_csv(data_dir / "learn_data.csv", index=False)
+    scoring.to_csv(data_dir / "score_data.csv", index=False)
+    submission.to_csv(data_dir / "answer_key.csv", index=False)
+
+    profile = TabularProfiler(ProfilerConfig()).profile_directory(
+        data_dir,
+        "generic-competition",
+        train_pattern="learn",
+        test_pattern="score",
+        submission_pattern="answer",
+    )
+
+    assert profile.train_file == "learn_data.csv"
+    assert profile.test_file == "score_data.csv"
+    assert profile.sample_submission_file == "answer_key.csv"
+    assert profile.target_column == "label"
+    assert profile.id_column == "id"

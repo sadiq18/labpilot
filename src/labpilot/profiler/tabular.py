@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -5,6 +6,8 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 from labpilot.config import ProfilerConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ColumnProfile(BaseModel):
@@ -34,7 +37,11 @@ class DatasetProfile(BaseModel):
 
 
 class TabularProfiler:
-    """Profile tabular competition datasets."""
+    """Profile tabular competition datasets.
+
+    # TODO: control the verbosity of this class's logging via a future CLI
+    # --verbose/--quiet flag (see docs/MILESTONES.md).
+    """
 
     def __init__(self, config: ProfilerConfig) -> None:
         self.config = config
@@ -67,21 +74,36 @@ class TabularProfiler:
             columns=columns,
         )
 
-    def profile_directory(self, data_dir: Path, competition: str) -> DatasetProfile:
+    def profile_directory(
+        self,
+        data_dir: Path,
+        competition: str,
+        train_pattern: str = "train",
+        test_pattern: str = "test",
+        submission_pattern: str = "submission",
+    ) -> DatasetProfile:
+        # File-role detection is a naming-convention heuristic. `train_pattern`,
+        # `test_pattern`, and `submission_pattern` let a competition's local
+        # config (`configs/competitions/<slug>.yaml`) override the defaults
+        # when a dataset doesn't follow the "train*/test*/*submission*"
+        # convention.
+        # TODO: fetch the real file roles from the Kaggle competition
+        # portal/API automatically instead of relying on name matching.
+        logger.info("Profiling dataset directory %s for '%s'", data_dir, competition)
         csv_files = sorted(data_dir.rglob("*.csv"))
         if not csv_files:
             raise FileNotFoundError(f"No CSV files found in {data_dir}.")
 
         train_path = self._single_file(
-            [path for path in csv_files if path.name.lower().startswith("train")],
+            [path for path in csv_files if path.name.lower().startswith(train_pattern.lower())],
             "training",
         )
         test_path = self._single_file(
-            [path for path in csv_files if path.name.lower().startswith("test")],
+            [path for path in csv_files if path.name.lower().startswith(test_pattern.lower())],
             "test",
         )
         sample_path = self._single_file(
-            [path for path in csv_files if "submission" in path.name.lower()],
+            [path for path in csv_files if submission_pattern.lower() in path.name.lower()],
             "sample submission",
         )
 
@@ -128,6 +150,14 @@ class TabularProfiler:
         profile.submission_columns = submission_columns
         for column in profile.columns:
             column.is_target_candidate = column.name == target_column
+        logger.info(
+            "Profiled '%s': target=%s, id=%s, train_rows=%d, test_rows=%d",
+            competition,
+            target_column,
+            id_column,
+            profile.row_count,
+            profile.test_row_count,
+        )
         return profile
 
     def _single_file(self, matches: list[Path], role: str) -> Path:

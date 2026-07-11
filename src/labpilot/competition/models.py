@@ -30,3 +30,11 @@ class CompetitionSpec(BaseModel):
     deadline: str | None = None
     tags: list[str] = Field(default_factory=list)
     raw_html: str = ""
+
+    # Optional overrides for competitions whose file names don't follow the
+    # "train*/test*/*submission*" convention the profiler assumes by default.
+    # TODO: resolve these automatically from the Kaggle competition page/API
+    # instead of requiring a local override.
+    train_file_pattern: str = "train"
+    test_file_pattern: str = "test"
+    submission_file_pattern: str = "submission"

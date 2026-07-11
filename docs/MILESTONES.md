@@ -49,7 +49,10 @@ After a few hours, a complete run should produce:
 
 **Explicit P0 constraint:** One baseline per problem type, no search, no agents, no memory across runs.
 
-**First target competition:** Titanic (tabular binary classification).
+**Validation competition:** any tabular binary/multi-class classification competition with a
+train/test/sample-submission split. Titanic is used as the first end-to-end validation target
+because it is small and free of licensing friction, but nothing in the design is Titanic-specific
+— see `configs/competitions/README.md` for how a new competition's contract is supplied locally.
 
 ---
 
@@ -129,9 +132,9 @@ See [Future (Explicitly Deferred)](#future-explicitly-deferred) above.
 |-------|--------|
 | CLI + orchestrator | Wired — all 12 stages run in sequence |
 | Manifest / status | Works, including skipped upload stages |
-| Competition parser | Titanic metadata contract implemented |
-| Data download | Kaggle API download and unzip implemented |
-| Dataset profiler | Detects train/test/submission roles, target, and ID |
+| Competition parser | Reads a local, per-competition contract (`configs/competitions/<slug>.yaml`) |
+| Data download | Kaggle API download, unzip, and per-competition cache implemented |
+| Dataset profiler | Detects train/test/submission roles, target, and ID (patterns overridable per competition) |
 | Brief / reflection | Fallback text only — no LLM calls |
 | Baseline selection | Works from competition and dataset contracts |
 | Code generation | Works — renders Jinja2 templates |
@@ -140,7 +143,7 @@ See [Future (Explicitly Deferred)](#future-explicitly-deferred) above.
 | Submission | Validated against sample columns, row count, and labels |
 | Kaggle upload | Real API upload, explicit `--submit` opt-in |
 | Experiment logging | Works |
-| Tests | Unit tests plus mocked end-to-end Titanic pipeline |
+| Tests | Unit tests plus a mocked end-to-end pipeline run (validated against Titanic) |
 
 ---
 
@@ -148,9 +151,10 @@ See [Future (Explicitly Deferred)](#future-explicitly-deferred) above.
 
 ### Required before P0 is complete
 
-#### 1. Credentialed Titanic smoke run
+#### 1. Credentialed smoke run on a real competition
 
-- Join Titanic and accept its rules on Kaggle
+- Join the target competition and accept its rules on Kaggle
+- Create its local contract (`configs/competitions/<slug>.yaml`, see the README in that folder)
 - Configure `KAGGLE_API_TOKEN` (preferred) or legacy username/key credentials
 - Run once without `--submit` and inspect `metrics.json` and `submission.csv`
 - Run separately with `--submit` and verify Kaggle accepts the file
@@ -165,20 +169,24 @@ Both generators have `TODO` and use fallback markdown. Implement:
 
 #### 3. Generalization and CLI ergonomics
 
-- Generic competition metadata resolution beyond Titanic
+- Automatic competition metadata resolution from the Kaggle URL/slug (remove the need for a
+  hand-written local contract file)
 - Multi-class classification support
 - `--resume --run-id <id>` — restart from failed stage
 - Public leaderboard score polling
+- `--verbose`/`--quiet` flag to control log level across all major classes
 - Clearer environment diagnostics for Python and LightGBM
 
 ---
 
-## Completed Executable-Titanic Slice
+## Completed Executable-Baseline Slice
+
+Validated end-to-end against Titanic; nothing below is Titanic-specific.
 
 ```
 ✓ Python 3.11+ project environment and macOS libomp setup
-✓ Kaggle download and archive extraction
-✓ Train/test/sample submission detection
+✓ Kaggle download, archive extraction, and per-competition cache
+✓ Train/test/sample submission detection (overridable file-name patterns)
 ✓ Target, ID, metric, and submission contract
 ✓ Fold-fitted preprocessing and LightGBM training
 ✓ Real CV accuracy and fail-hard artifact validation
@@ -191,14 +199,15 @@ Both generators have `TODO` and use fallback markdown. Implement:
 
 ## P0 Validation Checklist
 
-Before declaring P0 complete on one contest:
+Before declaring P0 complete on one contest (checked items validated with Titanic
+as the exercising example; the checks themselves are competition-agnostic):
 
 ```
 [x] uv sync --extra dev succeeds
-[x] Mocked run downloads the 3 Titanic CSV roles
-[x] profile.json has target=Survived, id=PassengerId
+[x] Mocked run downloads the 3 dataset file roles (train/test/sample submission)
+[x] profile.json correctly infers the target and ID columns
 [x] pipeline/train.py runs without manual edits
-[x] metrics.json has real cv_accuracy
+[x] metrics.json has real cv_<metric>
 [x] submission.csv row count and columns match the sample
 [x] Upload is skipped unless --submit is provided
 [ ] Credentialed Kaggle download succeeds

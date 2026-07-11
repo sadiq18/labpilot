@@ -1,3 +1,4 @@
+import logging
 import os
 import zipfile
 from pathlib import Path
@@ -6,6 +7,8 @@ from typing import Any, Protocol
 from pydantic import BaseModel
 
 from labpilot.config import KaggleConfig
+
+logger = logging.getLogger(__name__)
 
 
 class SubmissionResult(BaseModel):
@@ -27,7 +30,11 @@ class KaggleGateway(Protocol):
 
 
 class KaggleClient:
-    """Download data and upload submissions through Kaggle's official API."""
+    """Download data and upload submissions through Kaggle's official API.
+
+    # TODO: control the verbosity of this class's logging via a future CLI
+    # --verbose/--quiet flag (see docs/MILESTONES.md).
+    """
 
     def __init__(self, config: KaggleConfig, api: Any | None = None) -> None:
         self.config = config
@@ -45,6 +52,7 @@ class KaggleClient:
         if self._api is not None:
             return self._api
 
+        logger.info("Authenticating with the Kaggle API.")
         self._configure_environment()
         try:
             from kaggle.api.kaggle_api_extended import KaggleApi
@@ -62,9 +70,11 @@ class KaggleClient:
                 "~/.kaggle/access_token (legacy KAGGLE_USERNAME/KAGGLE_KEY also work)."
             ) from exc
         self._api = api
+        logger.info("Kaggle authentication succeeded.")
         return api
 
     def download_competition(self, competition: str, destination: Path) -> list[Path]:
+        logger.info("Downloading competition '%s' into %s", competition, destination)
         destination.mkdir(parents=True, exist_ok=True)
         api = self.authenticate()
         try:
@@ -82,6 +92,7 @@ class KaggleClient:
 
         if self.config.download_unzip:
             for archive in destination.glob("*.zip"):
+                logger.info("Extracting %s", archive)
                 with zipfile.ZipFile(archive) as zipped:
                     zipped.extractall(destination)
                 archive.unlink()
@@ -89,6 +100,7 @@ class KaggleClient:
         files = sorted(path for path in destination.rglob("*") if path.is_file())
         if not files:
             raise RuntimeError(f"Kaggle returned no files for competition '{competition}'.")
+        logger.info("Downloaded %d file(s) for '%s'.", len(files), competition)
         return files
 
     def upload_submission(
@@ -98,6 +110,7 @@ class KaggleClient:
             raise FileNotFoundError(f"Submission file not found: {submission_path}")
 
         submission_message = message or self.config.submit_message
+        logger.info("Uploading %s to '%s'.", submission_path, competition)
         api = self.authenticate()
         try:
             response = api.competition_submit(
@@ -113,6 +126,7 @@ class KaggleClient:
             ) from exc
 
         status = getattr(response, "status", None) or "submitted"
+        logger.info("Submission to '%s' completed with status '%s'.", competition, status)
         return SubmissionResult(
             competition=competition,
             submission_path=str(submission_path),

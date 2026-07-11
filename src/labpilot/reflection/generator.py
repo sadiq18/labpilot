@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -9,9 +10,15 @@ from labpilot.config import LLMConfig
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.profiler.tabular import DatasetProfile
 
+logger = logging.getLogger(__name__)
+
 
 class ReflectionGenerator:
-    """Generate a post-run reflection with next-step recommendations."""
+    """Generate a post-run reflection with next-step recommendations.
+
+    # TODO: control the verbosity of this class's logging via a future CLI
+    # --verbose/--quiet flag (see docs/MILESTONES.md).
+    """
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
@@ -40,11 +47,16 @@ class ReflectionGenerator:
             submission=submission,
         )
         # TODO: call LLM provider using self.config
+        logger.info(
+            "Generating reflection for run '%s' (LLM call not yet configured; using fallback).",
+            run_id,
+        )
         return self._fallback_reflection(run_id, competition, metrics, prompt)
 
     def save(self, run_dir: Path, content: str) -> Path:
         output = run_dir / "reflection.md"
         output.write_text(content)
+        logger.info("Saved reflection to %s", output)
         return output
 
     def load_metrics(self, run_dir: Path) -> dict[str, float]:
