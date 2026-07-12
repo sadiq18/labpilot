@@ -2,7 +2,27 @@
 
 Back to [MILESTONES.md](../MILESTONES.md).
 
-Items here are **not scheduled** for the current kernel-submission slice (P1.5). They extend P1.5b once synchronous push/poll/submit is proven, or land in P2/P3.
+Items here are **not scheduled** for the current milestone. Pick them up in follow-up PRs (P3.1, P2, etc.) when prioritised.
+
+---
+
+## Deferred from P3 v0.4 (explicitly out of scope)
+
+These were intentionally excluded from the v0.4 iteration loop. Keep them here for future planning — do not expand v0.4 scope to include them without a new milestone slice.
+
+| Item | Target / notes |
+|------|----------------|
+| **P2 remote runtimes / Colab / `--remote-train`** | Offload `train_model` to user-registered runtimes; quota-aware scheduling. See [TODO.md](TODO.md) (P2 deferred). |
+| **AutoML / neural architecture search** | Full search over many configs or architectures; v0.4 uses a fixed 12-point LightGBM grid step only. |
+| **LLM-generated arbitrary Python feature code** | v0.4 feature work is predefined recipes only (`target_encoding`, `log_numeric`), not free-form codegen. |
+| **Multi-model ensembles** | Single model per run remains the default. |
+| **Text/image template tuning** | Tabular-first in v0.4; extend `training_overrides` + tuner to text/image templates in **P3.1**. |
+| **Kernel slug fix** | Valid Kaggle kernel slug generation in `kernel/exporter.py`. See [Kernel submission reliability](#kernel-submission-reliability-p15b-follow-up) below. Separate small PR before kernel improve tests if needed. |
+
+**Related but already tracked elsewhere:**
+
+- Async kernel watcher → [Async kernel submission watcher](#async-kernel-submission-watcher-event-driven) below
+- Remote training-only (not submit) → overlaps P2 in [TODO.md](TODO.md)
 
 ---
 
@@ -147,6 +167,8 @@ flowchart TD
 
 | Item | Notes |
 |------|-------|
+| **P3.1 — tabular grid search (pick best)** | Train all grid combos and select best CV score (v0.4 only advances one grid step). |
+| **P3.1 — text/image hyperparameter tuning** | Extend `improve --strategy tune` beyond tabular templates. |
 | Inbound webhook server | `research events listen` for external cron/CI |
 | Notification plugins | Slack, email, ntfy.sh via webhook_url |
 | Multi-run watch | `research watch --all` for all `kernel_running` jobs |
