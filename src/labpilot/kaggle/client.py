@@ -126,11 +126,7 @@ class KaggleClient:
             ) from exc
 
         if self.config.download_unzip:
-            for archive in destination.glob("*.zip"):
-                logger.info("Extracting %s", archive)
-                with zipfile.ZipFile(archive) as zipped:
-                    zipped.extractall(destination)
-                archive.unlink()
+            self._extract_all_zip_archives(destination)
 
         files = sorted(path for path in destination.rglob("*") if path.is_file())
         if not files:
@@ -288,6 +284,27 @@ class KaggleClient:
             kernel_url=kernel_url,
         )
 
+    @staticmethod
+    def _extract_all_zip_archives(directory: Path, *, max_passes: int = 10) -> None:
+        """Extract nested zip archives until none remain (e.g. train.zip inside competition bundle)."""
+        for _ in range(max_passes):
+            archives = sorted(directory.glob("*.zip"))
+            if not archives:
+                return
+            for archive in archives:
+                logger.info("Extracting %s", archive)
+                with zipfile.ZipFile(archive) as zipped:
+                    zipped.extractall(directory)
+                archive.unlink(missing_ok=True)
+        remaining = list(directory.glob("*.zip"))
+        if remaining:
+            logger.warning(
+                "Stopped extracting zips in %s after %d passes; %d archive(s) remain.",
+                directory,
+                max_passes,
+                len(remaining),
+            )
+
     def _poll_kernel_run(self, api: Any, kernel_ref: str) -> str:
         deadline = time.monotonic() + self.config.kernel_poll_timeout
         last_status = "unknown"
@@ -355,11 +372,18 @@ class KaggleClient:
         return self._kernel_ref_from_metadata(kernel_dir, api)
 
     @staticmethod
+    def _normalize_kernel_ref(kernel_ref: str) -> str:
+        ref = kernel_ref.strip().strip("/")
+        if ref.startswith("code/"):
+            ref = ref.removeprefix("code/")
+        return ref
+
+    @staticmethod
     def _kernel_ref_from_push(push_response: Any, url: str) -> str | None:
         for attr in ("ref", "kernelRef", "kernel_ref"):
             ref = getattr(push_response, attr, None)
             if ref:
-                return str(ref).strip("/")
+                return KaggleClient._normalize_kernel_ref(str(ref))
         resolved_url = url or str(getattr(push_response, "url", "") or "")
         if resolved_url:
             for marker in ("/code/", "/kernels/"):
@@ -367,11 +391,11 @@ class KaggleClient:
                     tail = resolved_url.split(marker, 1)[1].strip("/").split("?")[0]
                     parts = tail.split("/")
                     if len(parts) >= 2:
-                        return f"{parts[0]}/{parts[1]}"
+                        return KaggleClient._normalize_kernel_ref(f"{parts[0]}/{parts[1]}")
         slug = getattr(push_response, "slug", None)
         owner = getattr(push_response, "owner", None) or getattr(push_response, "userName", None)
         if slug and owner:
-            return f"{owner}/{slug}"
+            return KaggleClient._normalize_kernel_ref(f"{owner}/{slug}")
         return None
 
     def _kernel_ref_from_metadata(self, kernel_dir: Path, api: Any | None = None) -> str | None:

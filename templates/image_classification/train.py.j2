@@ -45,7 +45,7 @@ def resolve_image_path(value: str) -> Path | None:
     return None
 
 
-def extract_features(df: pd.DataFrame, image_column: str) -> np.ndarray:
+def extract_features(df: pd.DataFrame, image_column: str, batch_size: int = 64) -> np.ndarray:
     import torch
     import torchvision.models as models
     import torchvision.transforms as T
@@ -53,6 +53,8 @@ def extract_features(df: pd.DataFrame, image_column: str) -> np.ndarray:
     model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
     model.fc = torch.nn.Identity()
     model.eval()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
 
     transform = T.Compose(
         [
@@ -63,18 +65,32 @@ def extract_features(df: pd.DataFrame, image_column: str) -> np.ndarray:
         ]
     )
 
-    features = []
-    for value in df[image_column].astype(str):
-        path = resolve_image_path(value)
-        if path is None:
-            features.append(np.zeros(512, dtype=np.float32))
+    rows = df[image_column].astype(str).tolist()
+    feature_dim = 512
+    features = np.zeros((len(rows), feature_dim), dtype=np.float32)
+    for start in range(0, len(rows), batch_size):
+        batch_values = rows[start : start + batch_size]
+        tensors: list[torch.Tensor] = []
+        batch_indices: list[int] = []
+        for offset, value in enumerate(batch_values):
+            path = resolve_image_path(value)
+            if path is None:
+                continue
+            with Image.open(path).convert("RGB") as img:
+                tensors.append(transform(img))
+            batch_indices.append(offset)
+        if not tensors:
             continue
-        with Image.open(path).convert("RGB") as img:
-            tensor = transform(img).unsqueeze(0)
+        batch_tensor = torch.stack(tensors).to(device)
         with torch.no_grad():
-            feat = model(tensor).squeeze(0).numpy()
-        features.append(feat.astype(np.float32))
-    return np.vstack(features)
+            batch_features = model(batch_tensor).cpu().numpy()
+        for offset, feat in zip(batch_indices, batch_features, strict=True):
+            features[start + offset] = feat.astype(np.float32)
+    return features
+
+
+def _as_feature_frame(matrix: np.ndarray) -> pd.DataFrame:
+    return pd.DataFrame(matrix, columns=[f"f{i}" for i in range(matrix.shape[1])])
 
 
 def main() -> None:
@@ -88,6 +104,8 @@ def main() -> None:
 
     X = extract_features(train, IMAGE_COLUMN)
     X_test = extract_features(test, IMAGE_COLUMN)
+    X_frame = _as_feature_frame(X)
+    X_test_frame = _as_feature_frame(X_test)
 
     folds = min(CV_FOLDS, int(np.bincount(y).min()))
     oof_proba = np.zeros((len(train), num_classes), dtype=float)
@@ -99,9 +117,9 @@ def main() -> None:
         clf = lgb.LGBMClassifier(
             n_estimators=200, learning_rate=0.05, random_state=RANDOM_SEED, verbose=-1
         )
-        clf.fit(X[train_idx], y[train_idx])
-        oof_proba[np.ix_(val_idx, clf.classes_)] = clf.predict_proba(X[val_idx])
-        test_proba[:, clf.classes_] += clf.predict_proba(X_test)
+        clf.fit(X_frame.iloc[train_idx], y[train_idx])
+        oof_proba[np.ix_(val_idx, clf.classes_)] = clf.predict_proba(X_frame.iloc[val_idx])
+        test_proba[:, clf.classes_] += clf.predict_proba(X_test_frame)
         models.append(clf)
 
     oof_codes = oof_proba.argmax(axis=1)
