@@ -26,7 +26,7 @@ from labpilot.improvement.planner import ImprovementPlanner
 from labpilot.kaggle.client import KaggleClient, KaggleGateway, SubmissionResult
 from labpilot.kaggle.urls import competition_submissions_url
 from labpilot.kernel.exporter import export_kernel
-from labpilot.llm.client import LLMClient, create_llm_client
+from labpilot.llm.client import LLMClient, create_llm_client, resolve_llm_client
 from labpilot.orchestrator.manifest import (
     RunManifest,
     StageStatus,
@@ -72,7 +72,7 @@ class Pipeline:
         # returns `None` when there's no key/package, and BriefGenerator /
         # ReflectionGenerator both treat `None` as "use fallback template
         # text" rather than an error.
-        self.llm_client = llm_client if llm_client is not None else create_llm_client(config.llm)
+        self.llm_client = llm_client if llm_client is not None else resolve_llm_client(config.llm)
         self.submit = submit
         self.force_submit = force_submit
         # Overrides where competition contracts (configs/competitions/<slug>.yaml)

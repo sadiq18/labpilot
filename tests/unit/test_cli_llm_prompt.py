@@ -29,7 +29,7 @@ def _no_client_config() -> LLMConfig:
 
 def test_check_llm_or_confirm_returns_client_immediately_without_prompting(monkeypatch):
     fake_client = FakeLLMClient()
-    monkeypatch.setattr(cli_main, "create_llm_client", lambda config: fake_client)
+    monkeypatch.setattr(cli_main, "resolve_llm_client", lambda config: fake_client)
 
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("Confirm.ask should not be called when a client is available")

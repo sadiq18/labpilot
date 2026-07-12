@@ -15,7 +15,7 @@ from labpilot.diagnostics import (
     required_environment_checks,
 )
 from labpilot.kaggle.client import SubmissionResult
-from labpilot.llm.client import LLMClient, create_llm_client
+from labpilot.llm.client import LLMClient, create_llm_client, llm_setup_hints, resolve_llm_client
 from labpilot.orchestrator.manifest import StageStatus
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
 from labpilot.tracking.index import diff_runs
@@ -332,15 +332,16 @@ def _check_llm_or_confirm(config: LLMConfig, assume_yes: bool) -> LLMClient | No
     `_fail_fast_on_bad_environment` treats a broken Python/LightGBM/Kaggle
     setup, since an LLM is optional by design.
     """
-    client = create_llm_client(config)
+    client = resolve_llm_client(config)
     if client is not None:
         return client
 
     console.print(
-        "[yellow]No LLM provider available[/yellow] (missing OPENAI_API_KEY/GEMINI_API_KEY, "
-        "or the optional package isn't installed) — brief.md/reflection.md will use "
+        "[yellow]No LLM provider available[/yellow] — brief.md/reflection.md will use "
         "template fallback text instead of AI-generated content."
     )
+    for hint in llm_setup_hints(config):
+        console.print(f"  [dim]•[/dim] {hint}")
     if assume_yes or not sys.stdin.isatty():
         console.print("Proceeding without LLM.")
         return None

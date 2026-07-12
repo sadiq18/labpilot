@@ -4,7 +4,7 @@ import pytest
 
 from labpilot.config import LLMConfig
 from labpilot.llm import client as llm_client_module
-from labpilot.llm.client import GeminiClient, OpenAIClient, create_llm_client
+from labpilot.llm.client import GeminiClient, OpenAIClient, create_llm_client, resolve_llm_client
 
 
 def _config(provider: str = "openai", api_key: str = "", model: str = "") -> LLMConfig:
@@ -68,3 +68,15 @@ def test_create_llm_client_respects_explicit_model_override():
 
 def test_default_model_by_provider_matches_client_registry():
     assert set(llm_client_module.DEFAULT_MODEL_BY_PROVIDER) == {"openai", "gemini"}
+
+
+def test_resolve_llm_client_falls_back_to_gemini_when_openai_unavailable(monkeypatch):
+    pytest.importorskip("google.genai")
+    monkeypatch.setitem(sys.modules, "openai", None)
+
+    client = resolve_llm_client(
+        _config(provider="openai", api_key="sk-test"),
+        alternate_keys={"openai": "sk-test", "gemini": "gemini-key"},
+    )
+
+    assert isinstance(client, GeminiClient)

@@ -112,6 +112,10 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     if settings.labpilot_llm_provider:
         config.llm.provider = settings.labpilot_llm_provider
+    elif settings.gemini_api_key.strip() and not settings.openai_api_key.strip():
+        config.llm.provider = "gemini"
+    elif settings.openai_api_key.strip() and not settings.gemini_api_key.strip():
+        config.llm.provider = "openai"
     if settings.labpilot_llm_model:
         config.llm.model = settings.labpilot_llm_model
     elif "model" not in raw.get("llm", {}):
