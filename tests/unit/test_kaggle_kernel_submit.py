@@ -62,6 +62,15 @@ def test_kernel_ref_parses_kernels_url():
     assert ref == "sadik18/aerial-cactus-labpilot-baseline"
 
 
+def test_kernel_ref_strips_code_prefix_from_push_response():
+    client = KaggleClient(KaggleConfig())
+    ref = client._kernel_ref_from_push(
+        SimpleNamespace(ref="code/sadiq18/aerial-cactus-identification-labpilot-baseline"),
+        "",
+    )
+    assert ref == "sadiq18/aerial-cactus-identification-labpilot-baseline"
+
+
 def test_validate_push_response_rejects_error():
     client = KaggleClient(KaggleConfig())
     try:

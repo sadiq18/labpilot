@@ -14,7 +14,10 @@ def kernel_notebook_url(owner: str, kernel_slug: str, version: int | None = None
 
 def parse_kernel_ref(kernel_ref: str) -> tuple[str, str]:
     """Split `owner/slug` into components."""
-    parts = kernel_ref.strip("/").split("/")
+    ref = kernel_ref.strip().strip("/")
+    if ref.startswith("code/"):
+        ref = ref.removeprefix("code/")
+    parts = ref.split("/")
     if len(parts) != 2:
         raise ValueError(f"Kernel ref must be owner/slug, got {kernel_ref!r}")
     return parts[0], parts[1]

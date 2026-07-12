@@ -26,6 +26,7 @@ def test_build_kernel_metadata_uses_username_prefix():
     assert kernel_id.startswith("testuser/")
     assert metadata["id"] == kernel_id
     assert len(metadata["id"].split("/")[-1]) <= 50
+    assert metadata["title"].lower().replace(" ", "-") == kernel_id.split("/", 1)[1]
 
 
 def test_kernel_exporter_writes_valid_slug(tmp_path: Path):

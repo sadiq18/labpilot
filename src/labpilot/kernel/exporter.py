@@ -75,11 +75,10 @@ def build_kernel_metadata(
     run_suffix: str | None = None,
 ) -> tuple[str, dict]:
     """Return (kernel_id, metadata dict) with a valid Kaggle slug."""
-    title = competition.title or competition.slug
-    slug = slugify_kernel_id(title)
-    if run_suffix:
-        suffix = slugify_kernel_id(run_suffix, max_length=12)
-        slug = slugify_kernel_id(f"{slug}-{suffix}", max_length=50)
+    _ = run_suffix  # Stable slug per competition; run id must not change kernel identity.
+    slug = slugify_kernel_id(f"{competition.slug[:20]}-labpilot", max_length=50)
+    # Kaggle validates that the title slugifies to the kernel slug in metadata id.
+    kernel_title = slug.replace("-", " ").title()
 
     if username:
         kernel_id = f"{username}/{slug}"
@@ -88,7 +87,7 @@ def build_kernel_metadata(
 
     metadata = {
         "id": kernel_id,
-        "title": f"{title} — LabPilot baseline",
+        "title": kernel_title,
         "code_file": "run.py",
         "language": "python",
         "kernel_type": "script",
@@ -116,7 +115,7 @@ def export_kernel(
     kernel_dir = run_dir / "kernel"
     kernel_dir.mkdir(parents=True, exist_ok=True)
 
-    kaggle_input = f"/kaggle/input/{competition.slug}"
+    kaggle_input = f"/kaggle/input/competitions/{competition.slug}"
     kaggle_working = "/kaggle/working"
     run_py = _adapt_train_script(train_path.read_text(), kaggle_input, kaggle_working)
     (kernel_dir / "run.py").write_text(run_py)
@@ -130,6 +129,90 @@ def export_kernel(
     (kernel_dir / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2))
     logger.info("Exported kernel artifacts to %s (id=%s)", kernel_dir, kernel_id)
     return kernel_dir
+
+
+_KAGGLE_BOOTSTRAP = '''
+def _labpilot_image_search_bases() -> list[Path]:
+    """Candidate directories for image files on Kaggle after zip extraction."""
+    bases = [DATA_DIR / IMAGE_DIR, OUTPUT_DIR / IMAGE_DIR]
+    for rel in ("train", "test", "train/train", "test/test"):
+        bases.extend([DATA_DIR / rel, OUTPUT_DIR / rel])
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for base in bases:
+        key = str(base)
+        if key not in seen:
+            seen.add(key)
+            unique.append(base)
+    return unique
+
+
+def _labpilot_prepare_kaggle_data() -> None:
+    """Extract nested competition zips and validate CSV paths on Kaggle."""
+    import zipfile
+
+    global DATA_DIR
+
+    if not str(DATA_DIR).startswith("/kaggle/input"):
+        return
+
+    input_root = Path("/kaggle/input")
+    if not DATA_DIR.is_dir():
+        matches: list[Path] = []
+        for root in (DATA_DIR, input_root):
+            if root.is_dir():
+                matches.extend(sorted(root.rglob(TRAIN_FILE)))
+        if matches:
+            DATA_DIR = matches[0].parent
+        elif input_root.is_dir():
+            available = sorted(p.name for p in input_root.iterdir())
+            raise FileNotFoundError(
+                f"Competition data directory not found: {DATA_DIR}. "
+                f"Top-level input entries: {available}. "
+                "Confirm kernel-metadata.json lists competition_sources and "
+                "you have accepted the competition rules on Kaggle."
+            )
+        else:
+            raise FileNotFoundError(
+                f"Competition data directory not found: {DATA_DIR}. "
+                "Confirm kernel-metadata.json lists competition_sources and "
+                "you have accepted the competition rules on Kaggle."
+            )
+
+    for archive in sorted(DATA_DIR.glob("*.zip")):
+        with zipfile.ZipFile(archive) as zipped:
+            zipped.extractall(OUTPUT_DIR)
+
+    for name in (TRAIN_FILE, TEST_FILE, SAMPLE_SUBMISSION_FILE):
+        if (DATA_DIR / name).is_file():
+            continue
+        matches = []
+        for root in (DATA_DIR, OUTPUT_DIR, input_root):
+            if root.is_dir():
+                matches.extend(sorted(root.rglob(name)))
+        if matches and name == TRAIN_FILE:
+            DATA_DIR = matches[0].parent
+            break
+        if not matches:
+            available = sorted(p.name for p in DATA_DIR.iterdir())
+            raise FileNotFoundError(
+                f"Required file {name!r} not found under {DATA_DIR} or {OUTPUT_DIR}. "
+                f"Available in input: {available}. "
+                "Ensure competition_sources includes this competition in kernel-metadata.json."
+            )
+
+
+def _labpilot_resolve_image_path(value: str) -> Path | None:
+    candidates = []
+    for base in _labpilot_image_search_bases():
+        candidates.extend(
+            [base / value, base / f"{value}.jpg", base / f"{value}.jpeg", base / f"{value}.png"]
+        )
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+'''
 
 
 def _adapt_train_script(source: str, data_dir: str, output_dir: str) -> str:
@@ -148,6 +231,7 @@ def _adapt_train_script(source: str, data_dir: str, output_dir: str) -> str:
         count=1,
         flags=re.MULTILINE,
     )
+    text = _inject_kaggle_bootstrap(text)
     header = (
         '"""LabPilot kernel script — generated from pipeline/train.py."""\n\n'
         "import sys\n"
@@ -157,4 +241,39 @@ def _adapt_train_script(source: str, data_dir: str, output_dir: str) -> str:
     )
     if not text.startswith('"""'):
         text = header + text
+    return text
+
+
+def _inject_kaggle_bootstrap(source: str) -> str:
+    """Inject Kaggle zip extraction and multi-root image lookup into train.py."""
+    if "def load_data()" not in source:
+        return source
+
+    text = source
+    if "_labpilot_prepare_kaggle_data" not in text:
+        text = text.replace(
+            "\n\ndef load_data()",
+            f"\n\n{_KAGGLE_BOOTSTRAP.strip()}\n\n\ndef load_data()",
+            1,
+        )
+
+    resolve_pattern = re.compile(
+        r"def resolve_image_path\(value: str\) -> Path \| None:.*?(?=\n\n(?:def |class ))",
+        re.DOTALL,
+    )
+    replacement = (
+        "def resolve_image_path(value: str) -> Path | None:\n"
+        "    return _labpilot_resolve_image_path(value)\n"
+    )
+    text, count = resolve_pattern.subn(replacement, text, count=1)
+    if count == 0 and "def resolve_image_path" in text:
+        logger.warning("Could not patch resolve_image_path for Kaggle bootstrap.")
+
+    if "    _labpilot_prepare_kaggle_data()" not in text:
+        text = re.sub(
+            r"(def main\(\) -> None:\n)",
+            r"\1    _labpilot_prepare_kaggle_data()\n",
+            text,
+            count=1,
+        )
     return text

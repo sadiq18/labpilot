@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from labpilot.competition.models import CompetitionSpec
-from labpilot.kernel.exporter import export_kernel
+from labpilot.kernel.exporter import _adapt_train_script, export_kernel
 
 
 def test_kernel_exporter_writes_metadata(tmp_path: Path):
@@ -37,6 +37,22 @@ def test_kernel_exporter_writes_metadata(tmp_path: Path):
 
     run_py = (kernel_dir / "run.py").read_text()
     assert "labpilot.evaluation.metrics" not in run_py
-    assert "/kaggle/input/aerial-cactus-identification" in run_py
+    assert "/kaggle/input/competitions/aerial-cactus-identification" in run_py
     assert "/kaggle/working" in run_py
     assert "def compute_metric" in run_py
+
+
+def test_kernel_exporter_injects_kaggle_bootstrap_for_image_template(tmp_path: Path):
+    source = (Path(__file__).resolve().parents[2] / "templates/image_classification/train.py.j2").read_text()
+    adapted = _adapt_train_script(
+        source,
+        "/kaggle/input/competitions/aerial-cactus-identification",
+        "/kaggle/working",
+    )
+
+    assert "_labpilot_prepare_kaggle_data()" in adapted
+    assert "_labpilot_resolve_image_path" in adapted
+    assert "zipfile.ZipFile" in adapted
+    assert "competition_sources" in adapted
+    assert "return _labpilot_resolve_image_path(value)" in adapted
+    assert "    _labpilot_prepare_kaggle_data()" in adapted

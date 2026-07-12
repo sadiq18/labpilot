@@ -82,12 +82,16 @@ class DataDownloader:
         return layout.raw_dir
 
     @staticmethod
-    def _extract_zip_archives(directory: Path) -> None:
-        for archive in sorted(directory.glob("*.zip")):
-            logger.info("Extracting %s", archive)
-            with zipfile.ZipFile(archive) as zipped:
-                zipped.extractall(directory)
-            archive.unlink(missing_ok=True)
+    def _extract_zip_archives(directory: Path, *, max_passes: int = 10) -> None:
+        for _ in range(max_passes):
+            archives = sorted(directory.glob("*.zip"))
+            if not archives:
+                return
+            for archive in archives:
+                logger.info("Extracting %s", archive)
+                with zipfile.ZipFile(archive) as zipped:
+                    zipped.extractall(directory)
+                archive.unlink(missing_ok=True)
 
     def _sync_from_cache(self, cache_dir: Path, raw_dir: Path) -> None:
         for cached_file in list_files(cache_dir):
