@@ -34,9 +34,9 @@ titanic` (parse → download → profile → brief) followed by `research build 
 
 | Track | Document | Summary |
 |-------|----------|---------|
-| **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 shipped |
-| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Nothing active — P2 is next |
-| **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2+ roadmap (remote runtime, iteration loop, production) |
+| **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P3 shipped |
+| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Nothing active — P4 is next |
+| **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2 (deferred) + P4 roadmap |
 | **Backlog** | [milestones/backlog.md](milestones/backlog.md) | Unscheduled extensions (async kernel watcher, webhooks) |
 
 ---
@@ -47,8 +47,8 @@ titanic` (parse → download → profile → brief) followed by `research build 
 |-----------|---------|--------|------|
 | **P0** | v0.1 | **Done** | Prove the full pipeline for tabular classification/regression |
 | **P1** | v0.2 | **Done** | Same loop, more competition types (text, image, metric-aware eval, rules) |
-| **P2** | v0.3 | Planned | Remote runtime & scheduling (Kaggle Kernels, Colab, quota-aware dispatch) |
-| **P3** | v0.4 | Planned | Iteration loop (`research improve`, tuning, run diffs) |
+| **P2** | v0.3 | **Deferred** | Remote runtime & scheduling (Kaggle Kernels, Colab, quota-aware dispatch) |
+| **P3** | v0.4 | **Done** | Iteration loop (`research improve`, tuning, run diffs) |
 | **P4** | v1.0 | Planned | Production quality (multi-competition workspace, CI-tested templates) |
 
 Details for each track live in the linked documents above.

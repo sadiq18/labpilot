@@ -7,13 +7,14 @@ from rich.console import Console
 from rich.prompt import Confirm
 from rich.table import Table
 
-from labpilot.config import LLMConfig, load_config
 from labpilot.competition.models import CompetitionSpec
+from labpilot.config import LLMConfig, load_config
 from labpilot.diagnostics import check_environment, print_diagnostics_report
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, create_llm_client
 from labpilot.orchestrator.manifest import StageStatus
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
+from labpilot.tracking.index import diff_runs
 
 logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -22,6 +23,8 @@ app = typer.Typer(
     help="LabPilot — one-command Kaggle competition research engine",
     no_args_is_help=True,
 )
+runs_app = typer.Typer(help="Inspect and compare research runs.")
+app.add_typer(runs_app, name="runs")
 console = Console()
 
 
@@ -400,6 +403,131 @@ def status(
         )
 
     console.print(table)
+
+
+@app.command()
+def improve(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Parent run ID to improve"),
+    strategy: str = typer.Option(
+        "auto",
+        "--strategy",
+        help="Improvement strategy: auto (LLM plan), tune (LightGBM grid), or features",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    submit: bool = typer.Option(
+        False,
+        "--submit",
+        help="Upload the validated submission to Kaggle (disabled by default)",
+    ),
+    force_submit: bool = typer.Option(
+        False,
+        "--force-submit",
+        help="With --submit: upload even when the competition deadline has passed",
+    ),
+    assume_yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompts, e.g. proceed without LLM if unavailable",
+    ),
+) -> None:
+    """Fork a completed run, apply an improvement plan, and retrain."""
+    _fail_fast_on_bad_environment()
+    _validate_submit_flags(submit, force_submit)
+
+    config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
+    llm_client = _check_llm_or_confirm(config.llm, assume_yes)
+
+    console.print(
+        f"[bold]LabPilot[/bold] — improving run [cyan]{run_id}[/cyan] "
+        f"(strategy={strategy})\n"
+    )
+
+    pipeline = Pipeline(
+        config,
+        submit=submit,
+        force_submit=force_submit,
+        llm_client=llm_client,
+    )
+    manifest = _continue_or_exit(lambda _: pipeline.improve(run_id, strategy=strategy), run_id)
+
+    run_dir = config.runs_dir / manifest.run_id
+    console.print(f"\n[green]Improvement complete:[/green] {run_dir}")
+    console.print(f"[green]Reflection:[/green] {run_dir / 'reflection.md'}")
+    console.print(
+        f"\nCompare: [cyan]research runs diff --base {run_id} --compare {manifest.run_id}[/cyan]"
+    )
+    _print_submission_links_if_present(run_dir, submit)
+
+
+@runs_app.command("diff")
+def runs_diff(
+    base: str = typer.Option(..., "--base", help="Base (parent) run ID"),
+    compare: str = typer.Option(..., "--compare", help="Run ID to compare against base"),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+) -> None:
+    """Compare two runs side-by-side (metrics, params, lineage)."""
+    config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
+
+    try:
+        result = diff_runs(config.runs_dir, base, compare)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    console.print(f"\n[bold]Run diff[/bold]: [cyan]{base}[/cyan] → [cyan]{compare}[/cyan]\n")
+
+    metrics_table = Table(title="Metrics")
+    metrics_table.add_column("Metric", style="cyan")
+    metrics_table.add_column("Base")
+    metrics_table.add_column("Compare")
+    metrics_table.add_column("Delta")
+    all_metrics = sorted(set(result.base_metrics) | set(result.compare_metrics))
+    for key in all_metrics:
+        base_val = result.base_metrics.get(key)
+        compare_val = result.compare_metrics.get(key)
+        delta = result.metric_deltas.get(key)
+        delta_str = f"{delta:+.6f}" if delta is not None else "-"
+        metrics_table.add_row(
+            key,
+            f"{base_val:.6f}" if isinstance(base_val, (int, float)) else "-",
+            f"{compare_val:.6f}" if isinstance(compare_val, (int, float)) else "-",
+            delta_str,
+        )
+    console.print(metrics_table)
+
+    if result.param_changes:
+        params_table = Table(title="Param changes")
+        params_table.add_column("Param", style="cyan")
+        params_table.add_column("Base")
+        params_table.add_column("Compare")
+        for key, change in result.param_changes.items():
+            params_table.add_row(key, str(change.get("base")), str(change.get("compare")))
+        console.print(params_table)
+
+    lineage_table = Table(title="Lineage")
+    lineage_table.add_column("Field", style="cyan")
+    lineage_table.add_column("Value")
+    for key, value in result.lineage.items():
+        lineage_table.add_row(key, str(value))
+    console.print(lineage_table)
+
+    submission_table = Table(title="Submission status")
+    submission_table.add_column("Run", style="cyan")
+    submission_table.add_column("Status")
+    submission_table.add_row(base, result.submission_notes.get("base", "-"))
+    submission_table.add_row(compare, result.submission_notes.get("compare", "-"))
+    console.print(submission_table)
 
 
 @app.command()

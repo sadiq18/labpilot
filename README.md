@@ -138,6 +138,39 @@ finished yet.
 | `--force-submit` | With `--submit`: upload even when the competition deadline has passed |
 | `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
 
+### `research improve --run-id <parent>`
+
+Fork a **completed** parent run, reuse init artifacts (competition, data, profile, brief),
+apply an improvement plan, and re-run from code generation through reflection.
+
+| Option | Description |
+|--------|-------------|
+| `--run-id, -r` | Parent run ID (required; must be `completed`) |
+| `--strategy` | `auto` (LLM plan, fallback to tune), `tune` (LightGBM grid), or `features` |
+| `--config` | Path to config file (default: `configs/default.yaml`) |
+| `--runs-dir` | Override the runs directory |
+| `--submit` | Upload the child run's submission to Kaggle |
+| `--force-submit` | With `--submit`: upload even when the deadline has passed |
+| `--yes, -y` | Skip confirmation prompts |
+
+```bash
+# Auto-plan from reflection + metrics, fork, retrain
+research improve --run-id 20260712-014250-spaceship-titanic
+
+# Explicit tuning strategy
+research improve --run-id <parent> --strategy tune
+
+# Compare parent vs child
+research runs diff --base <parent> --compare <child>
+```
+
+Child runs record lineage in `manifest.json` (`parent_run_id`, `iteration`) and persist
+`improvement_plan.json` plus `training_overrides.json` (model params and feature recipes).
+
+### `research runs diff --base <a> --compare <b>`
+
+Side-by-side comparison of two runs: CV metrics, param deltas, lineage, and submission status.
+
 ### `research resume --run-id <id>`
 
 Resumes a run from its first failed or incomplete stage. Stages already `completed` or

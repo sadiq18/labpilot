@@ -1,12 +1,14 @@
 import ast
 import logging
 from pathlib import Path
+from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from labpilot.baseline.registry import BaselineTemplate
 from labpilot.baseline.selector import BaselineChoice
 from labpilot.config import TrainingConfig
+from labpilot.improvement.models import DEFAULT_TABULAR_MODEL_PARAMS
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +19,28 @@ class CodeRenderer:
     def __init__(self, training_config: TrainingConfig) -> None:
         self.training_config = training_config
 
-    def render(self, template: BaselineTemplate, choice: BaselineChoice, run_dir: Path) -> Path:
+    def render(
+        self,
+        template: BaselineTemplate,
+        choice: BaselineChoice,
+        run_dir: Path,
+        *,
+        model_params: dict[str, Any] | None = None,
+        feature_recipes: list[str] | None = None,
+        target_encoding_columns: list[str] | None = None,
+        log_numeric_columns: list[str] | None = None,
+    ) -> Path:
         logger.info("Rendering template '%s' into %s/pipeline", template.name, run_dir)
         env = Environment(
             loader=FileSystemLoader(template.template_dir),
             autoescape=select_autoescape(default=False),
         )
+
+        resolved_params = dict(DEFAULT_TABULAR_MODEL_PARAMS)
+        resolved_params["random_state"] = self.training_config.random_seed
+        if model_params:
+            resolved_params.update(model_params)
+        resolved_params.setdefault("random_state", self.training_config.random_seed)
 
         context = {
             "competition": run_dir.name,
@@ -32,6 +50,10 @@ class CodeRenderer:
             "data_dir": str(run_dir / "data" / "raw"),
             "output_dir": str(run_dir),
             "max_images_sample": 5_000,
+            "model_params": resolved_params,
+            "feature_recipes": feature_recipes or [],
+            "target_encoding_columns": target_encoding_columns or [],
+            "log_numeric_columns": log_numeric_columns or [],
             "deep": {
                 "max_epochs": 3,
                 "max_train_samples": 5_000,

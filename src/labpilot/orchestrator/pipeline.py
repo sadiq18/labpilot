@@ -3,6 +3,7 @@ import logging
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
@@ -15,6 +16,13 @@ from labpilot.competition.models import CompetitionSpec, ProblemType
 from labpilot.competition.parser import CompetitionParser
 from labpilot.config import AppConfig
 from labpilot.data.downloader import DataDownloader
+from labpilot.improvement.fork import fork_run
+from labpilot.improvement.models import (
+    load_training_overrides,
+    save_improvement_plan,
+    save_training_overrides,
+)
+from labpilot.improvement.planner import ImprovementPlanner
 from labpilot.kaggle.client import KaggleClient, KaggleGateway, SubmissionResult
 from labpilot.kaggle.urls import competition_submissions_url
 from labpilot.kernel.exporter import export_kernel
@@ -118,6 +126,52 @@ class Pipeline:
         reached) is re-executed in pipeline order.
         """
         return self._continue(run_id)
+
+    def improve(
+        self,
+        parent_run_id: str,
+        strategy: str = "auto",
+    ) -> RunManifest:
+        """Fork a completed parent run, plan improvements, and re-run downstream stages."""
+        parent_run_dir = (self.config.runs_dir / parent_run_id).resolve()
+        if not (parent_run_dir / "manifest.json").is_file():
+            raise FileNotFoundError(f"Run not found: {parent_run_id}")
+
+        parent_manifest = load_manifest(parent_run_dir)
+        if parent_manifest.status != StageStatus.COMPLETED:
+            raise ValueError(
+                f"Parent run '{parent_run_id}' must be completed before improving "
+                f"(status: {parent_manifest.status.value})."
+            )
+
+        planner = ImprovementPlanner(self.config.llm, self.llm_client)
+        plan, overrides = planner.plan(
+            parent_run_dir,
+            parent_run_id,
+            strategy=strategy,
+            random_seed=self.config.training.random_seed,
+        )
+
+        child_run_id, child_run_dir = fork_run(
+            parent_run_dir,
+            self.config.runs_dir,
+            parent_run_id=parent_run_id,
+            improvement_strategy=strategy,
+        )
+        save_improvement_plan(child_run_dir, plan)
+        save_training_overrides(child_run_dir, overrides)
+
+        child_manifest = load_manifest(child_run_dir)
+        all_stages = self.config.pipeline.stages or list(self.handlers.keys())
+        stages_to_run = plan.stages_to_run or [
+            name for name in all_stages if name not in {s.name for s in child_manifest.stages}
+        ]
+
+        console.print(
+            f"Improving '{parent_run_id}' → [cyan]{child_run_id}[/cyan] "
+            f"(strategy={strategy}, iteration={child_manifest.metadata.get('iteration')})\n"
+        )
+        return self._execute(child_run_dir, child_manifest, stages_to_run, all_stages)
 
     def _start(self, competition: str, run_dir: Path | None) -> tuple[RunManifest, Path, list[str]]:
         run_id = generate_run_id(competition)
@@ -328,8 +382,17 @@ class Pipeline:
         if template is None:
             raise ValueError(f"No template for {choice.problem_type}")
 
+        overrides = load_training_overrides(run_dir)
         renderer = CodeRenderer(config.training)
-        pipeline_dir = renderer.render(template, choice, run_dir)
+        pipeline_dir = renderer.render(
+            template,
+            choice,
+            run_dir,
+            model_params=overrides.model_params or None,
+            feature_recipes=overrides.feature_recipes or None,
+            target_encoding_columns=overrides.target_encoding_columns or None,
+            log_numeric_columns=overrides.log_numeric_columns or None,
+        )
         errors = validate_pipeline(pipeline_dir)
         if errors:
             raise ValueError(f"Pipeline validation failed: {errors}")
@@ -513,11 +576,25 @@ class Pipeline:
             metrics = {k: float(v) for k, v in raw.items() if isinstance(v, (int, float))}
 
         choice = BaselineChoice.model_validate_json((run_dir / "baseline_choice.json").read_text())
+        overrides = load_training_overrides(run_dir)
+        params: dict[str, Any] = {
+            "template": choice.template_name,
+            "problem_type": choice.problem_type,
+        }
+        if overrides.model_params:
+            params["model_params"] = overrides.model_params
+        if overrides.feature_recipes:
+            params["feature_recipes"] = overrides.feature_recipes
+        if manifest.metadata.get("parent_run_id"):
+            params["parent_run_id"] = manifest.metadata["parent_run_id"]
+            params["iteration"] = manifest.metadata.get("iteration", 0)
+            params["improvement_strategy"] = manifest.metadata.get("improvement_strategy")
+
         path = logger.log(
             run_id=manifest.run_id,
             competition=manifest.competition,
             metrics=metrics,
-            params={"template": choice.template_name, "problem_type": choice.problem_type},
+            params=params,
             artifacts=[str(run_dir / "submission.csv"), str(run_dir / "oof.csv")],
         )
         return [str(path)]
