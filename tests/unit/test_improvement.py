@@ -52,6 +52,7 @@ def _completed_parent(tmp_path: Path, run_id: str = "20260101-120000-titanic") -
         "generate_submission",
         "log_experiment",
         "write_reflection",
+        "write_report",
     ):
         manifest.mark_completed(stage, [])
     save_manifest(run_dir, manifest)

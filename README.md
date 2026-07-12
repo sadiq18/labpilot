@@ -18,6 +18,7 @@ After a few hours, LabPilot produces:
 - Validated Kaggle submission (local by default)
 - Experiment log
 - Reflection report with next-step recommendations
+- Standalone HTML report (`report.html`)
 
 ## Quick Start
 
@@ -121,7 +122,7 @@ Global flags (apply to every command, placed before the subcommand):
 ### `research run --competition <slug>`
 
 Runs the full pipeline start to finish in one call: parse → download → profile → brief →
-baseline → code → train → evaluate → submission → upload → log → reflection.
+baseline → code → train → evaluate → submission → upload → log → reflection → HTML report.
 
 | Option | Description |
 |--------|-------------|
@@ -169,9 +170,9 @@ research run --competition titanic --project-dir .
 
 ### `research runtime list|show|register|doctor`
 
-Manage training runtime profiles (local, Kaggle kernel, Google Colab, other). v1.0 ships
-**configuration and validation only** — training still runs locally. Remote dispatch
-(`--remote-train`) is planned for P2 execution.
+Manage training runtime profiles (local, Kaggle kernel, Google Colab, other). **P2 v0.3**
+ships registry + validation; training still runs locally until **P2 execution**
+(`--remote-train`) lands.
 
 ```bash
 research runtime list
@@ -277,6 +278,17 @@ Shows the per-stage status and artifacts for one run.
 | `--config` | Path to config file (default: `configs/default.yaml`) |
 | `--runs-dir` | Override the runs directory |
 
+### `research report --run-id <id>`
+
+Generate or refresh the standalone HTML report (`report.html`) from existing run artifacts.
+The pipeline writes this automatically at the end of every completed build/run.
+
+| Option | Description |
+|--------|-------------|
+| `--run-id, -r` | Run ID to render (required) |
+| `--config` | Path to config file (default: `configs/default.yaml`) |
+| `--runs-dir` | Override the runs directory |
+
 ### `research list-runs`
 
 Lists every run under the runs directory with its competition and overall status
@@ -290,7 +302,7 @@ Lists every run under the runs directory with its competition and overall status
 ## Project Status
 
 **P4 — Production Quality v1.0** (complete): GitHub Actions CI, template integration tests,
-optional project workspace, config layering, `--dry-run`, runtime registry config, kernel slug fix.
+optional project workspace, config layering, `--dry-run`, runtime registry (P2 v0.3), HTML reports, kernel slug fix.
 
 **P3 — Iteration Loop v0.4** (complete): `research improve`, tuning, `runs diff`.
 

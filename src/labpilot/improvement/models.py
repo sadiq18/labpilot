@@ -20,6 +20,7 @@ DEFAULT_IMPROVE_STAGES = [
     "upload_submission",
     "log_experiment",
     "write_reflection",
+    "write_report",
 ]
 
 

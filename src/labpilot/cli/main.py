@@ -24,6 +24,7 @@ from labpilot.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
 from labpilot.orchestrator.manifest import StageStatus
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
+from labpilot.report.generator import ReportGenerator
 from labpilot.runtimes.doctor import check_all_runtimes
 from labpilot.runtimes.registry import get_runtime, list_runtimes
 from labpilot.runtimes.templates import runtime_to_yaml_dict, scaffold_runtime
@@ -336,6 +337,8 @@ def build(
     run_dir = config.runs_dir / manifest.run_id
     console.print(f"\n[green]Build complete:[/green] {run_dir}")
     console.print(f"[green]Reflection:[/green] {run_dir / 'reflection.md'}")
+    if (run_dir / "report.html").is_file():
+        console.print(f"[green]Report:[/green] {run_dir / 'report.html'}")
     _print_submission_links_if_present(run_dir, submit)
 
 
@@ -502,6 +505,27 @@ def status(
         )
 
     console.print(table)
+
+
+@app.command()
+def report(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Run ID to render"),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+) -> None:
+    """Generate or refresh the standalone HTML report for a research run."""
+    config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
+    run_dir = config.runs_dir / run_id
+    if not (run_dir / "manifest.json").is_file():
+        raise typer.BadParameter(f"Run not found: {run_id}")
+
+    manifest = find_manifest(config, run_id)
+    path = ReportGenerator().generate(run_dir, manifest)
+    console.print(f"[green]Report written:[/green] {path}")
 
 
 @app.command()

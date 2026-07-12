@@ -37,6 +37,7 @@ from labpilot.orchestrator.manifest import (
 from labpilot.profiler.report import load_profile, write_profile
 from labpilot.profiler.tabular import TabularProfiler
 from labpilot.reflection.generator import ReflectionGenerator
+from labpilot.report.generator import ReportGenerator
 from labpilot.submission.formatter import SubmissionValidator
 from labpilot.tracking.logger import ExperimentLogger
 from labpilot.training.runner import TrainingRunner
@@ -61,6 +62,7 @@ POST_CODEGEN_STAGES = {
     "upload_submission",
     "log_experiment",
     "write_reflection",
+    "write_report",
 }
 
 
@@ -100,6 +102,7 @@ class Pipeline:
             "upload_submission": self._upload_submission,
             "log_experiment": self._log_experiment,
             "write_reflection": self._write_reflection,
+            "write_report": self._write_report,
         }
 
     def run(self, competition: str, run_dir: Path | None = None) -> RunManifest:
@@ -665,6 +668,11 @@ class Pipeline:
             run_dir=run_dir,
         )
         path = generator.save(run_dir, content, submission=submission)
+        return [str(path)]
+
+    def _write_report(self, run_dir: Path, manifest: RunManifest, config: AppConfig) -> list[str]:
+        generator = ReportGenerator()
+        path = generator.generate(run_dir, manifest)
         return [str(path)]
 
 

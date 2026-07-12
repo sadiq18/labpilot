@@ -12,7 +12,7 @@ These were intentionally excluded from the v0.4 iteration loop. Keep them here f
 
 | Item | Target / notes |
 |------|----------------|
-| **P2 remote runtimes / Colab / `--remote-train`** | **Config shipped in P4** (`research runtime`, `configs/runtimes/`). **Execution** (dispatch, polling, sync) deferred — [TODO.md](TODO.md). |
+| **P2 remote runtimes / Colab / `--remote-train`** | **Config shipped in P2 v0.3 / P4** (`research runtime`, `configs/runtimes/`). **Execution** (dispatch, polling, sync) deferred — [TODO.md](TODO.md). |
 | **AutoML / neural architecture search** | Full search over many configs or architectures; v0.4 uses a fixed 12-point LightGBM grid step only. |
 | **LLM-generated arbitrary Python feature code** | v0.4 feature work is predefined recipes only (`target_encoding`, `log_numeric`), not free-form codegen. |
 | **Multi-model ensembles** | Single model per run remains the default. |

@@ -1,9 +1,8 @@
 # Runtime registry
 
-LabPilot runtimes describe **where** `train_model` will execute. In v1.0, only
-configuration and validation are implemented — training still runs locally via
-the built-in `local-default` runtime. Remote dispatch (`--remote-train`) is
-deferred to the P2 execution milestone.
+LabPilot runtimes describe **where** `train_model` will execute. **P2 v0.3** ships the
+registry, validation CLI, and per-run `runtime.json` metadata. Training still runs locally
+via the built-in `local-default` runtime until **P2 execution** (`--remote-train`) lands.
 
 ## Layout
 
@@ -25,11 +24,11 @@ shadow earlier ones by `id`.
 | `id` | Stable runtime id for `--runtime` (future) |
 | `provider` | `local`, `kaggle_kernel`, `google_colab`, or `other` |
 | `enabled` | Soft disable without deleting the file |
-| `priority` | Scheduler preference (config-only in v1.0) |
+| `priority` | Scheduler preference (config-only until execution milestone) |
 | `labels` | Tags such as `gpu`, `free-tier`, `paid` |
 | `artifacts` | Paths to sync back when remote execution lands |
 | `poll` | `interval_seconds`, `timeout_seconds` for remote job polling |
-| `quotas` | Local quota tracking config (not enforced in v1.0) |
+| `quotas` | Local quota tracking config (not enforced until execution milestone) |
 
 ## Providers
 
@@ -49,7 +48,7 @@ Google Colab runtime. Doctor checks auth env vars only — no OAuth in v1.0.
 ### `other`
 
 Extensibility hook via `adapter: module.path:ClassName`. Schema validates;
-execution adapters ship with P2.
+execution adapters ship with P2 execution.
 
 ## CLI
 

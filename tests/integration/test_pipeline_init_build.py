@@ -90,6 +90,7 @@ def test_build_continues_and_finishes_the_pipeline(
     run_dir = config.runs_dir / init_manifest.run_id
     assert (run_dir / "submission.csv").exists()
     assert (run_dir / "reflection.md").exists()
+    assert (run_dir / "report.html").exists()
 
     submission = pd.read_csv(run_dir / "submission.csv")
     assert list(submission.columns) == ["PassengerId", "Survived"]
