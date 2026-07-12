@@ -82,7 +82,7 @@ def export_kernel(run_dir: Path, competition: CompetitionSpec) -> Path:
         "kernel_type": "script",
         "is_private": True,
         "enable_gpu": False,
-        "enable_internet": False,
+        "enable_internet": True,
         "dataset_sources": [],
         "competition_sources": [competition.slug],
         "kernel_sources": [],

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import time
@@ -207,19 +208,31 @@ class KaggleClient:
                     "and that competition rules are accepted."
                 ) from exc
 
+            self._validate_push_response(push_response)
+
             kernel_url = getattr(push_response, "url", None) or ""
             kernel_version = self._coerce_int(
                 getattr(push_response, "versionNumber", None)
                 or getattr(push_response, "version_number", None)
             )
             kernel_slug = self._kernel_ref_from_push(push_response, kernel_url)
+            if not kernel_slug and (kernel_url or kernel_version is not None):
+                kernel_slug = self._kernel_ref_from_metadata(kernel_dir, api)
             if not kernel_slug:
-                raise RuntimeError("kernels_push succeeded but no kernel slug was returned.")
+                raise RuntimeError(
+                    "kernels_push returned no kernel slug. "
+                    f"url={kernel_url!r}, version={kernel_version!r}"
+                )
 
             owner, slug = parse_kernel_ref(kernel_slug)
-            if kernel_url:
-                kernel_url = kernel_notebook_url(owner, slug, kernel_version)
+            kernel_url = kernel_notebook_url(owner, slug, kernel_version)
+
             run_status = self._poll_kernel_run(api, kernel_slug)
+            if run_status not in _KERNEL_COMPLETE_STATUSES:
+                raise RuntimeError(
+                    f"Kernel '{kernel_slug}' did not finish successfully "
+                    f"(last status: {run_status}). Open {kernel_url} to inspect the run."
+                )
         else:
             owner, slug = parse_kernel_ref(kernel_slug)
             kernel_url = kernel_notebook_url(owner, slug, kernel_version)
@@ -281,9 +294,16 @@ class KaggleClient:
         while True:
             try:
                 status_response = api.kernels_status(kernel_ref)
-            except Exception:
-                logger.warning("Unable to poll kernel status for '%s'.", kernel_ref)
-                return last_status
+            except Exception as exc:
+                logger.warning(
+                    "Unable to poll kernel status for '%s': %s",
+                    kernel_ref,
+                    exc,
+                )
+                if time.monotonic() >= deadline:
+                    return last_status
+                time.sleep(self.config.kernel_poll_interval)
+                continue
 
             last_status = self._normalize_kernel_status(status_response)
             if last_status in _KERNEL_COMPLETE_STATUSES:
@@ -312,23 +332,77 @@ class KaggleClient:
         return str(status_response)
 
     @staticmethod
+    def _validate_push_response(response: Any) -> None:
+        error = getattr(response, "error", None)
+        if error:
+            raise RuntimeError(f"Kaggle kernels_push failed: {error}")
+        url = getattr(response, "url", None)
+        version = getattr(response, "versionNumber", None)
+        if version is None:
+            version = getattr(response, "version_number", None)
+        if not url and version is None:
+            raise RuntimeError(
+                "Kaggle kernels_push returned no URL or version number. "
+                "Accept the competition rules on Kaggle and verify kernel metadata."
+            )
+
+    def _resolve_kernel_ref(
+        self, push_response: Any, kernel_dir: Path, url: str = "", api: Any = None
+    ) -> str | None:
+        ref = self._kernel_ref_from_push(push_response, url)
+        if ref:
+            return ref
+        return self._kernel_ref_from_metadata(kernel_dir, api)
+
+    @staticmethod
     def _kernel_ref_from_push(push_response: Any, url: str) -> str | None:
         for attr in ("ref", "kernelRef", "kernel_ref"):
             ref = getattr(push_response, attr, None)
             if ref:
                 return str(ref).strip("/")
-        if url:
-            marker = "/code/"
-            if marker in url:
-                tail = url.split(marker, 1)[1].strip("/")
-                parts = tail.split("/")
-                if len(parts) >= 2:
-                    return f"{parts[0]}/{parts[1]}"
+        resolved_url = url or str(getattr(push_response, "url", "") or "")
+        if resolved_url:
+            for marker in ("/code/", "/kernels/"):
+                if marker in resolved_url:
+                    tail = resolved_url.split(marker, 1)[1].strip("/").split("?")[0]
+                    parts = tail.split("/")
+                    if len(parts) >= 2:
+                        return f"{parts[0]}/{parts[1]}"
         slug = getattr(push_response, "slug", None)
         owner = getattr(push_response, "owner", None) or getattr(push_response, "userName", None)
         if slug and owner:
             return f"{owner}/{slug}"
         return None
+
+    def _kernel_ref_from_metadata(self, kernel_dir: Path, api: Any | None = None) -> str | None:
+        meta_path = kernel_dir / "kernel-metadata.json"
+        if not meta_path.is_file():
+            return None
+        meta = json.loads(meta_path.read_text())
+        kernel_id = str(meta.get("id", "")).strip().strip("/")
+        if not kernel_id:
+            return None
+        if "/" in kernel_id:
+            return kernel_id
+        owner = self._api_username(api)
+        if owner:
+            return f"{owner}/{kernel_id}"
+        return None
+
+    def _api_username(self, api: Any | None) -> str:
+        owner = self.config.username or os.environ.get("KAGGLE_USERNAME", "")
+        if owner or api is None:
+            return owner
+        getter = getattr(api, "get_config_value", None)
+        if callable(getter):
+            try:
+                owner = str(getter("username") or "").strip()
+            except Exception:
+                owner = ""
+        if not owner:
+            config_values = getattr(api, "config_values", None) or {}
+            owner = str(config_values.get("username", "")).strip()
+        return owner
 
     def _poll_public_score(self, api: Any, competition: str, message: str) -> float | None:
         """Poll for the public leaderboard score of the submission just made.

@@ -112,6 +112,37 @@ flowchart TD
 
 ---
 
+## Kernel submission reliability (P1.5b follow-up)
+
+**Discovered during:** live retry on `aerial-cactus-identification` (2026-07-12).
+
+**Symptoms:**
+- Kaggle submissions page shows **0 submissions** after `research resume --submit`.
+- First attempt silently recorded `kernel_pushed` with a guessed slug (no kernel on account).
+- Retry with push validation surfaced: `Kaggle kernels_push failed: Invalid slug: 'aerial-cactus-identification-labpilot-baseline'`.
+
+**Root causes (confirmed / suspected):**
+
+| Issue | Detail |
+|-------|--------|
+| **Kernel metadata slug invalid** | `kernel-metadata.json` `id` uses `{competition-slug}-labpilot-baseline` (43 chars). Kaggle rejects this slug on push. Need shorter, slugified id aligned with `title` (Kaggle slugify rules). |
+| **Missing `owner/slug` in metadata** | Exporter writes bare slug; should embed `username/slug` or rely on authenticated user with validated slug. |
+| **False-success on push** | Addressed: check `push_response.error`, require URL/version before code-submit. |
+| **Status poll gave up early** | Addressed: retry `kernels_status` until timeout; require `COMPLETE` before code-submit. |
+| **Closed competition / API 403** | Earlier `competition_submit_code` returned 403; may be deadline or rules — separate from slug error. Re-test after slug fix. |
+
+**Proposed fixes (defer to next PR):**
+
+1. **`kernel/exporter.py`:** generate short slug, e.g. `{competition[:20]}-lp` or hash suffix; set `id` to `{username}/{slug}` when username known; slugify `title` to match `id`.
+2. **`kaggle/client.py`:** `_validate_push_response` and poll retry landed; slug generation still open.
+3. **Preflight:** surface `submissions_disabled` and kernels-only deadline limitations with actionable CLI message (link to rules page).
+4. **Tests:** push response with `error` field; invalid slug metadata; slug length regression.
+5. **Smoke:** re-run `aerial-cactus-identification --submit` after slug fix; document in `COMPLETED.md`.
+
+**Workaround for users today:** manually push kernel via `kaggle kernels push` with a valid slug, then `research resume --submit` if `kernel_pushed` retry path works.
+
+---
+
 ## Other backlog candidates
 
 | Item | Notes |

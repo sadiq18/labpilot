@@ -51,3 +51,30 @@ def test_submit_via_kernel_pushes_polls_and_scores(tmp_path: Path):
     assert result.kernel_slug == "testuser/aerial-cactus-labpilot-baseline"
     assert result.kernel_version == 1
     assert result.submissions_url.endswith("/aerial-cactus-identification/submissions")
+
+
+def test_kernel_ref_parses_kernels_url():
+    client = KaggleClient(KaggleConfig())
+    ref = client._kernel_ref_from_push(
+        SimpleNamespace(),
+        "https://www.kaggle.com/kernels/sadik18/aerial-cactus-labpilot-baseline",
+    )
+    assert ref == "sadik18/aerial-cactus-labpilot-baseline"
+
+
+def test_validate_push_response_rejects_error():
+    client = KaggleClient(KaggleConfig())
+    try:
+        client._validate_push_response(SimpleNamespace(error="competition rules not accepted"))
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "kernels_push failed" in str(exc)
+
+
+def test_validate_push_response_rejects_empty_response():
+    client = KaggleClient(KaggleConfig())
+    try:
+        client._validate_push_response(SimpleNamespace(error=None, url=None, versionNumber=None))
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "no URL or version" in str(exc)
