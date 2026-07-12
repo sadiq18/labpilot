@@ -34,6 +34,8 @@ deep_baseline:
 kaggle:
   download_unzip: true
   submit_message: "labpilot baseline submission"
+  kernel_poll_timeout: 3600
+  kernel_poll_interval: 15
 
 pipeline:
   stages:
@@ -46,6 +48,7 @@ pipeline:
     - train_model
     - evaluate_cv
     - generate_submission
+    - export_kernel
     - upload_submission
     - log_experiment
     - write_reflection

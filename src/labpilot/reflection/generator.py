@@ -10,6 +10,7 @@ from labpilot.config import LLMConfig
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, create_llm_client
 from labpilot.profiler.tabular import DatasetProfile
+from labpilot.reflection.links import render_submission_links
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,11 @@ class ReflectionGenerator:
             )
         return self._fallback_reflection(run_id, competition, metrics, f"{system}\n\n---\n\n{user}")
 
-    def save(self, run_dir: Path, content: str) -> Path:
+    def save(self, run_dir: Path, content: str, submission: SubmissionResult | None = None) -> Path:
+        if submission is not None:
+            footer = render_submission_links(submission)
+            if footer.strip() not in content:
+                content = content.rstrip() + "\n\n" + footer
         output = run_dir / "reflection.md"
         output.write_text(content)
         logger.info("Saved reflection to %s", output)

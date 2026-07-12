@@ -56,6 +56,8 @@ class KaggleConfig(BaseModel):
     # public leaderboard score instead of leaving it null.
     submission_poll_timeout: int = 120
     submission_poll_interval: int = 5
+    kernel_poll_timeout: int = 3600
+    kernel_poll_interval: int = 15
     api_token: str = Field(default="", exclude=True, repr=False)
     username: str = Field(default="", exclude=True, repr=False)
     key: str = Field(default="", exclude=True, repr=False)

@@ -8,6 +8,8 @@ import yaml
 from labpilot.competition.metrics import enrich_metric_spec, normalize_metric
 from labpilot.competition.models import CompetitionMetadata, CompetitionSpec
 from labpilot.competition.rules import fetch_rules_excerpt
+from labpilot.competition.submission_mode import apply_submission_mode
+from labpilot.kaggle.urls import competition_submissions_url
 from labpilot.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -50,13 +52,15 @@ class CompetitionParser:
         config_path = self.configs_dir / f"{self.competition_slug}.yaml"
         spec = self._parse_from_file(config_path) if config_path.is_file() else self._resolve_automatically()
         spec = self._apply_rules_scrape(spec)
+        spec = apply_submission_mode(spec)
         self._warn_if_competition_closed(spec)
 
         logger.info(
-            "Parsed competition '%s': problem_type=%s, metric=%s",
+            "Parsed competition '%s': problem_type=%s, metric=%s, submission_mode=%s",
             self.competition_slug,
             spec.problem_type,
             spec.evaluation_metric.name if spec.evaluation_metric else "unknown",
+            spec.submission_mode,
         )
         return spec
 
@@ -162,6 +166,10 @@ class CompetitionParser:
         )
         raw.setdefault(
             "rules_url", f"https://www.kaggle.com/competitions/{self.competition_slug}/rules"
+        )
+        raw.setdefault(
+            "submissions_url",
+            competition_submissions_url(self.competition_slug),
         )
 
     def save(self, run_dir: Path) -> Path:

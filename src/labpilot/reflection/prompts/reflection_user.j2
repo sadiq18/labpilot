@@ -22,6 +22,19 @@
 
 ## Submission
 - Status: {{ submission.status }}
+- Mode: {{ submission.submission_mode }}
 - Public score: {{ submission.public_score or "N/A" }}
+{% if submission.kernel_slug %}
+- Kernel: {{ submission.kernel_slug }}{% if submission.kernel_version %} (v{{ submission.kernel_version }}){% endif %}
+{% endif %}
+{% if submission.kernel_run_status %}
+- Kernel run status: {{ submission.kernel_run_status }}
+{% endif %}
+{% if submission.submissions_url %}
+- Submissions page: {{ submission.submissions_url }}
+{% endif %}
+{% if submission.kernel_url %}
+- Kernel URL: {{ submission.kernel_url }}
+{% endif %}
 
 Write the reflection report for this run.
