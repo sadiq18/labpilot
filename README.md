@@ -113,6 +113,7 @@ baseline → code → train → evaluate → submission → upload → log → r
 | `--runs-dir` | Override the runs directory |
 | `--competitions-dir` | Directory with local per-competition contracts (`<slug>.yaml`); see [configs/competitions/README.md](configs/competitions/README.md) |
 | `--submit` | Upload the validated submission to Kaggle (disabled by default) |
+| `--force-submit` | With `--submit`: upload even when the competition deadline has passed |
 | `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
 
 ### `research init --competition <slug>`
@@ -134,6 +135,7 @@ finished yet.
 | `--config` | Path to config file (default: `configs/default.yaml`) |
 | `--runs-dir` | Override the runs directory (must match the `init` call's) |
 | `--submit` | Upload the validated submission to Kaggle (disabled by default) |
+| `--force-submit` | With `--submit`: upload even when the competition deadline has passed |
 | `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
 
 ### `research resume --run-id <id>`
@@ -144,7 +146,8 @@ or never reached) is re-executed in pipeline order. One exception: if the run fi
 `upload_submission` left as `skipped` (i.e. it ran without `--submit`) and you now pass
 `--submit`, that stage is re-run for real instead of staying skipped — so `research resume
 --run-id <id> --submit` is the command to upload a submission after the fact, without
-re-running the rest of an already-completed pipeline.
+re-running the rest of an already-completed pipeline. Add `--force-submit` when the
+competition deadline has passed but Kaggle may still accept uploads.
 
 | Option | Description |
 |--------|-------------|
@@ -153,6 +156,7 @@ re-running the rest of an already-completed pipeline.
 | `--runs-dir` | Override the runs directory (must match the original run's) |
 | `--competitions-dir` | Directory with local per-competition contracts |
 | `--submit` | Upload the validated submission to Kaggle (disabled by default) |
+| `--force-submit` | With `--submit`: upload even when the competition deadline has passed |
 | `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
 
 `run`/`init`/`build`/`resume` all check LLM availability once up front (before doing any work):
