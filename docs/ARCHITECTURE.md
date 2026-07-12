@@ -4,7 +4,9 @@
 
 LabPilot is a linear-pipeline research engine. A single CLI command drives a fixed sequence of stages. Each stage is an independent module with a narrow input/output contract. Stages write artifacts to disk under `runs/<run_id>/`, making every step inspectable and resumable.
 
-No multi-agent orchestration, vector stores, or autonomous planning in P0 — just a deterministic DAG.
+After a completed baseline run, **`research improve`** forks a child run from the parent's init artifacts and re-executes downstream stages (codegen through reflection) with a structured improvement plan — hyperparameter tuning or predefined feature recipes — without re-running init.
+
+No multi-agent orchestration, vector stores, or autonomous planning — just a deterministic DAG plus an explicit iteration layer on top.
 
 ---
 
@@ -49,6 +51,32 @@ flowchart LR
 
 The orchestrator lives in `orchestrator/pipeline.py`. Stage order is configurable via `configs/default.yaml` under `pipeline.stages`.
 
+### Init / build split
+
+| Command | Stages run |
+|---------|------------|
+| `research init` | `parse_competition` → `generate_brief` |
+| `research build` | `select_baseline` → `write_reflection` |
+| `research run` | All stages |
+| `research resume` | From first failed/incomplete stage |
+| `research improve` | Fork parent init artifacts, then `generate_code` → `write_reflection` |
+
+### Iteration flow (P3)
+
+```mermaid
+flowchart TD
+    parent[Parent run completed] --> plan[ImprovementPlanner]
+    plan --> fork[Fork run_dir + lineage]
+    fork --> copy[Copy init artifacts]
+    copy --> stages[Targeted stages]
+    stages --> genCode[generate_code]
+    genCode --> train[train_model]
+    train --> eval[evaluate_cv through reflection]
+    eval --> diff[runs diff vs parent]
+```
+
+`Pipeline.improve()` validates the parent is `completed`, calls the planner, forks via `improvement/fork.py`, writes `improvement_plan.json` and `training_overrides.json`, then executes `stages_to_run` (default: codegen through reflection).
+
 ---
 
 ## Run Artifact Layout
@@ -57,7 +85,7 @@ Every run writes to `runs/<run_id>/`:
 
 ```
 runs/<run_id>/
-├── manifest.json              # Stage status, timestamps, errors
+├── manifest.json              # Stage status, timestamps, errors, lineage metadata
 ├── competition.json           # Parsed competition metadata
 ├── data/
 │   ├── raw/                   # Downloaded competition files
@@ -66,6 +94,8 @@ runs/<run_id>/
 ├── profile.md                 # Human-readable profile
 ├── brief.md                   # AI-generated research brief
 ├── baseline_choice.json       # Selected template + target/id columns
+├── training_overrides.json    # (child runs) model_params + feature recipes
+├── improvement_plan.json      # (child runs) structured improvement plan
 ├── pipeline/                  # Generated training code
 │   ├── train.py
 │   └── config.yaml
@@ -73,6 +103,7 @@ runs/<run_id>/
 ├── oof.csv                    # Out-of-fold predictions
 ├── metrics.json               # CV scores
 ├── submission.csv             # Kaggle submission file
+├── kernel/                    # (kernel-only comps) exported notebook
 ├── submission_result.json     # Upload result + LB score
 ├── training.log               # Subprocess stdout/stderr
 ├── experiment/
@@ -81,6 +112,14 @@ runs/<run_id>/
 ```
 
 Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-143022-<slug>`).
+
+**Child run lineage** (set by `research improve`) lives in `manifest.json` metadata:
+
+| Field | Meaning |
+|-------|---------|
+| `parent_run_id` | Run this iteration forked from |
+| `iteration` | Parent iteration + 1 (root runs default to `0`) |
+| `improvement_strategy` | `auto`, `tune`, or `features` |
 
 ---
 
@@ -99,9 +138,14 @@ Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-1430
 Commands:
 
 - `research run --competition <slug>` — full pipeline
+- `research init --competition <slug>` / `research build --run-id <id>` — two-step workflow
+- `research resume --run-id <id>` — resume failed/incomplete stages
+- `research improve --run-id <parent>` — fork + plan + retrain (P3)
+- `research runs diff --base <a> --compare <b>` — cross-run experiment comparison (P3)
 - `research run --competition <slug> --submit` — full pipeline plus Kaggle upload
 - `research status --run-id <id>` — inspect stage progress
 - `research list-runs` — list all runs
+- `research doctor` — environment diagnostics
 
 ### 2. Competition Parser
 
@@ -170,11 +214,11 @@ Selection rules use competition `problem_type` when known, otherwise infer from 
 |---|---|
 | **Path** | `codegen/renderer.py`, `codegen/validators.py` |
 | **Responsibility** | Render training pipeline from Jinja2 templates |
-| **Input** | `BaselineChoice`, training config |
+| **Input** | `BaselineChoice`, training config, optional `TrainingOverrides` |
 | **Output** | `pipeline/train.py`, `pipeline/config.yaml` |
-| **P0 status** | Implemented |
+| **Status** | Implemented |
 
-Templates live in `templates/` (not inside the Python package). The renderer passes `data_dir`, `output_dir`, `cv_folds`, and `random_seed` as template context.
+Templates live in `templates/` (not inside the Python package). The renderer passes `data_dir`, `output_dir`, `cv_folds`, `random_seed`, `model_params`, and `feature_recipes` as template context. Tabular templates read `MODEL_PARAMS` for LightGBM and optionally inject target-encoding / log1p recipe blocks.
 
 ### 8. Trainer
 
@@ -222,11 +266,13 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 
 | | |
 |---|---|
-| **Path** | `tracking/logger.py`, `tracking/store.py` |
-| **Responsibility** | Log params, metrics, artifact paths |
+| **Path** | `tracking/logger.py`, `tracking/store.py`, `tracking/index.py` |
+| **Responsibility** | Log params, metrics, artifact paths; compare runs across the runs directory |
 | **Input** | Run context |
-| **Output** | `experiment/record.json` |
-| **P0 status** | Implemented — local JSON store |
+| **Output** | `experiment/record.json`; diff reports via CLI |
+| **Status** | Implemented — local JSON store + cross-run index (P3) |
+
+`ExperimentLogger` writes per-run records. `tracking/index.py` scans `runs/*/experiment/record.json` and manifest metadata to build a lightweight index and compute metric/param deltas for `research runs diff`.
 
 ### 13. Reflection Generator
 
@@ -238,7 +284,25 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 | **Output** | `reflection.md` |
 | **P0 status** | Implemented — OpenAI or Gemini via `llm/client.py`; falls back to template text if no key/package/call succeeds |
 
----
+### 14. Improvement Loop (P3)
+
+| | |
+|---|---|
+| **Path** | `improvement/fork.py`, `improvement/planner.py`, `improvement/models.py`, `improvement/tuner.py`, `improvement/recipes.py` |
+| **Responsibility** | Fork completed runs, plan improvements, apply tuning/recipes, record lineage |
+| **Input** | Completed parent run dir, `--strategy` (`auto` \| `tune` \| `features`) |
+| **Output** | Child run dir, `improvement_plan.json`, `training_overrides.json` |
+| **Status** | Implemented (tabular-first) |
+
+| Component | Role |
+|-----------|------|
+| `fork.py` | Copy init artifacts; pre-complete stages through `select_baseline`; write lineage metadata |
+| `planner.py` | LLM JSON plan from reflection + metrics (fallback: tune); deterministic tune/features paths |
+| `models.py` | `ImprovementPlan`, `TrainingOverrides`, persistence helpers |
+| `tuner.py` | Small LightGBM grid (`learning_rate`, `num_leaves`, `n_estimators`, ≤12 combos) |
+| `recipes.py` | Predefined tabular recipes: `target_encoding`, `log_numeric` |
+
+`Pipeline.improve()` is CLI orchestration over existing stages — no new pipeline stage in `configs/default.yaml`.
 
 ## Repository Structure
 
@@ -263,13 +327,18 @@ labpilot/
 │   ├── evaluation/            # CV metrics
 │   ├── submission/            # Formatter + validator
 │   ├── kaggle/                # Kaggle API client
-│   ├── tracking/              # Experiment logger + store
+│   ├── kernel/                # Kernel export for kernel-only competitions
+│   ├── improvement/           # Run fork, planner, tuner, feature recipes (P3)
+│   ├── tracking/              # Experiment logger, store, cross-run index
 │   ├── reflection/            # Reflection generation + prompts
 │   └── config.py              # AppConfig + Settings
 │
 ├── templates/                 # Baseline code templates (Jinja2)
 │   ├── tabular_classification/
-│   └── tabular_regression/
+│   ├── tabular_regression/
+│   ├── text_classification/
+│   ├── image_classification/
+│   └── *_deep/                # Opt-in transfer-learning variants
 │
 ├── configs/
 │   ├── default.yaml           # Default pipeline + training config
@@ -285,9 +354,9 @@ labpilot/
     ├── ARCHITECTURE.md        # This file
     ├── MILESTONES.md          # Roadmap index
     └── milestones/
-        ├── COMPLETED.md       # P0 shipped
-        ├── IN-PROGRESS.md     # P1 active work
-        └── TODO.md            # P2+ planned
+    ├── COMPLETED.md       # Shipped milestones (P0–P3)
+    ├── IN-PROGRESS.md     # Active work (if any)
+    └── TODO.md            # P2 (deferred) + P4+ planned
 ```
 
 ---
@@ -326,14 +395,18 @@ Templates are Jinja2 files in `templates/`, rendered into `runs/<id>/pipeline/`.
 
 | Template | Model | CV | Metric |
 |----------|-------|-----|--------|
-| `tabular_classification` | LightGBM binary classifier | StratifiedKFold (5) | Accuracy |
+| `tabular_classification` | LightGBM classifier | StratifiedKFold (5) | Accuracy |
 | `tabular_regression` | LightGBM regressor | KFold (5) | RMSE |
+| `text_classification` | TF-IDF + LogisticRegression | StratifiedKFold | Accuracy / F1 |
+| `image_classification` | ResNet18 + LightGBM | StratifiedKFold | AUC |
+| `*_deep` | Fine-tuned DistilBERT / ResNet18 | Reduced folds on CPU | Problem-dependent |
 
-Preprocessing in all templates:
+Preprocessing in tabular templates:
 
 - Fold-fitted ordinal encoding with unknown-category handling
 - Fold-fitted numeric median and categorical most-frequent imputation
-- No feature engineering beyond defaults
+- Optional P3 recipes: target encoding (high-cardinality categoricals), log1p (skewed numerics)
+- Hyperparameters from `training_overrides.json` → `MODEL_PARAMS` in generated code
 
 Templates are executed as a subprocess with `cwd=pipeline/`. Paths to `data/raw/` and the run output directory are injected at render time.
 
@@ -375,13 +448,13 @@ Defined in `pyproject.toml` — not required for tabular-only runs. Install with
 3. **Templates over generation** — LLM optionally writes brief/reflection (falls back to template text without one); training code always comes from Jinja2 templates.
 4. **Subprocess training** — generated `pipeline/` runs in isolation; failures are contained.
 5. **Fail loud, log everything** — manifest records per-stage status; no silent fallbacks.
-6. **One competition archetype first** — tabular proved the loop; P1 expands to text/image (see [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md)).
+6. **One competition archetype first** — tabular proved the loop; P1 expanded to text/image; P3 adds iteration on tabular first.
 
 ---
 
 ## P1 Additions (shipped in v0.2)
 
-Planned modules and template expansions for v0.2 — see [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md).
+See [milestones/COMPLETED.md](milestones/COMPLETED.md).
 
 | Area | New / changed | Purpose |
 |------|---------------|---------|
@@ -393,7 +466,25 @@ Planned modules and template expansions for v0.2 — see [milestones/IN-PROGRESS
 | `templates/image_classification/` | ResNet18 features + LightGBM | Image baseline (optional `image` extra) |
 | `templates/*_deep/` | Fine-tuned DistilBERT / ResNet18 | Opt-in transfer learning (optional `deep` extra) |
 
-Remote runtime scheduling (P2) is documented in [milestones/TODO.md](milestones/TODO.md) — not part of P1.
+Remote runtime scheduling (P2) is deferred — see [milestones/TODO.md](milestones/TODO.md).
+
+---
+
+## P3 Additions (shipped in v0.4)
+
+| Area | New / changed | Purpose |
+|------|---------------|---------|
+| `improvement/fork.py` | Run fork + lineage | Reuse init artifacts; `parent_run_id`, `iteration` in manifest |
+| `improvement/planner.py` | `ImprovementPlan` | LLM auto-plan or `--strategy tune\|features` |
+| `improvement/tuner.py` | LightGBM grid | Small hyperparameter search over tabular templates |
+| `improvement/recipes.py` | Feature recipes | `target_encoding`, `log_numeric` from profile |
+| `training_overrides.json` | Training config artifact | Separate from `baseline_choice.json` |
+| `codegen/renderer.py` | Template context | `model_params`, `feature_recipes`, recipe column lists |
+| `tracking/index.py` | Cross-run index | `research runs diff --base/--compare` |
+| `cli/main.py` | `improve`, `runs diff` | Iteration entrypoint and experiment comparison |
+| Tabular templates | Parameterized LightGBM | `MODEL_PARAMS` + optional recipe blocks |
+
+Text/image template tuning remains deferred to a follow-up; iteration strategies fall back to retrain-only for non-tabular problem types.
 
 ---
 
@@ -406,6 +497,8 @@ competition.json ─────────────────────
                                            ├──► brief.md
 profile.json ──────────────────────────────┤
                                            ├──► baseline_choice.json
+                                           ├──► training_overrides.json (child runs)
+                                           ├──► improvement_plan.json (child runs)
                                            ├──► pipeline/
                                            │         │
                                            │         ▼
@@ -419,6 +512,9 @@ profile.json ──────────────────────�
                                                      │
                                                      ▼
                                                 reflection.md
+                                                     │
+                                                     ▼ (research improve)
+                                                child run (fork + retrain)
 ```
 
-This artifact-driven design means any stage can be re-run independently once its inputs exist on disk.
+This artifact-driven design means any stage can be re-run independently once its inputs exist on disk. Child runs inherit init artifacts from the parent and only re-execute downstream stages defined in `ImprovementPlan.stages_to_run`.
