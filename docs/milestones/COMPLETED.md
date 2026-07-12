@@ -104,6 +104,22 @@ elif target is numeric:
 **Optional extras:** `uv sync --extra llm` (briefs), `--extra image` (image baseline),
 `--extra deep` (transfer-learning baselines). See [README.md](../../README.md#optional-installs).
 
+### Architecture changes (P1)
+
+| Area | New / changed | Purpose |
+|------|---------------|---------|
+| `competition/metrics.py` | `MetricSpec.key`, LLM tie-breaker | Map Kaggle metric strings to canonical eval keys |
+| `evaluation/metrics.py` | Extended `compute_metric` | AUC, log loss, F1, MAE, RMSLE; sklearn RMSE fix |
+| `brief/context.py` | Competition context block | Deterministic rules/metric section prepended to `brief.md` |
+| `profiler/modality.py` | Modality detector | Tabular / text / image signals + LLM tie-breaker |
+| `templates/text_classification/` | TF-IDF + LogisticRegression | NLP baseline |
+| `templates/image_classification/` | ResNet18 features + LightGBM | Image baseline (optional `image` extra) |
+| `templates/*_deep/` | Fine-tuned DistilBERT / ResNet18 | Opt-in transfer learning (optional `deep` extra) |
+
+Remote runtime **configuration** shipped in P2 v0.3 / P4 v1.0 — see `runtimes/` and
+[configs/runtimes/README.md](../../configs/runtimes/README.md). Remote **execution**
+(`--remote-train`, scheduler, artifact sync) is deferred — see [TODO.md](TODO.md).
+
 ---
 
 ## P1 Validation
@@ -163,6 +179,39 @@ with `improvement_plan.json`, `training_overrides.json`, new `metrics.json`, and
 
 **Version:** `0.4.0`
 
+### Architecture changes (P3)
+
+```mermaid
+flowchart TD
+    parent[Parent run completed] --> plan[ImprovementPlanner]
+    plan --> fork[Fork run_dir + lineage]
+    fork --> copy[Copy init artifacts]
+    copy --> stages[Targeted stages]
+    stages --> genCode[generate_code]
+    genCode --> train[train_model]
+    train --> eval[evaluate_cv through reflection]
+    eval --> diff[runs diff vs parent]
+```
+
+`Pipeline.improve()` validates the parent is `completed`, calls the planner, forks via
+`improvement/fork.py`, writes `improvement_plan.json` and `training_overrides.json`, then
+executes `stages_to_run` (default: codegen through reflection).
+
+| Area | New / changed | Purpose |
+|------|---------------|---------|
+| `improvement/fork.py` | Run fork + lineage | Reuse init artifacts; `parent_run_id`, `iteration` in manifest |
+| `improvement/planner.py` | `ImprovementPlan` | LLM auto-plan or `--strategy tune\|features` |
+| `improvement/tuner.py` | LightGBM grid | Small hyperparameter search over tabular templates |
+| `improvement/recipes.py` | Feature recipes | `target_encoding`, `log_numeric` from profile |
+| `training_overrides.json` | Training config artifact | Separate from `baseline_choice.json` |
+| `codegen/renderer.py` | Template context | `model_params`, `feature_recipes`, recipe column lists |
+| `tracking/index.py` | Cross-run index | `research runs diff --base/--compare` |
+| `cli/main.py` | `improve`, `runs diff` | Iteration entrypoint and experiment comparison |
+| Tabular templates | Parameterized LightGBM | `MODEL_PARAMS` + optional recipe blocks |
+
+Text/image template tuning remains deferred to a follow-up; iteration strategies fall back to
+retrain-only for non-tabular problem types.
+
 ---
 
 ## P4 — v1.0 (Production Quality)
@@ -185,3 +234,20 @@ with `improvement_plan.json`, `training_overrides.json`, new `metrics.json`, and
 (`--remote-train`, scheduler, artifact sync) remains deferred — see [TODO.md](TODO.md).
 
 **Version:** `1.0.0`
+
+### Architecture changes (P4)
+
+| Area | New / changed | Purpose |
+|------|---------------|---------|
+| `.github/workflows/ci.yml` | CI matrix | Tabular, LLM, image, deep test jobs |
+| `workspace/` | Project overlay | `project.yaml` discovery; `research workspace init/status` |
+| `config.py` | Layered merge | Package → project → CLI → env precedence |
+| `Pipeline(dry_run=True)` | Dry-run mode | Skip post-codegen stages; write `dry_run.json` |
+| `runtimes/` | Runtime registry | Models, registry, doctor; `research runtime` CLI |
+| `configs/runtimes/` | Runtime YAML | local, kaggle_kernel, google_colab, other schemas |
+| `kernel/exporter.py` | Slug fix | Valid `{username}/{slug}` kernel metadata |
+| `report/generator.py` | HTML report | Self-contained `report.html` from run artifacts |
+| `cli/main.py` | `--dry-run`, `--project-dir`, `report` | Production UX flags + standalone report command |
+| Integration tests | text/image/deep | One automated test per template family |
+
+Each run writes `runtime.json` with the configured default runtime (`local-default`).

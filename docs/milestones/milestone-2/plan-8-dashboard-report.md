@@ -40,6 +40,13 @@ the *last* plan: it has no new reasoning logic of its own, it's a formatter over
 That's by design — if this plan needs new reasoning logic to produce a field, that's a sign a
 field belongs in an earlier plan instead.
 
+The mockup above is a *summary* — top discoveries, known failures, one best pipeline. It
+deliberately does not show every experiment. But "see all experimentation and its progress and
+short description" is also a first-class requirement of this plan: both the terminal and HTML
+reports additionally render a full **all-experiments table** (every `Experiment` in the graph,
+with `status`, `progress`, and `description` from Plan 1), so nothing is hidden behind the
+top-3 summaries above. See §1 and §2 below.
+
 ## Design
 
 ### 1. Terminal report — `research experiments report`
@@ -59,6 +66,7 @@ def build_report(competition: str, runs_dir: Path, knowledge_dir: Path) -> Exper
         known_failures=kb.known_failures(3),
         best_pipeline=graph.best_path(metric_key),      # Plan 1
         recommended_next=ranked[0] if ranked else None, # Plan 6
+        experiments=sorted(graph.nodes.values(), key=lambda e: e.created_at, reverse=True),
     )
 ```
 
@@ -72,7 +80,12 @@ class ExperimentReport(BaseModel):
     known_failures: list[KnowledgeEntry]
     best_pipeline: list[Experiment]
     recommended_next: RankedCandidate | None
+    experiments: list[Experiment]         # NEW — full list, newest first; powers the all-experiments table (§1/§2)
 ```
+
+The terminal report (`rich.Table`) renders `experiments` as a table with columns `id`, `status`,
+`progress`, `description`, and the primary metric — this is the "see everything" view;
+`top_discoveries`/`known_failures`/`best_pipeline` above stay as the curated summary.
 
 Rendered with `rich` (`Console`/`Table`/`Panel`), consistent with the existing CLI's use of
 `rich` elsewhere in `cli/main.py`. `--format json` dumps `ExperimentReport.model_dump_json()`
@@ -92,6 +105,16 @@ just a terminal print. Reuse the existing pattern from `report/generator.py` (Ji
   experiment count, best score, top discoveries/failures tables, an HTML rendering of the
   experiment tree (reuse `ExperimentGraph.to_tree_text()` from Plan 1, wrapped in a `<pre>`
   block for v1 — a real interactive tree widget is a plausible follow-up, not required here).
+- **All-experiments table** — the dashboard's main content, not an afterthought: one row per
+  `ExperimentReport.experiments` entry (id, status, progress, description, primary metric,
+  created_at), each row's id linking to that run's own `runs/<id>/report.html` (Milestone 1's
+  per-run report) via a relative or `file://` link so a reader can go from "which experiments
+  exist" straight to "full detail on this one" in one click. This is the direct answer to
+  "see all experimentation and its progress and short description in HTML" — the
+  discoveries/failures/best-pipeline panels above remain a curated summary, not a replacement
+  for this table. Rows for experiments with a parent (i.e. `runs/<id>/comparison.md` exists,
+  per Plan 3) additionally link to that comparison write-up, so "what changed vs. its parent"
+  is one click away alongside the full per-run report.
 - Output path: `knowledge/<competition-slug>/dashboard.html` — **not** committed, gitignored
   like `runs/` already is, since it's a generated artifact.
 
@@ -147,8 +170,15 @@ research experiments dashboard --competition <slug>   # writes + prints path to 
   knowledge base, and ranking backlog produces output matching every field in the brief's
   deliverable mockup (experiment count, best score, top 3 discoveries, top 3 failures, best
   pipeline path, recommended next + confidence).
-- `--format json` output round-trips through `ExperimentReport.model_validate_json(...)`.
+- The terminal report's all-experiments table lists every `Experiment` in the fixture graph
+  (not just the top 3 discoveries/failures) with correct `status`, `progress`, and
+  `description` for each — including at least one still-`running`/`partial` experiment to
+  confirm incomplete runs are listed, not filtered out.
+- `--format json` output round-trips through `ExperimentReport.model_validate_json(...)`,
+  including the full `experiments` list.
 - `research experiments dashboard --competition <slug>` writes a valid, openable HTML file
-  containing the same data as the text report.
+  containing the same data as the text report, including the all-experiments table, and each
+  row's link to its per-run `report.html` resolves to a real file on disk in the fixture; rows
+  for non-root experiments additionally link to a resolvable `comparison.md`.
 - Running the report/dashboard commands against a competition slug with zero runs produces a
   clear "no experiments yet" message, not a traceback.
