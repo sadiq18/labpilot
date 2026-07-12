@@ -16,6 +16,8 @@ from labpilot.competition.parser import CompetitionParser
 from labpilot.config import AppConfig
 from labpilot.data.downloader import DataDownloader
 from labpilot.kaggle.client import KaggleClient, KaggleGateway, SubmissionResult
+from labpilot.kaggle.urls import competition_submissions_url
+from labpilot.kernel.exporter import export_kernel
 from labpilot.llm.client import LLMClient, create_llm_client
 from labpilot.orchestrator.manifest import (
     RunManifest,
@@ -80,6 +82,7 @@ class Pipeline:
             "train_model": self._train_model,
             "evaluate_cv": self._evaluate_cv,
             "generate_submission": self._generate_submission,
+            "export_kernel": self._export_kernel,
             "upload_submission": self._upload_submission,
             "log_experiment": self._log_experiment,
             "write_reflection": self._write_reflection,
@@ -196,12 +199,24 @@ class Pipeline:
 
             index = all_stages.index(stage_name) + 1
             console.print(f"[bold][{index}/{total}][/bold] {stage_name}...")
+            if stage_name == "export_kernel":
+                competition = self._load_competition(resolved_run_dir)
+                if competition.submission_mode != "kernel":
+                    manifest.mark_skipped(stage_name, [])
+                    save_manifest(resolved_run_dir, manifest)
+                    console.print(f"  [yellow]–[/yellow] {stage_name} (csv competition)")
+                    continue
             if stage_name == "upload_submission" and not self.submit:
+                competition = self._load_competition(resolved_run_dir)
+                status = "kernel_ready" if competition.submission_mode == "kernel" else "not_submitted"
                 result = SubmissionResult(
-                    competition=competition,
+                    competition=manifest.competition,
                     submission_path=str(resolved_run_dir / "submission.csv"),
-                    status="not_submitted",
+                    status=status,
                     message="Upload skipped; rerun with --submit to upload.",
+                    submission_mode=competition.submission_mode,
+                    submissions_url=competition.submissions_url
+                    or competition_submissions_url(competition.slug),
                 )
                 result_path = KaggleClient.save_result(resolved_run_dir, result)
                 manifest.mark_skipped(stage_name, [str(result_path)])
@@ -392,30 +407,69 @@ class Pipeline:
             raise ValueError(f"Invalid submission: {result.errors}")
         return [str(submission_path)]
 
+    def _export_kernel(
+        self, run_dir: Path, manifest: RunManifest, config: AppConfig
+    ) -> list[str]:
+        competition = self._load_competition(run_dir)
+        kernel_dir = export_kernel(run_dir, competition)
+        return [str(kernel_dir / name) for name in ("run.py", "kernel-metadata.json")]
+
     def _upload_submission(
         self, run_dir: Path, manifest: RunManifest, config: AppConfig
     ) -> list[str]:
-        competition = CompetitionSpec.model_validate_json(
-            (run_dir / "competition.json").read_text()
-        )
+        competition = self._load_competition(run_dir)
         self._preflight_submission(competition)
 
-        result = self.kaggle_client.upload_submission(
-            manifest.competition,
-            run_dir / "submission.csv",
-        )
+        existing = self._load_submission_result(run_dir)
+        if competition.submission_mode == "kernel":
+            kernel_dir = run_dir / "kernel"
+            if not kernel_dir.is_dir():
+                raise FileNotFoundError(
+                    "Kernel export not found. Re-run from export_kernel or rebuild the run."
+                )
+            retry_slug = None
+            retry_version = None
+            if existing is not None and existing.status == "kernel_pushed":
+                retry_slug = existing.kernel_slug
+                retry_version = existing.kernel_version
+            result = self.kaggle_client.submit_via_kernel(
+                manifest.competition,
+                kernel_dir,
+                output_file=competition.kernel_output_file,
+                existing_kernel_slug=retry_slug,
+                existing_kernel_version=retry_version,
+            )
+        else:
+            result = self.kaggle_client.upload_submission(
+                manifest.competition,
+                run_dir / "submission.csv",
+            )
         path = KaggleClient.save_result(run_dir, result)
+        self._print_submission_links(result)
         return [str(path)]
+
+    @staticmethod
+    def _load_competition(run_dir: Path) -> CompetitionSpec:
+        return CompetitionSpec.model_validate_json((run_dir / "competition.json").read_text())
+
+    @staticmethod
+    def _load_submission_result(run_dir: Path) -> SubmissionResult | None:
+        path = run_dir / "submission_result.json"
+        if not path.is_file():
+            return None
+        return SubmissionResult.model_validate_json(path.read_text())
+
+    @staticmethod
+    def _print_submission_links(result: SubmissionResult) -> None:
+        if result.submissions_url:
+            console.print(f"\n[bold]Submissions:[/bold] {result.submissions_url}")
+        if result.kernel_url:
+            console.print(f"[bold]Kernel:[/bold]      {result.kernel_url}")
 
     def _preflight_submission(self, competition: CompetitionSpec) -> None:
         if competition.submissions_disabled:
             raise ValueError(
                 f"Submissions are disabled for '{competition.slug}' on Kaggle."
-            )
-        if competition.is_kernels_submissions_only:
-            raise ValueError(
-                f"Competition '{competition.slug}' requires kernels-only submissions. "
-                "LabPilot P0/P1 uploads CSV files directly — use a kernels workflow instead."
             )
         if competition.deadline:
             try:
@@ -487,7 +541,7 @@ class Pipeline:
             submission=submission,
             run_dir=run_dir,
         )
-        path = generator.save(run_dir, content)
+        path = generator.save(run_dir, content, submission=submission)
         return [str(path)]
 
 

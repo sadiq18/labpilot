@@ -29,11 +29,14 @@ def test_preflight_blocks_disabled_submissions():
         pipeline._preflight_submission(competition)
 
 
-def test_preflight_blocks_kernels_only():
+def test_preflight_allows_kernel_mode():
     pipeline = Pipeline(AppConfig(), kaggle_client=FakeKaggleWithQuota(), submit=True)
-    competition = CompetitionSpec(slug="test", is_kernels_submissions_only=True)
-    with pytest.raises(ValueError, match="kernels-only"):
-        pipeline._preflight_submission(competition)
+    competition = CompetitionSpec(
+        slug="aerial-cactus",
+        submission_mode="kernel",
+        is_kernels_submissions_only=True,
+    )
+    pipeline._preflight_submission(competition)
 
 
 def test_preflight_blocks_past_deadline():

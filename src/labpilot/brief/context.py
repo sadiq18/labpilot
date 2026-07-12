@@ -38,6 +38,12 @@ def render_competition_context(competition: CompetitionSpec) -> str:
     if competition.is_kernels_submissions_only:
         lines.append("**Kernels-only submissions:** yes")
 
+    lines.append(f"**Submission mode:** {competition.submission_mode}")
+    if competition.submission_mode == "kernel":
+        lines.append(f"**Kernel output file:** {competition.kernel_output_file}")
+    if competition.submissions_url:
+        lines.append(f"**Submissions page:** {competition.submissions_url}")
+
     if competition.tags:
         lines.append(f"**Tags:** {', '.join(competition.tags)}")
 

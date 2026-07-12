@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from labpilot.baseline.selector import BaselineChoice
 from labpilot.config import LLMConfig
@@ -103,9 +104,19 @@ def test_generate_falls_back_when_llm_client_raises(profile, baseline, submissio
     assert "LLM generation not available" in reflection
 
 
-def test_generator_defaults_to_create_llm_client_when_not_provided(profile, baseline, submission):
-    generator = ReflectionGenerator(LLMConfig(provider="openai", api_key=""))
+def test_save_appends_submission_links_footer(tmp_path: Path, submission: SubmissionResult):
+    generator = ReflectionGenerator(LLMConfig(provider="openai", api_key=""), llm_client=None)
+    submission = submission.model_copy(
+        update={
+            "submissions_url": "https://www.kaggle.com/competitions/titanic/submissions",
+            "kernel_url": "https://www.kaggle.com/code/user/kernel/versions/1",
+            "submission_mode": "kernel",
+        }
+    )
 
-    assert generator.llm_client is None
-    reflection = _generate(generator, profile, baseline, submission)
-    assert "LLM generation not available" in reflection
+    path = generator.save(tmp_path, "# Reflection\n\nBody text.", submission=submission)
+    content = path.read_text()
+
+    assert "## Submission links" in content
+    assert "competitions/titanic/submissions" in content
+    assert "code/user/kernel" in content

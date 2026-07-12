@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -55,6 +56,9 @@ class CompetitionSpec(BaseModel):
     max_daily_submissions: int | None = None
     submissions_disabled: bool = False
     is_kernels_submissions_only: bool = False
+    submission_mode: Literal["csv", "kernel"] = "csv"
+    kernel_output_file: str = "submission.csv"
+    submissions_url: str = ""
     tags: list[str] = Field(default_factory=list)
     raw_html: str = ""
     baseline_strategy: str = "lightweight"  # lightweight | deep (P1 opt-in)

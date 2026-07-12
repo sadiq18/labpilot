@@ -149,6 +149,14 @@ or never reached) is re-executed in pipeline order. One exception: if the run fi
 re-running the rest of an already-completed pipeline. Add `--force-submit` when the
 competition deadline has passed but Kaggle may still accept uploads.
 
+**Kernel-only competitions** (e.g. `aerial-cactus-identification`): LabPilot detects
+`submission_mode: kernel` from Kaggle metadata (with a rules-page fallback). Training still
+runs locally; `export_kernel` writes `runs/<id>/kernel/` for Kaggle's notebook API. The same
+`--submit` flag pushes the kernel, waits for the run, submits via `competition_submit_code`,
+and polls the leaderboard. Without `--submit`, `submission_result.json` is written with status
+`kernel_ready`. After upload, the CLI and `reflection.md` include links to the submissions
+page and kernel notebook.
+
 | Option | Description |
 |--------|-------------|
 | `--run-id, -r` | Run ID to resume (required) |

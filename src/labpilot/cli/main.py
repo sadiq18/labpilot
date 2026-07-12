@@ -8,7 +8,9 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from labpilot.config import LLMConfig, load_config
+from labpilot.competition.models import CompetitionSpec
 from labpilot.diagnostics import check_environment, print_diagnostics_report
+from labpilot.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, create_llm_client
 from labpilot.orchestrator.manifest import StageStatus
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
@@ -40,6 +42,37 @@ def main(
 def _validate_submit_flags(submit: bool, force_submit: bool) -> None:
     if force_submit and not submit:
         raise typer.BadParameter("--force-submit requires --submit.")
+
+
+def _print_kernel_init_banner(run_dir: Path) -> None:
+    competition_path = run_dir / "competition.json"
+    if not competition_path.is_file():
+        return
+    competition = CompetitionSpec.model_validate_json(competition_path.read_text())
+    if competition.submission_mode != "kernel":
+        return
+    console.print(
+        "\n[yellow]Kernel-only competition:[/yellow] LabPilot will train locally and "
+        "submit via the Kaggle notebook API when you pass --submit."
+    )
+    if competition.submissions_url:
+        console.print(f"[bold]Submissions:[/bold] {competition.submissions_url}")
+    console.print(
+        "Pass [cyan]--submit[/cyan] on `research build` or `research resume` to push the kernel."
+    )
+
+
+def _print_submission_links_if_present(run_dir: Path, submit: bool) -> None:
+    if not submit:
+        return
+    result_path = run_dir / "submission_result.json"
+    if not result_path.is_file():
+        return
+    result = SubmissionResult.model_validate_json(result_path.read_text())
+    if result.submissions_url:
+        console.print(f"\n[bold]Submissions:[/bold] {result.submissions_url}")
+    if result.kernel_url:
+        console.print(f"[bold]Kernel:[/bold]      {result.kernel_url}")
 
 
 @app.command()
@@ -100,10 +133,12 @@ def run(
     )
     manifest = pipeline.run(competition)
 
-    console.print(f"\n[green]Run complete:[/green] {config.runs_dir / manifest.run_id}")
+    run_dir = config.runs_dir / manifest.run_id
+    console.print(f"\n[green]Run complete:[/green] {run_dir}")
     console.print(
-        f"[green]Reflection:[/green] {config.runs_dir / manifest.run_id / 'reflection.md'}"
+        f"[green]Reflection:[/green] {run_dir / 'reflection.md'}"
     )
+    _print_submission_links_if_present(run_dir, submit)
 
 
 @app.command()
@@ -150,6 +185,7 @@ def init(
     run_dir = config.runs_dir / manifest.run_id
     console.print(f"\n[green]Init complete:[/green] {run_dir}")
     console.print(f"[green]Brief:[/green] {run_dir / 'brief.md'}")
+    _print_kernel_init_banner(run_dir)
     console.print(f"\nNext: [cyan]research build --run-id {manifest.run_id}[/cyan]")
 
 
@@ -199,6 +235,7 @@ def build(
     run_dir = config.runs_dir / manifest.run_id
     console.print(f"\n[green]Build complete:[/green] {run_dir}")
     console.print(f"[green]Reflection:[/green] {run_dir / 'reflection.md'}")
+    _print_submission_links_if_present(run_dir, submit)
 
 
 @app.command()
@@ -256,7 +293,9 @@ def resume(
     )
     manifest = _continue_or_exit(pipeline.resume, run_id)
 
-    console.print(f"\n[green]Run complete:[/green] {config.runs_dir / manifest.run_id}")
+    run_dir = config.runs_dir / manifest.run_id
+    console.print(f"\n[green]Run complete:[/green] {run_dir}")
+    _print_submission_links_if_present(run_dir, submit)
 
 
 def _continue_or_exit(action, run_id: str):

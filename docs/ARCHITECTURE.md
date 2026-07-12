@@ -42,9 +42,10 @@ flowchart LR
 | 7 | `train_model` | `training/runner.py` | `models/`, `oof.csv` |
 | 8 | `evaluate_cv` | `evaluation/metrics.py` | `metrics.json` |
 | 9 | `generate_submission` | `submission/formatter.py` | `submission.csv` |
-| 10 | `upload_submission` | `kaggle/client.py` | `submission_result.json` |
-| 11 | `log_experiment` | `tracking/logger.py` | `experiment/record.json` |
-| 12 | `write_reflection` | `reflection/generator.py` | `reflection.md` |
+| 10 | `export_kernel` | `kernel/exporter.py` | `kernel/` (kernel-only comps) |
+| 11 | `upload_submission` | `kaggle/client.py` | `submission_result.json` |
+| 12 | `log_experiment` | `tracking/logger.py` | `experiment/record.json` |
+| 13 | `write_reflection` | `reflection/generator.py` | `reflection.md` |
 
 The orchestrator lives in `orchestrator/pipeline.py`. Stage order is configurable via `configs/default.yaml` under `pipeline.stages`.
 

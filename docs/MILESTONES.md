@@ -37,6 +37,7 @@ titanic` (parse → download → profile → brief) followed by `research build 
 | **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 shipped |
 | **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Nothing active — P2 is next |
 | **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2+ roadmap (remote runtime, iteration loop, production) |
+| **Backlog** | [milestones/backlog.md](milestones/backlog.md) | Unscheduled extensions (async kernel watcher, webhooks) |
 
 ---
 
