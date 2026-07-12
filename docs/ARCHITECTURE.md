@@ -551,3 +551,14 @@ profile.json ──────────────────────�
 ```
 
 This artifact-driven design means any stage can be re-run independently once its inputs exist on disk. Child runs inherit init artifacts from the parent and only re-execute downstream stages defined in `ImprovementPlan.stages_to_run`.
+
+---
+
+## Looking ahead: Milestone 2 — Experiment Scientist
+
+Everything above describes the shipped P0–P4 pipeline. The next milestone doesn't change this
+pipeline — it adds a memory/reasoning layer on top of it (an `experiments/` package plus a new
+per-competition `knowledge/` data directory) so that dozens or hundreds of runs accumulate into
+a queryable, comparable, rankable research history instead of a flat list of directories. See
+[milestones/milestone-2/README.md](milestones/milestone-2/README.md) for the full design —
+this section will be folded into the tables above once implementation begins.
