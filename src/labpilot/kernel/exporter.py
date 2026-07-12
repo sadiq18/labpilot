@@ -149,12 +149,15 @@ def _labpilot_image_search_bases() -> list[Path]:
 
 def _labpilot_prepare_kaggle_data() -> None:
     """Extract nested competition zips and validate CSV paths on Kaggle."""
+    import os
     import zipfile
 
     global DATA_DIR
 
     if not str(DATA_DIR).startswith("/kaggle/input"):
         return
+
+    os.environ.setdefault("TORCH_HOME", str(OUTPUT_DIR / ".torch"))
 
     input_root = Path("/kaggle/input")
     if not DATA_DIR.is_dir():
