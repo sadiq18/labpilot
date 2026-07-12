@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_METRIC_BY_PROBLEM_TYPE: dict[str, str] = {
     ProblemType.TABULAR_CLASSIFICATION.value: "accuracy",
     ProblemType.TABULAR_REGRESSION.value: "rmse",
+    ProblemType.TEXT_CLASSIFICATION.value: "accuracy",
+    ProblemType.IMAGE_CLASSIFICATION.value: "accuracy",
+}
+
+SUPPORTED_METRICS_BY_PROBLEM_TYPE: dict[str, set[str]] = {
+    ProblemType.TABULAR_CLASSIFICATION.value: {"accuracy", "auc", "logloss", "f1"},
+    ProblemType.TEXT_CLASSIFICATION.value: {"accuracy", "auc", "logloss", "f1"},
+    ProblemType.IMAGE_CLASSIFICATION.value: {"accuracy", "auc", "logloss", "f1"},
+    ProblemType.TABULAR_REGRESSION.value: {"rmse", "mse", "mae", "rmsle"},
 }
 
 # A target is treated as classification if it's non-numeric, OR numeric with
@@ -41,6 +50,10 @@ class BaselineChoice(BaseModel):
     sample_submission_file: str | None = None
     submission_columns: list[str] = Field(default_factory=list)
     metric_name: str = "accuracy"
+    text_column: str | None = None
+    image_dir: str | None = None
+    image_column: str | None = None
+    baseline_strategy: str = "lightweight"
 
 
 class BaselineSelector:
@@ -48,12 +61,13 @@ class BaselineSelector:
 
     def select(self, competition: CompetitionSpec, profile: DatasetProfile) -> BaselineChoice:
         problem_type = self._infer_problem_type(competition, profile)
-        template = get_template(problem_type)
+        template_name = self._resolve_template_name(problem_type, competition)
+        template = get_template(problem_type, template_name=template_name)
 
         if template is None:
             raise ValueError(f"No baseline template for problem type: {problem_type}")
 
-        metric_name = DEFAULT_METRIC_BY_PROBLEM_TYPE.get(problem_type, "accuracy")
+        metric_name = self._resolve_metric_name(competition, problem_type)
         logger.info(
             "Selected baseline template '%s' for problem type '%s' (metric key: cv_%s).",
             template.name,
@@ -71,6 +85,10 @@ class BaselineSelector:
             sample_submission_file=profile.sample_submission_file,
             submission_columns=profile.submission_columns,
             metric_name=metric_name,
+            text_column=profile.text_column,
+            image_dir=profile.image_dir,
+            image_column=profile.image_column,
+            baseline_strategy=competition.baseline_strategy,
         )
 
     def save(self, run_dir: Path, choice: BaselineChoice) -> Path:
@@ -81,6 +99,11 @@ class BaselineSelector:
     def _infer_problem_type(self, competition: CompetitionSpec, profile: DatasetProfile) -> str:
         if competition.problem_type not in (ProblemType.UNKNOWN,):
             return competition.problem_type.value
+
+        if profile.modality == "image":
+            return ProblemType.IMAGE_CLASSIFICATION.value
+        if profile.modality == "text":
+            return ProblemType.TEXT_CLASSIFICATION.value
 
         if profile.target_column:
             target = next((c for c in profile.columns if c.name == profile.target_column), None)
@@ -95,6 +118,34 @@ class BaselineSelector:
 
         # Default P0 assumption: tabular classification
         return ProblemType.TABULAR_CLASSIFICATION.value
+
+    def _resolve_metric_name(self, competition: CompetitionSpec, problem_type: str) -> str:
+        default = DEFAULT_METRIC_BY_PROBLEM_TYPE.get(problem_type, "accuracy")
+        supported = SUPPORTED_METRICS_BY_PROBLEM_TYPE.get(problem_type, {default})
+        metric = competition.evaluation_metric
+        if metric is None or metric.key is None:
+            return default
+        if metric.key in supported:
+            return metric.key
+        logger.info(
+            "Competition metric key '%s' is not supported for %s; using default '%s'.",
+            metric.key,
+            problem_type,
+            default,
+        )
+        return default
+
+    def _resolve_template_name(self, problem_type: str, competition: CompetitionSpec) -> str | None:
+        if (
+            competition.baseline_strategy == "deep"
+            and problem_type
+            in {
+                ProblemType.TEXT_CLASSIFICATION.value,
+                ProblemType.IMAGE_CLASSIFICATION.value,
+            }
+        ):
+            return f"{problem_type}_deep"
+        return None
 
     def _rationale(self, problem_type: str, profile: DatasetProfile) -> str:
         return (

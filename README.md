@@ -46,6 +46,52 @@ uv run research status --run-id <run_id>
 You must join the competition and accept its rules on Kaggle before downloading data.
 On macOS, LightGBM also requires `brew install libomp`.
 
+## Optional installs
+
+Core dependencies (LightGBM, scikit-learn, Kaggle API, etc.) are installed by default and cover
+**tabular** competitions. Everything below is optional — LabPilot degrades gracefully when an
+extra or API key is missing.
+
+| Extra | Install | Enables | Required when |
+|-------|---------|---------|---------------|
+| `dev` | `uv sync --extra dev` | pytest, ruff, coverage | Running tests or linting locally |
+| `llm` | `uv sync --extra llm` | OpenAI + Gemini clients for `brief.md` / `reflection.md` | You want AI-generated briefs (not template fallback) |
+| `image` | `uv sync --extra image` | `image_classification` template (frozen ResNet18 + LightGBM) | Profiler detects an image competition and selects the lightweight image baseline |
+| `deep` | `uv sync --extra deep` | `text_classification_deep` + `image_classification_deep` (fine-tuned DistilBERT / ResNet18) | Local YAML sets `baseline_strategy: deep` for a text or image competition |
+
+Combine extras as needed:
+
+```bash
+uv sync --extra dev --extra llm              # tabular + AI briefs + tests
+uv sync --extra dev --extra llm --extra image   # add image baselines
+uv sync --extra dev --extra deep             # deep includes torch/torchvision/transformers (covers image too)
+```
+
+**LLM (`llm` extra)** — set one API key in `.env`:
+
+- `OPENAI_API_KEY` — default provider (`llm.provider: openai` in `configs/default.yaml`)
+- `GEMINI_API_KEY` + `LABPILOT_LLM_PROVIDER=gemini` — Gemini instead
+
+Without a key or package, `research run` warns and falls back to template text for
+`brief.md`/`reflection.md` (use `--yes` to skip the prompt).
+
+**Image / deep baselines** — no extra API keys. `research doctor` reports optional
+`image`/`deep` import status; training fails fast with a clear message only when the
+selected template needs a missing extra (tabular and text lightweight runs never require
+`torch`).
+
+**Deep transfer learning (opt-in)** — add to a local competition contract
+(`configs/competitions/<slug>.yaml`):
+
+```yaml
+baseline_strategy: deep   # default is lightweight
+```
+
+GPU is used automatically when available; on CPU, epoch and sample counts are clamped to
+keep runs bounded (see `deep_baseline` in `configs/default.yaml`).
+
+See [configs/competitions/README.md](configs/competitions/README.md) for the full YAML schema.
+
 ## Commands
 
 Global flags (apply to every command, placed before the subcommand):
@@ -118,8 +164,10 @@ non-interactive/CI runs).
 ### `research doctor`
 
 Checks that the local environment has everything LabPilot needs (Python version, LightGBM
-import, Kaggle credentials) and exits non-zero if anything's missing. `run`/`init`/`build`/
-`resume` run this automatically and fail fast on a bad environment.
+import, Kaggle credentials) and also reports optional `image`/`deep` dependency status.
+Exits non-zero if a **core** check fails. `run`/`init`/`build`/`resume` run core checks
+automatically and fail fast on a bad environment; optional extras are informational only
+unless the selected baseline template requires them at train time.
 
 ### `research status --run-id <id>`
 
@@ -143,9 +191,17 @@ Lists every run under the runs directory with its competition and overall status
 
 ## Project Status
 
-**P0 — Research Engine v0.1** (in progress): tabular competitions only.
+**P0 — Research Engine v0.1** (complete): tabular classification/regression end-to-end.
 
-See [docs/MILESTONES.md](docs/MILESTONES.md) for the roadmap, P0 scope, and pending tasks, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module design.
+**P1 — Problem Type Expansion v0.2** (complete): metric-aware evaluation, competition rules
+in `brief.md`, modality detection (tabular/text/image), NLP and image baselines, opt-in deep
+transfer-learning templates. See [Optional installs](#optional-installs) for `llm` / `image` /
+`deep` extras.
+
+See [docs/MILESTONES.md](docs/MILESTONES.md) for the roadmap (split into
+[Completed](docs/milestones/COMPLETED.md), [In progress](docs/milestones/IN-PROGRESS.md),
+and [TODO](docs/milestones/TODO.md)), and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for
+module design.
 
 ## Repository Layout
 

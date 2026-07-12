@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -246,6 +247,7 @@ class Pipeline:
             manifest.competition,
             configs_dir=self.configs_dir,
             metadata_fetcher=self.kaggle_client,
+            llm_client=self.llm_client,
         )
         path = parser.save(run_dir)
         return [str(path)]
@@ -273,6 +275,9 @@ class Pipeline:
             train_pattern=competition.train_file_pattern,
             test_pattern=competition.test_file_pattern,
             submission_pattern=competition.submission_file_pattern,
+            llm_client=self.llm_client,
+            competition_title=competition.title,
+            competition_description=competition.description,
         )
         json_path, md_path = write_profile(run_dir, profile)
         return [str(json_path), str(md_path)]
@@ -300,7 +305,7 @@ class Pipeline:
 
     def _generate_code(self, run_dir: Path, manifest: RunManifest, config: AppConfig) -> list[str]:
         choice = BaselineChoice.model_validate_json((run_dir / "baseline_choice.json").read_text())
-        template = get_template(choice.problem_type)
+        template = get_template(choice.problem_type, template_name=choice.template_name)
         if template is None:
             raise ValueError(f"No template for {choice.problem_type}")
 
@@ -363,7 +368,13 @@ class Pipeline:
         )
         target_is_numeric = bool(target_column_profile and target_column_profile.is_numeric)
         require_integer_target = (
-            choice.problem_type == ProblemType.TABULAR_CLASSIFICATION and target_is_numeric
+            choice.problem_type
+            in {
+                ProblemType.TABULAR_CLASSIFICATION.value,
+                ProblemType.TEXT_CLASSIFICATION.value,
+                ProblemType.IMAGE_CLASSIFICATION.value,
+            }
+            and target_is_numeric
         )
         validator = SubmissionValidator()
         result = validator.validate(
@@ -380,12 +391,52 @@ class Pipeline:
     def _upload_submission(
         self, run_dir: Path, manifest: RunManifest, config: AppConfig
     ) -> list[str]:
+        competition = CompetitionSpec.model_validate_json(
+            (run_dir / "competition.json").read_text()
+        )
+        self._preflight_submission(competition)
+
         result = self.kaggle_client.upload_submission(
             manifest.competition,
             run_dir / "submission.csv",
         )
         path = KaggleClient.save_result(run_dir, result)
         return [str(path)]
+
+    def _preflight_submission(self, competition: CompetitionSpec) -> None:
+        if competition.submissions_disabled:
+            raise ValueError(
+                f"Submissions are disabled for '{competition.slug}' on Kaggle."
+            )
+        if competition.is_kernels_submissions_only:
+            raise ValueError(
+                f"Competition '{competition.slug}' requires kernels-only submissions. "
+                "LabPilot P0/P1 uploads CSV files directly — use a kernels workflow instead."
+            )
+        if competition.deadline:
+            try:
+                deadline = datetime.fromisoformat(competition.deadline.replace("Z", "+00:00"))
+                if deadline.tzinfo is not None:
+                    deadline = deadline.replace(tzinfo=None)
+            except ValueError:
+                logger.warning(
+                    "Could not parse deadline %r for '%s'; skipping deadline check.",
+                    competition.deadline,
+                    competition.slug,
+                )
+            else:
+                if deadline < datetime.now():
+                    raise ValueError(
+                        f"Competition '{competition.slug}' deadline ({competition.deadline}) "
+                        "has already passed."
+                    )
+        if competition.max_daily_submissions is not None:
+            count = self.kaggle_client.count_todays_submissions(competition.slug)
+            if count >= competition.max_daily_submissions:
+                raise ValueError(
+                    f"Daily submission quota reached for '{competition.slug}' "
+                    f"({count}/{competition.max_daily_submissions})."
+                )
 
     def _log_experiment(self, run_dir: Path, manifest: RunManifest, config: AppConfig) -> list[str]:
         logger = ExperimentLogger(run_dir)
@@ -422,6 +473,7 @@ class Pipeline:
             baseline=choice,
             metrics=metrics,
             submission=submission,
+            run_dir=run_dir,
         )
         path = generator.save(run_dir, content)
         return [str(path)]

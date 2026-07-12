@@ -2,6 +2,7 @@ import logging
 import os
 import time
 import zipfile
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -31,6 +32,8 @@ class KaggleGateway(Protocol):
     ) -> SubmissionResult: ...
 
     def fetch_competition_metadata(self, competition: str) -> CompetitionMetadata | None: ...
+
+    def count_todays_submissions(self, competition: str) -> int: ...
 
 
 class KaggleClient:
@@ -226,7 +229,74 @@ class KaggleClient:
             description=getattr(match, "description", "") or "",
             category=getattr(match, "category", "") or "",
             evaluation_metric_raw=getattr(match, "evaluation_metric", "") or "",
+            deadline=self._format_deadline(getattr(match, "deadline", None)),
+            max_daily_submissions=self._coerce_int(
+                getattr(match, "max_daily_submissions", None)
+                or getattr(match, "maxDailySubmissions", None)
+            ),
+            submissions_disabled=bool(getattr(match, "submissions_disabled", False)),
+            is_kernels_submissions_only=bool(
+                getattr(match, "is_kernels_submissions_only", False)
+            ),
+            tags=self._extract_tags(match),
         )
+
+    def count_todays_submissions(self, competition: str) -> int:
+        """Count submissions made today for quota pre-flight checks."""
+        api = self.authenticate()
+        try:
+            submissions = api.competition_submissions(competition)
+        except Exception:
+            logger.warning("Unable to count today's submissions for '%s'.", competition)
+            return 0
+
+        today = date.today()
+        count = 0
+        for entry in submissions or []:
+            submitted = getattr(entry, "date", None) or getattr(entry, "submitted_at", None)
+            if submitted is None:
+                continue
+            if isinstance(submitted, datetime):
+                submitted_date = submitted.date()
+            else:
+                try:
+                    submitted_date = datetime.fromisoformat(str(submitted).replace("Z", "+00:00")).date()
+                except ValueError:
+                    continue
+            if submitted_date == today:
+                count += 1
+        return count
+
+    @staticmethod
+    def _format_deadline(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _coerce_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _extract_tags(match: Any) -> list[str]:
+        tags = getattr(match, "tags", None) or []
+        result: list[str] = []
+        for tag in tags:
+            name = getattr(tag, "name", None) or getattr(tag, "ref", None) or str(tag)
+            if name:
+                result.append(str(name))
+        category = getattr(match, "category", "") or ""
+        if category and category not in result:
+            result.insert(0, category)
+        return result
 
     @staticmethod
     def _ref_slug(ref: str) -> str:

@@ -5,6 +5,19 @@ def test_check_environment_returns_all_expected_checks():
     results = check_environment()
     names = {result.name for result in results}
 
+    assert names == {
+        "Python version",
+        "LightGBM import",
+        "Kaggle credentials",
+        "Image deps (torch/torchvision)",
+        "Deep deps (torch/torchvision/transformers)",
+    }
+    assert all(isinstance(result, CheckResult) for result in results)
+
+
+def test_check_environment_core_only_excludes_optional():
+    results = check_environment(include_optional=False)
+    names = {result.name for result in results}
     assert names == {"Python version", "LightGBM import", "Kaggle credentials"}
     assert all(isinstance(result, CheckResult) for result in results)
 

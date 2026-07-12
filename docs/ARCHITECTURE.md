@@ -282,7 +282,11 @@ labpilot/
 │
 └── docs/
     ├── ARCHITECTURE.md        # This file
-    └── MILESTONES.md          # Roadmap + pending tasks
+    ├── MILESTONES.md          # Roadmap index
+    └── milestones/
+        ├── COMPLETED.md       # P0 shipped
+        ├── IN-PROGRESS.md     # P1 active work
+        └── TODO.md            # P2+ planned
 ```
 
 ---
@@ -349,6 +353,18 @@ Templates are executed as a subprocess with `cwd=pipeline/`. Paths to `data/raw/
 | Testing | pytest | Per-module + integration |
 | Linting | ruff | Fast Python linter |
 
+### Optional dependency extras
+
+Defined in `pyproject.toml` — not required for tabular-only runs. Install with
+`uv sync --extra <name>` (see [README.md](../README.md#optional-installs) for full details).
+
+| Extra | Packages | Purpose |
+|-------|----------|---------|
+| `llm` | `openai`, `google-genai` | AI-generated `brief.md` / `reflection.md` |
+| `image` | `torch`, `torchvision`, `pillow` | Lightweight `image_classification` baseline |
+| `deep` | above + `transformers` | Opt-in `*_deep` transfer-learning templates |
+| `dev` | `pytest`, `pytest-cov`, `ruff` | Local development and CI |
+
 ---
 
 ## Design Principles
@@ -358,7 +374,25 @@ Templates are executed as a subprocess with `cwd=pipeline/`. Paths to `data/raw/
 3. **Templates over generation** — LLM optionally writes brief/reflection (falls back to template text without one); training code always comes from Jinja2 templates.
 4. **Subprocess training** — generated `pipeline/` runs in isolation; failures are contained.
 5. **Fail loud, log everything** — manifest records per-stage status; no silent fallbacks.
-6. **One competition archetype first** — tabular proves the loop; expand in P1.
+6. **One competition archetype first** — tabular proved the loop; P1 expands to text/image (see [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md)).
+
+---
+
+## P1 Additions (shipped in v0.2)
+
+Planned modules and template expansions for v0.2 — see [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md).
+
+| Area | New / changed | Purpose |
+|------|---------------|---------|
+| `competition/metrics.py` | `MetricSpec.key`, LLM tie-breaker | Map Kaggle metric strings to canonical eval keys |
+| `evaluation/metrics.py` | Extended `compute_metric` | AUC, log loss, F1, MAE, RMSLE; sklearn RMSE fix |
+| `brief/context.py` | Competition context block | Deterministic rules/metric section prepended to `brief.md` |
+| `profiler/modality.py` | Modality detector | Tabular / text / image signals + LLM tie-breaker |
+| `templates/text_classification/` | TF-IDF + LogisticRegression | NLP baseline |
+| `templates/image_classification/` | ResNet18 features + LightGBM | Image baseline (optional `image` extra) |
+| `templates/*_deep/` | Fine-tuned DistilBERT / ResNet18 | Opt-in transfer learning (optional `deep` extra) |
+
+Remote runtime scheduling (P2) is documented in [milestones/TODO.md](milestones/TODO.md) — not part of P1.
 
 ---
 

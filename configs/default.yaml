@@ -22,6 +22,14 @@ training:
 profiler:
   max_rows_sample: 100_000
   categorical_cardinality_threshold: 50
+  max_images_sample: 5_000
+
+deep_baseline:
+  max_epochs: 3
+  max_train_samples: 5_000
+  cpu_max_epochs: 2
+  cpu_max_train_samples: 2_000
+  cv_folds: 3
 
 kaggle:
   download_unzip: true

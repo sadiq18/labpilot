@@ -60,7 +60,9 @@ def test_generate_returns_llm_text_when_client_succeeds(competition, profile):
 
     brief = generator.generate(competition, profile)
 
-    assert brief == "# AI-generated brief\n\nDo feature engineering."
+    assert brief.startswith("## Competition Context")
+    assert "# AI-generated brief" in brief
+    assert "Do feature engineering." in brief
     assert len(fake_client.calls) == 1
 
 

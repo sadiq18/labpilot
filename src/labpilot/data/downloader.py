@@ -1,5 +1,6 @@
 import logging
 import shutil
+import zipfile
 from pathlib import Path
 
 from labpilot.config import KaggleConfig
@@ -73,10 +74,20 @@ class DataDownloader:
             if not list_files(cache_dir):
                 raise RuntimeError(f"No data files downloaded for {self.competition_slug}.")
 
+        self._extract_zip_archives(cache_dir)
         self._sync_from_cache(cache_dir, layout.raw_dir)
+        self._extract_zip_archives(layout.raw_dir)
         if not layout.list_raw_files():
             raise RuntimeError(f"No data files available for {self.competition_slug}.")
         return layout.raw_dir
+
+    @staticmethod
+    def _extract_zip_archives(directory: Path) -> None:
+        for archive in sorted(directory.glob("*.zip")):
+            logger.info("Extracting %s", archive)
+            with zipfile.ZipFile(archive) as zipped:
+                zipped.extractall(directory)
+            archive.unlink(missing_ok=True)
 
     def _sync_from_cache(self, cache_dir: Path, raw_dir: Path) -> None:
         for cached_file in list_files(cache_dir):

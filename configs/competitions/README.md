@@ -36,10 +36,16 @@ their own.
 title: <competition display name>
 description: <one paragraph summary>
 problem_type: tabular_classification | tabular_regression | text_classification | image_classification | unknown
+baseline_strategy: lightweight | deep   # deep = fine-tuned transfer-learning templates (text/image only)
 evaluation_metric:
   name: <metric name, e.g. accuracy, rmse, auc>
+  key: <canonical key, optional — accuracy, auc, logloss, f1, rmse, mse, mae, rmsle>
   direction: maximize | minimize
   description: <short description of the metric>
+deadline: <iso datetime, optional>
+max_daily_submissions: <int, optional>
+submissions_disabled: false
+is_kernels_submissions_only: false
 submission_format: <comma-separated column names as a string, informational>
 submission_columns:
   - <id column>
@@ -55,8 +61,12 @@ test_file_pattern: test
 submission_file_pattern: submission
 ```
 
-Only `problem_type` and `evaluation_metric.name` actually change pipeline
-behavior (problem type selects the baseline template; the evaluation metric
-is informational only — P0's templates always report `cv_accuracy` or
-`cv_rmse` regardless of the competition's real metric). Everything else is
-context passed to the brief and reflection generators.
+Only `problem_type`, `baseline_strategy`, and `evaluation_metric.key` (when
+set) change pipeline behavior — problem type and modality select the baseline
+template; `baseline_strategy: deep` opts into transfer-learning templates for
+text/image; the metric key drives which `cv_<metric>` the training template
+computes. Everything else is context for `brief.md` / reflection, or upload
+pre-flight checks when `--submit` is used.
+
+`brief.md` always opens with a deterministic `## Competition Context` block
+(metric, deadline, submission rules) parsed once at init.

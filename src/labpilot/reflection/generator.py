@@ -36,8 +36,14 @@ class ReflectionGenerator:
         baseline: BaselineChoice,
         metrics: dict[str, float],
         submission: SubmissionResult,
+        run_dir: Path | None = None,
     ) -> str:
         system = (self.prompts_dir / "reflection_system.md").read_text()
+        brief_text = ""
+        if run_dir is not None:
+            brief_path = run_dir / "brief.md"
+            if brief_path.is_file():
+                brief_text = brief_path.read_text()
         user = self.env.get_template("reflection_user.j2").render(
             run_id=run_id,
             competition=competition,
@@ -45,6 +51,7 @@ class ReflectionGenerator:
             baseline=baseline,
             metrics=metrics,
             submission=submission,
+            brief_text=brief_text,
         )
 
         if self.llm_client is not None:

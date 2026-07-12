@@ -40,6 +40,10 @@ class DatasetProfile(BaseModel):
     id_column: str | None = None
     submission_columns: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    modality: str = "tabular"
+    image_dir: str | None = None
+    image_column: str | None = None
+    text_column: str | None = None
 
 
 class TabularProfiler:
@@ -89,6 +93,9 @@ class TabularProfiler:
         train_pattern: str = "train",
         test_pattern: str = "test",
         submission_pattern: str = "submission",
+        llm_client: Any | None = None,
+        competition_title: str = "",
+        competition_description: str = "",
     ) -> DatasetProfile:
         # File-role detection is a naming-convention heuristic. `train_pattern`,
         # `test_pattern`, and `submission_pattern` let a competition's local
@@ -106,14 +113,24 @@ class TabularProfiler:
             [path for path in csv_files if path.name.lower().startswith(train_pattern.lower())],
             "training",
         )
-        test_path = self._single_file(
-            [path for path in csv_files if path.name.lower().startswith(test_pattern.lower())],
-            "test",
-        )
         sample_path = self._single_file(
             [path for path in csv_files if submission_pattern.lower() in path.name.lower()],
             "sample submission",
         )
+        test_matches = [
+            path for path in csv_files if path.name.lower().startswith(test_pattern.lower())
+        ]
+        test_warnings: list[str] = []
+        if len(test_matches) == 1:
+            test_path = test_matches[0]
+        elif len(test_matches) == 0:
+            test_path = sample_path
+            test_warnings.append(
+                "No test CSV found; using sample submission as the test reference file."
+            )
+        else:
+            names = [path.name for path in test_matches]
+            raise ValueError(f"Expected one test CSV, found {len(test_matches)}: {names}")
 
         train_columns = list(pd.read_csv(train_path, nrows=0).columns)
         test_columns = list(pd.read_csv(test_path, nrows=0).columns)
@@ -121,12 +138,22 @@ class TabularProfiler:
         submission_columns = list(submission.columns)
 
         target_candidates = [column for column in train_columns if column not in test_columns]
-        if len(target_candidates) != 1:
+        if len(target_candidates) == 1:
+            target_column = target_candidates[0]
+        elif test_path == sample_path:
+            overlap = [column for column in submission_columns if column in train_columns]
+            if len(overlap) >= 2:
+                target_column = overlap[1]
+            else:
+                raise ValueError(
+                    "Unable to infer one target column from train/sample submission schemas; "
+                    f"found {target_candidates or 'none'}."
+                )
+        else:
             raise ValueError(
                 "Unable to infer one target column from train/test schemas; "
                 f"found {target_candidates or 'none'}."
             )
-        target_column = target_candidates[0]
 
         id_candidates = [
             column
@@ -145,6 +172,12 @@ class TabularProfiler:
             )
 
         profile = self.profile_file(train_path)
+        profile.warnings.extend(test_warnings)
+        train_sample = pd.read_csv(train_path, nrows=self.config.max_rows_sample)
+        from labpilot.profiler.modality import ModalityDetector
+
+        detector = ModalityDetector()
+        detector.enrich_column_stats(train_sample, profile.columns)
         profile.competition = competition
         profile.files = [str(p.relative_to(data_dir)) for p in csv_files]
         profile.train_file = str(train_path.relative_to(data_dir))
@@ -158,6 +191,21 @@ class TabularProfiler:
         profile.submission_columns = submission_columns
         for column in profile.columns:
             column.is_target_candidate = column.name == target_column
+
+        modality = detector.detect(
+            data_dir,
+            profile,
+            llm_client=llm_client,
+            competition_title=competition_title,
+            competition_description=competition_description,
+        )
+        profile.modality = modality.modality
+        profile.image_dir = modality.image_dir
+        profile.image_column = modality.image_column
+        profile.text_column = modality.text_column
+        if modality.signals:
+            profile.warnings.extend(modality.signals)
+
         logger.info(
             "Profiled '%s': target=%s, id=%s, train_rows=%d, test_rows=%d",
             competition,

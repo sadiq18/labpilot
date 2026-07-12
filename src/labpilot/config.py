@@ -29,6 +29,19 @@ class TrainingConfig(BaseModel):
 class ProfilerConfig(BaseModel):
     max_rows_sample: int = 100_000
     categorical_cardinality_threshold: int = 50
+    max_images_sample: int = 5_000
+
+
+class DeepBaselineConfig(BaseModel):
+    max_epochs: int = 3
+    max_train_samples: int = 5_000
+    batch_size: int = 16
+    learning_rate: float = 2e-5
+    unfreeze_last_n_layers: int = 1
+    early_stopping_patience: int = 1
+    cpu_max_epochs: int = 2
+    cpu_max_train_samples: int = 2_000
+    cv_folds: int = 3
 
 
 class KaggleConfig(BaseModel):
@@ -57,6 +70,7 @@ class AppConfig(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     profiler: ProfilerConfig = Field(default_factory=ProfilerConfig)
+    deep_baseline: DeepBaselineConfig = Field(default_factory=DeepBaselineConfig)
     kaggle: KaggleConfig = Field(default_factory=KaggleConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
