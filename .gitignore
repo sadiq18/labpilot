@@ -34,6 +34,3 @@ htmlcov/
 
 # OS
 .DS_Store
-
-# Local vault export (not part of repo)
-autonomous-research-engineer-vault.tar.gz
