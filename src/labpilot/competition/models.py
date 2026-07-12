@@ -15,6 +15,10 @@ class MetricSpec(BaseModel):
     name: str
     direction: str = "maximize"  # maximize | minimize
     description: str = ""
+    # Canonical key used by BaselineSelector and training templates (e.g.
+    # "accuracy", "auc", "rmse"). None when the raw Kaggle metric string
+    # could not be mapped to a supported evaluator key.
+    key: str | None = None
 
 
 class CompetitionMetadata(BaseModel):
@@ -30,6 +34,11 @@ class CompetitionMetadata(BaseModel):
     description: str = ""
     category: str = ""
     evaluation_metric_raw: str = ""
+    deadline: str | None = None
+    max_daily_submissions: int | None = None
+    submissions_disabled: bool = False
+    is_kernels_submissions_only: bool = False
+    tags: list[str] = Field(default_factory=list)
 
 
 class CompetitionSpec(BaseModel):
@@ -43,8 +52,12 @@ class CompetitionSpec(BaseModel):
     rules_url: str = ""
     data_url: str = ""
     deadline: str | None = None
+    max_daily_submissions: int | None = None
+    submissions_disabled: bool = False
+    is_kernels_submissions_only: bool = False
     tags: list[str] = Field(default_factory=list)
     raw_html: str = ""
+    baseline_strategy: str = "lightweight"  # lightweight | deep (P1 opt-in)
 
     # Optional overrides for competitions whose file names don't follow the
     # "train*/test*/*submission*" convention the profiler assumes by default.

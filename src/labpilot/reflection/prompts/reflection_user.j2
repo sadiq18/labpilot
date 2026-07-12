@@ -1,6 +1,11 @@
 # Run: {{ run_id }}
 # Competition: {{ competition }}
 
+{% if brief_text %}
+## Research Brief
+{{ brief_text }}
+{% endif %}
+
 ## Metrics
 {% for name, value in metrics.items() %}
 - {{ name }}: {{ value }}

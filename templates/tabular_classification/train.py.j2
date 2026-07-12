@@ -9,10 +9,11 @@ import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import accuracy_score
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder, OrdinalEncoder
+
+from labpilot.evaluation.metrics import compute_metric
 
 DATA_DIR = Path({{ data_dir | tojson }})
 OUTPUT_DIR = Path({{ output_dir | tojson }})
@@ -21,6 +22,7 @@ TEST_FILE = {{ choice.test_file | tojson }}
 SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
 TARGET_COLUMN = {{ choice.target_column | tojson }}
 ID_COLUMN = {{ choice.id_column | tojson }}
+METRIC_NAME = {{ choice.metric_name | tojson }}
 CV_FOLDS = {{ cv_folds }}
 RANDOM_SEED = {{ random_seed }}
 
@@ -129,7 +131,16 @@ def main() -> None:
         models.append(model)
 
     oof_codes = oof_proba.argmax(axis=1)
-    cv_accuracy = accuracy_score(y, oof_codes)
+    proba_for_metric = None
+    if METRIC_NAME in ("auc", "logloss") and num_classes == 2:
+        proba_for_metric = oof_proba[:, 1]
+    cv_score = compute_metric(
+        y,
+        oof_codes,
+        METRIC_NAME,
+        y_proba=proba_for_metric,
+        num_classes=num_classes,
+    )
     predicted_codes = (test_proba / folds).argmax(axis=1)
     predicted_labels = encoder.inverse_transform(predicted_codes)
 
@@ -145,7 +156,11 @@ def main() -> None:
         }
     ).to_csv(OUTPUT_DIR / "oof.csv", index=False)
 
-    metrics = {"cv_accuracy": float(cv_accuracy), "cv_folds": folds, "num_classes": num_classes}
+    metrics = {
+        f"cv_{METRIC_NAME}": float(cv_score),
+        "cv_folds": folds,
+        "num_classes": num_classes,
+    }
     (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
     models_dir = OUTPUT_DIR / "models"
@@ -163,7 +178,7 @@ def main() -> None:
     submission[TARGET_COLUMN] = predicted_labels
     submission.to_csv(OUTPUT_DIR / "submission.csv", index=False)
 
-    print(f"CV accuracy: {cv_accuracy:.4f}")
+    print(f"CV {METRIC_NAME}: {cv_score:.4f}")
 
 
 if __name__ == "__main__":

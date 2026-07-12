@@ -3,10 +3,30 @@
 **Title:** {{ competition.title }}
 
 **Metric:** {{ competition.evaluation_metric.name if competition.evaluation_metric else "unknown" }}
+{% if competition.evaluation_metric and competition.evaluation_metric.key %}
+**Metric key:** {{ competition.evaluation_metric.key }}
+{% endif %}
 **Direction:** {{ competition.evaluation_metric.direction if competition.evaluation_metric else "maximize" }}
+
+{% if competition.deadline %}
+**Deadline:** {{ competition.deadline }}
+{% endif %}
+{% if competition.max_daily_submissions is not none %}
+**Daily submission limit:** {{ competition.max_daily_submissions }}
+{% endif %}
+**Submissions disabled:** {{ competition.submissions_disabled }}
+**Kernels-only submissions:** {{ competition.is_kernels_submissions_only }}
+{% if competition.tags %}
+**Tags:** {{ competition.tags | join(", ") }}
+{% endif %}
 
 ## Description
 {{ competition.description }}
+
+{% if competition.raw_html %}
+## Rules excerpt
+{{ competition.raw_html[:2000] }}{% if competition.raw_html|length > 2000 %}...{% endif %}
+{% endif %}
 
 ## Dataset Profile
 - Rows: {{ profile.row_count }}

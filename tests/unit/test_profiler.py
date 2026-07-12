@@ -136,6 +136,36 @@ def test_profile_directory_infers_titanic_contract(titanic_data_dir: Path):
     assert profile.test_row_count == 4
 
 
+def test_profile_directory_infers_image_layout_without_test_csv(tmp_path: Path):
+    data_dir = tmp_path / "image-fixture"
+    data_dir.mkdir()
+    train_dir = data_dir / "train"
+    train_dir.mkdir()
+    (train_dir / "img_a.jpg").write_bytes(b"fake")
+
+    training = pd.DataFrame(
+        {
+            "id": [f"img_{i}.jpg" for i in range(10)],
+            "has_cactus": [1] * 10,
+        }
+    )
+    for i in range(10):
+        (train_dir / f"img_{i}.jpg").write_bytes(b"fake")
+    submission = pd.DataFrame({"id": ["img_b.jpg", "img_c.jpg"], "has_cactus": [0.5, 0.5]})
+
+    training.to_csv(data_dir / "train.csv", index=False)
+    submission.to_csv(data_dir / "sample_submission.csv", index=False)
+
+    profile = TabularProfiler(ProfilerConfig()).profile_directory(data_dir, "aerial-cactus")
+
+    assert profile.train_file == "train.csv"
+    assert profile.test_file == "sample_submission.csv"
+    assert profile.target_column == "has_cactus"
+    assert profile.id_column == "id"
+    assert profile.modality == "image"
+    assert profile.image_column == "id"
+
+
 def test_profile_directory_honors_custom_file_patterns(tmp_path: Path):
     data_dir = tmp_path / "custom-fixture"
     data_dir.mkdir()

@@ -1,0 +1,199 @@
+"""Opt-in deep image baseline: fine-tuned ResNet18 transfer learning."""
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torchvision.models as models
+import torchvision.transforms as T
+from PIL import Image
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import LabelEncoder
+from torch.utils.data import DataLoader, Dataset
+
+from labpilot.evaluation.metrics import compute_metric
+
+DATA_DIR = Path({{ data_dir | tojson }})
+OUTPUT_DIR = Path({{ output_dir | tojson }})
+TRAIN_FILE = {{ choice.train_file | tojson }}
+TEST_FILE = {{ choice.test_file | tojson }}
+SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
+TARGET_COLUMN = {{ choice.target_column | tojson }}
+ID_COLUMN = {{ choice.id_column | tojson }}
+IMAGE_DIR = {{ choice.image_dir | tojson }}
+IMAGE_COLUMN = {{ choice.image_column | tojson }}
+METRIC_NAME = {{ choice.metric_name | tojson }}
+MAX_EPOCHS = {{ deep.max_epochs }}
+MAX_TRAIN_SAMPLES = {{ deep.max_train_samples }}
+BATCH_SIZE = {{ deep.batch_size }}
+LEARNING_RATE = {{ deep.learning_rate }}
+CPU_MAX_EPOCHS = {{ deep.cpu_max_epochs }}
+CPU_MAX_TRAIN_SAMPLES = {{ deep.cpu_max_train_samples }}
+CV_FOLDS = {{ deep.cv_folds }}
+RANDOM_SEED = {{ random_seed }}
+
+
+def resolve_image_path(value: str) -> Path | None:
+    base = DATA_DIR / IMAGE_DIR
+    for candidate in [base / value, base / f"{value}.jpg", base / f"{value}.png"]:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+class ImageDataset(Dataset):
+    def __init__(self, df, image_column, labels, transform):
+        self.df = df.reset_index(drop=True)
+        self.image_column = image_column
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        value = str(self.df.loc[idx, self.image_column])
+        path = resolve_image_path(value)
+        if path is None:
+            img = Image.new("RGB", (224, 224))
+        else:
+            img = Image.open(path).convert("RGB")
+        tensor = self.transform(img)
+        return tensor, int(self.labels[idx])
+
+
+def build_model(num_classes: int) -> nn.Module:
+    model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+    for param in model.parameters():
+        param.requires_grad = False
+    for param in model.layer4.parameters():
+        param.requires_grad = True
+    for param in model.fc.parameters():
+        param.requires_grad = True
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    return model
+
+
+def train_epoch(model, loader, device, optimizer, criterion):
+    model.train()
+    for images, labels in loader:
+        images, labels = images.to(device), labels.to(device)
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+
+def predict_proba(model, loader, device, num_classes):
+    model.eval()
+    probs = []
+    with torch.no_grad():
+        for images, _ in loader:
+            images = images.to(device)
+            logits = model(images)
+            prob = torch.softmax(logits, dim=-1).cpu().numpy()
+            probs.append(prob)
+    return np.vstack(probs) if probs else np.zeros((0, num_classes))
+
+
+def main() -> None:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    max_epochs = MAX_EPOCHS if device.type == "cuda" else CPU_MAX_EPOCHS
+    max_samples = MAX_TRAIN_SAMPLES if device.type == "cuda" else CPU_MAX_TRAIN_SAMPLES
+
+    train = pd.read_csv(DATA_DIR / TRAIN_FILE)
+    test = pd.read_csv(DATA_DIR / TEST_FILE)
+    sample_submission = pd.read_csv(DATA_DIR / SAMPLE_SUBMISSION_FILE)
+    if len(train) > max_samples:
+        train = train.sample(max_samples, random_state=RANDOM_SEED)
+
+    encoder = LabelEncoder()
+    y = encoder.fit_transform(train[TARGET_COLUMN])
+    num_classes = len(encoder.classes_)
+
+    transform = T.Compose(
+        [
+            T.Resize(256),
+            T.CenterCrop(224),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+
+    folds = min(CV_FOLDS, int(np.bincount(y).min()))
+    oof_proba = np.zeros((len(train), num_classes), dtype=float)
+    test_proba = np.zeros((len(test), num_classes), dtype=float)
+    splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=RANDOM_SEED)
+
+    for train_idx, val_idx in splitter.split(train, y):
+        model = build_model(num_classes).to(device)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, model.parameters()), lr=LEARNING_RATE
+        )
+        train_loader = DataLoader(
+            ImageDataset(train.iloc[train_idx], IMAGE_COLUMN, y[train_idx], transform),
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+        )
+        for _ in range(max_epochs):
+            train_epoch(model, train_loader, device, optimizer, criterion)
+
+        val_loader = DataLoader(
+            ImageDataset(train.iloc[val_idx], IMAGE_COLUMN, y[val_idx], transform),
+            batch_size=BATCH_SIZE,
+        )
+        fold_proba = predict_proba(model, val_loader, device, num_classes)
+        oof_proba[val_idx, : fold_proba.shape[1]] = fold_proba
+
+        test_loader = DataLoader(
+            ImageDataset(test, IMAGE_COLUMN, np.zeros(len(test)), transform),
+            batch_size=BATCH_SIZE,
+        )
+        test_proba += predict_proba(model, test_loader, device, num_classes)
+
+    oof_codes = oof_proba.argmax(axis=1)
+    proba_for_metric = oof_proba[:, 1] if num_classes == 2 and METRIC_NAME in ("auc", "logloss") else None
+    cv_score = compute_metric(
+        y, oof_codes, METRIC_NAME, y_proba=proba_for_metric, num_classes=num_classes
+    )
+    predicted_codes = (test_proba / folds).argmax(axis=1)
+    predicted_labels = encoder.inverse_transform(predicted_codes)
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            ID_COLUMN: train[ID_COLUMN],
+            "actual": train[TARGET_COLUMN],
+            "prediction": encoder.inverse_transform(oof_codes),
+        }
+    ).to_csv(OUTPUT_DIR / "oof.csv", index=False)
+    metrics = {f"cv_{METRIC_NAME}": float(cv_score), "cv_folds": folds}
+    (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2))
+
+    models_dir = OUTPUT_DIR / "models"
+    models_dir.mkdir(exist_ok=True)
+    for index in range(folds):
+        (models_dir / f"fold_{index}.json").write_text(
+            json.dumps(
+                {
+                    "model": "resnet18",
+                    "epochs": max_epochs,
+                    "device": str(device),
+                }
+            )
+        )
+
+    submission = sample_submission.copy()
+    submission[ID_COLUMN] = test[ID_COLUMN].to_numpy()
+    submission[TARGET_COLUMN] = predicted_labels
+    submission.to_csv(OUTPUT_DIR / "submission.csv", index=False)
+    print(f"CV {METRIC_NAME}: {cv_score:.4f} on {device}")
+
+
+if __name__ == "__main__":
+    main()

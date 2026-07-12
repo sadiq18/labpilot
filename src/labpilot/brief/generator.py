@@ -3,6 +3,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from labpilot.brief.context import render_competition_context
 from labpilot.competition.models import CompetitionSpec
 from labpilot.config import LLMConfig
 from labpilot.llm.client import LLMClient, create_llm_client
@@ -40,7 +41,8 @@ class BriefGenerator:
         if self.llm_client is not None:
             logger.info("Generating research brief for '%s' via LLM.", competition.slug)
             try:
-                return self.llm_client.complete(system, user)
+                narrative = self.llm_client.complete(system, user)
+                return render_competition_context(competition) + narrative
             except Exception:
                 # A brief is a helpful enhancement, not a hard requirement —
                 # any failure here (bad key, network, rate limit, unknown
@@ -70,7 +72,8 @@ class BriefGenerator:
     ) -> str:
         env_var = _ENV_VAR_BY_PROVIDER.get(self.config.provider.strip().lower(), "OPENAI_API_KEY")
         return (
-            f"# Research Brief: {competition.title or competition.slug}\n\n"
+            render_competition_context(competition)
+            + f"# Research Brief: {competition.title or competition.slug}\n\n"
             f"> LLM generation not available. Set {env_var} to enable.\n\n"
             f"## Problem Summary\n\n"
             f"Competition `{competition.slug}` with {profile.row_count} rows and "

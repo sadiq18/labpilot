@@ -31,6 +31,16 @@ class CodeRenderer:
             "random_seed": self.training_config.random_seed,
             "data_dir": str(run_dir / "data" / "raw"),
             "output_dir": str(run_dir),
+            "max_images_sample": 5_000,
+            "deep": {
+                "max_epochs": 3,
+                "max_train_samples": 5_000,
+                "batch_size": 16,
+                "learning_rate": 2e-5,
+                "cpu_max_epochs": 2,
+                "cpu_max_train_samples": 2_000,
+                "cv_folds": 3,
+            },
         }
 
         pipeline_dir = run_dir / "pipeline"

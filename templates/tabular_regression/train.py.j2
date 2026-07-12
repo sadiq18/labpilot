@@ -9,10 +9,11 @@ import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
+
+from labpilot.evaluation.metrics import compute_metric
 
 DATA_DIR = Path({{ data_dir | tojson }})
 OUTPUT_DIR = Path({{ output_dir | tojson }})
@@ -21,6 +22,7 @@ TEST_FILE = {{ choice.test_file | tojson }}
 SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
 TARGET_COLUMN = {{ choice.target_column | tojson }}
 ID_COLUMN = {{ choice.id_column | tojson }}
+METRIC_NAME = {{ choice.metric_name | tojson }}
 CV_FOLDS = {{ cv_folds }}
 RANDOM_SEED = {{ random_seed }}
 
@@ -113,10 +115,7 @@ def main() -> None:
         test_predictions.append(model.predict(X_test))
         models.append(model)
 
-    # `mean_squared_error(..., squared=False)` was removed in newer
-    # scikit-learn (the `squared` kwarg is gone as of 1.6), so RMSE is
-    # computed manually for compatibility across versions.
-    cv_rmse = float(np.sqrt(mean_squared_error(y, oof)))
+    cv_score = compute_metric(y, oof, METRIC_NAME)
     predicted = np.mean(test_predictions, axis=0)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -128,7 +127,7 @@ def main() -> None:
         }
     ).to_csv(OUTPUT_DIR / "oof.csv", index=False)
 
-    metrics = {"cv_rmse": float(cv_rmse), "cv_folds": CV_FOLDS}
+    metrics = {f"cv_{METRIC_NAME}": float(cv_score), "cv_folds": CV_FOLDS}
     (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
     models_dir = OUTPUT_DIR / "models"
@@ -146,7 +145,7 @@ def main() -> None:
     submission[TARGET_COLUMN] = predicted
     submission.to_csv(OUTPUT_DIR / "submission.csv", index=False)
 
-    print(f"CV RMSE: {cv_rmse:.4f}")
+    print(f"CV {METRIC_NAME}: {cv_score:.4f}")
 
 
 if __name__ == "__main__":

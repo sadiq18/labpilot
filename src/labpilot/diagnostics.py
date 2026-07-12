@@ -35,21 +35,6 @@ def _check_python_version() -> CheckResult:
     return CheckResult("Python version", ok, detail, "" if ok else fix)
 
 
-def _check_lightgbm() -> CheckResult:
-    try:
-        import lightgbm  # noqa: F401
-    except OSError as exc:
-        fix = (
-            "brew install libomp"
-            if sys.platform == "darwin"
-            else "Install your platform's OpenMP runtime (e.g. `apt install libgomp1`)."
-        )
-        return CheckResult("LightGBM import", False, str(exc), fix)
-    except ImportError as exc:
-        return CheckResult("LightGBM import", False, str(exc), 'Run: pip install -e ".[dev,llm]"')
-    return CheckResult("LightGBM import", True, "importable")
-
-
 def _check_kaggle_credentials() -> CheckResult:
     # Mirrors how `load_config()` actually resolves credentials (env vars or
     # a local .env file via pydantic Settings), not just raw os.environ, so
@@ -68,13 +53,60 @@ def _check_kaggle_credentials() -> CheckResult:
     return CheckResult("Kaggle credentials", ok, detail, "" if ok else fix)
 
 
-def check_environment() -> list[CheckResult]:
+def _check_lightgbm() -> CheckResult:
+    try:
+        import lightgbm  # noqa: F401
+    except OSError as exc:
+        fix = (
+            "brew install libomp"
+            if sys.platform == "darwin"
+            else "Install your platform's OpenMP runtime (e.g. `apt install libgomp1`)."
+        )
+        return CheckResult("LightGBM import", False, str(exc), fix)
+    except ImportError as exc:
+        return CheckResult("LightGBM import", False, str(exc), 'Run: pip install -e ".[dev,llm]"')
+    return CheckResult("LightGBM import", True, "importable")
+
+
+def _check_image_deps() -> CheckResult:
+    try:
+        import torch  # noqa: F401
+        import torchvision  # noqa: F401
+    except ImportError as exc:
+        return CheckResult(
+            "Image deps (torch/torchvision)",
+            False,
+            str(exc),
+            'Run: pip install -e ".[image]"',
+        )
+    return CheckResult("Image deps (torch/torchvision)", True, "importable")
+
+
+def _check_deep_deps() -> CheckResult:
+    try:
+        import torch  # noqa: F401
+        import torchvision  # noqa: F401
+        import transformers  # noqa: F401
+    except ImportError as exc:
+        return CheckResult(
+            "Deep deps (torch/torchvision/transformers)",
+            False,
+            str(exc),
+            'Run: pip install -e ".[deep]"',
+        )
+    return CheckResult("Deep deps (torch/torchvision/transformers)", True, "importable")
+
+
+def check_environment(include_optional: bool = True) -> list[CheckResult]:
     """Run all environment checks and return their results, in report order."""
-    return [
+    results = [
         _check_python_version(),
         _check_lightgbm(),
         _check_kaggle_credentials(),
     ]
+    if include_optional:
+        results.extend([_check_image_deps(), _check_deep_deps()])
+    return results
 
 
 def print_diagnostics_report(results: list[CheckResult], console: "Console | None" = None) -> bool:
