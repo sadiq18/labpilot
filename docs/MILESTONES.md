@@ -21,6 +21,7 @@ After a few hours, a complete run should produce:
 ✔ Uploaded submission
 ✔ Logged experiment
 ✔ Wrote reflection
+✔ Wrote HTML report
 ```
 
 For a reviewable two-step alternative — pause after the brief to sanity-check the resolved
@@ -34,9 +35,9 @@ titanic` (parse → download → profile → brief) followed by `research build 
 
 | Track | Document | Summary |
 |-------|----------|---------|
-| **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P3 + P4 shipped |
+| **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P2 + P3 + P4 shipped |
 | **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Nothing active |
-| **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2 execution + post-1.0 items |
+| **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2 execution dispatch + post-1.0 items |
 | **Backlog** | [milestones/backlog.md](milestones/backlog.md) | Unscheduled extensions (async kernel watcher, webhooks) |
 
 ---
@@ -47,9 +48,10 @@ titanic` (parse → download → profile → brief) followed by `research build 
 |-----------|---------|--------|------|
 | **P0** | v0.1 | **Done** | Prove the full pipeline for tabular classification/regression |
 | **P1** | v0.2 | **Done** | Same loop, more competition types (text, image, metric-aware eval, rules) |
-| **P2** | v0.3 | **Deferred** | Remote runtime & scheduling (Kaggle Kernels, Colab, quota-aware dispatch) |
+| **P2** | v0.3 | **Done** | Remote runtime registry, validation, and per-run runtime metadata |
+| **P2 execution** | — | **Deferred** | Remote training dispatch (`--remote-train`, scheduler, artifact sync) |
 | **P3** | v0.4 | **Done** | Iteration loop (`research improve`, tuning, run diffs) |
-| **P4** | v1.0 | **Done** | Production quality (workspace, CI, dry-run, runtime config) |
+| **P4** | v1.0 | **Done** | Production quality (workspace, CI, dry-run, HTML reports) |
 
 Details for each track live in the linked documents above.
 

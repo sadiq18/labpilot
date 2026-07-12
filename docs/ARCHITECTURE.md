@@ -48,6 +48,7 @@ flowchart LR
 | 11 | `upload_submission` | `kaggle/client.py` | `submission_result.json` |
 | 12 | `log_experiment` | `tracking/logger.py` | `experiment/record.json` |
 | 13 | `write_reflection` | `reflection/generator.py` | `reflection.md` |
+| 14 | `write_report` | `report/generator.py` | `report.html` |
 
 The orchestrator lives in `orchestrator/pipeline.py`. Stage order is configurable via `configs/default.yaml` under `pipeline.stages`.
 
@@ -109,6 +110,7 @@ runs/<run_id>/
 ├── experiment/
 │   └── record.json            # Params, metrics, artifact paths
 └── reflection.md              # Post-run analysis + next steps
+└── report.html                # Standalone HTML report (brief + reflection + metrics)
 ```
 
 Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-143022-<slug>`).
@@ -284,7 +286,17 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 | **Output** | `reflection.md` |
 | **P0 status** | Implemented — OpenAI or Gemini via `llm/client.py`; falls back to template text if no key/package/call succeeds |
 
-### 14. Improvement Loop (P3)
+### 14. HTML Report Generator
+
+| | |
+|---|---|
+| **Path** | `report/generator.py`, `report/templates/report.html.j2` |
+| **Responsibility** | Standalone HTML report bundling brief, profile, metrics, reflection, and stage status |
+| **Input** | Run directory artifacts + `manifest.json` |
+| **Output** | `report.html` |
+| **Status** | Implemented — pipeline stage `write_report` and `research report --run-id` |
+
+### 15. Improvement Loop (P3)
 
 | | |
 |---|---|
@@ -466,7 +478,9 @@ See [milestones/COMPLETED.md](milestones/COMPLETED.md).
 | `templates/image_classification/` | ResNet18 features + LightGBM | Image baseline (optional `image` extra) |
 | `templates/*_deep/` | Fine-tuned DistilBERT / ResNet18 | Opt-in transfer learning (optional `deep` extra) |
 
-Remote runtime scheduling (P2) is deferred — see [milestones/TODO.md](milestones/TODO.md).
+Remote runtime **configuration** shipped in P2 v0.3 / P4 v1.0 — see `runtimes/` and
+[configs/runtimes/README.md](../configs/runtimes/README.md). Remote **execution**
+(`--remote-train`, scheduler, artifact sync) is deferred — see [milestones/TODO.md](milestones/TODO.md).
 
 ---
 
@@ -486,10 +500,6 @@ Remote runtime scheduling (P2) is deferred — see [milestones/TODO.md](mileston
 
 Text/image template tuning remains deferred to a follow-up; iteration strategies fall back to retrain-only for non-tabular problem types.
 
-Remote runtime **configuration** shipped in P4 v1.0 — see `runtimes/` and
-[configs/runtimes/README.md](../configs/runtimes/README.md). Remote **execution**
-(`--remote-train`, scheduler, artifact sync) is deferred — see [milestones/TODO.md](milestones/TODO.md).
-
 ---
 
 ## P4 Additions (shipped in v1.0)
@@ -503,7 +513,8 @@ Remote runtime **configuration** shipped in P4 v1.0 — see `runtimes/` and
 | `runtimes/` | Runtime registry | Models, registry, doctor; `research runtime` CLI |
 | `configs/runtimes/` | Runtime YAML | local, kaggle_kernel, google_colab, other schemas |
 | `kernel/exporter.py` | Slug fix | Valid `{username}/{slug}` kernel metadata |
-| `cli/main.py` | `--dry-run`, `--project-dir` | Production UX flags |
+| `report/generator.py` | HTML report | Self-contained `report.html` from run artifacts |
+| `cli/main.py` | `--dry-run`, `--project-dir`, `report` | Production UX flags + standalone report command |
 | Integration tests | text/image/deep | One automated test per template family |
 
 Each run writes `runtime.json` with the configured default runtime (`local-default`).

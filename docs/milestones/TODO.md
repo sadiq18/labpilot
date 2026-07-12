@@ -4,10 +4,9 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-## P2 — v0.3 (Remote Runtime Execution) — **Deferred**
+## P2 execution — Remote training dispatch — **Deferred**
 
-> **P2 config slice shipped in P4 v1.0** (`configs/runtimes/`, `research runtime list|register|doctor`).
-> This milestone covers **execution** only.
+> **P2 configuration shipped in v0.3 / P4 v1.0** — see [COMPLETED.md](COMPLETED.md).
 
 **Goal:** Offload `train_model` to user-registered remote runtimes with quota-aware scheduling.
 
@@ -40,6 +39,7 @@ See [COMPLETED.md](COMPLETED.md).
 | Capability | Why deferred |
 |------------|--------------|
 | **Packaging & PyPI** | Bundle `templates/` + default configs in wheel; `pip install labpilot`; release workflow |
+| **P2 remote execution** | Dispatch, polling, artifact sync (`--remote-train`) |
 | Multi-agent systems | Orchestrator + templates are enough for P0–P4 |
 | Vector databases | Brief uses competition page + profiler, not retrieval |
 | Knowledge graphs | No cross-competition reasoning needed yet |

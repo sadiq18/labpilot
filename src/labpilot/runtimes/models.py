@@ -1,4 +1,4 @@
-"""Runtime configuration models (P2 config slice — no remote dispatch in v1.0)."""
+"""Runtime configuration models (P2 v0.3 — remote dispatch deferred to P2 execution)."""
 
 from typing import Annotated, Literal
 

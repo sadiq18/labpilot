@@ -124,6 +124,25 @@ Credentialed smoke runs on five Kaggle competitions (2026-07-12). Run IDs under 
 
 ---
 
+## P2 — v0.3 (Remote Runtime Configuration)
+
+**Goal:** Describe and validate where `train_model` runs, with a registry users can extend before remote dispatch lands.
+
+| Deliverable | Status |
+|-------------|--------|
+| Runtime models (`local`, `kaggle_kernel`, `google_colab`, `other`) | Done |
+| YAML registry (`configs/runtimes/`, project overrides) | Done |
+| CLI: `research runtime list/show/register/doctor` | Done |
+| Per-run `runtime.json` snapshot | Done |
+| Quota/poll config schema (local tracking fields) | Done |
+| Remote dispatch (`--remote-train`, scheduler, artifact sync) | Deferred post-1.0 |
+
+Shipped alongside **P4 v1.0** — runtime **configuration and validation** are complete; training still executes locally via `local-default` until the execution milestone below.
+
+**Version:** `0.3.0` (config slice)
+
+---
+
 ## P3 — v0.4 (Iteration Loop)
 
 **Goal:** Turn reflection into action via `research improve`.
@@ -159,6 +178,7 @@ with `improvement_plan.json`, `training_overrides.json`, new `metrics.json`, and
 | `--dry-run` on `run`/`build`/`improve` (codegen only) | Done |
 | Runtime registry config (`configs/runtimes/`, `research runtime list/show/register/doctor`) | Done |
 | Kernel slug fix (`{username}/{slug}` metadata) | Done |
+| Standalone HTML report (`report.html`, `research report`) | Done |
 | `research templates` list command | Done |
 
 **P2 split:** Runtime **configuration** shipped in P4; remote **execution**
