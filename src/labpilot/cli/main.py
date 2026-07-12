@@ -9,7 +9,11 @@ from rich.table import Table
 
 from labpilot.competition.models import CompetitionSpec
 from labpilot.config import LLMConfig, load_config
-from labpilot.diagnostics import check_environment, print_diagnostics_report
+from labpilot.diagnostics import (
+    check_environment,
+    print_diagnostics_report,
+    required_environment_checks,
+)
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, create_llm_client
 from labpilot.orchestrator.manifest import StageStatus
@@ -361,9 +365,9 @@ def _fail_fast_on_bad_environment(skip_lightgbm: bool = False) -> None:
     # `research init` never touches LightGBM (no baseline is trained), so a
     # broken/missing install on this machine shouldn't block it — only
     # `build`/`run`/`resume`, which actually train a model, need to check.
-    results = [
-        r for r in check_environment() if not (skip_lightgbm and r.name == "LightGBM import")
-    ]
+    # Optional extras (image/deep torch stacks) are reported by `research doctor`
+    # but must not block tabular/text lightweight runs.
+    results = required_environment_checks(skip_lightgbm=skip_lightgbm)
     if all(result.ok for result in results):
         return
     console.print("[red]Environment check failed — run `research doctor` for details.[/red]")
