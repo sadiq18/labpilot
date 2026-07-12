@@ -5,7 +5,7 @@ from labpilot.improvement.models import load_training_overrides
 from labpilot.orchestrator.manifest import StageStatus
 from labpilot.orchestrator.pipeline import Pipeline
 from labpilot.tracking.index import diff_runs
-from tests.integration.test_pipeline_titanic import FakeKaggleGateway
+from helpers.kaggle import FakeKaggleGateway
 
 
 def test_improve_tune_creates_child_with_different_params(

@@ -32,6 +32,8 @@ def test_kernel_exporter_writes_metadata(tmp_path: Path):
     assert metadata["language"] == "python"
     assert metadata["code_file"] == "run.py"
     assert metadata["competition_sources"] == ["aerial-cactus-identification"]
+    assert len(metadata["id"]) <= 60
+    assert "labpilot-baseline" not in metadata["id"] or len(metadata["id"].split("/")[-1]) <= 30
 
     run_py = (kernel_dir / "run.py").read_text()
     assert "labpilot.evaluation.metrics" not in run_py

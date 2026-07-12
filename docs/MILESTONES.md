@@ -34,9 +34,9 @@ titanic` (parse → download → profile → brief) followed by `research build 
 
 | Track | Document | Summary |
 |-------|----------|---------|
-| **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P3 shipped |
-| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Nothing active — P4 is next |
-| **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2 (deferred) + P4 roadmap |
+| **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P3 + P4 shipped |
+| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Nothing active |
+| **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2 execution + post-1.0 items |
 | **Backlog** | [milestones/backlog.md](milestones/backlog.md) | Unscheduled extensions (async kernel watcher, webhooks) |
 
 ---
@@ -49,7 +49,7 @@ titanic` (parse → download → profile → brief) followed by `research build 
 | **P1** | v0.2 | **Done** | Same loop, more competition types (text, image, metric-aware eval, rules) |
 | **P2** | v0.3 | **Deferred** | Remote runtime & scheduling (Kaggle Kernels, Colab, quota-aware dispatch) |
 | **P3** | v0.4 | **Done** | Iteration loop (`research improve`, tuning, run diffs) |
-| **P4** | v1.0 | Planned | Production quality (multi-competition workspace, CI-tested templates) |
+| **P4** | v1.0 | **Done** | Production quality (workspace, CI, dry-run, runtime config) |
 
 Details for each track live in the linked documents above.
 

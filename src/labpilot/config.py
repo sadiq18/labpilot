@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from labpilot.workspace.discover import load_project
 
 # Shared with `labpilot.llm.client.create_llm_client()`: if a user switches
 # `llm.provider` without also overriding `llm.model`, this is what resolves
@@ -47,13 +52,7 @@ class DeepBaselineConfig(BaseModel):
 class KaggleConfig(BaseModel):
     download_unzip: bool = True
     submit_message: str = "labpilot baseline submission"
-    # Shared across runs and keyed by competition slug, so re-running the same
-    # competition doesn't re-download identical data every time.
     cache_dir: Path = Path(".cache/kaggle")
-    # Kaggle scores submissions asynchronously; after upload we poll
-    # `competition_submissions` for up to `submission_poll_timeout` seconds,
-    # checking every `submission_poll_interval` seconds, to persist the real
-    # public leaderboard score instead of leaving it null.
     submission_poll_timeout: int = 120
     submission_poll_interval: int = 5
     kernel_poll_timeout: int = 3600
@@ -61,6 +60,11 @@ class KaggleConfig(BaseModel):
     api_token: str = Field(default="", exclude=True, repr=False)
     username: str = Field(default="", exclude=True, repr=False)
     key: str = Field(default="", exclude=True, repr=False)
+
+
+class RuntimeDefaults(BaseModel):
+    runtimes_dir: Path = Path("configs/runtimes")
+    default_runtime: str = "local-default"
 
 
 class PipelineConfig(BaseModel):
@@ -74,6 +78,7 @@ class AppConfig(BaseModel):
     profiler: ProfilerConfig = Field(default_factory=ProfilerConfig)
     deep_baseline: DeepBaselineConfig = Field(default_factory=DeepBaselineConfig)
     kaggle: KaggleConfig = Field(default_factory=KaggleConfig)
+    runtime: RuntimeDefaults = Field(default_factory=RuntimeDefaults)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
 
@@ -89,26 +94,66 @@ class Settings(BaseSettings):
     labpilot_runs_dir: str = "runs"
     labpilot_llm_provider: str = ""
     labpilot_llm_model: str = ""
+    labpilot_runtimes_dir: str = ""
+    labpilot_default_runtime: str = ""
 
 
-def load_config(path: Path | None = None) -> AppConfig:
-    config_path = path or Path("configs/default.yaml")
-    raw = {}
-    if config_path.exists():
-        with config_path.open() as f:
-            raw = yaml.safe_load(f) or {}
+def _package_default_config_path() -> Path:
+    return Path("configs/default.yaml")
 
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_yaml_dict(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    with path.open() as handle:
+        return yaml.safe_load(handle) or {}
+
+
+def _normalize_paths(raw: dict[str, Any]) -> dict[str, Any]:
     if "runs_dir" in raw:
         raw["runs_dir"] = Path(raw["runs_dir"])
+    runtime = raw.get("runtime")
+    if isinstance(runtime, dict) and "runtimes_dir" in runtime:
+        runtime["runtimes_dir"] = Path(runtime["runtimes_dir"])
+    kaggle = raw.get("kaggle")
+    if isinstance(kaggle, dict) and "cache_dir" in kaggle:
+        kaggle["cache_dir"] = Path(kaggle["cache_dir"])
+    return raw
 
-    config = AppConfig.model_validate(raw)
-    settings = Settings()
 
+def _apply_project_overrides(raw: dict[str, Any], project) -> dict[str, Any]:
+    project_raw = _load_yaml_dict(project.config_path)
+    merged = _deep_merge(raw, project_raw)
+    merged["runs_dir"] = project.runs_dir
+    runtime = merged.setdefault("runtime", {})
+    runtime["runtimes_dir"] = project.runtimes_dir
+    runtime["default_runtime"] = project.default_runtime
+    kaggle = merged.setdefault("kaggle", {})
+    kaggle["cache_dir"] = project.cache_dir
+    return merged
+
+
+def _apply_settings(config: AppConfig, settings: Settings, raw: dict[str, Any]) -> AppConfig:
     config.kaggle.api_token = settings.kaggle_api_token
     config.kaggle.username = settings.kaggle_username
     config.kaggle.key = settings.kaggle_key
+
     if settings.labpilot_runs_dir != "runs":
         config.runs_dir = Path(settings.labpilot_runs_dir)
+    if settings.labpilot_runtimes_dir:
+        config.runtime.runtimes_dir = Path(settings.labpilot_runtimes_dir)
+    if settings.labpilot_default_runtime:
+        config.runtime.default_runtime = settings.labpilot_default_runtime
 
     if settings.labpilot_llm_provider:
         config.llm.provider = settings.labpilot_llm_provider
@@ -119,10 +164,6 @@ def load_config(path: Path | None = None) -> AppConfig:
     if settings.labpilot_llm_model:
         config.llm.model = settings.labpilot_llm_model
     elif "model" not in raw.get("llm", {}):
-        # No explicit model in the config file or env — resolve the right
-        # default for whichever provider ended up configured, instead of
-        # leaving LLMConfig's dataclass default (an OpenAI model name) in
-        # place for a provider it doesn't apply to.
         config.llm.model = DEFAULT_MODEL_BY_PROVIDER.get(config.llm.provider, config.llm.model)
 
     config.llm.api_key = {
@@ -131,3 +172,90 @@ def load_config(path: Path | None = None) -> AppConfig:
     }.get(config.llm.provider.strip().lower(), "")
 
     return config
+
+
+def load_config(
+    path: Path | None = None,
+    *,
+    project_dir: Path | None = None,
+    start_dir: Path | None = None,
+) -> AppConfig:
+    """Load config with layered precedence:
+
+    1. Package default (`configs/default.yaml`)
+    2. Project config (when `project.yaml` is detected or `--project-dir` is set)
+    3. Explicit CLI `--config` file
+    4. Environment variables (`LABPILOT_*`, credentials)
+    """
+    layers: list[dict[str, Any]] = []
+
+    package_default = _package_default_config_path()
+    if package_default.is_file():
+        layers.append(_load_yaml_dict(package_default))
+
+    project = load_project(start=start_dir, project_dir=project_dir)
+    if project is not None:
+        project_layer = _load_yaml_dict(project.config_path)
+        project_layer["runs_dir"] = str(project.runs_dir)
+        project_layer.setdefault("runtime", {})
+        project_layer["runtime"]["runtimes_dir"] = str(project.runtimes_dir)
+        project_layer["runtime"]["default_runtime"] = project.default_runtime
+        project_layer.setdefault("kaggle", {})
+        project_layer["kaggle"]["cache_dir"] = str(project.cache_dir)
+        layers.append(project_layer)
+
+    explicit_path = path or _package_default_config_path()
+    skip_explicit = (
+        project is not None
+        and explicit_path.resolve() == _package_default_config_path().resolve()
+        and explicit_path.resolve() != project.config_path.resolve()
+    )
+    if explicit_path.is_file() and not skip_explicit:
+        resolved_explicit = explicit_path.resolve()
+        already_loaded = {_package_default_config_path().resolve()}
+        if project is not None:
+            already_loaded.add(project.config_path.resolve())
+        if resolved_explicit not in already_loaded:
+            layers.append(_load_yaml_dict(explicit_path))
+        elif project is None and resolved_explicit == _package_default_config_path().resolve():
+            pass  # already loaded as package default
+        elif project is not None and resolved_explicit == project.config_path.resolve():
+            pass  # already loaded via project layer
+        else:
+            layers.append(_load_yaml_dict(explicit_path))
+
+    merged: dict[str, Any] = {}
+    for layer in layers:
+        merged = _deep_merge(merged, layer)
+
+    merged = _normalize_paths(merged)
+    config = AppConfig.model_validate(merged)
+    settings = Settings()
+    return _apply_settings(config, settings, merged)
+
+
+def resolve_competitions_dir(
+    config: AppConfig,
+    competitions_dir: Path | None = None,
+    *,
+    project_dir: Path | None = None,
+    start_dir: Path | None = None,
+) -> Path:
+    if competitions_dir is not None:
+        return competitions_dir
+    project = load_project(start=start_dir, project_dir=project_dir)
+    if project is not None:
+        return project.competitions_dir
+    return Path(__file__).resolve().parents[3] / "configs" / "competitions"
+
+
+def resolve_runtimes_dir(
+    config: AppConfig,
+    *,
+    project_dir: Path | None = None,
+    start_dir: Path | None = None,
+) -> Path:
+    project = load_project(start=start_dir, project_dir=project_dir)
+    if project is not None:
+        return project.runtimes_dir
+    return config.runtime.runtimes_dir

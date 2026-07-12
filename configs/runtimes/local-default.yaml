@@ -1,0 +1,9 @@
+schema_version: 1
+id: local-default
+provider: local
+enabled: true
+priority: 0
+labels: [cpu, local]
+python: null
+timeout_seconds: null
+env: {}

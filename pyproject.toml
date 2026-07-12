@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "labpilot"
-version = "0.4.0"
+version = "1.0.0"
 description = "One-command Kaggle competition research engine"
 readme = "README.md"
 license = "MIT"
@@ -43,7 +43,13 @@ packages = ["src/labpilot"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "llm: marks tests that require the llm extra",
+    "image: marks tests that require the image extra (torch, pillow)",
+    "deep: marks tests that require the deep extra (transformers)",
+]
 
 [tool.ruff]
 line-length = 100

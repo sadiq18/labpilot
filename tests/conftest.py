@@ -149,4 +149,120 @@ def competition_configs_dir(tmp_path: Path) -> Path:
         "  - id\n"
         "  - species\n"
     )
+    (configs_dir / "text-sentiment.yaml").write_text(
+        "title: Text Sentiment Fixture\n"
+        "description: Small text classification fixture for integration tests.\n"
+        "problem_type: text_classification\n"
+        "evaluation_metric:\n"
+        "  name: accuracy\n"
+        "  direction: maximize\n"
+        "submission_columns:\n"
+        "  - id\n"
+        "  - label\n"
+    )
+    (configs_dir / "image-pets.yaml").write_text(
+        "title: Image Pets Fixture\n"
+        "description: Tiny image classification fixture for integration tests.\n"
+        "problem_type: image_classification\n"
+        "evaluation_metric:\n"
+        "  name: accuracy\n"
+        "  direction: maximize\n"
+        "submission_columns:\n"
+        "  - id\n"
+        "  - label\n"
+    )
+    (configs_dir / "text-deep.yaml").write_text(
+        "title: Text Deep Fixture\n"
+        "description: Deep text classification fixture.\n"
+        "problem_type: text_classification\n"
+        "baseline_strategy: deep\n"
+        "evaluation_metric:\n"
+        "  name: accuracy\n"
+        "  direction: maximize\n"
+        "submission_columns:\n"
+        "  - id\n"
+        "  - label\n"
+    )
+    (configs_dir / "image-deep.yaml").write_text(
+        "title: Image Deep Fixture\n"
+        "description: Deep image classification fixture.\n"
+        "problem_type: image_classification\n"
+        "baseline_strategy: deep\n"
+        "evaluation_metric:\n"
+        "  name: accuracy\n"
+        "  direction: maximize\n"
+        "submission_columns:\n"
+        "  - id\n"
+        "  - label\n"
+    )
     return configs_dir
+
+
+@pytest.fixture
+def text_data_dir(tmp_path: Path) -> Path:
+    data_dir = tmp_path / "text-fixture"
+    data_dir.mkdir()
+    train = pd.DataFrame(
+        {
+            "id": range(1, 13),
+            "text": [
+                "This product is absolutely wonderful and exceeded expectations.",
+                "Terrible experience, would not recommend to anyone at all.",
+                "Average quality, nothing special but acceptable for the price.",
+                "Outstanding service and fast delivery, very happy customer.",
+                "Worst purchase ever, complete waste of money and time.",
+                "Pretty good overall, minor issues but generally satisfied.",
+            ]
+            * 2,
+            "label": ["positive", "negative", "neutral"] * 4,
+        }
+    )
+    test = pd.DataFrame(
+        {
+            "id": range(13, 17),
+            "text": [
+                "Great value and excellent build quality throughout.",
+                "Disappointed with the results and poor support.",
+                "Neutral feelings about this item, neither good nor bad.",
+                "Amazing features and intuitive design, love it.",
+            ],
+        }
+    )
+    sample = pd.DataFrame({"id": test["id"], "label": ["positive"] * len(test)})
+    train.to_csv(data_dir / "train.csv", index=False)
+    test.to_csv(data_dir / "test.csv", index=False)
+    sample.to_csv(data_dir / "sample_submission.csv", index=False)
+    return data_dir
+
+
+@pytest.fixture
+def image_data_dir(tmp_path: Path) -> Path:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    data_dir = tmp_path / "image-fixture"
+    images_dir = data_dir / "images"
+    images_dir.mkdir(parents=True)
+
+    labels = ["cat", "dog", "cat", "dog", "cat", "dog"] * 2
+    train_rows = []
+    test_rows = []
+    for index, label in enumerate(labels, start=1):
+        filename = f"{index}.jpg"
+        Image.new("RGB", (32, 32), color=(index * 20 % 255, 50, 100)).save(
+            images_dir / filename
+        )
+        train_rows.append({"id": index, "file": filename, "label": label})
+    for index in range(len(labels) + 1, len(labels) + 5):
+        filename = f"{index}.jpg"
+        Image.new("RGB", (32, 32), color=(100, index * 15 % 255, 50)).save(
+            images_dir / filename
+        )
+        test_rows.append({"id": index, "file": filename})
+
+    pd.DataFrame(train_rows).to_csv(data_dir / "train.csv", index=False)
+    pd.DataFrame(test_rows).to_csv(data_dir / "test.csv", index=False)
+    pd.DataFrame({"id": [row["id"] for row in test_rows], "label": ["cat"] * len(test_rows)}).to_csv(
+        data_dir / "sample_submission.csv", index=False
+    )
+    return data_dir

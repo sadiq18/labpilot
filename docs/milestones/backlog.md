@@ -12,12 +12,13 @@ These were intentionally excluded from the v0.4 iteration loop. Keep them here f
 
 | Item | Target / notes |
 |------|----------------|
-| **P2 remote runtimes / Colab / `--remote-train`** | Offload `train_model` to user-registered runtimes; quota-aware scheduling. See [TODO.md](TODO.md) (P2 deferred). |
+| **P2 remote runtimes / Colab / `--remote-train`** | **Config shipped in P4** (`research runtime`, `configs/runtimes/`). **Execution** (dispatch, polling, sync) deferred — [TODO.md](TODO.md). |
 | **AutoML / neural architecture search** | Full search over many configs or architectures; v0.4 uses a fixed 12-point LightGBM grid step only. |
 | **LLM-generated arbitrary Python feature code** | v0.4 feature work is predefined recipes only (`target_encoding`, `log_numeric`), not free-form codegen. |
 | **Multi-model ensembles** | Single model per run remains the default. |
 | **Text/image template tuning** | Tabular-first in v0.4; extend `training_overrides` + tuner to text/image templates in **P3.1**. |
-| **Kernel slug fix** | Valid Kaggle kernel slug generation in `kernel/exporter.py`. See [Kernel submission reliability](#kernel-submission-reliability-p15b-follow-up) below. Separate small PR before kernel improve tests if needed. |
+| **Kernel slug fix** | Done in P4 v1.0 — see [COMPLETED.md](COMPLETED.md). |
+| **Packaging & PyPI** | Bundle templates/configs in wheel; `importlib.resources` path helper; PyPI publish workflow. Deferred post-1.0. |
 
 **Related but already tracked elsewhere:**
 

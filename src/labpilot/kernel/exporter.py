@@ -1,5 +1,3 @@
-"""Export a Kaggle kernel script from a completed local training run."""
-
 import json
 import logging
 import re
@@ -59,7 +57,57 @@ def compute_metric(y_true, y_pred, metric_name, y_proba=None, *, num_classes=Non
 '''
 
 
-def export_kernel(run_dir: Path, competition: CompetitionSpec) -> Path:
+def slugify_kernel_id(title: str, *, max_length: int = 30) -> str:
+    """Build a Kaggle-valid kernel slug from a title."""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    slug = re.sub(r"-+", "-", slug)
+    if not slug:
+        slug = "labpilot-baseline"
+    if len(slug) > max_length:
+        slug = slug[:max_length].rstrip("-")
+    return slug or "labpilot-baseline"
+
+
+def build_kernel_metadata(
+    competition: CompetitionSpec,
+    *,
+    username: str | None = None,
+    run_suffix: str | None = None,
+) -> tuple[str, dict]:
+    """Return (kernel_id, metadata dict) with a valid Kaggle slug."""
+    title = competition.title or competition.slug
+    slug = slugify_kernel_id(title)
+    if run_suffix:
+        suffix = slugify_kernel_id(run_suffix, max_length=12)
+        slug = slugify_kernel_id(f"{slug}-{suffix}", max_length=50)
+
+    if username:
+        kernel_id = f"{username}/{slug}"
+    else:
+        kernel_id = slug
+
+    metadata = {
+        "id": kernel_id,
+        "title": f"{title} — LabPilot baseline",
+        "code_file": "run.py",
+        "language": "python",
+        "kernel_type": "script",
+        "is_private": True,
+        "enable_gpu": False,
+        "enable_internet": True,
+        "dataset_sources": [],
+        "competition_sources": [competition.slug],
+        "kernel_sources": [],
+    }
+    return kernel_id, metadata
+
+
+def export_kernel(
+    run_dir: Path,
+    competition: CompetitionSpec,
+    *,
+    username: str | None = None,
+) -> Path:
     """Write `run_dir/kernel/` with metadata and a Kaggle-ready training script."""
     train_path = run_dir / "pipeline" / "train.py"
     if not train_path.is_file():
@@ -73,20 +121,12 @@ def export_kernel(run_dir: Path, competition: CompetitionSpec) -> Path:
     run_py = _adapt_train_script(train_path.read_text(), kaggle_input, kaggle_working)
     (kernel_dir / "run.py").write_text(run_py)
 
-    kernel_id = f"{competition.slug}-labpilot-baseline"
-    metadata = {
-        "id": kernel_id,
-        "title": f"{competition.title or competition.slug} — LabPilot baseline",
-        "code_file": "run.py",
-        "language": "python",
-        "kernel_type": "script",
-        "is_private": True,
-        "enable_gpu": False,
-        "enable_internet": True,
-        "dataset_sources": [],
-        "competition_sources": [competition.slug],
-        "kernel_sources": [],
-    }
+    run_suffix = run_dir.name.split("-")[-1] if run_dir.name else None
+    kernel_id, metadata = build_kernel_metadata(
+        competition,
+        username=username,
+        run_suffix=run_suffix,
+    )
     (kernel_dir / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2))
     logger.info("Exported kernel artifacts to %s (id=%s)", kernel_dir, kernel_id)
     return kernel_dir
