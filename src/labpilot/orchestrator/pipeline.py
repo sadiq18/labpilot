@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,7 @@ from labpilot.submission.formatter import SubmissionValidator
 from labpilot.tracking.logger import ExperimentLogger
 from labpilot.training.runner import TrainingRunner
 
+logger = logging.getLogger(__name__)
 console = Console()
 
 StageHandler = Callable[[Path, RunManifest, AppConfig], list[str]]
@@ -49,6 +51,7 @@ class Pipeline:
         config: AppConfig,
         kaggle_client: KaggleGateway | None = None,
         submit: bool = False,
+        force_submit: bool = False,
         configs_dir: Path | None = None,
         llm_client: LLMClient | None = None,
     ) -> None:
@@ -61,6 +64,7 @@ class Pipeline:
         # text" rather than an error.
         self.llm_client = llm_client if llm_client is not None else create_llm_client(config.llm)
         self.submit = submit
+        self.force_submit = force_submit
         # Overrides where competition contracts (configs/competitions/<slug>.yaml)
         # are read from. Defaults to the package location; tests and callers
         # that don't want to depend on a locally created file can point this
@@ -426,10 +430,18 @@ class Pipeline:
                 )
             else:
                 if deadline < datetime.now():
-                    raise ValueError(
-                        f"Competition '{competition.slug}' deadline ({competition.deadline}) "
-                        "has already passed."
-                    )
+                    if self.force_submit:
+                        logger.warning(
+                            "Deadline for '%s' (%s) has passed; uploading anyway "
+                            "because --force-submit was set.",
+                            competition.slug,
+                            competition.deadline,
+                        )
+                    else:
+                        raise ValueError(
+                            f"Competition '{competition.slug}' deadline ({competition.deadline}) "
+                            "has already passed. Pass --force-submit with --submit to upload anyway."
+                        )
         if competition.max_daily_submissions is not None:
             count = self.kaggle_client.count_todays_submissions(competition.slug)
             if count >= competition.max_daily_submissions:

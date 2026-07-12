@@ -37,6 +37,11 @@ def main(
     logging.getLogger("labpilot").setLevel(level)
 
 
+def _validate_submit_flags(submit: bool, force_submit: bool) -> None:
+    if force_submit and not submit:
+        raise typer.BadParameter("--force-submit requires --submit.")
+
+
 @app.command()
 def run(
     competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
@@ -58,6 +63,11 @@ def run(
         "--submit",
         help="Upload the validated submission to Kaggle (disabled by default)",
     ),
+    force_submit: bool = typer.Option(
+        False,
+        "--force-submit",
+        help="With --submit: upload even when the competition deadline has passed",
+    ),
     assume_yes: bool = typer.Option(
         False,
         "--yes",
@@ -72,6 +82,7 @@ def run(
     init` followed by `research build` instead.
     """
     _fail_fast_on_bad_environment()
+    _validate_submit_flags(submit, force_submit)
 
     config = load_config(config_path)
     if runs_dir:
@@ -80,7 +91,13 @@ def run(
 
     console.print(f"[bold]LabPilot[/bold] — starting run for [cyan]{competition}[/cyan]\n")
 
-    pipeline = Pipeline(config, submit=submit, configs_dir=competitions_dir, llm_client=llm_client)
+    pipeline = Pipeline(
+        config,
+        submit=submit,
+        force_submit=force_submit,
+        configs_dir=competitions_dir,
+        llm_client=llm_client,
+    )
     manifest = pipeline.run(competition)
 
     console.print(f"\n[green]Run complete:[/green] {config.runs_dir / manifest.run_id}")
@@ -152,6 +169,11 @@ def build(
         "--submit",
         help="Upload the validated submission to Kaggle (disabled by default)",
     ),
+    force_submit: bool = typer.Option(
+        False,
+        "--force-submit",
+        help="With --submit: upload even when the competition deadline has passed",
+    ),
     assume_yes: bool = typer.Option(
         False,
         "--yes",
@@ -161,6 +183,7 @@ def build(
 ) -> None:
     """Run the build half of an already-`init`'d run: baseline through reflection."""
     _fail_fast_on_bad_environment()
+    _validate_submit_flags(submit, force_submit)
 
     config = load_config(config_path)
     if runs_dir:
@@ -168,7 +191,9 @@ def build(
     llm_client = _check_llm_or_confirm(config.llm, assume_yes)
     console.print(f"[bold]LabPilot[/bold] — building run [cyan]{run_id}[/cyan]\n")
 
-    pipeline = Pipeline(config, submit=submit, llm_client=llm_client)
+    pipeline = Pipeline(
+        config, submit=submit, force_submit=force_submit, llm_client=llm_client
+    )
     manifest = _continue_or_exit(pipeline.build, run_id)
 
     run_dir = config.runs_dir / manifest.run_id
@@ -195,6 +220,11 @@ def resume(
         "--submit",
         help="Upload the validated submission to Kaggle (disabled by default)",
     ),
+    force_submit: bool = typer.Option(
+        False,
+        "--force-submit",
+        help="With --submit: upload even when the competition deadline has passed",
+    ),
     assume_yes: bool = typer.Option(
         False,
         "--yes",
@@ -209,6 +239,7 @@ def resume(
     re-executed in pipeline order.
     """
     _fail_fast_on_bad_environment()
+    _validate_submit_flags(submit, force_submit)
 
     config = load_config(config_path)
     if runs_dir:
@@ -216,7 +247,13 @@ def resume(
     llm_client = _check_llm_or_confirm(config.llm, assume_yes)
     console.print(f"[bold]LabPilot[/bold] — resuming run [cyan]{run_id}[/cyan]\n")
 
-    pipeline = Pipeline(config, submit=submit, configs_dir=competitions_dir, llm_client=llm_client)
+    pipeline = Pipeline(
+        config,
+        submit=submit,
+        force_submit=force_submit,
+        configs_dir=competitions_dir,
+        llm_client=llm_client,
+    )
     manifest = _continue_or_exit(pipeline.resume, run_id)
 
     console.print(f"\n[green]Run complete:[/green] {config.runs_dir / manifest.run_id}")

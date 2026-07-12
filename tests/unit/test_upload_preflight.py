@@ -44,6 +44,15 @@ def test_preflight_blocks_past_deadline():
         pipeline._preflight_submission(competition)
 
 
+def test_preflight_allows_past_deadline_with_force_submit():
+    pipeline = Pipeline(
+        AppConfig(), kaggle_client=FakeKaggleWithQuota(), submit=True, force_submit=True
+    )
+    past = (datetime.now() - timedelta(days=1)).isoformat()
+    competition = CompetitionSpec(slug="test", deadline=past)
+    pipeline._preflight_submission(competition)
+
+
 def test_preflight_blocks_daily_quota():
     pipeline = Pipeline(AppConfig(), kaggle_client=FakeKaggleWithQuota(), submit=True)
     competition = CompetitionSpec(slug="test", max_daily_submissions=5)
