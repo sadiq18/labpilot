@@ -8,7 +8,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from labpilot.baseline.selector import BaselineChoice
 from labpilot.config import LLMConfig
 from labpilot.kaggle.client import SubmissionResult
-from labpilot.llm.client import LLMClient, create_llm_client
+from labpilot.llm.client import LLMClient, complete_with_fallback, resolve_llm_client
 from labpilot.profiler.tabular import DatasetProfile
 from labpilot.reflection.links import render_submission_links
 
@@ -22,7 +22,7 @@ class ReflectionGenerator:
 
     def __init__(self, config: LLMConfig, llm_client: LLMClient | None = None) -> None:
         self.config = config
-        self.llm_client = llm_client if llm_client is not None else create_llm_client(config)
+        self.llm_client = llm_client if llm_client is not None else resolve_llm_client(config)
         self.prompts_dir = Path(__file__).parent / "prompts"
         self.env = Environment(
             loader=FileSystemLoader(self.prompts_dir),
@@ -57,18 +57,13 @@ class ReflectionGenerator:
 
         if self.llm_client is not None:
             logger.info("Generating reflection for run '%s' via LLM.", run_id)
-            try:
-                return self.llm_client.complete(system, user)
-            except Exception:
-                # A reflection is a helpful enhancement, not a hard
-                # requirement — any failure here (bad key, network, rate
-                # limit, unknown model) must degrade to the fallback text,
-                # never crash the `write_reflection` pipeline stage.
-                logger.warning(
-                    "LLM reflection generation failed for run '%s'; using fallback template text.",
-                    run_id,
-                    exc_info=True,
-                )
+            content = complete_with_fallback(self.config, system, user, self.llm_client)
+            if content is not None:
+                return content
+            logger.warning(
+                "LLM reflection generation failed for run '%s'; using fallback template text.",
+                run_id,
+            )
         else:
             logger.info(
                 "Generating reflection for run '%s' (no LLM configured; using fallback).",

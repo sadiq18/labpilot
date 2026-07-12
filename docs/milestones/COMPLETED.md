@@ -121,3 +121,25 @@ Credentialed smoke runs on five Kaggle competitions (2026-07-12). Run IDs under 
 **Smoke pass:** Runs 1–5 completed with expected artifacts (`competition.json`, `profile.json`, `brief.md`, `baseline_choice.json`, `metrics.json`, `submission.csv`, `reflection.md`). Run 6 upload pre-flight + Kaggle submit validated on `spaceship-titanic` (`submission_result.json` status `scored`).
 
 **Fixes surfaced during smoke:** zip extraction on cached downloads; image competitions without `test.csv`; image filename column detection (ID column holds paths); deep templates now write lightweight `models/fold_*.json` manifests for artifact checks.
+
+---
+
+## P3 — v0.4 (Iteration Loop)
+
+**Goal:** Turn reflection into action via `research improve`.
+
+| Deliverable | Status |
+|-------------|--------|
+| Run fork + lineage (`parent_run_id`, `iteration` in manifest) | Done |
+| `research improve --run-id <parent>` CLI | Done |
+| Structured `improvement_plan.json` + `ImprovementPlanner` (auto/tune/features) | Done |
+| `training_overrides.json` + tabular template parameterization | Done |
+| LightGBM grid tuning (`improvement/tuner.py`) | Done |
+| Feature recipes: `target_encoding`, `log_numeric` | Done |
+| Cross-run diff: `research runs diff --base/--compare` | Done |
+
+**Smoke (integration):** Titanic fixture — baseline run → `improve --strategy tune` → child run
+with `improvement_plan.json`, `training_overrides.json`, new `metrics.json`, and lineage metadata;
+`runs diff` reports param/metric deltas.
+
+**Version:** `0.4.0`

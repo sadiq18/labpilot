@@ -8,4 +8,7 @@ Structure your response with these sections:
 5. Top 3–5 Recommended Next Steps (specific and actionable)
 6. Risks for the Next Iteration
 
+Optional: end with a short machine-readable block listing suggested improvement actions
+(e.g. tune_hyperparams, apply_feature_recipe) when the data supports it.
+
 Base your analysis on the actual metrics, profile, and brief provided. Be honest about limitations.

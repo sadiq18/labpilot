@@ -109,6 +109,23 @@ def check_environment(include_optional: bool = True) -> list[CheckResult]:
     return results
 
 
+OPTIONAL_CHECK_NAMES = frozenset(
+    {
+        "Image deps (torch/torchvision)",
+        "Deep deps (torch/torchvision/transformers)",
+    }
+)
+
+
+def required_environment_checks(skip_lightgbm: bool = False) -> list[CheckResult]:
+    """Checks that must pass before running pipeline commands."""
+    return [
+        result
+        for result in check_environment(include_optional=False)
+        if not (skip_lightgbm and result.name == "LightGBM import")
+    ]
+
+
 def print_diagnostics_report(results: list[CheckResult], console: "Console | None" = None) -> bool:
     """Print a pass/fail table for `results`. Returns True iff everything passed."""
     from rich.console import Console

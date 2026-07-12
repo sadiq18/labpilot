@@ -79,13 +79,15 @@ def test_generate_falls_back_when_llm_client_raises(competition, profile):
     assert competition.slug in brief
 
 
-def test_generator_defaults_to_create_llm_client_when_not_provided(competition, profile):
-    # No `llm_client` argument at all, and no API key configured -> the
-    # constructor's own `create_llm_client` call must resolve to `None`
-    # rather than raising, so this behaves the same as passing `None`
-    # explicitly.
+def test_generator_defaults_to_resolve_llm_client_when_not_provided(monkeypatch, competition, profile):
+    monkeypatch.setattr(
+        "labpilot.brief.generator.resolve_llm_client",
+        lambda config: None,
+    )
     generator = BriefGenerator(LLMConfig(provider="openai", api_key=""))
 
     assert generator.llm_client is None
+    brief = generator.generate(competition, profile)
+    assert "LLM generation not available" in brief
     brief = generator.generate(competition, profile)
     assert "LLM generation not available" in brief

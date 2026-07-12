@@ -6,7 +6,9 @@ Items here are explicitly **not** in the current implementation scope. Build onl
 
 ---
 
-## P2 — v0.3 (Remote Runtime & Scheduling)
+## P2 — v0.3 (Remote Runtime & Scheduling) — **Deferred**
+
+> Superseded by P3 priority. Remote runtime work resumes after the iteration loop ships.
 
 **Goal:** Offload `train_model` to user-registered remote runtimes with quota-aware scheduling.
 
@@ -23,14 +25,9 @@ research runtime list | register | doctor
 
 ---
 
-## P3 — v0.4 (Iteration Loop)
+## P3 — v0.4 (Iteration Loop) — **Done**
 
-**Goal:** Turn reflection into action.
-
-- `research improve --run-id <id>` reads reflection and re-runs targeted steps
-- Manual or semi-automatic feature engineering from brief suggestions
-- Simple hyperparameter tuning (grid/random, not AutoML)
-- Diff between runs in experiment tracker
+See [COMPLETED.md](COMPLETED.md).
 
 ---
 
