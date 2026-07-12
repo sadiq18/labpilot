@@ -8,6 +8,8 @@ After a completed baseline run, **`research improve`** forks a child run from th
 
 No multi-agent orchestration, vector stores, or autonomous planning — just a deterministic DAG plus an explicit iteration layer on top.
 
+This document only covers the **current-state design** — module layout, artifact contracts, pipeline flow. Per-milestone history (what P0–P4 each added, validation runs, deferred/backlog items) and in-progress/future design (Milestone 2 — Experiment Scientist) live under [milestones/](milestones/); start at [MILESTONES.md](../MILESTONES.md).
+
 ---
 
 ## Pipeline Flow
@@ -62,21 +64,8 @@ The orchestrator lives in `orchestrator/pipeline.py`. Stage order is configurabl
 | `research resume` | From first failed/incomplete stage |
 | `research improve` | Fork parent init artifacts, then `generate_code` → `write_reflection` |
 
-### Iteration flow (P3)
-
-```mermaid
-flowchart TD
-    parent[Parent run completed] --> plan[ImprovementPlanner]
-    plan --> fork[Fork run_dir + lineage]
-    fork --> copy[Copy init artifacts]
-    copy --> stages[Targeted stages]
-    stages --> genCode[generate_code]
-    genCode --> train[train_model]
-    train --> eval[evaluate_cv through reflection]
-    eval --> diff[runs diff vs parent]
-```
-
-`Pipeline.improve()` validates the parent is `completed`, calls the planner, forks via `improvement/fork.py`, writes `improvement_plan.json` and `training_overrides.json`, then executes `stages_to_run` (default: codegen through reflection).
+See [milestones/COMPLETED.md](milestones/COMPLETED.md#architecture-changes-p3) for how the
+`research improve` iteration flow was introduced.
 
 ---
 
@@ -135,7 +124,7 @@ Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-1430
 | **Responsibility** | Entry point, stage sequencing, run state |
 | **Input** | `--competition`, config file |
 | **Output** | `manifest.json`, stage logs |
-| **P0 status** | Implemented |
+| **Status** | Implemented |
 
 Commands:
 
@@ -157,7 +146,7 @@ Commands:
 | **Responsibility** | Fetch and structure competition metadata |
 | **Input** | Competition slug |
 | **Output** | `competition.json` (`CompetitionSpec`) |
-| **P0 status** | Implemented via a local, per-competition contract at `configs/competitions/<slug>.yaml` |
+| **Status** | Implemented via a local, per-competition contract at `configs/competitions/<slug>.yaml` |
 
 `CompetitionSpec` fields include `slug`, `title`, `evaluation_metric`, `problem_type`,
 `submission_columns`, URLs, deadline, and tags. Competitions without a local contract
@@ -173,7 +162,7 @@ locally authored file.
 | **Responsibility** | Download and organize competition datasets |
 | **Input** | Competition slug, Kaggle credentials |
 | **Output** | `data/raw/`, `data/processed/` |
-| **P0 status** | Implemented through the official Kaggle API |
+| **Status** | Implemented through the official Kaggle API |
 
 ### 4. Dataset Profiler
 
@@ -183,7 +172,7 @@ locally authored file.
 | **Responsibility** | Schema, stats, distributions, target/id detection |
 | **Input** | `data/raw/` paths |
 | **Output** | `profile.json`, `profile.md` |
-| **P0 status** | Implemented for one train, test, and sample-submission CSV |
+| **Status** | Implemented for one train, test, and sample-submission CSV |
 
 `DatasetProfile` records file roles, train/test row counts, column profiles,
 `target_column`, `id_column`, and the expected submission columns.
@@ -196,7 +185,7 @@ locally authored file.
 | **Responsibility** | AI problem framing, risks, strategy |
 | **Input** | `CompetitionSpec` + `DatasetProfile` |
 | **Output** | `brief.md` |
-| **P0 status** | Implemented — OpenAI or Gemini via `llm/client.py`; falls back to template text if no key/package/call succeeds |
+| **Status** | Implemented — OpenAI or Gemini via `llm/client.py`; falls back to template text if no key/package/call succeeds |
 
 ### 6. Baseline Selector
 
@@ -206,7 +195,7 @@ locally authored file.
 | **Responsibility** | Map problem type to template |
 | **Input** | `CompetitionSpec` + `DatasetProfile` |
 | **Output** | `baseline_choice.json` |
-| **P0 status** | Implemented — rule-based, defaults to tabular classification |
+| **Status** | Implemented — rule-based, defaults to tabular classification |
 
 Selection rules use competition `problem_type` when known, otherwise infer from target column dtype.
 
@@ -230,7 +219,7 @@ Templates live in `templates/` (not inside the Python package). The renderer pas
 | **Responsibility** | Execute generated pipeline as subprocess |
 | **Input** | `pipeline/train.py` |
 | **Output** | `models/`, `oof.csv`, `metrics.json`, `training.log` |
-| **P0 status** | Implemented with fold-fitted preprocessing and serialized models |
+| **Status** | Implemented with fold-fitted preprocessing and serialized models |
 
 ### 9. Evaluator
 
@@ -240,7 +229,7 @@ Templates live in `templates/` (not inside the Python package). The renderer pas
 | **Responsibility** | CV metrics aligned to competition metric |
 | **Input** | OOF predictions, metric spec |
 | **Output** | `metrics.json` |
-| **P0 status** | Validates the metric artifact produced by training |
+| **Status** | Validates the metric artifact produced by training |
 
 Supported metrics: AUC, log loss, accuracy, RMSE.
 
@@ -252,7 +241,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 | **Responsibility** | Format and validate submission file |
 | **Input** | Predictions, id/target columns |
 | **Output** | `submission.csv` |
-| **P0 status** | Validates schema, row count, nulls, and integer labels |
+| **Status** | Validates schema, row count, nulls, and integer labels |
 
 ### 11. Kaggle Client
 
@@ -262,7 +251,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 | **Responsibility** | Upload submission, fetch score |
 | **Input** | `submission.csv`, competition slug |
 | **Output** | `submission_result.json` |
-| **P0 status** | Implemented; upload requires explicit `--submit` |
+| **Status** | Implemented; upload requires explicit `--submit` |
 
 ### 12. Experiment Tracker
 
@@ -284,7 +273,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 | **Responsibility** | Post-mortem + next-step recommendations |
 | **Input** | Full run context (profile, metrics, submission result) |
 | **Output** | `reflection.md` |
-| **P0 status** | Implemented — OpenAI or Gemini via `llm/client.py`; falls back to template text if no key/package/call succeeds |
+| **Status** | Implemented — OpenAI or Gemini via `llm/client.py`; falls back to template text if no key/package/call succeeds |
 
 ### 14. HTML Report Generator
 
@@ -296,7 +285,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 | **Output** | `report.html` |
 | **Status** | Implemented — pipeline stage `write_report` and `research report --run-id` |
 
-### 15. Improvement Loop (P3)
+### 15. Improvement Loop
 
 | | |
 |---|---|
@@ -363,12 +352,14 @@ labpilot/
 │   └── integration/           # Mocked end-to-end pipeline run
 │
 └── docs/
-    ├── ARCHITECTURE.md        # This file
+    ├── ARCHITECTURE.md        # This file — current-state module/pipeline reference only
     ├── MILESTONES.md          # Roadmap index
     └── milestones/
-    ├── COMPLETED.md       # Shipped milestones (P0–P3)
-    ├── IN-PROGRESS.md     # Active work (if any)
-    └── TODO.md            # P2 (deferred) + P4+ planned
+        ├── COMPLETED.md       # Shipped milestones (P0–P4) + per-milestone architecture changes
+        ├── IN-PROGRESS.md     # Active work (Milestone 2 design)
+        ├── TODO.md            # P2 execution (deferred) + post-1.0 planned
+        ├── backlog.md         # Unscheduled future work
+        └── milestone-2/       # Experiment Scientist design docs (README + 8 plans)
 ```
 
 ---
@@ -464,63 +455,6 @@ Defined in `pyproject.toml` — not required for tabular-only runs. Install with
 
 ---
 
-## P1 Additions (shipped in v0.2)
-
-See [milestones/COMPLETED.md](milestones/COMPLETED.md).
-
-| Area | New / changed | Purpose |
-|------|---------------|---------|
-| `competition/metrics.py` | `MetricSpec.key`, LLM tie-breaker | Map Kaggle metric strings to canonical eval keys |
-| `evaluation/metrics.py` | Extended `compute_metric` | AUC, log loss, F1, MAE, RMSLE; sklearn RMSE fix |
-| `brief/context.py` | Competition context block | Deterministic rules/metric section prepended to `brief.md` |
-| `profiler/modality.py` | Modality detector | Tabular / text / image signals + LLM tie-breaker |
-| `templates/text_classification/` | TF-IDF + LogisticRegression | NLP baseline |
-| `templates/image_classification/` | ResNet18 features + LightGBM | Image baseline (optional `image` extra) |
-| `templates/*_deep/` | Fine-tuned DistilBERT / ResNet18 | Opt-in transfer learning (optional `deep` extra) |
-
-Remote runtime **configuration** shipped in P2 v0.3 / P4 v1.0 — see `runtimes/` and
-[configs/runtimes/README.md](../configs/runtimes/README.md). Remote **execution**
-(`--remote-train`, scheduler, artifact sync) is deferred — see [milestones/TODO.md](milestones/TODO.md).
-
----
-
-## P3 Additions (shipped in v0.4)
-
-| Area | New / changed | Purpose |
-|------|---------------|---------|
-| `improvement/fork.py` | Run fork + lineage | Reuse init artifacts; `parent_run_id`, `iteration` in manifest |
-| `improvement/planner.py` | `ImprovementPlan` | LLM auto-plan or `--strategy tune\|features` |
-| `improvement/tuner.py` | LightGBM grid | Small hyperparameter search over tabular templates |
-| `improvement/recipes.py` | Feature recipes | `target_encoding`, `log_numeric` from profile |
-| `training_overrides.json` | Training config artifact | Separate from `baseline_choice.json` |
-| `codegen/renderer.py` | Template context | `model_params`, `feature_recipes`, recipe column lists |
-| `tracking/index.py` | Cross-run index | `research runs diff --base/--compare` |
-| `cli/main.py` | `improve`, `runs diff` | Iteration entrypoint and experiment comparison |
-| Tabular templates | Parameterized LightGBM | `MODEL_PARAMS` + optional recipe blocks |
-
-Text/image template tuning remains deferred to a follow-up; iteration strategies fall back to retrain-only for non-tabular problem types.
-
----
-
-## P4 Additions (shipped in v1.0)
-
-| Area | New / changed | Purpose |
-|------|---------------|---------|
-| `.github/workflows/ci.yml` | CI matrix | Tabular, LLM, image, deep test jobs |
-| `workspace/` | Project overlay | `project.yaml` discovery; `research workspace init/status` |
-| `config.py` | Layered merge | Package → project → CLI → env precedence |
-| `Pipeline(dry_run=True)` | Dry-run mode | Skip post-codegen stages; write `dry_run.json` |
-| `runtimes/` | Runtime registry | Models, registry, doctor; `research runtime` CLI |
-| `configs/runtimes/` | Runtime YAML | local, kaggle_kernel, google_colab, other schemas |
-| `kernel/exporter.py` | Slug fix | Valid `{username}/{slug}` kernel metadata |
-| `report/generator.py` | HTML report | Self-contained `report.html` from run artifacts |
-| `cli/main.py` | `--dry-run`, `--project-dir`, `report` | Production UX flags + standalone report command |
-| Integration tests | text/image/deep | One automated test per template family |
-
-Each run writes `runtime.json` with the configured default runtime (`local-default`).
-
----
-
 ## Module Dependency Graph
 
 Modules depend only on artifacts from prior stages, never on in-memory shared state:
@@ -560,5 +494,6 @@ Everything above describes the shipped P0–P4 pipeline. The next milestone does
 pipeline — it adds a memory/reasoning layer on top of it (an `experiments/` package plus a new
 per-competition `knowledge/` data directory) so that dozens or hundreds of runs accumulate into
 a queryable, comparable, rankable research history instead of a flat list of directories. See
-[milestones/milestone-2/README.md](milestones/milestone-2/README.md) for the full design —
-this section will be folded into the tables above once implementation begins.
+[milestones/milestone-2/README.md](milestones/milestone-2/README.md) for the full design. This
+section will be expanded into the Module Catalog and Repository Structure above once
+implementation begins.

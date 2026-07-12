@@ -46,6 +46,10 @@ This is real, working logic — reused, not thrown away. What's missing, from th
 4. **Persistence.** `diff_runs` is compute-on-demand only (`research runs diff`). Task 3
    implies every child experiment gets compared to its parent automatically, so the
    comparison is a fact recorded once, not recomputed by whoever happens to ask later.
+5. **A shareable write-up, not just a JSON fact.** `ExperimentComparison` is structured data;
+   nothing renders it to a durable, human-readable document the way `reflection.md` exists
+   alongside `reflection.json`. A markdown summary is needed so a comparison can be read,
+   linked, or pasted into a PR description without re-running a CLI command.
 
 ## Design
 
@@ -139,25 +143,41 @@ calls `comparator.compare(parent_experiment, child_experiment)` and writes
 knowledge base and Plan 8's dashboard) instead of something recomputed on every dashboard
 render. Root runs (no parent) simply get no `comparison.json` — nothing to compare against.
 
+Alongside `comparison.json`, write `runs/<child_id>/comparison.md` — a markdown rendering of
+the same `ExperimentComparison`, produced by `comparator.render_markdown(comparison) -> str`.
+Same relationship as Plan 4's `reflection.json`/`reflection.md` pair: the JSON is the source of
+truth, the markdown is a deterministic *view* over it (no second computation, no LLM call —
+this whole plan stays "no LLM required"). Sections mirror the brief's mockup shape: a `##
+Changes` list (one bullet per `ConfigChange.label`, grouped by `category`), a `## Metrics`
+table (`metric_deltas`, `runtime_delta_seconds/pct`, an explicit `Inference: not tracked`
+line), and a `## Conclusion` line (`verdict` + `verdict_reason`). This gives comparisons the
+same "durable, shareable write-up" property `reflection.md` already has, addresses the
+sprint's "Markdown summaries" deliverable, and gives Plan 8's dashboard a ready-made per-child
+detail link (each experiment row can link to its own `comparison.md`, next to `report.html`).
+
 ### 5. New/changed files
 
 | File | Change |
 |---|---|
 | `src/labpilot/experiments/models.py` | + `ChangeCategory`, `ConfigChange`, `Verdict`, `ExperimentComparison` |
-| `src/labpilot/experiments/comparator.py` | new — `compare(base, compare) -> ExperimentComparison`, category rules, verdict logic |
+| `src/labpilot/experiments/comparator.py` | new — `compare(base, compare) -> ExperimentComparison`, category rules, verdict logic, `render_markdown(comparison) -> str` |
 | `src/labpilot/tracking/index.py` | `diff_runs()` becomes a thin wrapper: build two `Experiment`s, call `comparator.compare`, adapt to the existing `RunDiff` shape so `research runs diff` output is unchanged |
-| `src/labpilot/orchestrator/pipeline.py` | `improve()` writes `comparison.json` after `write_reflection` |
+| `src/labpilot/orchestrator/pipeline.py` | `improve()` writes `comparison.json` and `comparison.md` after `write_reflection` |
 | `src/labpilot/cli/main.py` | + `experiments compare` subcommand |
 | `configs/default.yaml` | + `experiments.comparator.{noise_epsilon,max_runtime_increase_pct}` |
 
 ### 6. CLI
 
 ```
-research experiments compare <base_id> <compare_id> [--format table|json]
+research experiments compare <base_id> <compare_id> [--format table|json|markdown]
 ```
 
-Renders the brief's exact mockup shape: a `Changes` list, `Validation`/metric deltas, training
-time delta, an explicit `inference: not tracked` line, and `Conclusion`.
+`--format table` (default) and `--format json` render the brief's exact mockup shape: a
+`Changes` list, `Validation`/metric deltas, training time delta, an explicit
+`inference: not tracked` line, and `Conclusion`. `--format markdown` prints the same
+`render_markdown()` output used to write `comparison.md` on child completion — useful for
+comparing two arbitrary experiments on demand (not just a parent/child pair) without writing a
+file.
 
 ## Non-goals
 
@@ -190,6 +210,9 @@ time delta, an explicit `inference: not tracked` line, and `Conclusion`.
 - A fixture pair with a metric improvement but runtime increase above the configured
   threshold returns `NOT_WORTH_KEEPING`.
 - After `research improve --strategy tune`, the child run directory contains a valid
-  `comparison.json`.
+  `comparison.json` **and** a `comparison.md` rendered from it (headings for Changes, Metrics,
+  Conclusion all present; verdict text matches the JSON's `verdict`/`verdict_reason`).
+- `research experiments compare <a> <b> --format markdown` prints output byte-identical to the
+  `comparison.md` written for that pair, when such a file already exists on disk.
 - `research runs diff --base <a> --compare <b>` output is unchanged from before this plan
   (regression-tested against the existing `test_tracking_index.py` fixtures).

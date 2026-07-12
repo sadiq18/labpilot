@@ -22,6 +22,8 @@ After a few hours, LabPilot produces:
 
 ## Quick Start
 
+Install from source (PyPI packaging is deferred):
+
 ```bash
 # Create a Python 3.11+ environment and install dependencies
 uv sync --extra dev
@@ -298,25 +300,6 @@ Lists every run under the runs directory with its competition and overall status
 |--------|-------------|
 | `--config` | Path to config file (default: `configs/default.yaml`) |
 | `--runs-dir` | Override the runs directory |
-
-## Project Status
-
-**P4 — Production Quality v1.0** (complete): GitHub Actions CI, template integration tests,
-optional project workspace, config layering, `--dry-run`, runtime registry (P2 v0.3), HTML reports, kernel slug fix.
-
-**P3 — Iteration Loop v0.4** (complete): `research improve`, tuning, `runs diff`.
-
-**P1 — Problem Type Expansion v0.2** (complete): text/image/deep templates, modality detection.
-
-**P0 — Research Engine v0.1** (complete): tabular classification/regression end-to-end.
-
-Install path for v1.0: clone repo + `uv sync`. PyPI packaging is deferred — see
-[docs/milestones/TODO.md](docs/milestones/TODO.md).
-
-See [docs/MILESTONES.md](docs/MILESTONES.md) for the roadmap (split into
-[Completed](docs/milestones/COMPLETED.md), [In progress](docs/milestones/IN-PROGRESS.md),
-and [TODO](docs/milestones/TODO.md)), and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for
-module design.
 
 ## Repository Layout
 

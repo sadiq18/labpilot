@@ -72,9 +72,15 @@ def search(graph: ExperimentGraph, comparisons: dict[str, ExperimentComparison],
 
 `_matches` is a straightforward chain of `if filter_set and not condition: return False` checks
 — no clever query planning needed at "142 experiments" scale (a full linear scan of in-memory
-`Experiment` objects, already loaded once per invocation, is milliseconds). `--config
-model_params.ema=true` resolves dotted-path lookups against the merged config snapshot on
-`Experiment` (same dotted-path convention as Plan 3's `ConfigChange.field`, for consistency).
+`Experiment` objects, already loaded once per invocation, is milliseconds). `--config <key>=<value>`
+resolves dotted-path lookups against a merged view of `Experiment.config_snapshot` (Plan 1's
+`runs/<id>/config.json`, e.g. `--config training.cv_folds=10`) and `model_params` (e.g.
+`--config model_params.ema=true`), checked in that order — same dotted-path convention as
+Plan 3's `ConfigChange.field`, for consistency. `model_params` is checked because it's the
+*resolved* per-run training config (defaults + tuner/recipe overrides applied), which is what
+the brief's own `--config model_params.ema=true` example is asking about, while
+`config_snapshot` covers everything else in `AppConfig` (e.g. `training.cv_folds`,
+`llm.provider`) that never flows through `model_params`.
 
 `comparisons` is built by loading every `runs/<id>/comparison.json` that exists for runs in the
 graph (Plan 3); filters relying on it (`--metric-delta-gt`, `--verdict`) simply exclude
