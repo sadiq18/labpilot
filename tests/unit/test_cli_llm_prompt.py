@@ -43,6 +43,7 @@ def test_check_llm_or_confirm_returns_client_immediately_without_prompting(monke
 
 def test_check_llm_or_confirm_auto_proceeds_with_assume_yes(monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", FakeStdin(is_tty=True))
+    monkeypatch.setattr(cli_main, "resolve_llm_client", lambda config: None)
 
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("Confirm.ask should not be called when --yes is passed")
@@ -57,6 +58,7 @@ def test_check_llm_or_confirm_auto_proceeds_with_assume_yes(monkeypatch, capsys)
 
 def test_check_llm_or_confirm_auto_proceeds_when_non_interactive(monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", FakeStdin(is_tty=False))
+    monkeypatch.setattr(cli_main, "resolve_llm_client", lambda config: None)
 
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("Confirm.ask should not be called for non-interactive runs")
@@ -71,6 +73,7 @@ def test_check_llm_or_confirm_auto_proceeds_when_non_interactive(monkeypatch, ca
 
 def test_check_llm_or_confirm_returns_none_when_user_confirms(monkeypatch):
     monkeypatch.setattr(sys, "stdin", FakeStdin(is_tty=True))
+    monkeypatch.setattr(cli_main, "resolve_llm_client", lambda config: None)
     monkeypatch.setattr(cli_main.Confirm, "ask", lambda *args, **kwargs: True)
 
     result = cli_main._check_llm_or_confirm(_no_client_config(), False)
@@ -80,6 +83,7 @@ def test_check_llm_or_confirm_returns_none_when_user_confirms(monkeypatch):
 
 def test_check_llm_or_confirm_exits_when_user_declines(monkeypatch):
     monkeypatch.setattr(sys, "stdin", FakeStdin(is_tty=True))
+    monkeypatch.setattr(cli_main, "resolve_llm_client", lambda config: None)
     monkeypatch.setattr(cli_main.Confirm, "ask", lambda *args, **kwargs: False)
 
     with pytest.raises(typer.Exit):

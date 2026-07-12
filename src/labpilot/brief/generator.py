@@ -6,7 +6,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from labpilot.brief.context import render_competition_context
 from labpilot.competition.models import CompetitionSpec
 from labpilot.config import LLMConfig
-from labpilot.llm.client import LLMClient, create_llm_client
+from labpilot.llm.client import LLMClient, complete_with_fallback, resolve_llm_client
 from labpilot.profiler.tabular import DatasetProfile
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ class BriefGenerator:
 
     def __init__(self, config: LLMConfig, llm_client: LLMClient | None = None) -> None:
         self.config = config
-        self.llm_client = llm_client if llm_client is not None else create_llm_client(config)
+        self.llm_client = llm_client if llm_client is not None else resolve_llm_client(config)
         self.prompts_dir = Path(__file__).parent / "prompts"
         self.env = Environment(
             loader=FileSystemLoader(self.prompts_dir),
@@ -40,19 +40,13 @@ class BriefGenerator:
 
         if self.llm_client is not None:
             logger.info("Generating research brief for '%s' via LLM.", competition.slug)
-            try:
-                narrative = self.llm_client.complete(system, user)
+            narrative = complete_with_fallback(self.config, system, user, self.llm_client)
+            if narrative is not None:
                 return render_competition_context(competition) + narrative
-            except Exception:
-                # A brief is a helpful enhancement, not a hard requirement —
-                # any failure here (bad key, network, rate limit, unknown
-                # model) must degrade to the fallback text, never crash the
-                # `generate_brief` pipeline stage.
-                logger.warning(
-                    "LLM brief generation failed for '%s'; using fallback template text.",
-                    competition.slug,
-                    exc_info=True,
-                )
+            logger.warning(
+                "LLM brief generation failed for '%s'; using fallback template text.",
+                competition.slug,
+            )
         else:
             logger.info(
                 "Generating research brief for '%s' (no LLM configured; using fallback).",

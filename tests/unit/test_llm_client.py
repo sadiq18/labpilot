@@ -4,7 +4,13 @@ import pytest
 
 from labpilot.config import LLMConfig
 from labpilot.llm import client as llm_client_module
-from labpilot.llm.client import GeminiClient, OpenAIClient, create_llm_client, resolve_llm_client
+from labpilot.llm.client import (
+    GeminiClient,
+    OpenAIClient,
+    complete_with_fallback,
+    create_llm_client,
+    resolve_llm_client,
+)
 
 
 def _config(provider: str = "openai", api_key: str = "", model: str = "") -> LLMConfig:
@@ -80,3 +86,54 @@ def test_resolve_llm_client_falls_back_to_gemini_when_openai_unavailable(monkeyp
     )
 
     assert isinstance(client, GeminiClient)
+
+
+def test_resolve_llm_client_prefers_explicit_gemini_provider(monkeypatch):
+    pytest.importorskip("google.genai")
+    monkeypatch.setenv("LABPILOT_LLM_PROVIDER", "gemini")
+
+    client = resolve_llm_client(
+        _config(provider="openai", api_key="sk-test"),
+        alternate_keys={"openai": "sk-test", "gemini": "gemini-key"},
+    )
+
+    assert isinstance(client, GeminiClient)
+
+
+def test_complete_with_fallback_tries_alternate_provider_on_api_error(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+
+    class FailingOpenAI:
+        model = "gpt-4o-mini"
+
+        def complete(self, system: str, user: str) -> str:
+            raise RuntimeError("quota exceeded")
+
+    class WorkingGemini:
+        model = "gemini-3.5-flash"
+
+        def complete(self, system: str, user: str) -> str:
+            return "gemini narrative"
+
+    config = _config(provider="openai", api_key="sk-test")
+
+    def fake_create(cfg: LLMConfig):
+        if cfg.provider == "gemini":
+            return WorkingGemini()
+        return None
+
+    import labpilot.llm.client as llm_module
+
+    original_create = llm_module.create_llm_client
+    llm_module.create_llm_client = fake_create
+    try:
+        result = complete_with_fallback(
+            config,
+            "system",
+            "user",
+            FailingOpenAI(),
+        )
+    finally:
+        llm_module.create_llm_client = original_create
+
+    assert result == "gemini narrative"

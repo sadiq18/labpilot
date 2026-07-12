@@ -64,6 +64,39 @@ _CLIENT_BY_PROVIDER: dict[str, type] = {
 }
 
 
+def _provider_priority(config: LLMConfig, settings) -> list[str]:
+    """Order providers to try: explicit env override, then config, then alternate."""
+    explicit = (settings.labpilot_llm_provider or "").strip().lower()
+    primary = explicit or config.provider.strip().lower()
+    order = [primary] if primary in _CLIENT_BY_PROVIDER else []
+    for provider in _CLIENT_BY_PROVIDER:
+        if provider not in order:
+            order.append(provider)
+    return order
+
+
+def _client_provider_name(client: LLMClient) -> str:
+    if isinstance(client, OpenAIClient):
+        return "openai"
+    if isinstance(client, GeminiClient):
+        return "gemini"
+    return type(client).__name__
+
+
+def _llm_config_for_provider(
+    config: LLMConfig,
+    provider: str,
+    alternate_keys: dict[str, str],
+) -> LLMConfig:
+    return config.model_copy(
+        update={
+            "provider": provider,
+            "model": DEFAULT_MODEL_BY_PROVIDER.get(provider, config.model),
+            "api_key": (alternate_keys.get(provider) or "").strip(),
+        }
+    )
+
+
 def create_llm_client(config: LLMConfig) -> LLMClient | None:
     """Build the LLM client for `config.provider`, or `None` if it can't be
     used right now.
@@ -109,11 +142,7 @@ def resolve_llm_client(
     *,
     alternate_keys: dict[str, str] | None = None,
 ) -> LLMClient | None:
-    """Try the configured provider, then fall back to the other if it has a key."""
-    client = create_llm_client(config)
-    if client is not None:
-        return client
-
+    """Return the first LLM client that can be constructed for a configured provider."""
     if alternate_keys is None:
         from labpilot.config import Settings
 
@@ -122,29 +151,70 @@ def resolve_llm_client(
             "openai": settings.openai_api_key,
             "gemini": settings.gemini_api_key,
         }
+    else:
+        from labpilot.config import Settings
 
-    primary = config.provider.strip().lower()
-    for provider in _CLIENT_BY_PROVIDER:
-        if provider == primary:
-            continue
-        alt_key = (alternate_keys.get(provider) or "").strip()
-        if not alt_key:
-            continue
-        alt_config = config.model_copy(
-            update={
-                "provider": provider,
-                "model": DEFAULT_MODEL_BY_PROVIDER.get(provider, config.model),
-                "api_key": alt_key,
-            }
-        )
-        client = create_llm_client(alt_config)
+        settings = Settings()
+
+    for provider in _provider_priority(config, settings):
+        provider_config = _llm_config_for_provider(config, provider, alternate_keys)
+        client = create_llm_client(provider_config)
         if client is not None:
-            logger.info(
-                "LLM provider '%s' unavailable; using '%s' instead.",
-                primary,
-                provider,
-            )
+            if provider != config.provider.strip().lower():
+                logger.info(
+                    "LLM provider '%s' unavailable; using '%s' instead.",
+                    config.provider,
+                    provider,
+                )
+            else:
+                logger.info("Using LLM provider: %s", provider)
             return client
+    return None
+
+
+def complete_with_fallback(
+    config: LLMConfig,
+    system: str,
+    user: str,
+    llm_client: LLMClient | None = None,
+) -> str | None:
+    """Call LLM providers in priority order until one succeeds."""
+    from labpilot.config import Settings
+
+    settings = Settings()
+    alternate_keys = {
+        "openai": settings.openai_api_key,
+        "gemini": settings.gemini_api_key,
+    }
+
+    clients: list[LLMClient] = []
+    seen_providers: set[str] = set()
+
+    if llm_client is not None:
+        clients.append(llm_client)
+        seen_providers.add(_client_provider_name(llm_client))
+
+    for provider in _provider_priority(config, settings):
+        if provider in seen_providers:
+            continue
+        provider_config = _llm_config_for_provider(config, provider, alternate_keys)
+        client = create_llm_client(provider_config)
+        if client is None:
+            continue
+        clients.append(client)
+        seen_providers.add(provider)
+
+    for client in clients:
+        provider_name = _client_provider_name(client)
+        try:
+            logger.info("Calling LLM provider: %s", provider_name)
+            return client.complete(system, user)
+        except Exception as exc:
+            logger.warning(
+                "LLM call failed for provider '%s' (%s); trying next provider if available.",
+                provider_name,
+                exc,
+            )
     return None
 
 
