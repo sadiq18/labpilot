@@ -2,17 +2,15 @@
 
 Back to [MILESTONES.md](../MILESTONES.md).
 
-Items here are explicitly **not** in the current implementation scope. Build only after P1 ships.
-
 ---
 
-## P2 — v0.3 (Remote Runtime & Scheduling) — **Deferred**
+## P2 — v0.3 (Remote Runtime Execution) — **Deferred**
 
-> Superseded by P3 priority. Remote runtime work resumes after the iteration loop ships.
+> **P2 config slice shipped in P4 v1.0** (`configs/runtimes/`, `research runtime list|register|doctor`).
+> This milestone covers **execution** only.
 
 **Goal:** Offload `train_model` to user-registered remote runtimes with quota-aware scheduling.
 
-- Register Kaggle notebooks/kernels, Google Colab, and other providers in `configs/runtimes/`
 - `RuntimeProfiler` tracks free/paid usage limits locally
 - `RuntimeScheduler` picks a runtime within quotas (`--remote-train`, `--runtime <id>`)
 - Poll remote job status until artifacts sync back; `research resume` re-enters poll loop
@@ -20,7 +18,7 @@ Items here are explicitly **not** in the current implementation scope. Build onl
 
 ```bash
 research build --run-id <id> --remote-train
-research runtime list | register | doctor
+research run --competition <slug> --runtime kaggle-gpu-free
 ```
 
 ---
@@ -31,21 +29,18 @@ See [COMPLETED.md](COMPLETED.md).
 
 ---
 
-## P4 — v1.0 (Production Quality)
+## P4 — v1.0 (Production Quality) — **Done**
 
-**Goal:** Reliable tool for repeated competition use.
-
-- Multi-competition project workspace
-- Config overrides (`--config`, `--dry-run`, `--submit`)
-- CI-tested templates per problem type
+See [COMPLETED.md](COMPLETED.md).
 
 ---
 
-## Future (Explicitly Deferred)
+## Post-1.0 (Explicitly Deferred)
 
 | Capability | Why deferred |
 |------------|--------------|
-| Multi-agent systems | Orchestrator + templates are enough for P0/P1 |
+| **Packaging & PyPI** | Bundle `templates/` + default configs in wheel; `pip install labpilot`; release workflow |
+| Multi-agent systems | Orchestrator + templates are enough for P0–P4 |
 | Vector databases | Brief uses competition page + profiler, not retrieval |
 | Knowledge graphs | No cross-competition reasoning needed yet |
 | Long-term memory | Each run is self-contained |
@@ -53,4 +48,4 @@ See [COMPLETED.md](COMPLETED.md).
 | Self-modifying code | Templates + parameterization first |
 | AutoML search | One strong baseline proves the loop |
 | Multi-model orchestration | Single model per run |
-| Full-pipeline remote execution | Training-only remote in P2 v1 |
+| Full-pipeline remote execution | Training-only remote in P2 execution |

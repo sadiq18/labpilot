@@ -1,0 +1,18 @@
+schema_version: 1
+id: kaggle-gpu-free
+provider: kaggle_kernel
+enabled: true
+priority: 10
+labels: [gpu, free-tier]
+username: null
+kernel_type: script
+accelerator: gpu
+language: python
+push_dir: kernel
+slug_template: "{competition}-lp-{run_suffix}"
+poll:
+  timeout_seconds: 3600
+  interval_seconds: 15
+quotas:
+  daily_gpu_hours: 30
+  concurrent_jobs: 1

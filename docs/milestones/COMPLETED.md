@@ -143,3 +143,25 @@ with `improvement_plan.json`, `training_overrides.json`, new `metrics.json`, and
 `runs diff` reports param/metric deltas.
 
 **Version:** `0.4.0`
+
+---
+
+## P4 — v1.0 (Production Quality)
+
+**Goal:** Reliable tool for repeated competition use with CI confidence and safe validation.
+
+| Deliverable | Status |
+|-------------|--------|
+| GitHub Actions CI (tabular / llm / image / deep jobs) | Done |
+| Integration tests per template family (text, image, deep) | Done |
+| Optional project workspace (`project.yaml`, `research workspace init/status`) | Done |
+| Config layering (package → project → CLI → env) | Done |
+| `--dry-run` on `run`/`build`/`improve` (codegen only) | Done |
+| Runtime registry config (`configs/runtimes/`, `research runtime list/show/register/doctor`) | Done |
+| Kernel slug fix (`{username}/{slug}` metadata) | Done |
+| `research templates` list command | Done |
+
+**P2 split:** Runtime **configuration** shipped in P4; remote **execution**
+(`--remote-train`, scheduler, artifact sync) remains deferred — see [TODO.md](TODO.md).
+
+**Version:** `1.0.0`

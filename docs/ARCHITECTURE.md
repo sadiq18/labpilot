@@ -486,6 +486,28 @@ Remote runtime scheduling (P2) is deferred — see [milestones/TODO.md](mileston
 
 Text/image template tuning remains deferred to a follow-up; iteration strategies fall back to retrain-only for non-tabular problem types.
 
+Remote runtime **configuration** shipped in P4 v1.0 — see `runtimes/` and
+[configs/runtimes/README.md](../configs/runtimes/README.md). Remote **execution**
+(`--remote-train`, scheduler, artifact sync) is deferred — see [milestones/TODO.md](milestones/TODO.md).
+
+---
+
+## P4 Additions (shipped in v1.0)
+
+| Area | New / changed | Purpose |
+|------|---------------|---------|
+| `.github/workflows/ci.yml` | CI matrix | Tabular, LLM, image, deep test jobs |
+| `workspace/` | Project overlay | `project.yaml` discovery; `research workspace init/status` |
+| `config.py` | Layered merge | Package → project → CLI → env precedence |
+| `Pipeline(dry_run=True)` | Dry-run mode | Skip post-codegen stages; write `dry_run.json` |
+| `runtimes/` | Runtime registry | Models, registry, doctor; `research runtime` CLI |
+| `configs/runtimes/` | Runtime YAML | local, kaggle_kernel, google_colab, other schemas |
+| `kernel/exporter.py` | Slug fix | Valid `{username}/{slug}` kernel metadata |
+| `cli/main.py` | `--dry-run`, `--project-dir` | Production UX flags |
+| Integration tests | text/image/deep | One automated test per template family |
+
+Each run writes `runtime.json` with the configured default runtime (`local-default`).
+
 ---
 
 ## Module Dependency Graph

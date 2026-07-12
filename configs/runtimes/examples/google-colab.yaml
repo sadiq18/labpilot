@@ -1,0 +1,15 @@
+schema_version: 1
+id: colab-pro
+provider: google_colab
+enabled: true
+priority: 20
+labels: [gpu, paid]
+runtime_type: gpu
+auth:
+  token_env: COLAB_AUTH_TOKEN
+drive_sync:
+  folder_id_env: LABPILOT_COLAB_DRIVE_FOLDER
+install_extras: [deep]
+poll:
+  timeout_seconds: 14400
+  interval_seconds: 30

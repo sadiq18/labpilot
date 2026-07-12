@@ -12,6 +12,8 @@ from labpilot.llm.client import (
     resolve_llm_client,
 )
 
+pytestmark = pytest.mark.llm
+
 
 def _config(provider: str = "openai", api_key: str = "", model: str = "") -> LLMConfig:
     return LLMConfig(provider=provider, model=model, temperature=0.3, api_key=api_key)

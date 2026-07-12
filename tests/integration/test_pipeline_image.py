@@ -1,50 +1,49 @@
-import shutil
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from labpilot.competition.models import CompetitionMetadata
 from labpilot.config import AppConfig
-from labpilot.kaggle.client import SubmissionResult
 from labpilot.orchestrator.manifest import StageStatus
 from labpilot.orchestrator.pipeline import Pipeline
 
 from helpers.kaggle import FakeKaggleGateway
 
+pytestmark = pytest.mark.image
 
-@pytest.mark.parametrize("submit", [False, True])
-def test_titanic_pipeline_generates_valid_submission(
+
+@pytest.fixture
+def image_deps():
+    pytest.importorskip("torch")
+    pytest.importorskip("PIL")
+
+
+def test_image_pipeline_generates_valid_submission(
     tmp_path: Path,
-    titanic_data_dir: Path,
+    image_data_dir: Path,
     competition_configs_dir: Path,
-    submit: bool,
+    image_deps,
 ):
-    gateway = FakeKaggleGateway(titanic_data_dir)
+    gateway = FakeKaggleGateway(image_data_dir)
     config = AppConfig()
     config.training.cv_folds = 2
+    config.profiler.max_images_sample = 20
     config.kaggle.cache_dir = tmp_path / "kaggle-cache"
-    run_dir = tmp_path / f"run-{submit}"
+    run_dir = tmp_path / "run-image"
 
     manifest = Pipeline(
         config,
         kaggle_client=gateway,
-        submit=submit,
         configs_dir=competition_configs_dir,
     ).run(
-        "titanic",
+        "image-pets",
         run_dir=run_dir,
     )
 
     assert manifest.status == StageStatus.COMPLETED
-    expected_upload_status = StageStatus.COMPLETED if submit else StageStatus.SKIPPED
-    assert manifest.stage("upload_submission").status == expected_upload_status
-    assert len(gateway.uploads) == int(submit)
-
     metrics = (run_dir / "metrics.json").read_text()
     assert "cv_accuracy" in metrics
 
     submission = pd.read_csv(run_dir / "submission.csv")
-    assert list(submission.columns) == ["PassengerId", "Survived"]
+    assert list(submission.columns) == ["id", "label"]
     assert len(submission) == 4
-    assert set(submission["Survived"]).issubset({0, 1})

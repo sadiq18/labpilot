@@ -1,5 +1,7 @@
 # LabPilot
 
+[![CI](https://github.com/sadiq18/labpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/sadiq18/labpilot/actions/workflows/ci.yml)
+
 One command to solve the first 80% of a Kaggle competition — without writing code manually.
 
 ```bash
@@ -41,6 +43,9 @@ uv run research run --competition titanic --submit
 
 # Check run status
 uv run research status --run-id <run_id>
+
+# Validate through codegen without training
+uv run research run --competition titanic --dry-run --yes
 ```
 
 You must join the competition and accept its rules on Kaggle before downloading data.
@@ -65,6 +70,18 @@ Combine extras as needed:
 uv sync --extra dev --extra llm              # tabular + AI briefs + tests
 uv sync --extra dev --extra llm --extra image   # add image baselines
 uv sync --extra dev --extra deep             # deep includes torch/torchvision/transformers (covers image too)
+```
+
+### Local CI parity
+
+Run the same test slices as GitHub Actions:
+
+```bash
+uv sync --extra dev
+uv run pytest -m "not llm and not image and not deep"   # tabular (required)
+uv sync --extra llm && uv run pytest -m llm             # LLM unit tests
+uv sync --extra image && uv run pytest -m image         # image integration
+uv sync --extra deep && uv run pytest -m deep           # deep integration
 ```
 
 **LLM (`llm` extra)** — set one API key in `.env`:
@@ -137,6 +154,42 @@ finished yet.
 | `--submit` | Upload the validated submission to Kaggle (disabled by default) |
 | `--force-submit` | With `--submit`: upload even when the competition deadline has passed |
 | `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
+
+### `research workspace init --name <name>`
+
+Create a multi-competition project with `project.yaml`, `runs/`, `competitions/`, and
+`configs/runtimes/`. Auto-detected when you run pipeline commands from the project directory
+(or pass `--project-dir`).
+
+```bash
+research workspace init --name kaggle-2026
+research workspace status
+research run --competition titanic --project-dir .
+```
+
+### `research runtime list|show|register|doctor`
+
+Manage training runtime profiles (local, Kaggle kernel, Google Colab, other). v1.0 ships
+**configuration and validation only** — training still runs locally. Remote dispatch
+(`--remote-train`) is planned for P2 execution.
+
+```bash
+research runtime list
+research runtime register --provider kaggle_kernel --id kaggle-gpu-free
+research runtime doctor
+```
+
+See [configs/runtimes/README.md](configs/runtimes/README.md) for the schema.
+
+### `research templates`
+
+List registered baseline templates (tabular, text, image, deep variants).
+
+### `research run --dry-run`
+
+Add `--dry-run` to `run`, `build`, or `improve` to validate through code generation without
+training or submission. Produces `pipeline/train.py` and `dry_run.json`. Mutually exclusive
+with `--submit`.
 
 ### `research improve --run-id <parent>`
 
@@ -236,12 +289,17 @@ Lists every run under the runs directory with its competition and overall status
 
 ## Project Status
 
+**P4 — Production Quality v1.0** (complete): GitHub Actions CI, template integration tests,
+optional project workspace, config layering, `--dry-run`, runtime registry config, kernel slug fix.
+
+**P3 — Iteration Loop v0.4** (complete): `research improve`, tuning, `runs diff`.
+
+**P1 — Problem Type Expansion v0.2** (complete): text/image/deep templates, modality detection.
+
 **P0 — Research Engine v0.1** (complete): tabular classification/regression end-to-end.
 
-**P1 — Problem Type Expansion v0.2** (complete): metric-aware evaluation, competition rules
-in `brief.md`, modality detection (tabular/text/image), NLP and image baselines, opt-in deep
-transfer-learning templates. See [Optional installs](#optional-installs) for `llm` / `image` /
-`deep` extras.
+Install path for v1.0: clone repo + `uv sync`. PyPI packaging is deferred — see
+[docs/milestones/TODO.md](docs/milestones/TODO.md).
 
 See [docs/MILESTONES.md](docs/MILESTONES.md) for the roadmap (split into
 [Completed](docs/milestones/COMPLETED.md), [In progress](docs/milestones/IN-PROGRESS.md),

@@ -40,6 +40,8 @@ from labpilot.reflection.generator import ReflectionGenerator
 from labpilot.submission.formatter import SubmissionValidator
 from labpilot.tracking.logger import ExperimentLogger
 from labpilot.training.runner import TrainingRunner
+from labpilot.runtimes.models import RuntimeRecord
+from labpilot.runtimes.registry import get_runtime
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -51,6 +53,15 @@ StageHandler = Callable[[Path, RunManifest, AppConfig], list[str]]
 # build actually runs it (baseline through reflection). `research run` still
 # does both halves in one call for the default one-command experience.
 INIT_STAGES = ["parse_competition", "download_data", "profile_dataset", "generate_brief"]
+POST_CODEGEN_STAGES = {
+    "train_model",
+    "evaluate_cv",
+    "generate_submission",
+    "export_kernel",
+    "upload_submission",
+    "log_experiment",
+    "write_reflection",
+}
 
 
 class Pipeline:
@@ -64,22 +75,17 @@ class Pipeline:
         force_submit: bool = False,
         configs_dir: Path | None = None,
         llm_client: LLMClient | None = None,
+        dry_run: bool = False,
+        project_dir: Path | None = None,
     ) -> None:
         self.config = config
         self.kaggle_client = kaggle_client or KaggleClient(config.kaggle)
-        # `llm_client` is deliberately allowed to resolve to `None` here (an
-        # LLM is optional in P0) — `create_llm_client` never raises, it just
-        # returns `None` when there's no key/package, and BriefGenerator /
-        # ReflectionGenerator both treat `None` as "use fallback template
-        # text" rather than an error.
         self.llm_client = llm_client if llm_client is not None else resolve_llm_client(config.llm)
         self.submit = submit
         self.force_submit = force_submit
-        # Overrides where competition contracts (configs/competitions/<slug>.yaml)
-        # are read from. Defaults to the package location; tests and callers
-        # that don't want to depend on a locally created file can point this
-        # at a temporary directory instead.
         self.configs_dir = configs_dir
+        self.dry_run = dry_run
+        self.project_dir = project_dir
         self.handlers: dict[str, StageHandler] = {
             "parse_competition": self._parse_competition,
             "download_data": self._download_data,
@@ -160,6 +166,7 @@ class Pipeline:
         )
         save_improvement_plan(child_run_dir, plan)
         save_training_overrides(child_run_dir, overrides)
+        self._write_runtime_record(child_run_dir)
 
         child_manifest = load_manifest(child_run_dir)
         all_stages = self.config.pipeline.stages or list(self.handlers.keys())
@@ -181,6 +188,8 @@ class Pipeline:
         resolved_run_dir = (run_dir or self.config.runs_dir / run_id).resolve()
         resolved_run_dir.mkdir(parents=True, exist_ok=True)
 
+        self._write_runtime_record(resolved_run_dir)
+
         manifest = RunManifest(
             run_id=run_id,
             competition=competition,
@@ -191,6 +200,30 @@ class Pipeline:
 
         all_stages = self.config.pipeline.stages or list(self.handlers.keys())
         return manifest, resolved_run_dir, all_stages
+
+    def _write_runtime_record(self, run_dir: Path) -> None:
+        runtime_id = self.config.runtime.default_runtime
+        runtime = get_runtime(runtime_id, self.config.runtime.runtimes_dir)
+        provider = runtime.provider if runtime is not None else "local"
+        record = RuntimeRecord(runtime_id=runtime_id, provider=provider, mode="local")
+        (run_dir / "runtime.json").write_text(record.model_dump_json(indent=2))
+
+    def _write_dry_run_summary(
+        self,
+        run_dir: Path,
+        manifest: RunManifest,
+        all_stages: list[str],
+    ) -> None:
+        skipped = [stage.name for stage in manifest.stages if stage.status == StageStatus.SKIPPED]
+        summary = {
+            "dry_run": True,
+            "completed_through": "generate_code",
+            "skipped_stages": skipped,
+            "would_run_next": [
+                name for name in all_stages if name in POST_CODEGEN_STAGES and name not in skipped
+            ],
+        }
+        (run_dir / "dry_run.json").write_text(json.dumps(summary, indent=2))
 
     def _continue(self, run_id: str, require_done: list[str] | None = None) -> RunManifest:
         resolved_run_dir = (self.config.runs_dir / run_id).resolve()
@@ -251,6 +284,12 @@ class Pipeline:
             if handler is None:
                 raise ValueError(f"Unknown pipeline stage: {stage_name}")
 
+            if self.dry_run and stage_name in POST_CODEGEN_STAGES:
+                manifest.mark_skipped(stage_name, [])
+                save_manifest(resolved_run_dir, manifest)
+                console.print(f"  [yellow]–[/yellow] {stage_name} (dry-run)")
+                continue
+
             index = all_stages.index(stage_name) + 1
             console.print(f"[bold][{index}/{total}][/bold] {stage_name}...")
             if stage_name == "export_kernel":
@@ -310,6 +349,9 @@ class Pipeline:
         finished_names = {record.name for record in manifest.stages if record.status in done}
         reached_the_end = bool(all_stages) and all(name in finished_names for name in all_stages)
         manifest.status = StageStatus.COMPLETED if reached_the_end else StageStatus.PARTIAL
+        if self.dry_run:
+            manifest.metadata["dry_run"] = True
+            self._write_dry_run_summary(resolved_run_dir, manifest, all_stages)
         save_manifest(resolved_run_dir, manifest)
         return manifest
 
@@ -474,7 +516,11 @@ class Pipeline:
         self, run_dir: Path, manifest: RunManifest, config: AppConfig
     ) -> list[str]:
         competition = self._load_competition(run_dir)
-        kernel_dir = export_kernel(run_dir, competition)
+        kernel_dir = export_kernel(
+            run_dir,
+            competition,
+            username=self.config.kaggle.username or None,
+        )
         return [str(kernel_dir / name) for name in ("run.py", "kernel-metadata.json")]
 
     def _upload_submission(
