@@ -13,9 +13,6 @@ venv/
 # Run artifacts
 runs/
 
-# Local Obsidian reference (plans/milestones copies — not part of the package)
-obsidian-vault/
-
 # Kaggle download cache (shared across runs, safe to delete)
 .cache/
 
