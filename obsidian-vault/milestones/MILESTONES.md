@@ -53,7 +53,7 @@ titanic` (parse → download → profile → brief) followed by `research build 
 | **P3** | v0.4 | **Done** | Iteration loop (`research improve`, tuning, run diffs) |
 | **P4** | v1.0 | **Done** | Production quality (workspace, CI, dry-run, HTML reports) |
 
-See [milestones/COMPLETED.md](milestones/COMPLETED.md) for shipped work. Planning archives live in [obsidian-vault/](obsidian-vault/) (Obsidian) and `obsidian-vault/plans/`.
+Details for each track live in the linked documents above.
 
 ---
 
