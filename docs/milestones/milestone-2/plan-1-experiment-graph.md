@@ -79,6 +79,7 @@ class Experiment(BaseModel):
     artifacts: list[str]                 # NEW SOURCE — COMPUTED, see below (not experiment/record.json)
     reflection_path: str | None          # runs/<id>/reflection.md if present
     report_path: str | None              # NEW — runs/<id>/report.html if present (Milestone 1)
+    # reflection: StructuredReflection | None  — added by Plan 4 once reflection.json exists
     created_at: datetime                 # manifest.created_at
 ```
 

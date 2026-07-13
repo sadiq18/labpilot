@@ -62,6 +62,26 @@ This mirrors the brief's Task 4 I/O contract almost exactly (`previous`, `curren
 Plan 3's `ExperimentComparison` instead of a raw diff, and `previous`/`current` supplied by
 Plan 1's `Experiment`s instead of ad-hoc file reads.
 
+**Extends `Experiment` (Plan 1) with the reflection itself, not just a path.** Plan 1 only
+gives `Experiment.reflection_path: str | None` — a pointer to `reflection.md`. That means
+nothing downstream (Plan 6's ranking, a script, a test) can read *what the reflection actually
+concluded* without a second file read and a manual `json.loads`. This plan adds:
+
+```python
+class Experiment(BaseModel):
+    ...
+    reflection: StructuredReflection | None   # NEW — runs/<id>/reflection.json if present, else None
+```
+
+Computed the same way as Plan 1's `config_snapshot`: read at assembly time in `graph.py`, not
+stored redundantly — `StructuredReflection.model_validate_json((run_dir / "reflection.json").read_text())`
+if the file exists, else `None`. `reflection_path` is kept as-is alongside it (still useful for
+linking to the human-readable markdown from the dashboard/CLI); `reflection` is for anything
+that wants the structured fields (`observation`, `likely_cause`, `confidence`,
+`suggested_next`, ...) directly off the `Experiment` object instead of re-parsing a file by
+path. Runs created before this plan ships, or where reflection generation failed, simply get
+`reflection=None` — no crash, matching every other optional-field pattern in Plan 1.
+
 ### 2. Generation flow
 
 ```python
@@ -119,7 +139,8 @@ wrote in the prior stage.
 
 | File | Change |
 |---|---|
-| `src/labpilot/experiments/models.py` | + `StructuredReflection`, `HypothesisUpdate`, `HypothesisDraft` |
+| `src/labpilot/experiments/models.py` | + `StructuredReflection`, `HypothesisUpdate`, `HypothesisDraft`; `Experiment` (Plan 1) + `reflection: StructuredReflection \| None` |
+| `src/labpilot/experiments/graph.py` | `build_graph()` loads `reflection.json` into `Experiment.reflection` when present (mirrors Plan 1's `config_snapshot` loading) |
 | `src/labpilot/llm/json_utils.py` | new — extracted `parse_json_object` |
 | `src/labpilot/improvement/planner.py` | use `llm/json_utils.py` instead of local `_parse_json_object` |
 | `src/labpilot/reflection/generator.py` | + `generate_structured()`; existing `generate()` kept for compatibility or reimplemented as a thin wrapper that renders the structured result to markdown |
@@ -161,3 +182,8 @@ wrote in the prior stage.
   `evidence_for` after the run completes.
 - `llm/json_utils.py:parse_json_object` has unit test coverage ported from whatever existing
   `_parse_json_object` tests cover today.
+- After a run's `write_reflection` stage completes, `build_graph(...).nodes[run_id].reflection`
+  is a populated `StructuredReflection` matching the contents of `reflection.json` on disk —
+  not just `reflection_path` pointing at the markdown.
+- `Experiment.reflection` is `None` (not a crash) for a fixture run with no `reflection.json`
+  (e.g. a run created before this plan shipped, or one where `write_reflection` never ran).
