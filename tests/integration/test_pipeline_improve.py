@@ -28,6 +28,12 @@ def test_improve_tune_creates_child_with_different_params(
 
     assert parent_manifest.status == StageStatus.COMPLETED
 
+    # Mutate an inert config field (unused by training/kaggle stages) before
+    # improving, so the parent/child config.json snapshots below can only
+    # match if each run captured its own config at its own point in time
+    # rather than one being copied from the other.
+    config.llm.model = "gpt-4o-mini-child"
+
     child_manifest = Pipeline(
         config,
         kaggle_client=gateway,
@@ -50,3 +56,15 @@ def test_improve_tune_creates_child_with_different_params(
     assert diff.base_run_id == parent_manifest.run_id
     assert diff.compare_run_id == child_manifest.run_id
     assert diff.compare_params.get("parent_run_id") == parent_manifest.run_id
+
+    # Milestone 2, Plan 1: Research Memory — every run gets its own config
+    # snapshot, and the child's is independently resolved, not copied from
+    # the parent's.
+    parent_dir = config.runs_dir / parent_manifest.run_id
+    assert (parent_dir / "config.json").is_file()
+    assert (child_dir / "config.json").is_file()
+
+    parent_config = AppConfig.model_validate_json((parent_dir / "config.json").read_text())
+    child_config = AppConfig.model_validate_json((child_dir / "config.json").read_text())
+    assert parent_config.llm.model == "gpt-4o-mini"
+    assert child_config.llm.model == "gpt-4o-mini-child"

@@ -16,6 +16,7 @@ from labpilot.competition.models import CompetitionSpec, ProblemType
 from labpilot.competition.parser import CompetitionParser
 from labpilot.config import AppConfig
 from labpilot.data.downloader import DataDownloader
+from labpilot.experiments.graph import capture_git_commit
 from labpilot.improvement.fork import fork_run
 from labpilot.improvement.models import (
     load_training_overrides,
@@ -166,6 +167,7 @@ class Pipeline:
             self.config.runs_dir,
             parent_run_id=parent_run_id,
             improvement_strategy=strategy,
+            config=self.config,
         )
         save_improvement_plan(child_run_dir, plan)
         save_training_overrides(child_run_dir, overrides)
@@ -192,12 +194,14 @@ class Pipeline:
         resolved_run_dir.mkdir(parents=True, exist_ok=True)
 
         self._write_runtime_record(resolved_run_dir)
+        self._write_config_snapshot(resolved_run_dir)
 
         manifest = RunManifest(
             run_id=run_id,
             competition=competition,
             status=StageStatus.RUNNING,
             stages=[],
+            metadata={"git_commit": capture_git_commit()},
         )
         save_manifest(resolved_run_dir, manifest)
 
@@ -210,6 +214,16 @@ class Pipeline:
         provider = runtime.provider if runtime is not None else "local"
         record = RuntimeRecord(runtime_id=runtime_id, provider=provider, mode="local")
         (run_dir / "runtime.json").write_text(record.model_dump_json(indent=2))
+
+    def _write_config_snapshot(self, run_dir: Path) -> None:
+        """Best-effort snapshot of the config actually used for this run
+        (secrets excluded via `Field(exclude=True)` on `AppConfig`). Never
+        fails the run — Research Memory (Milestone 2, Plan 1) is a nice-to-have,
+        not a pipeline dependency."""
+        try:
+            (run_dir / "config.json").write_text(self.config.model_dump_json(indent=2))
+        except OSError as exc:
+            logger.warning("Could not write config.json snapshot for %s: %s", run_dir, exc)
 
     def _write_dry_run_summary(
         self,

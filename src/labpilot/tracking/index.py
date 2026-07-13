@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from labpilot.experiments.graph import assemble_experiment
 from labpilot.orchestrator.manifest import load_manifest
 from labpilot.tracking.store import ExperimentRecord, ExperimentStore
 
@@ -41,19 +42,23 @@ def scan_runs(runs_dir: Path) -> list[RunIndexEntry]:
         manifest_path = run_dir / "manifest.json"
         if not manifest_path.is_file():
             continue
+        # Reuses experiments/graph.py's single-run assembly instead of
+        # re-implementing the manifest walk here (Milestone 2, Plan 1).
+        # `params`/`improvement_strategy` stay sourced as before since
+        # neither has an equivalent field on `Experiment`.
+        experiment = assemble_experiment(run_dir)
         manifest = load_manifest(run_dir)
         record = ExperimentStore(run_dir).load()
-        metrics = record.metrics if record else {}
         params = record.params if record else {}
         entries.append(
             RunIndexEntry(
-                run_id=manifest.run_id,
-                competition=manifest.competition,
-                status=manifest.status.value,
-                parent_run_id=manifest.metadata.get("parent_run_id"),
-                iteration=int(manifest.metadata.get("iteration", 0)),
+                run_id=experiment.id,
+                competition=experiment.competition,
+                status=experiment.status,
+                parent_run_id=experiment.parent_id,
+                iteration=experiment.iteration,
                 improvement_strategy=manifest.metadata.get("improvement_strategy"),
-                metrics=metrics,
+                metrics=experiment.metrics,
                 params=params,
             )
         )

@@ -76,6 +76,7 @@ Every run writes to `runs/<run_id>/`:
 ```
 runs/<run_id>/
 ├── manifest.json              # Stage status, timestamps, errors, lineage metadata
+├── config.json                # Snapshot of the AppConfig used for this run (secrets excluded)
 ├── competition.json           # Parsed competition metadata
 ├── data/
 │   ├── raw/                   # Downloaded competition files
@@ -111,6 +112,11 @@ Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-1430
 | `parent_run_id` | Run this iteration forked from |
 | `iteration` | Parent iteration + 1 (root runs default to `0`) |
 | `improvement_strategy` | `auto`, `tune`, or `features` |
+| `git_commit` | Best-effort `git rev-parse HEAD` at run start; `None` outside a git checkout |
+
+See [milestones/milestone-2/plan-1-experiment-graph.md](milestones/milestone-2/plan-1-experiment-graph.md)
+for how `config.json`/`git_commit` and the parent/child graph are assembled into a read-side
+`Experiment` model, viewable via `research experiments graph`/`research experiments show`.
 
 ---
 
@@ -136,6 +142,7 @@ Commands:
 - `research run --competition <slug> --submit` — full pipeline plus Kaggle upload
 - `research status --run-id <id>` — inspect stage progress
 - `research list-runs` — list all runs
+- `research experiments graph --competition <slug>` / `research experiments show <run_id>` — experiment lineage graph (Milestone 2)
 - `research doctor` — environment diagnostics
 
 ### 2. Competition Parser
@@ -305,6 +312,26 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 
 `Pipeline.improve()` is CLI orchestration over existing stages — no new pipeline stage in `configs/default.yaml`.
 
+### 16. Experiment Graph (Milestone 2, Plan 1)
+
+| | |
+|---|---|
+| **Path** | `experiments/models.py`, `experiments/graph.py` |
+| **Responsibility** | Assemble a read-side `Experiment` model per run from existing artifacts, and the parent/child graph across a competition's runs |
+| **Input** | `runs/<id>/` (manifest, `config.json`, `baseline_choice.json`, `improvement_plan.json`, metrics, artifacts) |
+| **Output** | `Experiment`, `ExperimentGraph` (in-memory; nothing new written to disk) |
+| **Status** | Implemented |
+
+Not a new writer — every field is either already written elsewhere (`manifest.json`,
+`config.json`, `baseline_choice.json`, ...) or computed at read time (`progress`, `description`,
+`artifacts`, `runtime_seconds`). `tracking/index.py:scan_runs()` reuses `assemble_experiment()`
+instead of its own directory walk. See
+[milestones/milestone-2/plan-1-experiment-graph.md](milestones/milestone-2/plan-1-experiment-graph.md)
+for the full design.
+
+Commands: `research experiments graph --competition <slug> [--metric <key>]` (ASCII lineage
+tree), `research experiments show <run_id> [--format table|json]` (single-experiment detail view).
+
 ## Repository Structure
 
 ```
@@ -331,6 +358,7 @@ labpilot/
 │   ├── kernel/                # Kernel export for kernel-only competitions
 │   ├── improvement/           # Run fork, planner, tuner, feature recipes (P3)
 │   ├── tracking/              # Experiment logger, store, cross-run index
+│   ├── experiments/           # Experiment graph model + assembly (Milestone 2, Plan 1)
 │   ├── reflection/            # Reflection generation + prompts
 │   └── config.py              # AppConfig + Settings
 │

@@ -11,7 +11,7 @@ from labpilot.improvement.models import (
     save_improvement_plan,
     save_training_overrides,
 )
-from labpilot.config import LLMConfig
+from labpilot.config import AppConfig, LLMConfig
 from labpilot.improvement.planner import ImprovementPlanner
 from labpilot.improvement.tuner import grid_combinations, pick_tune_params
 from labpilot.orchestrator.manifest import RunManifest, StageStatus, save_manifest
@@ -61,7 +61,9 @@ def _completed_parent(tmp_path: Path, run_id: str = "20260101-120000-titanic") -
 
 def test_fork_copies_init_artifacts_and_lineage(tmp_path: Path):
     parent_dir = _completed_parent(tmp_path)
-    child_id, child_dir = fork_run(parent_dir, tmp_path, improvement_strategy="tune")
+    child_id, child_dir = fork_run(
+        parent_dir, tmp_path, improvement_strategy="tune", config=AppConfig()
+    )
 
     assert child_id != parent_dir.name
     assert child_dir.is_dir()
@@ -77,6 +79,47 @@ def test_fork_copies_init_artifacts_and_lineage(tmp_path: Path):
     assert manifest.stage("select_baseline").status == StageStatus.COMPLETED
     generate_code = manifest.stage("generate_code")
     assert generate_code is None or generate_code.status == StageStatus.PENDING
+
+    # Milestone 2, Plan 1: the child gets its own config snapshot and a
+    # best-effort git_commit — never crashes outside a git checkout.
+    assert (child_dir / "config.json").is_file()
+    assert "git_commit" in manifest.metadata
+    git_commit = manifest.metadata["git_commit"]
+    assert git_commit is None or isinstance(git_commit, str)
+
+
+def test_fork_without_config_skips_config_snapshot(tmp_path: Path):
+    """`config` stays optional so existing callers that don't pass it (e.g.
+    a bare improvement-planning dry run) keep working unchanged."""
+    parent_dir = _completed_parent(tmp_path)
+    _, child_dir = fork_run(parent_dir, tmp_path, improvement_strategy="tune")
+
+    assert not (child_dir / "config.json").exists()
+    manifest = RunManifest.model_validate_json((child_dir / "manifest.json").read_text())
+    assert "git_commit" in manifest.metadata
+
+
+def test_fork_config_snapshot_never_contains_secrets(tmp_path: Path):
+    """`AppConfig`'s secret fields use `Field(exclude=True)`, so the config
+    snapshot written by `fork_run` must never leak the raw credential
+    values, even when they're set to real-looking (fake) strings."""
+    parent_dir = _completed_parent(tmp_path)
+    config = AppConfig()
+    config.kaggle.api_token = "kaggle-fake-api-token-123456"
+    config.kaggle.username = "fake-kaggle-user"
+    config.kaggle.key = "fake-kaggle-key-abcdef"
+    config.llm.api_key = "sk-fake-openai-key-0000000000"
+
+    _, child_dir = fork_run(parent_dir, tmp_path, improvement_strategy="tune", config=config)
+
+    config_text = (child_dir / "config.json").read_text()
+    for secret in (
+        "kaggle-fake-api-token-123456",
+        "fake-kaggle-user",
+        "fake-kaggle-key-abcdef",
+        "sk-fake-openai-key-0000000000",
+    ):
+        assert secret not in config_text
 
 
 def test_fork_requires_completed_parent(tmp_path: Path):

@@ -20,9 +20,10 @@ from labpilot.diagnostics import (
     print_diagnostics_report,
     required_environment_checks,
 )
+from labpilot.experiments.graph import build_graph
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
-from labpilot.orchestrator.manifest import StageStatus
+from labpilot.orchestrator.manifest import StageStatus, load_manifest
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
 from labpilot.report.generator import ReportGenerator
 from labpilot.runtimes.doctor import check_all_runtimes
@@ -44,6 +45,8 @@ workspace_app = typer.Typer(help="Manage multi-competition project workspaces.")
 app.add_typer(workspace_app, name="workspace")
 runtime_app = typer.Typer(help="Register and validate training runtimes.")
 app.add_typer(runtime_app, name="runtime")
+experiments_app = typer.Typer(help="Explore the experiment graph (Milestone 2).")
+app.add_typer(experiments_app, name="experiments")
 console = Console()
 
 
@@ -662,6 +665,98 @@ def runs_diff(
     submission_table.add_row(base, result.submission_notes.get("base", "-"))
     submission_table.add_row(compare, result.submission_notes.get("compare", "-"))
     console.print(submission_table)
+
+
+@experiments_app.command("graph")
+def experiments_graph(
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    metric: str | None = typer.Option(
+        None, "--metric", help="Metric key to annotate scores and highlight the best path"
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+) -> None:
+    """Print the experiment lineage tree (parent/child relationships) for a competition."""
+    config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
+
+    graph = build_graph(config.runs_dir, competition)
+    if not graph.nodes:
+        console.print(f"No experiments found for [cyan]{competition}[/cyan] (check --runs-dir).")
+        raise typer.Exit()
+
+    console.print(f"[bold]{competition}[/bold] — {len(graph.nodes)} experiment(s)\n")
+    console.print(graph.to_tree_text(metric))
+    if metric:
+        console.print("\n[dim]* marks the best-scoring root-to-leaf path for this metric.[/dim]")
+
+
+@experiments_app.command("show")
+def experiments_show(
+    run_id: str = typer.Argument(..., help="Run ID to show"),
+    output_format: str = typer.Option(
+        "table", "--format", help="Output format: table or json"
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+) -> None:
+    """Show one experiment's detail view: status, progress, lineage, artifacts, metrics."""
+    if output_format not in {"table", "json"}:
+        raise typer.BadParameter("--format must be 'table' or 'json'.")
+
+    config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
+    run_dir = config.runs_dir / run_id
+    if not (run_dir / "manifest.json").is_file():
+        console.print(f"[red]Run not found:[/red] {run_id} (check --runs-dir).")
+        raise typer.Exit(code=1)
+
+    manifest = load_manifest(run_dir)
+    graph = build_graph(config.runs_dir, manifest.competition)
+    experiment = graph.nodes[run_id]
+
+    if output_format == "json":
+        # Plain print, not console.print(): rich soft-wraps long lines (e.g.
+        # artifact paths) at the terminal width, which corrupts JSON meant
+        # for scripting/piping.
+        print(experiment.model_dump_json(indent=2))
+        return
+
+    table = Table(title=f"Experiment: {experiment.id}")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value")
+    table.add_row("Competition", experiment.competition)
+    table.add_row("Status", experiment.status)
+    table.add_row("Progress", experiment.progress)
+    table.add_row("Description", experiment.description)
+    table.add_row("Parent", experiment.parent_id or "-")
+    table.add_row("Children", ", ".join(experiment.children_ids) or "-")
+    table.add_row("Iteration", str(experiment.iteration))
+    table.add_row("Git commit", experiment.git_commit or "-")
+    table.add_row("Template", experiment.template_name or "-")
+    table.add_row("Problem type", experiment.problem_type or "-")
+    table.add_row(
+        "Metrics",
+        ", ".join(f"{key}={value:.4f}" for key, value in sorted(experiment.metrics.items())) or "-",
+    )
+    table.add_row(
+        "Public score",
+        f"{experiment.public_score:.6f}" if experiment.public_score is not None else "-",
+    )
+    table.add_row(
+        "Runtime",
+        f"{experiment.runtime_seconds:.1f}s" if experiment.runtime_seconds is not None else "-",
+    )
+    table.add_row("Artifacts", str(len(experiment.artifacts)))
+    table.add_row("Reflection", experiment.reflection_path or "-")
+    table.add_row("Report", experiment.report_path or "-")
+    console.print(table)
 
 
 @app.command()

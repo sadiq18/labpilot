@@ -40,7 +40,9 @@ class BriefGenerator:
 
         if self.llm_client is not None:
             logger.info("Generating research brief for '%s' via LLM.", competition.slug)
-            narrative = complete_with_fallback(self.config, system, user, self.llm_client)
+            narrative = complete_with_fallback(
+                self.config, system, user, self.llm_client, max_attempts=3
+            )
             if narrative is not None:
                 return render_competition_context(competition) + narrative
             logger.warning(

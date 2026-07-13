@@ -90,6 +90,23 @@ def test_resolve_llm_client_falls_back_to_gemini_when_openai_unavailable(monkeyp
     assert isinstance(client, GeminiClient)
 
 
+def test_resolve_llm_client_keeps_explicit_model_for_the_primary_provider(monkeypatch):
+    # Regression test: `resolve_llm_client()` must not silently discard a
+    # user's explicit `model` (e.g. via `LABPILOT_LLM_MODEL`) in favor of
+    # the hardcoded `DEFAULT_MODEL_BY_PROVIDER` default when the resolved
+    # provider *is* the one the user actually configured — different
+    # models can have very different (and independently exhausted) quota.
+    pytest.importorskip("google.genai")
+
+    client = resolve_llm_client(
+        _config(provider="gemini", api_key="sk-test", model="gemini-3.1-flash-lite"),
+        alternate_keys={"openai": "", "gemini": "sk-test"},
+    )
+
+    assert isinstance(client, GeminiClient)
+    assert client.model == "gemini-3.1-flash-lite"
+
+
 def test_resolve_llm_client_prefers_explicit_gemini_provider(monkeypatch):
     pytest.importorskip("google.genai")
     monkeypatch.setenv("LABPILOT_LLM_PROVIDER", "gemini")
@@ -100,6 +117,63 @@ def test_resolve_llm_client_prefers_explicit_gemini_provider(monkeypatch):
     )
 
     assert isinstance(client, GeminiClient)
+
+
+def test_complete_with_fallback_retries_same_client_before_falling_back(monkeypatch):
+    # Free-tier providers (Gemini in particular) frequently return transient
+    # 503/429 errors that clear up within seconds; `max_attempts > 1` should
+    # retry the *same* client rather than immediately moving on.
+    monkeypatch.setattr(llm_client_module.time, "sleep", lambda *_args: None)
+
+    class FlakyThenWorking:
+        model = "gemini-3.1-flash-lite"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, system: str, user: str) -> str:
+            self.calls += 1
+            if self.calls < 3:
+                raise RuntimeError("503 UNAVAILABLE")
+            return "real llm text"
+
+    client = FlakyThenWorking()
+    result = complete_with_fallback(
+        _config(provider="gemini", api_key="fake-key"),
+        "system",
+        "user",
+        client,
+        max_attempts=3,
+    )
+
+    assert result == "real llm text"
+    assert client.calls == 3
+
+
+def test_complete_with_fallback_gives_up_after_max_attempts(monkeypatch):
+    monkeypatch.setattr(llm_client_module.time, "sleep", lambda *_args: None)
+
+    class AlwaysFails:
+        model = "gemini-3.1-flash-lite"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, system: str, user: str) -> str:
+            self.calls += 1
+            raise RuntimeError("still unavailable")
+
+    client = AlwaysFails()
+    result = complete_with_fallback(
+        _config(provider="gemini", api_key="fake-key"),
+        "system",
+        "user",
+        client,
+        max_attempts=3,
+    )
+
+    assert result is None
+    assert client.calls == 3
 
 
 def test_complete_with_fallback_tries_alternate_provider_on_api_error(monkeypatch):

@@ -1,6 +1,8 @@
 import shutil
 from pathlib import Path
 
+from labpilot.config import AppConfig
+from labpilot.experiments.graph import capture_git_commit
 from labpilot.orchestrator.manifest import (
     RunManifest,
     StageStatus,
@@ -34,6 +36,7 @@ def fork_run(
     *,
     parent_run_id: str | None = None,
     improvement_strategy: str = "auto",
+    config: AppConfig | None = None,
 ) -> tuple[str, Path]:
     """Fork a parent run directory into a new child run with lineage metadata."""
     parent_run_dir = parent_run_dir.resolve()
@@ -63,6 +66,15 @@ def fork_run(
     if parent_data.is_dir():
         shutil.copytree(parent_data, child_run_dir / "data")
 
+    # The child's own resolved config, not copied from the parent — a fork
+    # can be re-planned under a different config (e.g. a later `improve()`
+    # call after `configs/default.yaml` changed).
+    if config is not None:
+        try:
+            (child_run_dir / "config.json").write_text(config.model_dump_json(indent=2))
+        except OSError:
+            pass
+
     child_manifest = RunManifest(
         run_id=child_run_id,
         competition=parent_manifest.competition,
@@ -72,6 +84,7 @@ def fork_run(
             "parent_run_id": resolved_parent_id,
             "iteration": child_iteration,
             "improvement_strategy": improvement_strategy,
+            "git_commit": capture_git_commit(),
         },
     )
 
