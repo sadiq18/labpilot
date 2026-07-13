@@ -2,7 +2,7 @@
 
 Back to [Milestone 2](README.md).
 
-**Status:** Design. **Depends on:** nothing (foundational). **Unlocks:** Plans 2, 3, 6, 7, 8.
+**Status:** Shipped. **Depends on:** nothing (foundational). **Unlocks:** Plans 2, 3, 6, 7, 8.
 
 ---
 
@@ -79,6 +79,7 @@ class Experiment(BaseModel):
     artifacts: list[str]                 # NEW SOURCE — COMPUTED, see below (not experiment/record.json)
     reflection_path: str | None          # runs/<id>/reflection.md if present
     report_path: str | None              # NEW — runs/<id>/report.html if present (Milestone 1)
+    # reflection: StructuredReflection | None  — added by Plan 4 once reflection.json exists
     created_at: datetime                 # manifest.created_at
 ```
 
@@ -200,7 +201,7 @@ single-experiment view.
   slow at "142 experiments" scale, an on-disk cache is a follow-up, not a Milestone-2
   requirement (142 manifest reads is milliseconds; revisit at 10k+ runs).
 
-## Open questions
+## Open questions (resolved)
 
 1. Do we backfill `git_commit: null` semantics for pre-Milestone-2 runs, or leave old runs
    without the field and have `Experiment.git_commit` be optional everywhere? → **Optional
@@ -235,3 +236,17 @@ single-experiment view.
 - `Experiment.artifacts` for a fully completed run (through `write_report`) includes
   `reflection.md` and `report.html`, even though `log_experiment` — the stage that used to be
   the (incomplete) source of this field — runs before either of those stages.
+
+Formalizing the two resolved open questions above:
+
+- **No backfill (open question 1):** `assemble_experiment()`/`build_graph()` are strictly
+  read-only with respect to `manifest.json` — given a fixture run directory whose
+  `manifest.json` has no `git_commit` key (simulating a pre-Milestone-2 run), reading it via
+  either function returns `Experiment.git_commit is None` *and* leaves `manifest.json`'s bytes
+  on disk unchanged (no silent write-back/migration is ever attempted).
+- **`scan_runs()` refactor done in this PR, not deferred (open question 2):** `scan_runs()`
+  calls `experiments.graph.assemble_experiment()` per run instead of its own manifest walk
+  (verified by reading `tracking/index.py`, not just behaviorally), and a regression test on
+  the pre-refactor fixture confirms every `RunIndexEntry` field (`run_id`, `competition`,
+  `status`, `parent_run_id`, `iteration`, `improvement_strategy`, `metrics`, `params`) is
+  unchanged for existing callers.

@@ -57,7 +57,13 @@ def _generate(generator, profile, baseline, submission):
     )
 
 
-def test_generate_uses_fallback_text_when_no_llm_client(profile, baseline, submission):
+def test_generate_uses_fallback_text_when_no_llm_client(monkeypatch, profile, baseline, submission):
+    # `llm_client=None` alone isn't enough to guarantee "no LLM available":
+    # the constructor falls back to the real `resolve_llm_client()`, which
+    # would pick up genuine ambient credentials from a developer's real
+    # `.env` (a normal, supported setup). Mock it explicitly so this test
+    # stays hermetic regardless of the environment it runs in.
+    monkeypatch.setattr("labpilot.reflection.generator.resolve_llm_client", lambda config: None)
     generator = ReflectionGenerator(LLMConfig(provider="openai", api_key=""), llm_client=None)
 
     reflection = _generate(generator, profile, baseline, submission)
@@ -68,8 +74,9 @@ def test_generate_uses_fallback_text_when_no_llm_client(profile, baseline, submi
 
 
 def test_generate_fallback_mentions_gemini_env_var_for_gemini_provider(
-    profile, baseline, submission
+    monkeypatch, profile, baseline, submission
 ):
+    monkeypatch.setattr("labpilot.reflection.generator.resolve_llm_client", lambda config: None)
     generator = ReflectionGenerator(LLMConfig(provider="gemini", api_key=""), llm_client=None)
 
     reflection = _generate(generator, profile, baseline, submission)
@@ -93,7 +100,11 @@ def test_generate_returns_llm_text_when_client_succeeds(profile, baseline, submi
     assert system_prompt.strip() != ""
 
 
-def test_generate_falls_back_when_llm_client_raises(profile, baseline, submission):
+def test_generate_falls_back_when_llm_client_raises(monkeypatch, profile, baseline, submission):
+    # `generate()` retries transient failures (see `complete_with_fallback`,
+    # `max_attempts=3`) before degrading to fallback text; skip the real
+    # backoff sleeps so this stays a fast unit test.
+    monkeypatch.setattr("labpilot.llm.client.time.sleep", lambda *_args: None)
     fake_client = FakeLLMClient(error=RuntimeError("network error"))
     generator = ReflectionGenerator(
         LLMConfig(provider="openai", api_key="sk-test"), llm_client=fake_client
@@ -102,6 +113,7 @@ def test_generate_falls_back_when_llm_client_raises(profile, baseline, submissio
     reflection = _generate(generator, profile, baseline, submission)
 
     assert "LLM generation not available" in reflection
+    assert len(fake_client.calls) == 3
 
 
 def test_save_appends_submission_links_footer(tmp_path: Path, submission: SubmissionResult):

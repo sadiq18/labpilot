@@ -4,6 +4,43 @@ import pandas as pd
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_real_dotenv_in_tests(monkeypatch):
+    """Tests must never read a developer's real `.env` at the repo root
+    (a normal, README-documented setup for real Kaggle/LLM credentials).
+    Without this, `labpilot.config.Settings()` — used internally by
+    `resolve_llm_client()` and friends — would silently pick up real API
+    keys and make real, slow, rate-limited network calls from otherwise
+    hermetic unit/integration tests. Tests that want specific env vars
+    can still set them explicitly via `monkeypatch.setenv(...)`.
+
+    Two layers to neutralize, both required: (1) `uv run` itself loads
+    `.env` and injects its values directly into the process's real
+    `os.environ` *before* pytest even starts, so `monkeypatch.delenv` on
+    every var `Settings` reads is what actually matters; (2) disabling
+    `env_file` on `Settings.model_config` additionally guards against
+    `Settings()` re-reading `.env` on its own (e.g. if `uv run` isn't
+    what invoked pytest).
+    """
+    from labpilot.config import Settings
+
+    for var in (
+        "KAGGLE_API_TOKEN",
+        "KAGGLE_USERNAME",
+        "KAGGLE_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "LABPILOT_RUNS_DIR",
+        "LABPILOT_LLM_PROVIDER",
+        "LABPILOT_LLM_MODEL",
+        "LABPILOT_RUNTIMES_DIR",
+        "LABPILOT_DEFAULT_RUNTIME",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+
+
 @pytest.fixture
 def titanic_data_dir(tmp_path: Path) -> Path:
     data_dir = tmp_path / "titanic-fixture"

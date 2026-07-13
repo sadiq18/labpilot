@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -141,6 +142,29 @@ class ImprovementPlanner:
         )
         return plan, overrides
 
+    def _complete_with_retries(
+        self, user: str, *, max_attempts: int, retry_delay_seconds: float
+    ) -> str:
+        """Same rationale as `llm.client.complete_with_fallback`'s retry support:
+        free-tier providers frequently return transient errors that clear up
+        within seconds, and a single blip shouldn't downgrade a real LLM plan
+        to the deterministic `tune` fallback."""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self.llm_client.complete(_PLANNER_SYSTEM, user)
+            except Exception:
+                if attempt >= max_attempts:
+                    raise
+                logger.warning(
+                    "LLM improvement planning call failed (attempt %d/%d); retrying in %.0fs.",
+                    attempt,
+                    max_attempts,
+                    retry_delay_seconds,
+                    exc_info=True,
+                )
+                time.sleep(retry_delay_seconds)
+        raise AssertionError("unreachable")  # max_attempts >= 1 guaranteed by callers
+
     def _plan_auto_llm(
         self,
         parent_run_dir: Path,
@@ -163,7 +187,7 @@ class ImprovementPlanner:
             f"Metrics:\n{metrics}\n\n"
             f"Reflection:\n{reflection[:8000]}"
         )
-        raw = self.llm_client.complete(_PLANNER_SYSTEM, user)
+        raw = self._complete_with_retries(user, max_attempts=3, retry_delay_seconds=20.0)
         payload = _parse_json_object(raw)
         actions = [
             ImprovementAction(action)

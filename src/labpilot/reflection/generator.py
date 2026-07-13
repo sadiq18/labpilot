@@ -57,7 +57,9 @@ class ReflectionGenerator:
 
         if self.llm_client is not None:
             logger.info("Generating reflection for run '%s' via LLM.", run_id)
-            content = complete_with_fallback(self.config, system, user, self.llm_client)
+            content = complete_with_fallback(
+                self.config, system, user, self.llm_client, max_attempts=3
+            )
             if content is not None:
                 return content
             logger.warning(

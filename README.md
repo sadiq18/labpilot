@@ -227,6 +227,29 @@ Child runs record lineage in `manifest.json` (`parent_run_id`, `iteration`) and 
 
 Side-by-side comparison of two runs: CV metrics, param deltas, lineage, and submission status.
 
+### `research experiments graph --competition <slug>` / `research experiments show <run_id>`
+
+Explore the experiment graph (Milestone 2, Plan 1): every `run`/`init`/`improve` invocation
+records a best-effort `git_commit` and a `config.json` snapshot of the config actually used, on
+top of the existing `parent_run_id`/`iteration` lineage in `manifest.json` metadata.
+
+```bash
+# ASCII lineage tree for a competition, annotated with a metric and the best-scoring path
+research experiments graph --competition titanic --metric cv_accuracy
+
+# Single-experiment detail view: status, progress, description, artifacts, metrics
+research experiments show <run_id>
+research experiments show <run_id> --format json
+```
+
+| Option | Description |
+|--------|-------------|
+| `--competition, -c` | Kaggle competition slug (`graph` only, required) |
+| `--metric` | Metric key to annotate scores and highlight the best root-to-leaf path (`graph` only) |
+| `--format` | `table` (default) or `json` (`show` only) |
+| `--config` | Path to config file (default: `configs/default.yaml`) |
+| `--runs-dir` | Override the runs directory |
+
 ### `research resume --run-id <id>`
 
 Resumes a run from its first failed or incomplete stage. Stages already `completed` or

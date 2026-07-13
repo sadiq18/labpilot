@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Protocol
 
 from labpilot.config import DEFAULT_MODEL_BY_PROVIDER, LLMConfig
@@ -88,10 +89,23 @@ def _llm_config_for_provider(
     provider: str,
     alternate_keys: dict[str, str],
 ) -> LLMConfig:
+    # Only substitute the per-provider default model when actually falling
+    # back to a *different* provider than the one configured — `config.model`
+    # there was chosen for the original provider (e.g. an OpenAI model name)
+    # and would be nonsensical to send to a different API. When `provider`
+    # *is* the configured provider, the user's explicit `config.model` (e.g.
+    # `LABPILOT_LLM_MODEL`) must be respected as-is, not silently replaced
+    # with a hardcoded default that may have very different quota/pricing.
+    is_primary_provider = provider == config.provider.strip().lower()
+    model = (
+        config.model
+        if is_primary_provider and config.model
+        else DEFAULT_MODEL_BY_PROVIDER.get(provider, config.model)
+    )
     return config.model_copy(
         update={
             "provider": provider,
-            "model": DEFAULT_MODEL_BY_PROVIDER.get(provider, config.model),
+            "model": model,
             "api_key": (alternate_keys.get(provider) or "").strip(),
         }
     )
@@ -177,8 +191,21 @@ def complete_with_fallback(
     system: str,
     user: str,
     llm_client: LLMClient | None = None,
+    *,
+    max_attempts: int = 1,
+    retry_delay_seconds: float = 20.0,
 ) -> str | None:
-    """Call LLM providers in priority order until one succeeds."""
+    """Call LLM providers in priority order until one succeeds.
+
+    Free-tier providers (Gemini in particular) frequently return transient
+    `503 UNAVAILABLE` ("high demand") or `429 RESOURCE_EXHAUSTED` (per-minute
+    rate limit) errors that clear up within seconds — a single failure there
+    is not a real signal that the provider is unusable. When callers want to
+    avoid silently downgrading to fallback template text on the first blip,
+    they can pass `max_attempts > 1` to retry the *same* provider with a
+    fixed backoff before moving on to the next provider (or giving up).
+    Defaults to no retry (`max_attempts=1`), preserving prior behavior.
+    """
     from labpilot.config import Settings
 
     settings = Settings()
@@ -206,15 +233,31 @@ def complete_with_fallback(
 
     for client in clients:
         provider_name = _client_provider_name(client)
-        try:
-            logger.info("Calling LLM provider: %s", provider_name)
-            return client.complete(system, user)
-        except Exception as exc:
-            logger.warning(
-                "LLM call failed for provider '%s' (%s); trying next provider if available.",
-                provider_name,
-                exc,
-            )
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.info(
+                    "Calling LLM provider: %s (attempt %d/%d)", provider_name, attempt, max_attempts
+                )
+                return client.complete(system, user)
+            except Exception as exc:
+                if attempt < max_attempts:
+                    logger.warning(
+                        "LLM call failed for provider '%s' (%s); retrying in %.0fs "
+                        "(attempt %d/%d).",
+                        provider_name,
+                        exc,
+                        retry_delay_seconds,
+                        attempt,
+                        max_attempts,
+                    )
+                    time.sleep(retry_delay_seconds)
+                else:
+                    logger.warning(
+                        "LLM call failed for provider '%s' (%s); trying next provider if "
+                        "available.",
+                        provider_name,
+                        exc,
+                    )
     return None
 
 
