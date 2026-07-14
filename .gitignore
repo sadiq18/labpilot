@@ -13,6 +13,9 @@ venv/
 # Run artifacts
 runs/
 
+# Research memory (hypotheses, knowledge base) — local, like runs/
+knowledge/
+
 # Local Obsidian reference (plans/milestones copies — not part of the package)
 obsidian-vault/
 

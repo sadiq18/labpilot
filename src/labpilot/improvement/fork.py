@@ -1,5 +1,6 @@
 import shutil
 from pathlib import Path
+from typing import Any
 
 from labpilot.config import AppConfig
 from labpilot.experiments.graph import capture_git_commit
@@ -37,6 +38,7 @@ def fork_run(
     parent_run_id: str | None = None,
     improvement_strategy: str = "auto",
     config: AppConfig | None = None,
+    hypothesis_id: str | None = None,
 ) -> tuple[str, Path]:
     """Fork a parent run directory into a new child run with lineage metadata."""
     parent_run_dir = parent_run_dir.resolve()
@@ -75,17 +77,21 @@ def fork_run(
         except OSError:
             pass
 
+    metadata: dict[str, Any] = {
+        "parent_run_id": resolved_parent_id,
+        "iteration": child_iteration,
+        "improvement_strategy": improvement_strategy,
+        "git_commit": capture_git_commit(),
+    }
+    if hypothesis_id:
+        metadata["hypothesis_id"] = hypothesis_id
+
     child_manifest = RunManifest(
         run_id=child_run_id,
         competition=parent_manifest.competition,
         status=StageStatus.RUNNING,
         stages=[],
-        metadata={
-            "parent_run_id": resolved_parent_id,
-            "iteration": child_iteration,
-            "improvement_strategy": improvement_strategy,
-            "git_commit": capture_git_commit(),
-        },
+        metadata=metadata,
     )
 
     for stage_name in PRECOMPLETED_STAGES:

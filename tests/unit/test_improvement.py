@@ -99,6 +99,25 @@ def test_fork_without_config_skips_config_snapshot(tmp_path: Path):
     assert "git_commit" in manifest.metadata
 
 
+def test_fork_writes_hypothesis_id(tmp_path: Path):
+    parent_dir = _completed_parent(tmp_path)
+    _, child_dir = fork_run(
+        parent_dir,
+        tmp_path,
+        improvement_strategy="tune",
+        hypothesis_id="H-001",
+    )
+    manifest = RunManifest.model_validate_json((child_dir / "manifest.json").read_text())
+    assert manifest.metadata["hypothesis_id"] == "H-001"
+
+
+def test_fork_omits_hypothesis_id_when_unset(tmp_path: Path):
+    parent_dir = _completed_parent(tmp_path)
+    _, child_dir = fork_run(parent_dir, tmp_path, improvement_strategy="tune")
+    manifest = RunManifest.model_validate_json((child_dir / "manifest.json").read_text())
+    assert "hypothesis_id" not in manifest.metadata
+
+
 def test_fork_config_snapshot_never_contains_secrets(tmp_path: Path):
     """`AppConfig`'s secret fields use `Field(exclude=True)`, so the config
     snapshot written by `fork_run` must never leak the raw credential

@@ -21,6 +21,8 @@ from labpilot.diagnostics import (
     required_environment_checks,
 )
 from labpilot.experiments.graph import build_graph
+from labpilot.experiments.hypothesis import HypothesisStore, linked_experiments
+from labpilot.experiments.models import HypothesisStatus
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
 from labpilot.orchestrator.manifest import StageStatus, load_manifest
@@ -45,8 +47,10 @@ workspace_app = typer.Typer(help="Manage multi-competition project workspaces.")
 app.add_typer(workspace_app, name="workspace")
 runtime_app = typer.Typer(help="Register and validate training runtimes.")
 app.add_typer(runtime_app, name="runtime")
-experiments_app = typer.Typer(help="Explore the experiment graph (Milestone 2).")
+experiments_app = typer.Typer(help="Explore the experiment graph.")
 app.add_typer(experiments_app, name="experiments")
+hypothesis_app = typer.Typer(help="Manage structured hypotheses.")
+app.add_typer(hypothesis_app, name="hypothesis")
 console = Console()
 
 
@@ -78,12 +82,15 @@ def _load_app_config(
     config_path: Path,
     runs_dir: Path | None,
     project_dir: Path | None,
+    knowledge_dir: Path | None = None,
 ) -> "AppConfig":
     from labpilot.config import AppConfig
 
     config = load_config(config_path, project_dir=project_dir)
     if runs_dir:
         config.runs_dir = runs_dir
+    if knowledge_dir:
+        config.knowledge_dir = knowledge_dir
     return config
 
 
@@ -153,6 +160,9 @@ def run(
         None, "--project-dir", help="Project root containing project.yaml"
     ),
     runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
     competitions_dir: Path | None = typer.Option(
         None,
         "--competitions-dir",
@@ -161,6 +171,11 @@ def run(
             "(<slug>.yaml). Defaults to configs/competitions. See "
             "configs/competitions/README.md."
         ),
+    ),
+    hypothesis_id: str | None = typer.Option(
+        None,
+        "--hypothesis",
+        help="Hypothesis ID to test with this root run (e.g. H-001)",
     ),
     submit: bool = typer.Option(
         False,
@@ -194,7 +209,7 @@ def run(
     _validate_submit_flags(submit, force_submit)
     _validate_dry_run_flags(dry_run, submit)
 
-    config = _load_app_config(config_path, runs_dir, project_dir)
+    config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
     llm_client = _check_llm_or_confirm(config.llm, assume_yes)
 
     console.print(f"[bold]LabPilot[/bold] — starting run for [cyan]{competition}[/cyan]\n")
@@ -210,7 +225,11 @@ def run(
         dry_run=dry_run,
         project_dir=project_dir,
     )
-    manifest = pipeline.run(competition)
+    try:
+        manifest = pipeline.run(competition, hypothesis_id=hypothesis_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
 
     run_dir = config.runs_dir / manifest.run_id
     console.print(f"\n[green]Run complete:[/green] {run_dir}")
@@ -546,6 +565,14 @@ def improve(
         None, "--project-dir", help="Project root containing project.yaml"
     ),
     runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+    hypothesis_id: str | None = typer.Option(
+        None,
+        "--hypothesis",
+        help="Hypothesis ID to test with this child run (e.g. H-001)",
+    ),
     submit: bool = typer.Option(
         False,
         "--submit",
@@ -573,7 +600,7 @@ def improve(
     _validate_submit_flags(submit, force_submit)
     _validate_dry_run_flags(dry_run, submit)
 
-    config = _load_app_config(config_path, runs_dir, project_dir)
+    config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
     llm_client = _check_llm_or_confirm(config.llm, assume_yes)
 
     console.print(
@@ -591,7 +618,22 @@ def improve(
         dry_run=dry_run,
         project_dir=project_dir,
     )
-    manifest = _continue_or_exit(lambda _: pipeline.improve(run_id, strategy=strategy), run_id)
+
+    def _do_improve(_: str):
+        return pipeline.improve(run_id, strategy=strategy, hypothesis_id=hypothesis_id)
+
+    try:
+        manifest = pipeline.improve(run_id, strategy=strategy, hypothesis_id=hypothesis_id)
+    except FileNotFoundError as exc:
+        message = str(exc)
+        if "Hypothesis" in message:
+            console.print(f"[red]{message}[/red]")
+        else:
+            console.print(f"[red]Run not found:[/red] {run_id} (check --runs-dir).")
+        raise typer.Exit(code=1) from None
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
 
     run_dir = config.runs_dir / manifest.run_id
     console.print(f"\n[green]Improvement complete:[/green] {run_dir}")
@@ -683,7 +725,7 @@ def experiments_graph(
     if runs_dir:
         config.runs_dir = runs_dir
 
-    graph = build_graph(config.runs_dir, competition)
+    graph = build_graph(config.runs_dir, competition, knowledge_dir=config.knowledge_dir)
     if not graph.nodes:
         console.print(f"No experiments found for [cyan]{competition}[/cyan] (check --runs-dir).")
         raise typer.Exit()
@@ -718,7 +760,9 @@ def experiments_show(
         raise typer.Exit(code=1)
 
     manifest = load_manifest(run_dir)
-    graph = build_graph(config.runs_dir, manifest.competition)
+    graph = build_graph(
+        config.runs_dir, manifest.competition, knowledge_dir=config.knowledge_dir
+    )
     experiment = graph.nodes[run_id]
 
     if output_format == "json":
@@ -738,6 +782,7 @@ def experiments_show(
     table.add_row("Parent", experiment.parent_id or "-")
     table.add_row("Children", ", ".join(experiment.children_ids) or "-")
     table.add_row("Iteration", str(experiment.iteration))
+    table.add_row("Hypothesis", experiment.hypothesis_id or "-")
     table.add_row("Git commit", experiment.git_commit or "-")
     table.add_row("Template", experiment.template_name or "-")
     table.add_row("Problem type", experiment.problem_type or "-")
@@ -757,6 +802,178 @@ def experiments_show(
     table.add_row("Reflection", experiment.reflection_path or "-")
     table.add_row("Report", experiment.report_path or "-")
     console.print(table)
+
+
+@hypothesis_app.command("add")
+def hypothesis_add(
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    observation: str = typer.Option(..., "--observation", help="What was observed"),
+    reason: str = typer.Option(..., "--reason", help="Why that might be happening"),
+    prediction: str = typer.Option(..., "--prediction", help="What we predict will help"),
+    confidence: float = typer.Option(
+        ..., "--confidence", help="Prior confidence in 0.0–1.0", min=0.0, max=1.0
+    ),
+    tags: str = typer.Option(
+        "",
+        "--tags",
+        help="Comma-separated tags (e.g. loss,class-imbalance)",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Create a new structured hypothesis for a competition."""
+    config = _load_app_config(config_path, None, None, knowledge_dir)
+    store = HypothesisStore(config.knowledge_dir, competition)
+    tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+    hypothesis = store.create(
+        observation=observation,
+        reason=reason,
+        prediction=prediction,
+        confidence=confidence,
+        tags=tag_list,
+        source="manual",
+    )
+    path = config.knowledge_dir / competition / "hypotheses" / f"{hypothesis.id}.json"
+    console.print(f"[green]Created[/green] [cyan]{hypothesis.id}[/cyan] → {path}")
+
+
+@hypothesis_app.command("list")
+def hypothesis_list(
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    status: str | None = typer.Option(
+        None, "--status", help="Filter by status: proposed, testing, confirmed, ..."
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """List hypotheses for a competition."""
+    config = _load_app_config(config_path, None, None, knowledge_dir)
+    store = HypothesisStore(config.knowledge_dir, competition)
+    status_filter: HypothesisStatus | None = None
+    if status is not None:
+        try:
+            status_filter = HypothesisStatus(status)
+        except ValueError as exc:
+            allowed = ", ".join(s.value for s in HypothesisStatus)
+            raise typer.BadParameter(f"--status must be one of: {allowed}") from exc
+
+    hypotheses = store.list(status=status_filter)
+    if not hypotheses:
+        console.print(f"No hypotheses for [cyan]{competition}[/cyan].")
+        raise typer.Exit()
+
+    table = Table(title=f"Hypotheses: {competition}")
+    table.add_column("ID", style="cyan")
+    table.add_column("Status")
+    table.add_column("Confidence")
+    table.add_column("Prediction")
+    for hypothesis in hypotheses:
+        table.add_row(
+            hypothesis.id,
+            hypothesis.status.value,
+            f"{hypothesis.confidence:.2f}",
+            hypothesis.prediction,
+        )
+    console.print(table)
+
+
+@hypothesis_app.command("show")
+def hypothesis_show(
+    hypothesis_id: str = typer.Argument(..., help="Hypothesis ID (e.g. H-001)"),
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+) -> None:
+    """Show one hypothesis and the experiments linked to it."""
+    config = _load_app_config(config_path, runs_dir, None, knowledge_dir)
+    store = HypothesisStore(config.knowledge_dir, competition)
+    hypothesis = store.get(hypothesis_id)
+    if hypothesis is None:
+        console.print(
+            f"[red]Hypothesis not found:[/red] {hypothesis_id} "
+            f"(competition={competition})."
+        )
+        raise typer.Exit(code=1)
+
+    table = Table(title=f"Hypothesis: {hypothesis.id}")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value")
+    table.add_row("Competition", hypothesis.competition)
+    table.add_row("Status", hypothesis.status.value)
+    table.add_row("Confidence", f"{hypothesis.confidence:.2f}")
+    table.add_row("Observation", hypothesis.observation)
+    table.add_row("Reason", hypothesis.reason)
+    table.add_row("Prediction", hypothesis.prediction)
+    table.add_row("Tags", ", ".join(hypothesis.tags) or "-")
+    table.add_row("Source", hypothesis.source)
+    table.add_row("Evidence for", ", ".join(hypothesis.evidence_for) or "-")
+    table.add_row("Evidence against", ", ".join(hypothesis.evidence_against) or "-")
+    console.print(table)
+
+    graph = build_graph(
+        config.runs_dir, competition, knowledge_dir=config.knowledge_dir
+    )
+    linked = linked_experiments(hypothesis_id, graph)
+    console.print(
+        f"\n[bold]Linked experiments[/bold] ({len(linked)}): "
+        + (", ".join(exp.id for exp in linked) if linked else "-")
+    )
+
+
+@hypothesis_app.command("update")
+def hypothesis_update(
+    hypothesis_id: str = typer.Argument(..., help="Hypothesis ID (e.g. H-001)"),
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    status: str = typer.Option(..., "--status", help="New status"),
+    evidence_run: str | None = typer.Option(
+        None,
+        "--evidence-run",
+        help="Run ID supporting/contradicting the prediction (routed by --status)",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Update hypothesis status (and optionally append evidence from a run)."""
+    try:
+        new_status = HypothesisStatus(status)
+    except ValueError as exc:
+        allowed = ", ".join(s.value for s in HypothesisStatus)
+        raise typer.BadParameter(f"--status must be one of: {allowed}") from exc
+
+    config = _load_app_config(config_path, None, None, knowledge_dir)
+    store = HypothesisStore(config.knowledge_dir, competition)
+    try:
+        updated = store.update_status(
+            hypothesis_id, new_status, evidence_run_id=evidence_run
+        )
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    console.print(
+        f"[green]Updated[/green] [cyan]{updated.id}[/cyan] → status={updated.status.value}"
+    )
+    if evidence_run and new_status == HypothesisStatus.CONFIRMED:
+        console.print(f"  evidence_for += {evidence_run}")
+    elif evidence_run and new_status == HypothesisStatus.REJECTED:
+        console.print(f"  evidence_against += {evidence_run}")
 
 
 @app.command()

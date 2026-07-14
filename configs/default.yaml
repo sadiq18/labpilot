@@ -1,4 +1,5 @@
 runs_dir: runs
+knowledge_dir: knowledge
 
 # Used to generate brief.md/reflection.md — entirely optional. If no API key
 # is configured for the chosen provider (or the optional package isn't

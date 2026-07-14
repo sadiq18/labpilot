@@ -2,7 +2,7 @@
 
 Back to [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** In progress — Plan 1 shipped, Plans 2–8 still design-only. This directory is the
+**Status:** In progress — Plans 1–2 shipped, Plans 3–8 still design-only. This directory is the
 architecture/design workspace for Milestone 2. Each `plan-N-*.md` is meant to be reviewed and
 built independently, in order, as its own PR.
 
