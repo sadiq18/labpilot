@@ -150,6 +150,9 @@ Commands:
 - `research experiments graph --competition <slug>` / `research experiments show <run_id>` — experiment lineage graph (Milestone 2)
 - `research experiments compare <base> <compare>` — categorized A/B comparison + verdict (Milestone 2)
 - `research experiments knowledge list --competition <slug>` — accumulated technique knowledge (Milestone 2)
+- `research experiments rank --competition <slug>` — ranked hypothesis backlog (Milestone 2)
+- `research experiments search --competition <slug> [filters]` — filter experiments (Milestone 2)
+- `research experiments report|dashboard --competition <slug>` — competition rollup (Milestone 2)
 - `research hypothesis add|list|show|update` — structured hypotheses under `knowledge/` (Milestone 2)
 - `research doctor` — environment diagnostics
 
@@ -405,6 +408,40 @@ Keyed by `(technique, metric_key)`. Technique names come from field/recipe short
 Comparator updates use signed primary-metric deltas; reflection adds UNKNOWN entries (confidence
 ≤ 0.4) only when that technique is not already corroborated. See
 [milestones/milestone-2/plan-5-knowledge-base.md](milestones/milestone-2/plan-5-knowledge-base.md).
+
+### 21. Experiment Ranking (Milestone 2, Plan 6)
+
+| | |
+|---|---|
+| **Path** | `experiments/models.py` (`RankedCandidate`), `experiments/ranking.py` |
+| **Responsibility** | Deterministic scoring of proposed hypotheses (recommendation backlog) |
+| **Input** | Hypothesis store + knowledge base + graph artifacts |
+| **Output** | CLI `research experiments rank` |
+| **Status** | Implemented |
+
+### 22. Experiment Search (Milestone 2, Plan 7)
+
+| | |
+|---|---|
+| **Path** | `experiments/search.py` |
+| **Responsibility** | Composable AND filters over the experiment graph (+ comparisons) |
+| **Input** | `ExperimentGraph`, optional `comparison.json` files |
+| **Output** | CLI `research experiments search` |
+| **Status** | Implemented |
+
+### 23. Experiment Dashboard & Report (Milestone 2, Plan 8)
+
+| | |
+|---|---|
+| **Path** | `experiments/models.py` (`ExperimentReport`), `experiments/report.py`, `report/templates/experiments_dashboard.html.j2` |
+| **Responsibility** | Competition rollup (terminal + static HTML) composing graph, KB, ranking |
+| **Input** | Plans 1/5/6 (+ comparison links for dashboard rows) |
+| **Output** | CLI `research experiments report`, `research experiments dashboard` → `knowledge/<slug>/dashboard.html` |
+| **Status** | Implemented |
+
+The whole `knowledge/` directory remains gitignored (local research memory, like `runs/`).
+Dashboard is regenerated on demand. Per-run `report.html` links to the competition dashboard
+when that file exists; dashboard rows link back to per-run reports and `comparison.md`.
 
 ## Repository Structure
 

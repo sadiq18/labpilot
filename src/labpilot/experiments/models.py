@@ -153,3 +153,30 @@ class KnowledgeEntry(BaseModel):
     sample_size: int = 0
     evidence_run_ids: list[str] = Field(default_factory=list)
     updated_at: datetime
+
+
+class RankedCandidate(BaseModel):
+    """Scored backlog item over a proposed Hypothesis (Plan 6)."""
+
+    hypothesis: Hypothesis
+    expected_gain: float
+    implementation_cost: float
+    gpu_cost_seconds: float
+    risk: float
+    novelty: float
+    score: float
+
+
+class ExperimentReport(BaseModel):
+    """Competition-level rollup for terminal report + HTML dashboard (Plan 8)."""
+
+    competition: str
+    experiment_count: int
+    primary_metric_key: str | None = None
+    best_experiment_id: str | None = None
+    best_score: float | None = None
+    top_discoveries: list[KnowledgeEntry] = Field(default_factory=list)
+    known_failures: list[KnowledgeEntry] = Field(default_factory=list)
+    best_pipeline: list[Experiment] = Field(default_factory=list)
+    recommended_next: RankedCandidate | None = None
+    experiments: list[Experiment] = Field(default_factory=list)

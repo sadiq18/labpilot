@@ -2,7 +2,7 @@
 
 Back to [Milestone 2](README.md).
 
-**Status:** Design. **Depends on:** Plan 1 (`ExperimentGraph`, for novelty/runtime history),
+**Status:** Shipped. **Depends on:** Plan 1 (`ExperimentGraph`, for novelty/runtime history),
 Plan 2 (`Hypothesis`, the candidates), Plan 5 (`KnowledgeBase`, for expected-gain estimate).
 **Unlocks:** Plan 8.
 

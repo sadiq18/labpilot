@@ -80,9 +80,40 @@ class ReflectionConfig(BaseModel):
     max_new_hypotheses: int = 3
 
 
+class RankingWeightsConfig(BaseModel):
+    expected_gain: float = 2.0
+    implementation_cost: float = 0.5
+    gpu_cost: float = 0.5
+    risk: float = 1.0
+    novelty: float = 0.5
+
+
+class RankingConfig(BaseModel):
+    default_expected_gain: float = 0.0
+    cheap_tags: list[str] = Field(
+        default_factory=lambda: [
+            "hyperparameter",
+            "hyperparams",
+            "tune",
+            "tuning",
+            "loss",
+            "scheduler",
+            "features",
+            "feature-engineering",
+            "learning_rate",
+            "num_leaves",
+            "n_estimators",
+            "target_encoding",
+            "log_numeric",
+        ]
+    )
+    weights: RankingWeightsConfig = Field(default_factory=RankingWeightsConfig)
+
+
 class ExperimentsConfig(BaseModel):
     comparator: ComparatorConfig = Field(default_factory=ComparatorConfig)
     reflection: ReflectionConfig = Field(default_factory=ReflectionConfig)
+    ranking: RankingConfig = Field(default_factory=RankingConfig)
 
 
 class AppConfig(BaseModel):

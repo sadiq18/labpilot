@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LabPilot Experiments — {{ competition }}</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --text: #1a1f36;
+      --muted: #5c6370;
+      --accent: #2563eb;
+      --border: #e5e7eb;
+      --success: #059669;
+      --warning: #d97706;
+      --danger: #dc2626;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+    header {
+      background: linear-gradient(135deg, #1e3a8a, #2563eb);
+      color: #fff;
+      padding: 2rem 1.25rem;
+      border-radius: 12px;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 8px 24px rgba(37, 99, 235, 0.18);
+    }
+    header h1 { margin: 0 0 0.35rem; font-size: 1.75rem; }
+    header .meta { opacity: 0.92; font-size: 0.95rem; }
+    .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-bottom: 1.5rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.1rem 1.25rem;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    }
+    .card h2, section h2 {
+      margin: 0 0 0.75rem;
+      font-size: 1.05rem;
+      color: var(--text);
+    }
+    .metric-value { font-size: 1.6rem; font-weight: 700; color: var(--accent); }
+    .label { color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    section { margin-bottom: 1.5rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+    th, td { text-align: left; padding: 0.55rem 0.65rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .status-complete, .status-completed { color: var(--success); font-weight: 600; }
+    .status-failed { color: var(--danger); font-weight: 600; }
+    .status-skipped, .status-partial, .status-running { color: var(--warning); font-weight: 600; }
+    pre.tree {
+      background: #111827;
+      color: #f9fafb;
+      padding: 0.85rem 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
+    .pipeline { font-size: 1.05rem; font-weight: 600; }
+    footer { color: var(--muted); font-size: 0.85rem; text-align: center; margin-top: 2rem; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>{{ competition }}</h1>
+      <div class="meta">
+        {{ experiment_count }} experiments · Best
+        {% if best_score is not none %}{{ "%.4f"|format(best_score) }}{% else %}n/a{% endif %}
+        {% if best_experiment_id %} ({{ best_experiment_id }}){% endif %}
+        · Generated {{ generated_at }}
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <div class="label">Experiments</div>
+        <div class="metric-value">{{ experiment_count }}</div>
+      </div>
+      <div class="card">
+        <div class="label">Best {{ primary_metric_key }}</div>
+        <div class="metric-value">
+          {% if best_score is not none %}{{ "%.4f"|format(best_score) }}{% else %}—{% endif %}
+        </div>
+      </div>
+      <div class="card">
+        <div class="label">Recommended next</div>
+        {% if recommended %}
+        <div style="font-weight:600; margin-top:0.35rem;">{{ recommended.prediction }}</div>
+        <div class="label" style="margin-top:0.4rem;">
+          {{ "%.0f"|format(recommended.confidence * 100) }}% confidence · {{ recommended.id }}
+        </div>
+        {% else %}
+        <div style="margin-top:0.35rem; color: var(--muted);">No proposed hypotheses</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <section>
+      <div class="card">
+        <h2>Top discoveries</h2>
+        {% if top_discoveries %}
+        <table>
+          <thead><tr><th>Technique</th><th>Δ</th><th>Confidence</th><th>n</th></tr></thead>
+          <tbody>
+            {% for e in top_discoveries %}
+            <tr>
+              <td>{{ e.technique }}</td>
+              <td>{{ "%+.4f"|format(e.delta_estimate) }}</td>
+              <td>{{ "%.0f"|format(e.confidence * 100) }}%</td>
+              <td>{{ e.sample_size }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p style="color:var(--muted); margin:0;">None yet — run improve + compare to accumulate knowledge.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2>Known failures</h2>
+        {% if known_failures %}
+        <table>
+          <thead><tr><th>Technique</th><th>Δ</th><th>Confidence</th><th>n</th></tr></thead>
+          <tbody>
+            {% for e in known_failures %}
+            <tr>
+              <td>{{ e.technique }}</td>
+              <td>{{ "%+.4f"|format(e.delta_estimate) }}</td>
+              <td>{{ "%.0f"|format(e.confidence * 100) }}%</td>
+              <td>{{ e.sample_size }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p style="color:var(--muted); margin:0;">None yet.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2>Current best pipeline</h2>
+        {% if best_pipeline_labels %}
+        <p class="pipeline">{{ best_pipeline_labels | join(" → ") }}</p>
+        {% else %}
+        <p style="color:var(--muted); margin:0;">No scored path yet.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2>Experiment tree</h2>
+        <pre class="tree">{{ tree_text }}</pre>
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2>All experiments</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Status</th>
+              <th>Progress</th>
+              <th>Description</th>
+              <th>{{ primary_metric_key }}</th>
+              <th>Created</th>
+              <th>Links</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for exp in experiments %}
+            <tr>
+              <td>
+                {% if exp.has_report %}
+                <a href="{{ exp.report_href }}">{{ exp.id }}</a>
+                {% else %}
+                {{ exp.id }}
+                {% endif %}
+              </td>
+              <td class="status-{{ exp.status }}">{{ exp.status }}</td>
+              <td>{{ exp.progress }}</td>
+              <td>{{ exp.description or "—" }}</td>
+              <td>{% if exp.score is not none %}{{ "%.4f"|format(exp.score) }}{% else %}—{% endif %}</td>
+              <td>{{ exp.created_at }}</td>
+              <td>
+                {% if exp.has_report %}<a href="{{ exp.report_href }}">report</a>{% endif %}
+                {% if exp.comparison_href %}
+                  {% if exp.has_report %} · {% endif %}
+                  <a href="{{ exp.comparison_href }}">comparison</a>
+                {% endif %}
+                {% if not exp.has_report and not exp.comparison_href %}—{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      Generated by LabPilot · Competition dashboard for {{ competition }} ·
+      regenerate with <code>research experiments dashboard --competition {{ competition }}</code>
+    </footer>
+  </div>
+</body>
+</html>

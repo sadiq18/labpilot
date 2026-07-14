@@ -250,17 +250,30 @@ research experiments compare <base_id> <compare_id> --format json
 research experiments knowledge list --competition titanic
 research experiments knowledge list --competition titanic --effect hurts
 research experiments knowledge list --competition titanic --technique target_encoding
+
+# Rank proposed hypotheses (Plan 6) — recommendation backlog, does not auto-run
+research experiments rank --competition titanic --top 5
+
+# Search with composable AND filters (Plan 7)
+research experiments search --competition titanic --metric-gt cv_accuracy:0.8
+research experiments search --competition titanic --recipe target_encoding --verdict worth_keeping
+
+# Competition rollup + HTML dashboard (Plan 8)
+research experiments report --competition titanic
+research experiments report --competition titanic --format json
+research experiments dashboard --competition titanic
 ```
 
 | Option | Description |
 |--------|-------------|
-| `--competition, -c` | Kaggle competition slug (`graph` / `knowledge list` required) |
+| `--competition, -c` | Kaggle competition slug (`graph` / `knowledge list` / `rank` / `search` / `report` / `dashboard` required) |
 | `--metric` | Metric key to annotate scores and highlight the best root-to-leaf path (`graph` only) |
-| `--format` | `table` (default), `json` (`show`/`compare`), or `markdown` (`compare` only) |
+| `--format` | `table`/`json`/`markdown` (`show`/`compare`); `text`/`json` (`report`) |
 | `--technique` | Filter knowledge entries by technique (`knowledge list`) |
 | `--effect` | Filter knowledge by `improves`/`hurts`/`neutral`/`unknown` (`knowledge list`) |
 | `--config` | Path to config file (default: `configs/default.yaml`) |
 | `--runs-dir` | Override the runs directory |
+| `--knowledge-dir` | Override the knowledge directory |
 
 ### `research hypothesis add|list|show|update`
 

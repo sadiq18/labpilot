@@ -4,8 +4,8 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-**Milestone 2 — Experiment Scientist** is in progress — Plans 1–5 shipped; Plans 6–8 still
-design-only. **P4 — v1.0 (Production Quality)** shipped — see [COMPLETED.md](COMPLETED.md).
+**Milestone 2 — Experiment Scientist** — Plans 1–8 shipped (experiment graph through dashboard).
+**P4 — v1.0 (Production Quality)** shipped — see [COMPLETED.md](COMPLETED.md).
 
 The goal: turn LabPilot from "execute one experiment" into "manage many experiments like a
 research engineer" — an experiment graph with lineage, structured hypotheses, automatic
@@ -14,8 +14,7 @@ per-competition knowledge base, ranking of candidate next experiments, search, a
 **No planner, no multi-agent system, no LLM code generation** — see the design doc for the
 full set of guiding decisions.
 
-The milestone is split into eight independently buildable plans, meant to land as separate PRs
-in sequence:
+The milestone was split into eight independently buildable plans:
 
 | # | Plan | Depends on |
 |---|------|------------|

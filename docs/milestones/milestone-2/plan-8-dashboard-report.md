@@ -2,7 +2,7 @@
 
 Back to [Milestone 2](README.md).
 
-**Status:** Design. **Depends on:** Plan 1 (`ExperimentGraph`), Plan 3
+**Status:** Shipped. **Depends on:** Plan 1 (`ExperimentGraph`), Plan 3
 (`ExperimentComparison`), Plan 5 (`KnowledgeBase`), Plan 6 (`ranking`). **This is the
 milestone's capstone / deliverable plan** — everything else composes here.
 
@@ -126,7 +126,7 @@ just a terminal print. Reuse the existing pattern from `report/generator.py` (Ji
 | `src/labpilot/experiments/report.py` | new — `build_report()`, terminal rendering, `render_dashboard_html()` |
 | `src/labpilot/report/templates/experiments_dashboard.html.j2` | new template |
 | `src/labpilot/cli/main.py` | + `experiments report`, `experiments dashboard` |
-| `.gitignore` | + `knowledge/*/dashboard.html` (or the existing `runs/`-style pattern extended to cover generated `knowledge/` output) |
+| `.gitignore` | Unchanged — entire `knowledge/` stays ignored (hyps, KB, and generated `dashboard.html`) |
 
 ### 4. CLI
 
@@ -152,17 +152,15 @@ research experiments dashboard --competition <slug>   # writes + prints path to 
 
 1. Should `research report` (the existing **per-run** HTML report command, Milestone 1) gain
    a link to the new per-competition dashboard, or should these stay fully separate commands
-   with no cross-linking? → Add a one-line cross-link in both directions once both exist —
-   cheap, high value for someone browsing either report, and doesn't require either command to
-   depend on the other's code.
+   with no cross-linking? → **Resolved:** bidirectional cross-link when the sibling artifact
+   exists (per-run report links to `knowledge/<slug>/dashboard.html` if present; dashboard
+   rows link to `runs/<id>/report.html` and `comparison.md`).
 2. Is `knowledge/` the right gitignore boundary, or should `hypotheses/*.json` and
    `knowledge_base.json` remain committed (they're arguably valuable to keep in version control
-   per-competition, unlike `runs/` which is large binary-ish artifacts)? → Recommend
-   **committing** `knowledge/<slug>/hypotheses/` and `knowledge_base.json` (they're small,
-   human-readable, and are exactly the "research memory" the brief wants to accumulate across
-   sessions/contributors) while gitignoring only the generated `dashboard.html`. This is a
-   deliberate deviation from treating everything under a "data directory" as gitignored, and
-   should be called out explicitly in `ARCHITECTURE.md` when this plan ships.
+   per-competition, unlike `runs/` which is large binary-ish artifacts)? → **Resolved for now:**
+   keep **entire `knowledge/` gitignored** (same posture as `runs/`). The design note below
+   about committing hyps/KB is deferred — revisit if multi-contributor research memory becomes
+   a priority. Generated `dashboard.html` stays under that ignore either way.
 
 ## Acceptance criteria
 

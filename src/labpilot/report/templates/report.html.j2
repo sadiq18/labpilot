@@ -72,6 +72,9 @@
       <h1>{{ competition.title or competition_slug }}</h1>
       <div class="meta">
         Run <code>{{ run_id }}</code> · Status <strong>{{ manifest_status }}</strong> · Generated {{ generated_at }}
+        {% if dashboard_href %}
+        · <a href="{{ dashboard_href }}" style="color:#bfdbfe;">Competition dashboard</a>
+        {% endif %}
       </div>
     </header>
 
