@@ -115,6 +115,9 @@ Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-1430
 | `git_commit` | Best-effort `git rev-parse HEAD` at run start; `None` outside a git checkout |
 | `hypothesis_id` | Optional link to `knowledge/<slug>/hypotheses/H-NNN.json` (Plan 2) |
 
+Child improves also write `comparison.json` + `comparison.md` (Plan 3) whenever both
+parent and child can be assembled — even if a later pipeline stage fails.
+
 See [milestones/milestone-2/plan-1-experiment-graph.md](milestones/milestone-2/plan-1-experiment-graph.md)
 for how `config.json`/`git_commit` and the parent/child graph are assembled into a read-side
 `Experiment` model, viewable via `research experiments graph`/`research experiments show`.
@@ -144,6 +147,7 @@ Commands:
 - `research status --run-id <id>` — inspect stage progress
 - `research list-runs` — list all runs
 - `research experiments graph --competition <slug>` / `research experiments show <run_id>` — experiment lineage graph (Milestone 2)
+- `research experiments compare <base> <compare>` — categorized A/B comparison + verdict (Milestone 2)
 - `research hypothesis add|list|show|update` — structured hypotheses under `knowledge/` (Milestone 2)
 - `research doctor` — environment diagnostics
 
@@ -353,6 +357,21 @@ when the link resolves. See
 Commands: `research hypothesis add|list|show|update` (all require `--competition`), plus
 `--hypothesis H-NNN` on `research run` / `research improve`.
 
+### 18. Automatic Comparator (Milestone 2, Plan 3)
+
+| | |
+|---|---|
+| **Path** | `experiments/models.py` (`ExperimentComparison`), `experiments/comparator.py` |
+| **Responsibility** | Deterministic A/B comparison: categorized config changes, metric/runtime deltas, threshold verdict; persist `comparison.json`/`.md` on improve |
+| **Input** | Two assembled `Experiment`s (+ comparator thresholds from config) |
+| **Output** | `runs/<child>/comparison.json`, `comparison.md`; CLI `research experiments compare` |
+| **Status** | Implemented |
+
+No LLM. Verdicts: `worth_keeping` / `not_worth_keeping` / `regression` / `inconclusive`.
+`research runs diff` is unchanged for callers — it reuses comparator metric deltas under the
+hood while keeping its legacy `RunDiff` shape. See
+[milestones/milestone-2/plan-3-comparator.md](milestones/milestone-2/plan-3-comparator.md).
+
 ## Repository Structure
 
 ```
@@ -379,7 +398,7 @@ labpilot/
 │   ├── kernel/                # Kernel export for kernel-only competitions
 │   ├── improvement/           # Run fork, planner, tuner, feature recipes (P3)
 │   ├── tracking/              # Experiment logger, store, cross-run index
-│   ├── experiments/           # Experiment graph + hypotheses (Milestone 2)
+│   ├── experiments/           # Experiment graph, hypotheses, comparator (Milestone 2)
 │   ├── reflection/            # Reflection generation + prompts
 │   └── config.py              # AppConfig + Settings
 │

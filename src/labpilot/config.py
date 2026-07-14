@@ -71,6 +71,15 @@ class PipelineConfig(BaseModel):
     stages: list[str] = Field(default_factory=list)
 
 
+class ComparatorConfig(BaseModel):
+    noise_epsilon: float = 0.001
+    max_runtime_increase_pct: float = 50.0
+
+
+class ExperimentsConfig(BaseModel):
+    comparator: ComparatorConfig = Field(default_factory=ComparatorConfig)
+
+
 class AppConfig(BaseModel):
     runs_dir: Path = Path("runs")
     knowledge_dir: Path = Path("knowledge")
@@ -81,6 +90,7 @@ class AppConfig(BaseModel):
     kaggle: KaggleConfig = Field(default_factory=KaggleConfig)
     runtime: RuntimeDefaults = Field(default_factory=RuntimeDefaults)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    experiments: ExperimentsConfig = Field(default_factory=ExperimentsConfig)
 
 
 class Settings(BaseSettings):

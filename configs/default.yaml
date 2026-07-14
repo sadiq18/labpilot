@@ -1,6 +1,13 @@
 runs_dir: runs
 knowledge_dir: knowledge
 
+# Milestone 2 Plan 3 — Automatic Comparator thresholds for improve-time
+# comparison.json verdicts (`research experiments compare` uses the same defaults).
+experiments:
+  comparator:
+    noise_epsilon: 0.001
+    max_runtime_increase_pct: 50
+
 # Used to generate brief.md/reflection.md — entirely optional. If no API key
 # is configured for the chosen provider (or the optional package isn't
 # installed), LabPilot falls back to template-only text instead of failing.
