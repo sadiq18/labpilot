@@ -4,7 +4,7 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-**Milestone 2 — Experiment Scientist** is in progress — Plans 1–4 shipped; Plans 5–8 still
+**Milestone 2 — Experiment Scientist** is in progress — Plans 1–5 shipped; Plans 6–8 still
 design-only. **P4 — v1.0 (Production Quality)** shipped — see [COMPLETED.md](COMPLETED.md).
 
 The goal: turn LabPilot from "execute one experiment" into "manage many experiments like a

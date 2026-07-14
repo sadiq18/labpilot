@@ -23,6 +23,7 @@ from labpilot.diagnostics import (
 from labpilot.experiments.comparator import compare, load_comparison, render_markdown
 from labpilot.experiments.graph import assemble_experiment, build_graph
 from labpilot.experiments.hypothesis import HypothesisStore, linked_experiments
+from labpilot.experiments.knowledge import KnowledgeBase
 from labpilot.experiments.models import HypothesisStatus
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
@@ -50,6 +51,8 @@ runtime_app = typer.Typer(help="Register and validate training runtimes.")
 app.add_typer(runtime_app, name="runtime")
 experiments_app = typer.Typer(help="Explore the experiment graph.")
 app.add_typer(experiments_app, name="experiments")
+knowledge_app = typer.Typer(help="Explore the accumulated experiment knowledge base.")
+experiments_app.add_typer(knowledge_app, name="knowledge")
 hypothesis_app = typer.Typer(help="Manage structured hypotheses.")
 app.add_typer(hypothesis_app, name="hypothesis")
 console = Console()
@@ -894,6 +897,67 @@ def experiments_compare(
     conclusion.add_row("Verdict", comparison.verdict.value)
     conclusion.add_row("Reason", comparison.verdict_reason)
     console.print(conclusion)
+
+
+@knowledge_app.command("list")
+def experiments_knowledge_list(
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    technique: str | None = typer.Option(
+        None, "--technique", help="Filter by normalized technique name"
+    ),
+    effect: str | None = typer.Option(
+        None,
+        "--effect",
+        help="Filter by effect: improves|hurts|neutral|unknown",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """List accumulated technique knowledge for a competition (Plan 5)."""
+    from labpilot.experiments.models import KnowledgeEffect
+
+    effect_filter = None
+    if effect is not None:
+        try:
+            effect_filter = KnowledgeEffect(effect)
+        except ValueError as exc:
+            raise typer.BadParameter(
+                "--effect must be one of: improves, hurts, neutral, unknown"
+            ) from exc
+
+    config = _load_app_config(config_path, None, None, knowledge_dir)
+    kb = KnowledgeBase(config.knowledge_dir, competition)
+    entries = kb.list_entries(technique=technique, effect=effect_filter)
+    if not entries:
+        console.print(
+            f"No knowledge entries for [cyan]{competition}[/cyan] "
+            f"(check --knowledge-dir / run improve to accumulate)."
+        )
+        raise typer.Exit()
+
+    table = Table(title=f"Knowledge: {competition}")
+    table.add_column("Technique", style="cyan")
+    table.add_column("Metric")
+    table.add_column("Effect")
+    table.add_column("Delta")
+    table.add_column("Confidence")
+    table.add_column("N")
+    table.add_column("Updated")
+    for entry in entries:
+        table.add_row(
+            entry.technique,
+            entry.metric_key,
+            entry.effect.value,
+            f"{entry.delta_estimate:+.4f}",
+            f"{entry.confidence:.2f}",
+            str(entry.sample_size),
+            entry.updated_at.isoformat(timespec="seconds"),
+        )
+    console.print(table)
 
 
 @hypothesis_app.command("add")
