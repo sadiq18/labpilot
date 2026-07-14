@@ -16,9 +16,10 @@ from labpilot.competition.models import CompetitionSpec, ProblemType
 from labpilot.competition.parser import CompetitionParser
 from labpilot.config import AppConfig
 from labpilot.data.downloader import DataDownloader
-from labpilot.experiments.comparator import compare, write_comparison
+from labpilot.experiments.comparator import compare, load_comparison, write_comparison
 from labpilot.experiments.graph import assemble_experiment, capture_git_commit
 from labpilot.experiments.hypothesis import HypothesisStore
+from labpilot.experiments.models import StructuredReflection
 from labpilot.improvement.fork import fork_run
 from labpilot.improvement.models import (
     load_training_overrides,
@@ -749,6 +750,11 @@ class Pipeline:
     def _write_reflection(
         self, run_dir: Path, manifest: RunManifest, config: AppConfig
     ) -> list[str]:
+        # Prefer a fresh comparison artifact before reflection (Plan 3 finally also
+        # writes one; this ensures child runs have comparison.json during LLM call).
+        if manifest.metadata.get("parent_run_id"):
+            self._write_comparison_if_parent(run_dir)
+
         profile = load_profile(run_dir)
         choice = BaselineChoice.model_validate_json((run_dir / "baseline_choice.json").read_text())
         submission = SubmissionResult.model_validate_json(
@@ -756,17 +762,128 @@ class Pipeline:
         )
         generator = ReflectionGenerator(config.llm, self.llm_client)
         metrics = generator.load_metrics(run_dir)
-        content = generator.generate(
-            run_id=manifest.run_id,
-            competition=manifest.competition,
+
+        experiment = assemble_experiment(run_dir, knowledge_dir=config.knowledge_dir)
+        parent_experiment = None
+        parent_id = experiment.parent_id
+        if parent_id:
+            parent_dir = (config.runs_dir / parent_id).resolve()
+            if (parent_dir / "manifest.json").is_file():
+                try:
+                    parent_experiment = assemble_experiment(
+                        parent_dir, knowledge_dir=config.knowledge_dir
+                    )
+                except Exception as exc:
+                    logger.warning("Could not assemble parent experiment %s: %s", parent_id, exc)
+
+        comparison = None
+        comparison_failed = False
+        if parent_id:
+            comparison = load_comparison(run_dir)
+            if comparison is None and parent_experiment is not None:
+                try:
+                    comparator_cfg = config.experiments.comparator
+                    comparison = compare(
+                        parent_experiment,
+                        experiment,
+                        noise_epsilon=comparator_cfg.noise_epsilon,
+                        max_runtime_increase_pct=comparator_cfg.max_runtime_increase_pct,
+                        competition_dirs=(config.runs_dir / parent_id, run_dir),
+                    )
+                    write_comparison(run_dir, comparison)
+                except Exception as exc:
+                    logger.warning(
+                        "Comparison failed for reflection on %s: %s",
+                        manifest.run_id,
+                        exc,
+                    )
+                    comparison_failed = True
+            elif comparison is None:
+                comparison_failed = True
+
+        hypothesis = None
+        tagged_id = experiment.hypothesis_id
+        if tagged_id:
+            store = HypothesisStore(config.knowledge_dir, manifest.competition)
+            hypothesis = store.get(tagged_id)
+
+        structured = generator.generate_structured(
+            experiment=experiment,
+            parent_experiment=parent_experiment,
+            comparison=comparison,
+            hypothesis=hypothesis,
             profile=profile,
             baseline=choice,
             metrics=metrics,
             submission=submission,
             run_dir=run_dir,
+            max_new_hypotheses=config.experiments.reflection.max_new_hypotheses,
+            comparison_failed=comparison_failed,
         )
-        path = generator.save(run_dir, content, submission=submission)
-        return [str(path)]
+        paths = generator.save_structured(run_dir, structured, submission=submission)
+
+        allow_side_effects = structured.generated_by == "llm" and (
+            parent_id is None or comparison is not None
+        )
+        if allow_side_effects:
+            self._apply_reflection_hypothesis_side_effects(
+                config=config,
+                competition=manifest.competition,
+                run_id=manifest.run_id,
+                tagged_hypothesis_id=tagged_id,
+                structured=structured,
+            )
+
+        return [str(path) for path in paths]
+
+    def _apply_reflection_hypothesis_side_effects(
+        self,
+        *,
+        config: AppConfig,
+        competition: str,
+        run_id: str,
+        tagged_hypothesis_id: str | None,
+        structured: StructuredReflection,
+    ) -> None:
+        store = HypothesisStore(config.knowledge_dir, competition)
+        max_new = config.experiments.reflection.max_new_hypotheses
+
+        if tagged_hypothesis_id:
+            for update in structured.hypothesis_updates:
+                if update.hypothesis_id != tagged_hypothesis_id:
+                    logger.warning(
+                        "Ignoring hypothesis update for %s (run tagged %s)",
+                        update.hypothesis_id,
+                        tagged_hypothesis_id,
+                    )
+                    continue
+                try:
+                    store.update_status(
+                        update.hypothesis_id,
+                        update.new_status,
+                        evidence_run_id=run_id,
+                    )
+                except (FileNotFoundError, ValueError) as exc:
+                    logger.warning("Could not apply hypothesis update: %s", exc)
+        elif structured.hypothesis_updates:
+            logger.warning(
+                "Ignoring %d hypothesis_updates on untagged run %s",
+                len(structured.hypothesis_updates),
+                run_id,
+            )
+
+        for draft in structured.new_hypotheses[:max_new]:
+            try:
+                store.create(
+                    observation=draft.observation,
+                    reason=draft.reason,
+                    prediction=draft.prediction,
+                    confidence=draft.confidence,
+                    tags=draft.tags,
+                    source="reflection",
+                )
+            except Exception as exc:
+                logger.warning("Could not create hypothesis draft: %s", exc)
 
     def _write_report(self, run_dir: Path, manifest: RunManifest, config: AppConfig) -> list[str]:
         generator = ReportGenerator()

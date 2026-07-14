@@ -76,8 +76,13 @@ class ComparatorConfig(BaseModel):
     max_runtime_increase_pct: float = 50.0
 
 
+class ReflectionConfig(BaseModel):
+    max_new_hypotheses: int = 3
+
+
 class ExperimentsConfig(BaseModel):
     comparator: ComparatorConfig = Field(default_factory=ComparatorConfig)
+    reflection: ReflectionConfig = Field(default_factory=ReflectionConfig)
 
 
 class AppConfig(BaseModel):

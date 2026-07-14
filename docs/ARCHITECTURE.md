@@ -49,7 +49,7 @@ flowchart LR
 | 10 | `export_kernel` | `kernel/exporter.py` | `kernel/` (kernel-only comps) |
 | 11 | `upload_submission` | `kaggle/client.py` | `submission_result.json` |
 | 12 | `log_experiment` | `tracking/logger.py` | `experiment/record.json` |
-| 13 | `write_reflection` | `reflection/generator.py` | `reflection.md` |
+| 13 | `write_reflection` | `reflection/generator.py` | `reflection.json`, `reflection.md` |
 | 14 | `write_report` | `report/generator.py` | `report.html` |
 
 The orchestrator lives in `orchestrator/pipeline.py`. Stage order is configurable via `configs/default.yaml` under `pipeline.stages`.
@@ -99,7 +99,8 @@ runs/<run_id>/
 ├── training.log               # Subprocess stdout/stderr
 ├── experiment/
 │   └── record.json            # Params, metrics, artifact paths
-└── reflection.md              # Post-run analysis + next steps
+└── reflection.json            # Structured reflection (Milestone 2, Plan 4)
+└── reflection.md              # Markdown view of reflection.json + submission links
 └── report.html                # Standalone HTML report (brief + reflection + metrics)
 ```
 
@@ -282,11 +283,14 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 
 | | |
 |---|---|
-| **Path** | `reflection/generator.py`, `reflection/prompts/` |
-| **Responsibility** | Post-mortem + next-step recommendations |
-| **Input** | Full run context (profile, metrics, submission result) |
-| **Output** | `reflection.md` |
-| **Status** | Implemented — OpenAI or Gemini via `llm/client.py`; falls back to template text if no key/package/call succeeds |
+| **Path** | `reflection/generator.py`, `reflection/prompts/`, `llm/json_utils.py` |
+| **Responsibility** | Structured post-mortem (`StructuredReflection`) + markdown view; optional hypothesis side effects |
+| **Input** | Experiment (+ parent), best-effort `ExperimentComparison`, tagged `Hypothesis`, profile/metrics/submission/brief |
+| **Output** | `reflection.json`, `reflection.md` |
+| **Status** | Implemented — LLM JSON via `llm/client.py` + `parse_json_object`; template fallback if no key/package/call/parse succeeds |
+
+See [milestones/milestone-2/plan-4-reflection-engine.md](milestones/milestone-2/plan-4-reflection-engine.md).
+`Experiment.reflection` is loaded from `reflection.json` at assemble time (Plan 4).
 
 ### 14. HTML Report Generator
 
@@ -371,6 +375,20 @@ No LLM. Verdicts: `worth_keeping` / `not_worth_keeping` / `regression` / `inconc
 `research runs diff` is unchanged for callers — it reuses comparator metric deltas under the
 hood while keeping its legacy `RunDiff` shape. See
 [milestones/milestone-2/plan-3-comparator.md](milestones/milestone-2/plan-3-comparator.md).
+
+### 19. Structured Reflection (Milestone 2, Plan 4)
+
+| | |
+|---|---|
+| **Path** | `experiments/models.py` (`StructuredReflection`), `reflection/generator.py` |
+| **Responsibility** | LLM structured reflection; update tagged hypothesis; propose new drafts under `knowledge/` |
+| **Input** | Run artifacts + Plan 1–3 context |
+| **Output** | `reflection.json`/`.md`; optional hypothesis store side effects |
+| **Status** | Implemented |
+
+Markdown is a deterministic view of the JSON (not a second independent LLM call). Side effects
+run only for successful LLM generations when comparison context is healthy (roots always;
+children need a comparison). Cap: `experiments.reflection.max_new_hypotheses` (default 3).
 
 ## Repository Structure
 
