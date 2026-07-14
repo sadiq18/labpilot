@@ -153,3 +153,15 @@ class KnowledgeEntry(BaseModel):
     sample_size: int = 0
     evidence_run_ids: list[str] = Field(default_factory=list)
     updated_at: datetime
+
+
+class RankedCandidate(BaseModel):
+    """Scored backlog item over a proposed Hypothesis (Plan 6)."""
+
+    hypothesis: Hypothesis
+    expected_gain: float
+    implementation_cost: float
+    gpu_cost_seconds: float
+    risk: float
+    novelty: float
+    score: float

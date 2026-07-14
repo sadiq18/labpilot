@@ -25,6 +25,7 @@ from labpilot.experiments.graph import assemble_experiment, build_graph
 from labpilot.experiments.hypothesis import HypothesisStore, linked_experiments
 from labpilot.experiments.knowledge import KnowledgeBase
 from labpilot.experiments.models import HypothesisStatus
+from labpilot.experiments.ranking import RankingWeights, rank_candidates
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
 from labpilot.orchestrator.manifest import StageStatus, load_manifest
@@ -897,6 +898,77 @@ def experiments_compare(
     conclusion.add_row("Verdict", comparison.verdict.value)
     conclusion.add_row("Reason", comparison.verdict_reason)
     console.print(conclusion)
+
+
+@experiments_app.command("rank")
+def experiments_rank(
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    top: int = typer.Option(5, "--top", help="Show at most this many candidates"),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Rank proposed hypotheses (recommendation backlog — does not auto-run)."""
+    config = _load_app_config(config_path, runs_dir, None, knowledge_dir)
+    ranking_cfg = config.experiments.ranking
+    weights = RankingWeights(
+        expected_gain=ranking_cfg.weights.expected_gain,
+        implementation_cost=ranking_cfg.weights.implementation_cost,
+        gpu_cost=ranking_cfg.weights.gpu_cost,
+        risk=ranking_cfg.weights.risk,
+        novelty=ranking_cfg.weights.novelty,
+    )
+    ranked = rank_candidates(
+        competition,
+        config.runs_dir,
+        config.knowledge_dir,
+        weights=weights,
+        default_expected_gain=ranking_cfg.default_expected_gain,
+        cheap_tags=set(ranking_cfg.cheap_tags),
+    )
+    if not ranked:
+        console.print(
+            f"No proposed hypotheses to rank for [cyan]{competition}[/cyan] "
+            "(add some with `research hypothesis add`, or wait for reflection drafts)."
+        )
+        raise typer.Exit()
+
+    table = Table(title=f"Recommended next — {competition}")
+    table.add_column("#", style="cyan")
+    table.add_column("ID")
+    table.add_column("Prediction")
+    table.add_column("Gain")
+    table.add_column("Cost")
+    table.add_column("GPU (s)")
+    table.add_column("Risk")
+    table.add_column("Novelty")
+    table.add_column("Score")
+    for index, candidate in enumerate(ranked[: max(1, top)], start=1):
+        hyp = candidate.hypothesis
+        pred = hyp.prediction if len(hyp.prediction) <= 48 else hyp.prediction[:45] + "..."
+        table.add_row(
+            str(index),
+            hyp.id,
+            pred,
+            f"{candidate.expected_gain:+.4f}",
+            f"{candidate.implementation_cost:.2f}",
+            f"{candidate.gpu_cost_seconds:.1f}",
+            f"{candidate.risk:.2f}",
+            f"{candidate.novelty:.2f}",
+            f"{candidate.score:.3f}",
+        )
+    console.print(table)
+    top_candidate = ranked[0]
+    console.print(
+        f"\n[bold]Recommended next:[/bold] {top_candidate.hypothesis.id} — "
+        f"{top_candidate.hypothesis.prediction} "
+        f"(confidence {top_candidate.hypothesis.confidence:.0%}, "
+        f"score {top_candidate.score:.3f})"
+    )
 
 
 @knowledge_app.command("list")

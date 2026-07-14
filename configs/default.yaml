@@ -9,6 +9,28 @@ experiments:
     max_runtime_increase_pct: 50
   reflection:
     max_new_hypotheses: 3
+  ranking:
+    default_expected_gain: 0.0
+    cheap_tags:
+      - hyperparameter
+      - hyperparams
+      - tune
+      - tuning
+      - loss
+      - scheduler
+      - features
+      - feature-engineering
+      - learning_rate
+      - num_leaves
+      - n_estimators
+      - target_encoding
+      - log_numeric
+    weights:
+      expected_gain: 2.0
+      implementation_cost: 0.5
+      gpu_cost: 0.5
+      risk: 1.0
+      novelty: 0.5
 
 # Used to generate brief.md/reflection.md — entirely optional. If no API key
 # is configured for the chosen provider (or the optional package isn't
