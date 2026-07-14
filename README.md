@@ -240,13 +240,18 @@ research experiments graph --competition titanic --metric cv_accuracy
 # Single-experiment detail view: status, progress, description, artifacts, metrics
 research experiments show <run_id>
 research experiments show <run_id> --format json
+
+# Categorized A/B comparison + verdict (also written on improve as comparison.json/.md)
+research experiments compare <base_id> <compare_id>
+research experiments compare <base_id> <compare_id> --format markdown
+research experiments compare <base_id> <compare_id> --format json
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--competition, -c` | Kaggle competition slug (`graph` only, required) |
 | `--metric` | Metric key to annotate scores and highlight the best root-to-leaf path (`graph` only) |
-| `--format` | `table` (default) or `json` (`show` only) |
+| `--format` | `table` (default), `json` (`show`/`compare`), or `markdown` (`compare` only) |
 | `--config` | Path to config file (default: `configs/default.yaml`) |
 | `--runs-dir` | Override the runs directory |
 

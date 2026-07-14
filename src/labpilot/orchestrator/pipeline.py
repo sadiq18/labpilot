@@ -16,7 +16,8 @@ from labpilot.competition.models import CompetitionSpec, ProblemType
 from labpilot.competition.parser import CompetitionParser
 from labpilot.config import AppConfig
 from labpilot.data.downloader import DataDownloader
-from labpilot.experiments.graph import capture_git_commit
+from labpilot.experiments.comparator import compare, write_comparison
+from labpilot.experiments.graph import assemble_experiment, capture_git_commit
 from labpilot.experiments.hypothesis import HypothesisStore
 from labpilot.improvement.fork import fork_run
 from labpilot.improvement.models import (
@@ -206,12 +207,54 @@ class Pipeline:
             f"Improving '{parent_run_id}' → [cyan]{child_run_id}[/cyan] "
             f"(strategy={strategy}, iteration={child_manifest.metadata.get('iteration')})\n"
         )
-        return self._execute(child_run_dir, child_manifest, stages_to_run, all_stages)
+        try:
+            return self._execute(child_run_dir, child_manifest, stages_to_run, all_stages)
+        finally:
+            # Milestone 2 Plan 3: persist parent/child comparison whenever both
+            # experiments can be assembled — including after a mid-pipeline failure.
+            self._write_comparison_if_parent(child_run_dir)
 
     def _attach_hypothesis(self, competition: str, hypothesis_id: str) -> None:
         """Validate the hypothesis exists for this competition and mark it testing."""
         store = HypothesisStore(self.config.knowledge_dir, competition)
         store.mark_testing_if_proposed(hypothesis_id)
+
+    def _write_comparison_if_parent(self, child_run_dir: Path) -> None:
+        """Best-effort write of comparison.json/.md vs the child's parent.
+
+        Never raises — comparison is a side artifact and must not mask a stage
+        failure already propagating from `_execute`.
+        """
+        try:
+            child = assemble_experiment(
+                child_run_dir, knowledge_dir=self.config.knowledge_dir
+            )
+            if not child.parent_id:
+                return
+            parent_dir = (self.config.runs_dir / child.parent_id).resolve()
+            if not (parent_dir / "manifest.json").is_file():
+                logger.warning(
+                    "Skipping comparison for %s: parent run %s not found",
+                    child.id,
+                    child.parent_id,
+                )
+                return
+            parent = assemble_experiment(
+                parent_dir, knowledge_dir=self.config.knowledge_dir
+            )
+            comparator_cfg = self.config.experiments.comparator
+            comparison = compare(
+                parent,
+                child,
+                noise_epsilon=comparator_cfg.noise_epsilon,
+                max_runtime_increase_pct=comparator_cfg.max_runtime_increase_pct,
+                competition_dirs=(parent_dir, child_run_dir),
+            )
+            write_comparison(child_run_dir, comparison)
+        except Exception as exc:
+            logger.warning(
+                "Could not write comparison for %s: %s", child_run_dir.name, exc
+            )
 
     def _start(
         self,

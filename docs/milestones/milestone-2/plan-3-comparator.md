@@ -2,7 +2,7 @@
 
 Back to [Milestone 2](README.md).
 
-**Status:** Design. **Depends on:** Plan 1 (`Experiment` model). **Unlocks:** Plans 4, 5, 8
+**Status:** Shipped. **Depends on:** Plan 1 (`Experiment` model). **Unlocks:** Plans 4, 5, 8
 (Plan 7 optionally filters on its output).
 
 ---
@@ -135,13 +135,15 @@ in v1: LabPilot doesn't measure inference latency anywhere today (no template re
 Document this explicitly in the CLI output as `inference: not tracked` rather than fabricating
 a number — see Non-goals.
 
-### 4. Persistence — auto-write on child completion
+### 4. Persistence — auto-write whenever parent/child assemble
 
-`Pipeline.improve()` (in `orchestrator/pipeline.py`), after the `write_reflection` stage,
-calls `comparator.compare(parent_experiment, child_experiment)` and writes
-`runs/<child_id>/comparison.json`. This makes the comparison a durable fact (used by Plan 5's
-knowledge base and Plan 8's dashboard) instead of something recomputed on every dashboard
-render. Root runs (no parent) simply get no `comparison.json` — nothing to compare against.
+`Pipeline.improve()` wraps `_execute` in `try`/`finally` and always attempts
+`comparator.compare(parent, child)` → `runs/<child_id>/comparison.json` +
+`comparison.md` when the child has a `parent_run_id` and both experiments assemble.
+This makes the comparison a durable fact (used by Plan 5's knowledge base and Plan 8's
+dashboard) instead of something recomputed on every dashboard render. Root runs (no parent)
+simply get no `comparison.json` — nothing to compare against. Mid-pipeline failures still
+get a comparison (often `INCONCLUSIVE` if metrics are missing).
 
 Alongside `comparison.json`, write `runs/<child_id>/comparison.md` — a markdown rendering of
 the same `ExperimentComparison`, produced by `comparator.render_markdown(comparison) -> str`.
@@ -162,7 +164,7 @@ detail link (each experiment row can link to its own `comparison.md`, next to `r
 | `src/labpilot/experiments/models.py` | + `ChangeCategory`, `ConfigChange`, `Verdict`, `ExperimentComparison` |
 | `src/labpilot/experiments/comparator.py` | new — `compare(base, compare) -> ExperimentComparison`, category rules, verdict logic, `render_markdown(comparison) -> str` |
 | `src/labpilot/tracking/index.py` | `diff_runs()` becomes a thin wrapper: build two `Experiment`s, call `comparator.compare`, adapt to the existing `RunDiff` shape so `research runs diff` output is unchanged |
-| `src/labpilot/orchestrator/pipeline.py` | `improve()` writes `comparison.json` and `comparison.md` after `write_reflection` |
+| `src/labpilot/orchestrator/pipeline.py` | `improve()` writes `comparison.json` and `comparison.md` in a `finally` block |
 | `src/labpilot/cli/main.py` | + `experiments compare` subcommand |
 | `configs/default.yaml` | + `experiments.comparator.{noise_epsilon,max_runtime_increase_pct}` |
 
@@ -190,7 +192,7 @@ file.
 - Verdict thresholds are heuristic, not statistically rigorous (no variance estimate from
   repeated seeds) — acceptable for v1 given LabPilot doesn't run repeated-seed trials today.
 
-## Open questions
+## Open questions (resolved)
 
 1. Should `research runs diff`'s output format change at all, or must it be byte-for-byte
    identical after the refactor? → Byte-for-byte identical; this is a pure internals swap,
@@ -200,6 +202,15 @@ file.
    → Yes, add `template_name` as a compared field; it's exactly the kind of change the brief's
    example (`+ Mixup`, `+ EMA`) is gesturing at when the change is more structural than a
    single hyperparameter.
+3. `feature_recipes` category? → Default `FEATURE_ENGINEERING`; known augmentation recipe
+   names (`mixup`, `ema`, `cutmix`, `cutout`, …) map to `AUGMENTATION`. Emit per-recipe
+   `ConfigChange`s.
+4. When does `improve()` write comparison artifacts? → Whenever the child has a
+   `parent_run_id` and both experiments assemble — via `try`/`finally` around `_execute`,
+   including after mid-pipeline stage failures (not gated on `write_reflection`).
+5. Metric direction? → Normalize so “improved” is always positive before `_verdict()`, using
+   `MetricSpec` from `competition.json` when available; if missing, treat as maximize.
+   `INCONCLUSIVE` only when there is no shared primary metric key.
 
 ## Acceptance criteria
 

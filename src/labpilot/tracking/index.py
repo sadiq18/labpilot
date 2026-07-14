@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from labpilot.experiments.comparator import compare
 from labpilot.experiments.graph import assemble_experiment
 from labpilot.orchestrator.manifest import load_manifest
 from labpilot.tracking.store import ExperimentRecord, ExperimentStore
@@ -66,6 +67,11 @@ def scan_runs(runs_dir: Path) -> list[RunIndexEntry]:
 
 
 def diff_runs(runs_dir: Path, base_run_id: str, compare_run_id: str) -> RunDiff:
+    """Diff two runs, reusing Plan 3's comparator for metric deltas.
+
+    `RunDiff` params/lineage/submission stay sourced from experiment records and
+    manifests so `research runs diff` remains regression-identical to pre-Plan-3.
+    """
     base_dir = runs_dir / base_run_id
     compare_dir = runs_dir / compare_run_id
     if not (base_dir / "manifest.json").is_file():
@@ -82,13 +88,13 @@ def diff_runs(runs_dir: Path, base_run_id: str, compare_run_id: str) -> RunDiff:
         run_id=compare_run_id, competition=compare_manifest.competition
     )
 
-    metric_deltas: dict[str, float] = {}
-    all_metric_keys = set(base_record.metrics) | set(compare_record.metrics)
-    for key in sorted(all_metric_keys):
-        base_value = base_record.metrics.get(key)
-        compare_value = compare_record.metrics.get(key)
-        if isinstance(base_value, (int, float)) and isinstance(compare_value, (int, float)):
-            metric_deltas[key] = float(compare_value) - float(base_value)
+    base_experiment = assemble_experiment(base_dir)
+    compare_experiment = assemble_experiment(compare_dir)
+    comparison = compare(
+        base_experiment,
+        compare_experiment,
+        competition_dirs=(base_dir, compare_dir),
+    )
 
     param_changes: dict[str, dict[str, Any]] = {}
     all_param_keys = set(base_record.params) | set(compare_record.params)
@@ -115,7 +121,7 @@ def diff_runs(runs_dir: Path, base_run_id: str, compare_run_id: str) -> RunDiff:
         compare_run_id=compare_run_id,
         base_metrics=base_record.metrics,
         compare_metrics=compare_record.metrics,
-        metric_deltas=metric_deltas,
+        metric_deltas=comparison.metric_deltas,
         base_params=base_record.params,
         compare_params=compare_record.params,
         param_changes=param_changes,

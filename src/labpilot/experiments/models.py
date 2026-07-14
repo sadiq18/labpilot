@@ -68,3 +68,39 @@ class Experiment(BaseModel):
     reflection_path: str | None = None
     report_path: str | None = None
     created_at: datetime
+
+
+class ChangeCategory(StrEnum):
+    MODEL = "model"
+    AUGMENTATION = "augmentation"
+    TRAINING_STRATEGY = "training_strategy"
+    SCHEDULER = "scheduler"
+    FEATURE_ENGINEERING = "feature_engineering"
+    OTHER = "other"
+
+
+class ConfigChange(BaseModel):
+    category: ChangeCategory
+    field: str
+    base_value: Any
+    compare_value: Any
+    label: str
+
+
+class Verdict(StrEnum):
+    WORTH_KEEPING = "worth_keeping"
+    NOT_WORTH_KEEPING = "not_worth_keeping"
+    REGRESSION = "regression"
+    INCONCLUSIVE = "inconclusive"
+
+
+class ExperimentComparison(BaseModel):
+    base_id: str
+    compare_id: str
+    primary_metric_key: str | None
+    metric_deltas: dict[str, float]
+    changes: list[ConfigChange]
+    runtime_delta_seconds: float | None
+    runtime_delta_pct: float | None
+    verdict: Verdict
+    verdict_reason: str

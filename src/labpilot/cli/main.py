@@ -20,7 +20,8 @@ from labpilot.diagnostics import (
     print_diagnostics_report,
     required_environment_checks,
 )
-from labpilot.experiments.graph import build_graph
+from labpilot.experiments.comparator import compare, load_comparison, render_markdown
+from labpilot.experiments.graph import assemble_experiment, build_graph
 from labpilot.experiments.hypothesis import HypothesisStore, linked_experiments
 from labpilot.experiments.models import HypothesisStatus
 from labpilot.kaggle.client import SubmissionResult
@@ -802,6 +803,97 @@ def experiments_show(
     table.add_row("Reflection", experiment.reflection_path or "-")
     table.add_row("Report", experiment.report_path or "-")
     console.print(table)
+
+
+@experiments_app.command("compare")
+def experiments_compare(
+    base_id: str = typer.Argument(..., help="Base (parent / earlier) run ID"),
+    compare_id: str = typer.Argument(..., help="Compare (child / later) run ID"),
+    output_format: str = typer.Option(
+        "table", "--format", help="Output format: table, json, or markdown"
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+) -> None:
+    """Deterministic A/B comparison with categorized changes and a verdict."""
+    if output_format not in {"table", "json", "markdown"}:
+        raise typer.BadParameter("--format must be 'table', 'json', or 'markdown'.")
+
+    config = load_config(config_path)
+    if runs_dir:
+        config.runs_dir = runs_dir
+
+    base_dir = config.runs_dir / base_id
+    compare_dir = config.runs_dir / compare_id
+    if not (base_dir / "manifest.json").is_file():
+        console.print(f"[red]Base run not found:[/red] {base_id} (check --runs-dir).")
+        raise typer.Exit(code=1)
+    if not (compare_dir / "manifest.json").is_file():
+        console.print(f"[red]Compare run not found:[/red] {compare_id} (check --runs-dir).")
+        raise typer.Exit(code=1)
+
+    # Prefer on-disk comparison.json when it already records this exact pair so
+    # `--format markdown` matches the persisted comparison.md byte-for-byte.
+    stored = load_comparison(compare_dir)
+    if stored is not None and stored.base_id == base_id and stored.compare_id == compare_id:
+        comparison = stored
+    else:
+        base_exp = assemble_experiment(base_dir, knowledge_dir=config.knowledge_dir)
+        compare_exp = assemble_experiment(compare_dir, knowledge_dir=config.knowledge_dir)
+        comparator_cfg = config.experiments.comparator
+        comparison = compare(
+            base_exp,
+            compare_exp,
+            noise_epsilon=comparator_cfg.noise_epsilon,
+            max_runtime_increase_pct=comparator_cfg.max_runtime_increase_pct,
+            competition_dirs=(base_dir, compare_dir),
+        )
+
+    if output_format == "json":
+        print(comparison.model_dump_json(indent=2))
+        return
+
+    if output_format == "markdown":
+        # Plain print — same deterministic string as comparison.md on disk.
+        sys.stdout.write(render_markdown(comparison))
+        return
+
+    changes_table = Table(title="Changes")
+    changes_table.add_column("Category", style="cyan")
+    changes_table.add_column("Change")
+    if comparison.changes:
+        for change in comparison.changes:
+            changes_table.add_row(change.category.value, change.label)
+    else:
+        changes_table.add_row("-", "(no config changes detected)")
+    console.print(changes_table)
+
+    metrics_table = Table(title="Metrics")
+    metrics_table.add_column("Metric", style="cyan")
+    metrics_table.add_column("Delta")
+    for key in sorted(comparison.metric_deltas):
+        delta = comparison.metric_deltas[key]
+        label = f"{key} (primary)" if key == comparison.primary_metric_key else key
+        metrics_table.add_row(label, f"{delta:+.4f}")
+    if comparison.runtime_delta_seconds is None:
+        metrics_table.add_row("Training time", "not available")
+    else:
+        pct = comparison.runtime_delta_pct
+        pct_part = f" ({pct:+.0f}%)" if pct is not None else ""
+        metrics_table.add_row(
+            "Training time", f"{comparison.runtime_delta_seconds:+.1f}s{pct_part}"
+        )
+    metrics_table.add_row("Inference", "not tracked")
+    console.print(metrics_table)
+
+    conclusion = Table(title="Conclusion")
+    conclusion.add_column("Field", style="cyan")
+    conclusion.add_column("Value")
+    conclusion.add_row("Verdict", comparison.verdict.value)
+    conclusion.add_row("Reason", comparison.verdict_reason)
+    console.print(conclusion)
 
 
 @hypothesis_app.command("add")
