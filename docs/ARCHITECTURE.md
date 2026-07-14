@@ -149,6 +149,7 @@ Commands:
 - `research list-runs` — list all runs
 - `research experiments graph --competition <slug>` / `research experiments show <run_id>` — experiment lineage graph (Milestone 2)
 - `research experiments compare <base> <compare>` — categorized A/B comparison + verdict (Milestone 2)
+- `research experiments knowledge list --competition <slug>` — accumulated technique knowledge (Milestone 2)
 - `research hypothesis add|list|show|update` — structured hypotheses under `knowledge/` (Milestone 2)
 - `research doctor` — environment diagnostics
 
@@ -389,6 +390,21 @@ hood while keeping its legacy `RunDiff` shape. See
 Markdown is a deterministic view of the JSON (not a second independent LLM call). Side effects
 run only for successful LLM generations when comparison context is healthy (roots always;
 children need a comparison). Cap: `experiments.reflection.max_new_hypotheses` (default 3).
+
+### 20. Knowledge Base (Milestone 2, Plan 5)
+
+| | |
+|---|---|
+| **Path** | `experiments/models.py` (`KnowledgeEntry`), `experiments/knowledge.py` |
+| **Responsibility** | Accumulate technique×metric effects from comparisons (+ optional UNKNOWN from reflection tags) |
+| **Input** | `ExperimentComparison` after improve; `StructuredReflection.new_hypotheses[].tags` |
+| **Output** | `knowledge/<slug>/knowledge_base.json`; CLI `research experiments knowledge list` |
+| **Status** | Implemented |
+
+Keyed by `(technique, metric_key)`. Technique names come from field/recipe short names.
+Comparator updates use signed primary-metric deltas; reflection adds UNKNOWN entries (confidence
+≤ 0.4) only when that technique is not already corroborated. See
+[milestones/milestone-2/plan-5-knowledge-base.md](milestones/milestone-2/plan-5-knowledge-base.md).
 
 ## Repository Structure
 

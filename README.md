@@ -245,13 +245,20 @@ research experiments show <run_id> --format json
 research experiments compare <base_id> <compare_id>
 research experiments compare <base_id> <compare_id> --format markdown
 research experiments compare <base_id> <compare_id> --format json
+
+# Accumulated technique knowledge (Plan 5)
+research experiments knowledge list --competition titanic
+research experiments knowledge list --competition titanic --effect hurts
+research experiments knowledge list --competition titanic --technique target_encoding
 ```
 
 | Option | Description |
 |--------|-------------|
-| `--competition, -c` | Kaggle competition slug (`graph` only, required) |
+| `--competition, -c` | Kaggle competition slug (`graph` / `knowledge list` required) |
 | `--metric` | Metric key to annotate scores and highlight the best root-to-leaf path (`graph` only) |
 | `--format` | `table` (default), `json` (`show`/`compare`), or `markdown` (`compare` only) |
+| `--technique` | Filter knowledge entries by technique (`knowledge list`) |
+| `--effect` | Filter knowledge by `improves`/`hurts`/`neutral`/`unknown` (`knowledge list`) |
 | `--config` | Path to config file (default: `configs/default.yaml`) |
 | `--runs-dir` | Override the runs directory |
 

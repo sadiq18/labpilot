@@ -19,6 +19,7 @@ from labpilot.data.downloader import DataDownloader
 from labpilot.experiments.comparator import compare, load_comparison, write_comparison
 from labpilot.experiments.graph import assemble_experiment, capture_git_commit
 from labpilot.experiments.hypothesis import HypothesisStore
+from labpilot.experiments.knowledge import KnowledgeBase
 from labpilot.experiments.models import StructuredReflection
 from labpilot.improvement.fork import fork_run
 from labpilot.improvement.models import (
@@ -252,10 +253,39 @@ class Pipeline:
                 competition_dirs=(parent_dir, child_run_dir),
             )
             write_comparison(child_run_dir, comparison)
+            self._update_knowledge_from_comparison(
+                child.competition, comparison, parent_dir, child_run_dir
+            )
         except Exception as exc:
             logger.warning(
                 "Could not write comparison for %s: %s", child_run_dir.name, exc
             )
+
+    def _update_knowledge_from_comparison(
+        self,
+        competition: str,
+        comparison,
+        *competition_dirs: Path,
+    ) -> None:
+        """Best-effort Plan 5 KB update from a just-written comparison."""
+        try:
+            maximize = True
+            for run_dir in competition_dirs:
+                path = Path(run_dir) / "competition.json"
+                if not path.is_file():
+                    continue
+                try:
+                    spec = CompetitionSpec.model_validate_json(path.read_text())
+                except (OSError, ValueError):
+                    continue
+                if spec.evaluation_metric is not None:
+                    maximize = spec.evaluation_metric.direction != "minimize"
+                    break
+            KnowledgeBase(self.config.knowledge_dir, competition).update_from_comparison(
+                comparison, maximize=maximize
+            )
+        except Exception as exc:
+            logger.warning("Knowledge base update from comparison failed: %s", exc)
 
     def _start(
         self,
@@ -791,6 +821,12 @@ class Pipeline:
                         competition_dirs=(config.runs_dir / parent_id, run_dir),
                     )
                     write_comparison(run_dir, comparison)
+                    self._update_knowledge_from_comparison(
+                        manifest.competition,
+                        comparison,
+                        config.runs_dir / parent_id,
+                        run_dir,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "Comparison failed for reflection on %s: %s",
@@ -834,7 +870,39 @@ class Pipeline:
                 structured=structured,
             )
 
+        # Plan 5: optional UNKNOWN entries from draft tags (best-effort).
+        self._update_knowledge_from_reflection(
+            config=config,
+            competition=manifest.competition,
+            structured=structured,
+            comparison=comparison,
+            metrics=metrics,
+        )
+
         return [str(path) for path in paths]
+
+    def _update_knowledge_from_reflection(
+        self,
+        *,
+        config: AppConfig,
+        competition: str,
+        structured: StructuredReflection,
+        comparison,
+        metrics: dict[str, float],
+    ) -> None:
+        try:
+            metric_key = None
+            if comparison is not None and comparison.primary_metric_key:
+                metric_key = comparison.primary_metric_key
+            elif metrics:
+                metric_key = sorted(metrics)[0]
+            if not metric_key:
+                return
+            KnowledgeBase(config.knowledge_dir, competition).update_from_reflection(
+                structured, metric_key=metric_key
+            )
+        except Exception as exc:
+            logger.warning("Knowledge base update from reflection failed: %s", exc)
 
     def _apply_reflection_hypothesis_side_effects(
         self,

@@ -2,7 +2,7 @@
 
 Back to [Milestone 2](README.md).
 
-**Status:** Design. **Depends on:** Plan 3 (`ExperimentComparison`, required signal), Plan 4
+**Status:** Shipped. **Depends on:** Plan 3 (`ExperimentComparison`, required signal), Plan 4
 (`StructuredReflection`, optional enrichment). **Unlocks:** Plan 6, Plan 8.
 
 ---
@@ -131,16 +131,21 @@ dashboard.
   (and optionally reflections), never hand-authored, to keep the base's confidence numbers
   meaningfully tied to evidence.
 
-## Open questions
+## Open questions (resolved)
 
 1. Should `KnowledgeEntry` be keyed on `(technique, metric_key)` so the same technique can have
    different, independently-tracked effects on different metrics (e.g. helps `cv_macro_f1` but
-   hurts `cv_accuracy`)? → Yes — this is important enough to bake into the model now rather
-   than retrofit later; `KnowledgeBase` internally indexes by that composite key.
+   hurts `cv_accuracy`)? → Yes — baked into the model; `KnowledgeBase` indexes by that
+   composite key.
 2. Do we need file locking for concurrent writes (two runs finishing at once updating the same
-   `knowledge_base.json`)? → Not for v1 — LabPilot runs are sequential CLI invocations today,
-   no concurrent pipeline execution exists yet. Note this assumption explicitly so it's
-   revisited if/when remote/parallel execution (deferred P2 execution work) lands.
+   `knowledge_base.json`)? → Not for v1 — LabPilot runs are sequential CLI invocations today.
+3. Technique identity? → Prefer recipe / param field short names (`target_encoding`,
+   `learning_rate`), normalized (lowercase), not raw comparator labels.
+4. Reflection enrichment in this PR? → Yes — `update_from_reflection` adds `UNKNOWN`
+   low-confidence (≤ 0.4) entries from `new_hypotheses[].tags` when not already covered by a
+   comparator-derived entry for the same `(technique, metric_key)`.
+5. CLI scope? → `research experiments knowledge list` only in v1 (`top_discoveries` /
+   `known_failures` are API helpers for Plan 8).
 
 ## Acceptance criteria
 

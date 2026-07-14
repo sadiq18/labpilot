@@ -133,3 +133,23 @@ class ExperimentComparison(BaseModel):
     runtime_delta_pct: float | None
     verdict: Verdict
     verdict_reason: str
+
+
+class KnowledgeEffect(StrEnum):
+    IMPROVES = "improves"
+    HURTS = "hurts"
+    NEUTRAL = "neutral"
+    UNKNOWN = "unknown"
+
+
+class KnowledgeEntry(BaseModel):
+    """Cross-experiment observation about one technique on one metric."""
+
+    technique: str
+    metric_key: str
+    effect: KnowledgeEffect
+    delta_estimate: float
+    confidence: float = Field(ge=0.0, le=1.0)
+    sample_size: int = 0
+    evidence_run_ids: list[str] = Field(default_factory=list)
+    updated_at: datetime
