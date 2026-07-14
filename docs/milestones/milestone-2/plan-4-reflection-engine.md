@@ -2,7 +2,7 @@
 
 Back to [Milestone 2](README.md).
 
-**Status:** Design. **Depends on:** Plan 1 (`Experiment`), Plan 2 (`Hypothesis`), Plan 3
+**Status:** Shipped. **Depends on:** Plan 1 (`Experiment`), Plan 2 (`Hypothesis`), Plan 3
 (`ExperimentComparison`). **Unlocks:** Plan 5 (optional richer signal).
 
 ---
@@ -160,14 +160,21 @@ wrote in the prior stage.
   will change since it's now rendered from structured fields — this is acceptable and worth
   calling out to reviewers, not a silent behavior change to hide.
 
-## Open questions
+## Open questions (resolved)
 
 1. Should `hypothesis_updates`/`new_hypotheses` side effects happen even when
    `generated_by == "template_fallback"`? → No; the static fallback never fabricates a
    hypothesis update or draft (empty lists), since it has no real signal to offer beyond the
    existing generic checklist.
-2. Cap on `new_hypotheses` per reflection to avoid backlog spam? → Yes, cap at e.g. 3,
+2. Cap on `new_hypotheses` per reflection to avoid backlog spam? → Yes, cap at 3,
    configurable (`experiments.reflection.max_new_hypotheses`).
+3. Comparison timing vs reflection? → Comparison is best-effort context, never a gate.
+   `write_reflection` always produces structured artifacts even if comparison fails; in that
+   degraded path leave `new_hypotheses` empty. Hypothesis side effects only when
+   `generated_by == "llm"` and (`parent_id is None` or `comparison is not None`).
+4. Which hypotheses may the LLM update? → Only the run's tagged `hypothesis_id`. Mismatched
+   IDs are ignored. Untagged runs ignore `hypothesis_updates`. Drafts land via
+   `HypothesisStore.create(..., source="reflection")`.
 
 ## Acceptance criteria
 

@@ -6,7 +6,7 @@ from typing import Any
 
 from labpilot.baseline.selector import BaselineChoice
 from labpilot.competition.models import CompetitionSpec
-from labpilot.experiments.models import Experiment
+from labpilot.experiments.models import Experiment, StructuredReflection
 from labpilot.improvement.models import (
     ImprovementPlan,
     load_improvement_plan,
@@ -257,9 +257,21 @@ def assemble_experiment(
         config_snapshot=config_snapshot,
         artifacts=_scan_artifacts(run_dir),
         reflection_path=str(reflection_path) if reflection_path.is_file() else None,
+        reflection=_load_structured_reflection(run_dir),
         report_path=str(report_path) if report_path.is_file() else None,
         created_at=manifest.created_at,
     )
+
+
+def _load_structured_reflection(run_dir: Path) -> StructuredReflection | None:
+    path = run_dir / "reflection.json"
+    if not path.is_file():
+        return None
+    try:
+        return StructuredReflection.model_validate_json(path.read_text())
+    except (OSError, ValueError) as exc:
+        logger.debug("Could not load reflection.json from %s: %s", path, exc)
+        return None
 
 
 def _pick_best(candidates: list[Experiment], metric_key: str, maximize: bool) -> Experiment | None:

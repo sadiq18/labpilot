@@ -2,7 +2,7 @@
 
 Back to [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** In progress — Plans 1–3 shipped, Plans 4–8 still design-only. This directory is the
+**Status:** In progress — Plans 1–4 shipped, Plans 5–8 still design-only. This directory is the
 architecture/design workspace for Milestone 2. Each `plan-N-*.md` is meant to be reviewed and
 built independently, in order, as its own PR.
 
@@ -114,7 +114,7 @@ Nothing under `runs/<run_id>/` is removed; Plan 3 adds one new artifact
 |---|---|---|
 | Experiment object with parent/child | `improvement/fork.py` sets `parent_run_id`/`iteration` in `manifest.json`; `tracking/index.py:scan_runs` reads it | No `children` reverse-index, no graph traversal/visualization, no `git_commit`, single-parent-chain only ever exercised (Plan 1) |
 | Config diff / metric diff between two runs | `tracking/index.py:diff_runs` → `RunDiff` | No categorization (augmentation/model/training), no cost deltas, no verdict, computed on-demand only, not persisted (Plan 3) |
-| Post-run recommendations | `reflection/generator.py` → freeform `reflection.md` via LLM (or template fallback) | Freeform text, not structured; no access to comparator output or hypothesis; doesn't update anything (Plan 4) |
+| Post-run recommendations | `reflection/generator.py` → `reflection.json` + rendered `reflection.md` (Plan 4 shipped) | — |
 | "What should I try next" plan | `improvement/planner.py` → `ImprovementPlan` (LLM or `--strategy tune\|features`) | Produces a plan for **one specific child run about to execute**, not a ranked backlog of candidate ideas; no persistent hypothesis object; this stays as-is — Milestone 2 does not replace it (Plan 6 complements it) |
 | Cross-run comparison CLI | `research runs diff --base --compare` | Kept as-is; becomes a thin wrapper over the new comparator (Plan 3) |
 

@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +16,7 @@ from labpilot.improvement.models import (
 from labpilot.improvement.recipes import apply_recipes_from_profile
 from labpilot.improvement.tuner import default_tabular_params, pick_tune_params
 from labpilot.llm.client import LLMClient, create_llm_client
+from labpilot.llm.json_utils import parse_json_object
 from labpilot.profiler.report import load_profile
 
 logger = logging.getLogger(__name__)
@@ -188,7 +188,7 @@ class ImprovementPlanner:
             f"Reflection:\n{reflection[:8000]}"
         )
         raw = self._complete_with_retries(user, max_attempts=3, retry_delay_seconds=20.0)
-        payload = _parse_json_object(raw)
+        payload = parse_json_object(raw)
         actions = [
             ImprovementAction(action)
             for action in payload.get("actions", [])
@@ -238,15 +238,3 @@ def _is_tabular(problem_type: str) -> bool:
         ProblemType.TABULAR_CLASSIFICATION.value,
         ProblemType.TABULAR_REGRESSION.value,
     }
-
-
-def _parse_json_object(text: str) -> dict[str, Any]:
-    text = text.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if fence:
-        text = fence.group(1)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1:
-        raise ValueError("Planner response did not contain JSON object.")
-    return json.loads(text[start : end + 1])

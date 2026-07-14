@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
@@ -36,6 +38,32 @@ class Hypothesis(BaseModel):
     updated_at: datetime
 
 
+class HypothesisUpdate(BaseModel):
+    hypothesis_id: str
+    new_status: HypothesisStatus
+    note: str = ""
+
+
+class HypothesisDraft(BaseModel):
+    observation: str
+    reason: str
+    prediction: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    tags: list[str] = Field(default_factory=list)
+
+
+class StructuredReflection(BaseModel):
+    run_id: str
+    observation: str
+    evidence: list[str] = Field(default_factory=list)
+    likely_cause: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    suggested_next: list[str] = Field(default_factory=list)
+    hypothesis_updates: list[HypothesisUpdate] = Field(default_factory=list)
+    new_hypotheses: list[HypothesisDraft] = Field(default_factory=list)
+    generated_by: Literal["llm", "template_fallback"]
+
+
 class Experiment(BaseModel):
     """Read-side view of one run, assembled from its existing artifacts.
 
@@ -66,6 +94,7 @@ class Experiment(BaseModel):
     config_snapshot: dict[str, Any] = Field(default_factory=dict)
     artifacts: list[str] = Field(default_factory=list)
     reflection_path: str | None = None
+    reflection: StructuredReflection | None = None
     report_path: str | None = None
     created_at: datetime
 

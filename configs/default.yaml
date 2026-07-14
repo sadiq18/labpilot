@@ -7,6 +7,8 @@ experiments:
   comparator:
     noise_epsilon: 0.001
     max_runtime_increase_pct: 50
+  reflection:
+    max_new_hypotheses: 3
 
 # Used to generate brief.md/reflection.md — entirely optional. If no API key
 # is configured for the chosen provider (or the optional package isn't
