@@ -2,7 +2,7 @@
 
 Back to [Milestone 2](README.md).
 
-**Status:** Design. **Depends on:** Plan 1 (`Experiment`/`ExperimentGraph`). **Optionally
+**Status:** Shipped. **Depends on:** Plan 1 (`Experiment`/`ExperimentGraph`). **Optionally
 enriched by:** Plan 3 (`ExperimentComparison.verdict`/technique tags as filters). **Unlocks:**
 nothing downstream — this is a leaf capability, useful standalone.
 

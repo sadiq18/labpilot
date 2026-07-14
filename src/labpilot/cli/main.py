@@ -24,8 +24,16 @@ from labpilot.experiments.comparator import compare, load_comparison, render_mar
 from labpilot.experiments.graph import assemble_experiment, build_graph
 from labpilot.experiments.hypothesis import HypothesisStore, linked_experiments
 from labpilot.experiments.knowledge import KnowledgeBase
-from labpilot.experiments.models import HypothesisStatus
+from labpilot.experiments.models import HypothesisStatus, Verdict
 from labpilot.experiments.ranking import RankingWeights, rank_candidates
+from labpilot.experiments.search import (
+    SearchFilters,
+    load_comparisons,
+    parse_duration,
+    parse_key_value,
+    parse_metric_threshold,
+    search,
+)
 from labpilot.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
 from labpilot.orchestrator.manifest import StageStatus, load_manifest
@@ -969,6 +977,103 @@ def experiments_rank(
         f"(confidence {top_candidate.hypothesis.confidence:.0%}, "
         f"score {top_candidate.score:.3f})"
     )
+
+
+@experiments_app.command("search")
+def experiments_search(
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    config_equals: list[str] = typer.Option(
+        [], "--config", help="Filter key=value (repeatable), e.g. model_params.ema=true"
+    ),
+    recipe: list[str] = typer.Option([], "--recipe", help="Require feature recipe (repeatable)"),
+    metric_gt: list[str] = typer.Option(
+        [], "--metric-gt", help="Filter metric key:value greater-than (repeatable)"
+    ),
+    metric_lt: list[str] = typer.Option(
+        [], "--metric-lt", help="Filter metric key:value less-than (repeatable)"
+    ),
+    metric_delta_gt: list[str] = typer.Option(
+        [], "--metric-delta-gt", help="Filter comparison metric delta key:value (repeatable)"
+    ),
+    metric_delta_lt: list[str] = typer.Option(
+        [], "--metric-delta-lt", help="Filter comparison metric delta key:value (repeatable)"
+    ),
+    runtime_max: str | None = typer.Option(
+        None, "--runtime-max", help="Max runtime (e.g. 4h, 90m, 30s)"
+    ),
+    runtime_min: str | None = typer.Option(
+        None, "--runtime-min", help="Min runtime (e.g. 4h, 90m, 30s)"
+    ),
+    verdict: str | None = typer.Option(
+        None,
+        "--verdict",
+        help="worth_keeping|not_worth_keeping|regression|inconclusive",
+    ),
+    status: str | None = typer.Option(None, "--status", help="Exact experiment status"),
+    template: str | None = typer.Option(None, "--template", help="Exact template_name"),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config-file", help="Path to LabPilot config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+) -> None:
+    """Search experiments in a competition with composable AND filters."""
+    # Note: --config is used for key=value filters; LabPilot config file is --config-file.
+    filters = SearchFilters()
+    try:
+        for item in config_equals:
+            filters.config_equals.append(parse_key_value(item))
+        filters.recipes = list(recipe)
+        for item in metric_gt:
+            filters.metric_gt.append(parse_metric_threshold(item))
+        for item in metric_lt:
+            filters.metric_lt.append(parse_metric_threshold(item))
+        for item in metric_delta_gt:
+            filters.metric_delta_gt.append(parse_metric_threshold(item))
+        for item in metric_delta_lt:
+            filters.metric_delta_lt.append(parse_metric_threshold(item))
+        if runtime_max is not None:
+            filters.runtime_max_seconds = parse_duration(runtime_max)
+        if runtime_min is not None:
+            filters.runtime_min_seconds = parse_duration(runtime_min)
+        if verdict is not None:
+            filters.verdict = Verdict(verdict)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    filters.status = status
+    filters.template = template
+
+    config = _load_app_config(config_path, runs_dir, None, None)
+    graph = build_graph(config.runs_dir, competition, knowledge_dir=config.knowledge_dir)
+    if not graph.nodes:
+        console.print(f"No experiments found for [cyan]{competition}[/cyan].")
+        raise typer.Exit()
+
+    comparisons = load_comparisons(config.runs_dir, graph)
+    matches = search(graph, comparisons, filters)
+    if not matches:
+        console.print(f"No experiments matched filters for [cyan]{competition}[/cyan].")
+        raise typer.Exit()
+
+    table = Table(title=f"Search: {competition} ({len(matches)} match(es))")
+    table.add_column("ID", style="cyan")
+    table.add_column("Status")
+    table.add_column("Template")
+    table.add_column("Recipes")
+    table.add_column("Metrics")
+    table.add_column("Runtime")
+    for exp in matches:
+        metrics = ", ".join(f"{k}={v:.4f}" for k, v in sorted(exp.metrics.items())[:3]) or "-"
+        runtime = f"{exp.runtime_seconds:.1f}s" if exp.runtime_seconds is not None else "-"
+        table.add_row(
+            exp.id,
+            exp.status,
+            exp.template_name or "-",
+            ", ".join(exp.feature_recipes) or "-",
+            metrics,
+            runtime,
+        )
+    console.print(table)
 
 
 @knowledge_app.command("list")
