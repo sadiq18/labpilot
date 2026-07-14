@@ -73,6 +73,7 @@ class PipelineConfig(BaseModel):
 
 class AppConfig(BaseModel):
     runs_dir: Path = Path("runs")
+    knowledge_dir: Path = Path("knowledge")
     llm: LLMConfig = Field(default_factory=LLMConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     profiler: ProfilerConfig = Field(default_factory=ProfilerConfig)
@@ -92,6 +93,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     gemini_api_key: str = ""
     labpilot_runs_dir: str = "runs"
+    labpilot_knowledge_dir: str = "knowledge"
     labpilot_llm_provider: str = ""
     labpilot_llm_model: str = ""
     labpilot_runtimes_dir: str = ""
@@ -122,6 +124,8 @@ def _load_yaml_dict(path: Path) -> dict[str, Any]:
 def _normalize_paths(raw: dict[str, Any]) -> dict[str, Any]:
     if "runs_dir" in raw:
         raw["runs_dir"] = Path(raw["runs_dir"])
+    if "knowledge_dir" in raw:
+        raw["knowledge_dir"] = Path(raw["knowledge_dir"])
     runtime = raw.get("runtime")
     if isinstance(runtime, dict) and "runtimes_dir" in runtime:
         runtime["runtimes_dir"] = Path(runtime["runtimes_dir"])
@@ -150,6 +154,8 @@ def _apply_settings(config: AppConfig, settings: Settings, raw: dict[str, Any]) 
 
     if settings.labpilot_runs_dir != "runs":
         config.runs_dir = Path(settings.labpilot_runs_dir)
+    if settings.labpilot_knowledge_dir != "knowledge":
+        config.knowledge_dir = Path(settings.labpilot_knowledge_dir)
     if settings.labpilot_runtimes_dir:
         config.runtime.runtimes_dir = Path(settings.labpilot_runtimes_dir)
     if settings.labpilot_default_runtime:

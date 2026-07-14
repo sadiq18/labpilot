@@ -17,6 +17,7 @@ from labpilot.competition.parser import CompetitionParser
 from labpilot.config import AppConfig
 from labpilot.data.downloader import DataDownloader
 from labpilot.experiments.graph import capture_git_commit
+from labpilot.experiments.hypothesis import HypothesisStore
 from labpilot.improvement.fork import fork_run
 from labpilot.improvement.models import (
     load_training_overrides,
@@ -27,7 +28,7 @@ from labpilot.improvement.planner import ImprovementPlanner
 from labpilot.kaggle.client import KaggleClient, KaggleGateway, SubmissionResult
 from labpilot.kaggle.urls import competition_submissions_url
 from labpilot.kernel.exporter import export_kernel
-from labpilot.llm.client import LLMClient, create_llm_client, resolve_llm_client
+from labpilot.llm.client import LLMClient, resolve_llm_client
 from labpilot.orchestrator.manifest import (
     RunManifest,
     StageStatus,
@@ -39,11 +40,11 @@ from labpilot.profiler.report import load_profile, write_profile
 from labpilot.profiler.tabular import TabularProfiler
 from labpilot.reflection.generator import ReflectionGenerator
 from labpilot.report.generator import ReportGenerator
+from labpilot.runtimes.models import RuntimeRecord
+from labpilot.runtimes.registry import get_runtime
 from labpilot.submission.formatter import SubmissionValidator
 from labpilot.tracking.logger import ExperimentLogger
 from labpilot.training.runner import TrainingRunner
-from labpilot.runtimes.models import RuntimeRecord
-from labpilot.runtimes.registry import get_runtime
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -106,19 +107,35 @@ class Pipeline:
             "write_report": self._write_report,
         }
 
-    def run(self, competition: str, run_dir: Path | None = None) -> RunManifest:
+    def run(
+        self,
+        competition: str,
+        run_dir: Path | None = None,
+        *,
+        hypothesis_id: str | None = None,
+    ) -> RunManifest:
         """Run every configured stage, start to finish, in one call."""
-        manifest, resolved_run_dir, all_stages = self._start(competition, run_dir)
+        manifest, resolved_run_dir, all_stages = self._start(
+            competition, run_dir, hypothesis_id=hypothesis_id
+        )
         return self._execute(resolved_run_dir, manifest, all_stages, all_stages)
 
-    def init(self, competition: str, run_dir: Path | None = None) -> RunManifest:
+    def init(
+        self,
+        competition: str,
+        run_dir: Path | None = None,
+        *,
+        hypothesis_id: str | None = None,
+    ) -> RunManifest:
         """Run only the init half: parse → download → profile → brief.
 
         Leaves the run in `partial` status, ready for `build()` (or
         `resume()`) to run the remaining stages once the resolved brief/
         baseline choice has been reviewed.
         """
-        manifest, resolved_run_dir, all_stages = self._start(competition, run_dir)
+        manifest, resolved_run_dir, all_stages = self._start(
+            competition, run_dir, hypothesis_id=hypothesis_id
+        )
         stages_to_run = [name for name in all_stages if name in INIT_STAGES]
         if not stages_to_run:
             raise ValueError("No init stages are configured; check config.pipeline.stages.")
@@ -141,6 +158,8 @@ class Pipeline:
         self,
         parent_run_id: str,
         strategy: str = "auto",
+        *,
+        hypothesis_id: str | None = None,
     ) -> RunManifest:
         """Fork a completed parent run, plan improvements, and re-run downstream stages."""
         parent_run_dir = (self.config.runs_dir / parent_run_id).resolve()
@@ -153,6 +172,9 @@ class Pipeline:
                 f"Parent run '{parent_run_id}' must be completed before improving "
                 f"(status: {parent_manifest.status.value})."
             )
+
+        if hypothesis_id:
+            self._attach_hypothesis(parent_manifest.competition, hypothesis_id)
 
         planner = ImprovementPlanner(self.config.llm, self.llm_client)
         plan, overrides = planner.plan(
@@ -168,6 +190,7 @@ class Pipeline:
             parent_run_id=parent_run_id,
             improvement_strategy=strategy,
             config=self.config,
+            hypothesis_id=hypothesis_id,
         )
         save_improvement_plan(child_run_dir, plan)
         save_training_overrides(child_run_dir, overrides)
@@ -185,7 +208,18 @@ class Pipeline:
         )
         return self._execute(child_run_dir, child_manifest, stages_to_run, all_stages)
 
-    def _start(self, competition: str, run_dir: Path | None) -> tuple[RunManifest, Path, list[str]]:
+    def _attach_hypothesis(self, competition: str, hypothesis_id: str) -> None:
+        """Validate the hypothesis exists for this competition and mark it testing."""
+        store = HypothesisStore(self.config.knowledge_dir, competition)
+        store.mark_testing_if_proposed(hypothesis_id)
+
+    def _start(
+        self,
+        competition: str,
+        run_dir: Path | None,
+        *,
+        hypothesis_id: str | None = None,
+    ) -> tuple[RunManifest, Path, list[str]]:
         run_id = generate_run_id(competition)
         # Resolved to absolute: the training stage runs the generated script
         # as a subprocess with its cwd set to the run's pipeline directory,
@@ -196,12 +230,19 @@ class Pipeline:
         self._write_runtime_record(resolved_run_dir)
         self._write_config_snapshot(resolved_run_dir)
 
+        if hypothesis_id:
+            self._attach_hypothesis(competition, hypothesis_id)
+
+        metadata: dict[str, Any] = {"git_commit": capture_git_commit()}
+        if hypothesis_id:
+            metadata["hypothesis_id"] = hypothesis_id
+
         manifest = RunManifest(
             run_id=run_id,
             competition=competition,
             status=StageStatus.RUNNING,
             stages=[],
-            metadata={"git_commit": capture_git_commit()},
+            metadata=metadata,
         )
         save_manifest(resolved_run_dir, manifest)
 

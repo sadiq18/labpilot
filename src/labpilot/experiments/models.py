@@ -1,7 +1,39 @@
 from datetime import datetime
-from typing import Any
+from enum import StrEnum
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+class HypothesisStatus(StrEnum):
+    PROPOSED = "proposed"
+    TESTING = "testing"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    INCONCLUSIVE = "inconclusive"
+
+
+class Hypothesis(BaseModel):
+    """Durable, reusable unit of research intent — independent of any one run.
+
+    Linked experiments are derived by filtering the ExperimentGraph on
+    `hypothesis_id` (see `experiments.hypothesis.linked_experiments`), not
+    stored on this object.
+    """
+
+    id: str
+    competition: str
+    observation: str
+    reason: str
+    prediction: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    status: HypothesisStatus = HypothesisStatus.PROPOSED
+    tags: list[str] = Field(default_factory=list)
+    source: Literal["manual", "reflection", "llm"] = "manual"
+    evidence_for: list[str] = Field(default_factory=list)
+    evidence_against: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
 
 
 class Experiment(BaseModel):

@@ -113,6 +113,7 @@ Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-1430
 | `iteration` | Parent iteration + 1 (root runs default to `0`) |
 | `improvement_strategy` | `auto`, `tune`, or `features` |
 | `git_commit` | Best-effort `git rev-parse HEAD` at run start; `None` outside a git checkout |
+| `hypothesis_id` | Optional link to `knowledge/<slug>/hypotheses/H-NNN.json` (Plan 2) |
 
 See [milestones/milestone-2/plan-1-experiment-graph.md](milestones/milestone-2/plan-1-experiment-graph.md)
 for how `config.json`/`git_commit` and the parent/child graph are assembled into a read-side
@@ -143,6 +144,7 @@ Commands:
 - `research status --run-id <id>` — inspect stage progress
 - `research list-runs` — list all runs
 - `research experiments graph --competition <slug>` / `research experiments show <run_id>` — experiment lineage graph (Milestone 2)
+- `research hypothesis add|list|show|update` — structured hypotheses under `knowledge/` (Milestone 2)
 - `research doctor` — environment diagnostics
 
 ### 2. Competition Parser
@@ -332,6 +334,25 @@ for the full design.
 Commands: `research experiments graph --competition <slug> [--metric <key>]` (ASCII lineage
 tree), `research experiments show <run_id> [--format table|json]` (single-experiment detail view).
 
+### 17. Structured Hypothesis (Milestone 2, Plan 2)
+
+| | |
+|---|---|
+| **Path** | `experiments/models.py` (`Hypothesis`), `experiments/hypothesis.py` |
+| **Responsibility** | Per-competition hypothesis CRUD under `knowledge/`, link runs via `manifest.metadata["hypothesis_id"]`, derive linked experiments from the graph |
+| **Input** | CLI authoring; optional `--hypothesis` on `run`/`improve` |
+| **Output** | `knowledge/<slug>/hypotheses/H-NNN.json`; `hypothesis_id` in run manifests |
+| **Status** | Implemented |
+
+One file per hypothesis. Attaching a hypothesis to a run auto-transitions `proposed` →
+`testing`. Status updates with `--evidence-run` append to `evidence_for` (`confirmed`) or
+`evidence_against` (`rejected`). `Experiment.description` prefers `hypothesis.prediction`
+when the link resolves. See
+[milestones/milestone-2/plan-2-hypothesis.md](milestones/milestone-2/plan-2-hypothesis.md).
+
+Commands: `research hypothesis add|list|show|update` (all require `--competition`), plus
+`--hypothesis H-NNN` on `research run` / `research improve`.
+
 ## Repository Structure
 
 ```
@@ -358,7 +379,7 @@ labpilot/
 │   ├── kernel/                # Kernel export for kernel-only competitions
 │   ├── improvement/           # Run fork, planner, tuner, feature recipes (P3)
 │   ├── tracking/              # Experiment logger, store, cross-run index
-│   ├── experiments/           # Experiment graph model + assembly (Milestone 2, Plan 1)
+│   ├── experiments/           # Experiment graph + hypotheses (Milestone 2)
 │   ├── reflection/            # Reflection generation + prompts
 │   └── config.py              # AppConfig + Settings
 │

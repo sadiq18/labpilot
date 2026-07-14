@@ -169,7 +169,10 @@ def _compute_description(
     template_name: str | None,
     improvement_plan: ImprovementPlan | None,
     improvement_strategy: str | None,
+    hypothesis_prediction: str | None = None,
 ) -> str:
+    if hypothesis_prediction:
+        return hypothesis_prediction
     if parent_id is None:
         if template_name:
             return f"{template_name} baseline for {competition}"
@@ -181,7 +184,24 @@ def _compute_description(
     return f"{strategy} iteration on {parent_id}"
 
 
-def assemble_experiment(run_dir: Path) -> Experiment:
+def _load_hypothesis_prediction(
+    knowledge_dir: Path, competition: str, hypothesis_id: str | None
+) -> str | None:
+    if not hypothesis_id:
+        return None
+    # Local import avoids a circular dependency with hypothesis.py importing graph.
+    from labpilot.experiments.hypothesis import HypothesisStore
+
+    hypothesis = HypothesisStore(knowledge_dir, competition).get(hypothesis_id)
+    if hypothesis is None:
+        return None
+    prediction = hypothesis.prediction.strip()
+    return prediction or None
+
+
+def assemble_experiment(
+    run_dir: Path, *, knowledge_dir: Path | None = None
+) -> Experiment:
     """Assemble one `Experiment` from a run directory's existing artifacts.
 
     Single-run assembly only — `children_ids` is always `[]` here, since
@@ -197,6 +217,12 @@ def assemble_experiment(run_dir: Path) -> Experiment:
     parent_id = manifest.metadata.get("parent_run_id")
     template_name = baseline_choice.template_name if baseline_choice else None
     problem_type = baseline_choice.problem_type if baseline_choice else None
+    hypothesis_id = manifest.metadata.get("hypothesis_id")
+
+    resolved_knowledge = knowledge_dir
+    if resolved_knowledge is None:
+        raw = config_snapshot.get("knowledge_dir")
+        resolved_knowledge = Path(raw) if raw else Path("knowledge")
 
     reflection_path = run_dir / "reflection.md"
     report_path = run_dir / "report.html"
@@ -212,11 +238,14 @@ def assemble_experiment(run_dir: Path) -> Experiment:
             template_name=template_name,
             improvement_plan=improvement_plan,
             improvement_strategy=manifest.metadata.get("improvement_strategy"),
+            hypothesis_prediction=_load_hypothesis_prediction(
+                resolved_knowledge, manifest.competition, hypothesis_id
+            ),
         ),
         parent_id=parent_id,
         children_ids=[],
         iteration=int(manifest.metadata.get("iteration", 0)),
-        hypothesis_id=manifest.metadata.get("hypothesis_id"),
+        hypothesis_id=hypothesis_id,
         git_commit=manifest.metadata.get("git_commit"),
         template_name=template_name,
         problem_type=problem_type,
@@ -344,7 +373,9 @@ def _resolve_metric_direction(runs_dir: Path, run_ids: list[str]) -> bool:
     return True
 
 
-def build_graph(runs_dir: Path, competition: str) -> ExperimentGraph:
+def build_graph(
+    runs_dir: Path, competition: str, *, knowledge_dir: Path | None = None
+) -> ExperimentGraph:
     """Scan `runs_dir` for every run belonging to `competition` and assemble
     the full parent/child graph."""
     nodes: dict[str, Experiment] = {}
@@ -355,7 +386,9 @@ def build_graph(runs_dir: Path, competition: str) -> ExperimentGraph:
             manifest = load_manifest(run_dir)
             if manifest.competition != competition:
                 continue
-            nodes[manifest.run_id] = assemble_experiment(run_dir)
+            nodes[manifest.run_id] = assemble_experiment(
+                run_dir, knowledge_dir=knowledge_dir
+            )
 
     children_map: dict[str, list[str]] = {run_id: [] for run_id in nodes}
     for exp in nodes.values():

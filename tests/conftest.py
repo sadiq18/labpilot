@@ -32,6 +32,7 @@ def _no_real_dotenv_in_tests(monkeypatch):
         "ANTHROPIC_API_KEY",
         "GEMINI_API_KEY",
         "LABPILOT_RUNS_DIR",
+        "LABPILOT_KNOWLEDGE_DIR",
         "LABPILOT_LLM_PROVIDER",
         "LABPILOT_LLM_MODEL",
         "LABPILOT_RUNTIMES_DIR",

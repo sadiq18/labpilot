@@ -250,6 +250,36 @@ research experiments show <run_id> --format json
 | `--config` | Path to config file (default: `configs/default.yaml`) |
 | `--runs-dir` | Override the runs directory |
 
+### `research hypothesis add|list|show|update`
+
+Manual structured hypotheses for a competition (Milestone 2, Plan 2). Stored as
+`knowledge/<slug>/hypotheses/H-NNN.json` (gitignored). Attach one to a run with
+`--hypothesis H-001` on `research run` or `research improve` (auto-marks `proposed` →
+`testing`).
+
+```bash
+research hypothesis add --competition titanic \
+  --observation "Rare classes perform poorly" \
+  --reason "Dataset imbalance" \
+  --prediction "Focal Loss will improve Macro F1" \
+  --confidence 0.74 \
+  --tags loss,class-imbalance
+
+research hypothesis list --competition titanic [--status testing]
+research hypothesis show H-001 --competition titanic
+research hypothesis update H-001 --competition titanic --status confirmed --evidence-run <run_id>
+
+research run --competition titanic --hypothesis H-001
+research improve --run-id <parent> --hypothesis H-001 --strategy tune
+```
+
+| Option | Description |
+|--------|-------------|
+| `--competition, -c` | Kaggle competition slug (required on all hypothesis commands) |
+| `--status` | Filter (`list`) or set (`update`): proposed, testing, confirmed, rejected, inconclusive |
+| `--evidence-run` | Run id appended to `evidence_for` (confirmed) or `evidence_against` (rejected) |
+| `--knowledge-dir` | Override the knowledge directory (default: `knowledge/`) |
+
 ### `research resume --run-id <id>`
 
 Resumes a run from its first failed or incomplete stage. Stages already `completed` or
