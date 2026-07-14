@@ -26,6 +26,12 @@ from labpilot.experiments.hypothesis import HypothesisStore, linked_experiments
 from labpilot.experiments.knowledge import KnowledgeBase
 from labpilot.experiments.models import HypothesisStatus, Verdict
 from labpilot.experiments.ranking import RankingWeights, rank_candidates
+from labpilot.experiments.report import (
+    NoExperimentsError,
+    build_report,
+    render_report_text,
+    write_dashboard,
+)
 from labpilot.experiments.search import (
     SearchFilters,
     load_comparisons,
@@ -1074,6 +1080,95 @@ def experiments_search(
             runtime,
         )
     console.print(table)
+
+
+@experiments_app.command("report")
+def experiments_report(
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    output_format: str = typer.Option(
+        "text", "--format", help="Output format: text|json"
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Competition rollup: discoveries, failures, best path, recommended next."""
+    if output_format not in {"text", "json"}:
+        raise typer.BadParameter("--format must be text or json")
+    config = _load_app_config(config_path, runs_dir, None, knowledge_dir)
+    ranking_cfg = config.experiments.ranking
+    try:
+        report = build_report(
+            competition,
+            config.runs_dir,
+            config.knowledge_dir,
+            weights=RankingWeights(
+                expected_gain=ranking_cfg.weights.expected_gain,
+                implementation_cost=ranking_cfg.weights.implementation_cost,
+                gpu_cost=ranking_cfg.weights.gpu_cost,
+                risk=ranking_cfg.weights.risk,
+                novelty=ranking_cfg.weights.novelty,
+            ),
+            default_expected_gain=ranking_cfg.default_expected_gain,
+            cheap_tags=set(ranking_cfg.cheap_tags),
+        )
+    except NoExperimentsError as exc:
+        console.print(f"[yellow]{exc}[/yellow]")
+        raise typer.Exit() from exc
+
+    if output_format == "json":
+        print(report.model_dump_json(indent=2))
+        return
+    render_report_text(report, console=console)
+
+
+@experiments_app.command("dashboard")
+def experiments_dashboard(
+    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Write a static HTML competition dashboard under knowledge/<slug>/."""
+    config = _load_app_config(config_path, runs_dir, None, knowledge_dir)
+    ranking_cfg = config.experiments.ranking
+    try:
+        report = build_report(
+            competition,
+            config.runs_dir,
+            config.knowledge_dir,
+            weights=RankingWeights(
+                expected_gain=ranking_cfg.weights.expected_gain,
+                implementation_cost=ranking_cfg.weights.implementation_cost,
+                gpu_cost=ranking_cfg.weights.gpu_cost,
+                risk=ranking_cfg.weights.risk,
+                novelty=ranking_cfg.weights.novelty,
+            ),
+            default_expected_gain=ranking_cfg.default_expected_gain,
+            cheap_tags=set(ranking_cfg.cheap_tags),
+        )
+    except NoExperimentsError as exc:
+        console.print(f"[yellow]{exc}[/yellow]")
+        raise typer.Exit() from exc
+
+    graph = build_graph(
+        config.runs_dir, competition, knowledge_dir=config.knowledge_dir
+    )
+    path = write_dashboard(
+        report,
+        graph,
+        knowledge_dir=config.knowledge_dir,
+        runs_dir=config.runs_dir,
+    )
+    console.print(f"[green]Dashboard written:[/green] {path}")
 
 
 @knowledge_app.command("list")

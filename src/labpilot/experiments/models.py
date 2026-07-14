@@ -165,3 +165,18 @@ class RankedCandidate(BaseModel):
     risk: float
     novelty: float
     score: float
+
+
+class ExperimentReport(BaseModel):
+    """Competition-level rollup for terminal report + HTML dashboard (Plan 8)."""
+
+    competition: str
+    experiment_count: int
+    primary_metric_key: str | None = None
+    best_experiment_id: str | None = None
+    best_score: float | None = None
+    top_discoveries: list[KnowledgeEntry] = Field(default_factory=list)
+    known_failures: list[KnowledgeEntry] = Field(default_factory=list)
+    best_pipeline: list[Experiment] = Field(default_factory=list)
+    recommended_next: RankedCandidate | None = None
+    experiments: list[Experiment] = Field(default_factory=list)

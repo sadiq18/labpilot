@@ -103,6 +103,17 @@ class ReportGenerator:
         reflection_html = markdown_to_html(self._read_text(run_dir / "reflection.md"))
         profile_html = markdown_to_html(self._read_text(run_dir / "profile.md"))
 
+        # Relative link to competition dashboard when generated (Plan 8).
+        dashboard_href = None
+        dash_path = (
+            run_dir.resolve().parent.parent
+            / "knowledge"
+            / manifest.competition
+            / "dashboard.html"
+        )
+        if dash_path.is_file():
+            dashboard_href = f"../../knowledge/{manifest.competition}/dashboard.html"
+
         return {
             "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             "run_id": manifest.run_id,
@@ -119,6 +130,7 @@ class ReportGenerator:
             "profile_html": profile_html,
             "stages": self._stage_rows(manifest),
             "lineage": self._lineage(manifest),
+            "dashboard_href": dashboard_href,
         }
 
     @staticmethod
