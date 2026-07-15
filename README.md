@@ -114,270 +114,32 @@ See [configs/competitions/README.md](configs/competitions/README.md) for the ful
 
 ## Commands
 
-Global flags (apply to every command, placed before the subcommand):
+Full flag tables and examples for every subcommand: **[docs/CLI.md](docs/CLI.md)**.
 
-| Flag | Description |
-|------|-------------|
-| `--verbose` / `-v` | Debug logging for every stage |
-| `--quiet` / `-q` | Only log warnings and errors |
+How to run LabPilot day-to-day (baseline → improve → rank → submit):
+**[docs/SOP.md](docs/SOP.md)**.
 
-### `research run --competition <slug>`
+| I want to… | Command |
+|------------|---------|
+| Full pipeline | `research run --competition <slug>` |
+| Review brief before train | `research init` → `research build --run-id <id>` |
+| Resume / upload later | `research resume --run-id <id> [--submit]` |
+| Fork + retrain | `research improve --run-id <parent>` (`--strategy auto`, `tune`, or `features`) |
+| Environment check | `research doctor` |
+| Lineage / compare / KB / rank / search | `research experiments …` — see [CLI.md](docs/CLI.md#4-experiments) |
+| Hypothesis CRUD | `research hypothesis add` / `list` / `show` / `update` — see [CLI.md](docs/CLI.md#5-hypotheses) |
+| Per-run HTML | `research report --run-id <id>` |
+| Competition HTML | `research experiments dashboard --competition <slug>` |
 
-Runs the full pipeline start to finish in one call: parse → download → profile → brief →
-baseline → code → train → evaluate → submission → upload → log → reflection → HTML report.
+Global flags (before the subcommand): `--verbose` / `-v`, `--quiet` / `-q`.
 
-| Option | Description |
-|--------|-------------|
-| `--competition, -c` | Kaggle competition slug (required) |
-| `--config` | Path to config file (default: `configs/default.yaml`) |
-| `--runs-dir` | Override the runs directory |
-| `--competitions-dir` | Directory with local per-competition contracts (`<slug>.yaml`); see [configs/competitions/README.md](configs/competitions/README.md) |
-| `--submit` | Upload the validated submission to Kaggle (disabled by default) |
-| `--force-submit` | With `--submit`: upload even when the competition deadline has passed |
-| `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
+Default policy: **do not pass `--submit`** until you have inspected local metrics and
+`submission.csv`. Use `--dry-run` on `run` / `build` / `improve` to validate through
+codegen without training.
 
-### `research init --competition <slug>`
-
-Runs just the first half — parse → download → profile → brief — then stops, so you can review
-`competition.json`, the dataset profile, and `brief.md` before committing to training. Continue
-with `research build`. Takes the same options as `run` except `--submit` (nothing is uploaded
-yet).
-
-### `research build --run-id <id>`
-
-Runs the second half of an already-`init`'d run — baseline → code → train → evaluate →
-submission → upload → log → reflection. Fails fast with a clear message if `init` hasn't
-finished yet.
-
-| Option | Description |
-|--------|-------------|
-| `--run-id, -r` | Run ID to build, from `research init` (required) |
-| `--config` | Path to config file (default: `configs/default.yaml`) |
-| `--runs-dir` | Override the runs directory (must match the `init` call's) |
-| `--submit` | Upload the validated submission to Kaggle (disabled by default) |
-| `--force-submit` | With `--submit`: upload even when the competition deadline has passed |
-| `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
-
-### `research workspace init --name <name>`
-
-Create a multi-competition project with `project.yaml`, `runs/`, `competitions/`, and
-`configs/runtimes/`. Auto-detected when you run pipeline commands from the project directory
-(or pass `--project-dir`).
-
-```bash
-research workspace init --name kaggle-2026
-research workspace status
-research run --competition titanic --project-dir .
-```
-
-### `research runtime list|show|register|doctor`
-
-Manage training runtime profiles (local, Kaggle kernel, Google Colab, other). **P2 v0.3**
-ships registry + validation; training still runs locally until **P2 execution**
-(`--remote-train`) lands.
-
-```bash
-research runtime list
-research runtime register --provider kaggle_kernel --id kaggle-gpu-free
-research runtime doctor
-```
-
-See [configs/runtimes/README.md](configs/runtimes/README.md) for the schema.
-
-### `research templates`
-
-List registered baseline templates (tabular, text, image, deep variants).
-
-### `research run --dry-run`
-
-Add `--dry-run` to `run`, `build`, or `improve` to validate through code generation without
-training or submission. Produces `pipeline/train.py` and `dry_run.json`. Mutually exclusive
-with `--submit`.
-
-### `research improve --run-id <parent>`
-
-Fork a **completed** parent run, reuse init artifacts (competition, data, profile, brief),
-apply an improvement plan, and re-run from code generation through reflection.
-
-| Option | Description |
-|--------|-------------|
-| `--run-id, -r` | Parent run ID (required; must be `completed`) |
-| `--strategy` | `auto` (LLM plan, fallback to tune), `tune` (LightGBM grid), or `features` |
-| `--config` | Path to config file (default: `configs/default.yaml`) |
-| `--runs-dir` | Override the runs directory |
-| `--submit` | Upload the child run's submission to Kaggle |
-| `--force-submit` | With `--submit`: upload even when the deadline has passed |
-| `--yes, -y` | Skip confirmation prompts |
-
-```bash
-# Auto-plan from reflection + metrics, fork, retrain
-research improve --run-id 20260712-014250-spaceship-titanic
-
-# Explicit tuning strategy
-research improve --run-id <parent> --strategy tune
-
-# Compare parent vs child
-research runs diff --base <parent> --compare <child>
-```
-
-Child runs record lineage in `manifest.json` (`parent_run_id`, `iteration`) and persist
-`improvement_plan.json` plus `training_overrides.json` (model params and feature recipes).
-
-### `research runs diff --base <a> --compare <b>`
-
-Side-by-side comparison of two runs: CV metrics, param deltas, lineage, and submission status.
-
-### `research experiments graph --competition <slug>` / `research experiments show <run_id>`
-
-Explore the experiment graph (Milestone 2, Plan 1): every `run`/`init`/`improve` invocation
-records a best-effort `git_commit` and a `config.json` snapshot of the config actually used, on
-top of the existing `parent_run_id`/`iteration` lineage in `manifest.json` metadata.
-
-```bash
-# ASCII lineage tree for a competition, annotated with a metric and the best-scoring path
-research experiments graph --competition titanic --metric cv_accuracy
-
-# Single-experiment detail view: status, progress, description, artifacts, metrics
-research experiments show <run_id>
-research experiments show <run_id> --format json
-
-# Categorized A/B comparison + verdict (also written on improve as comparison.json/.md)
-research experiments compare <base_id> <compare_id>
-research experiments compare <base_id> <compare_id> --format markdown
-research experiments compare <base_id> <compare_id> --format json
-
-# Accumulated technique knowledge (Plan 5)
-research experiments knowledge list --competition titanic
-research experiments knowledge list --competition titanic --effect hurts
-research experiments knowledge list --competition titanic --technique target_encoding
-
-# Rank proposed hypotheses (Plan 6) — recommendation backlog, does not auto-run
-research experiments rank --competition titanic --top 5
-
-# Search with composable AND filters (Plan 7)
-research experiments search --competition titanic --metric-gt cv_accuracy:0.8
-research experiments search --competition titanic --recipe target_encoding --verdict worth_keeping
-
-# Competition rollup + HTML dashboard (Plan 8)
-research experiments report --competition titanic
-research experiments report --competition titanic --format json
-research experiments dashboard --competition titanic
-```
-
-| Option | Description |
-|--------|-------------|
-| `--competition, -c` | Kaggle competition slug (`graph` / `knowledge list` / `rank` / `search` / `report` / `dashboard` required) |
-| `--metric` | Metric key to annotate scores and highlight the best root-to-leaf path (`graph` only) |
-| `--format` | `table`/`json`/`markdown` (`show`/`compare`); `text`/`json` (`report`) |
-| `--technique` | Filter knowledge entries by technique (`knowledge list`) |
-| `--effect` | Filter knowledge by `improves`/`hurts`/`neutral`/`unknown` (`knowledge list`) |
-| `--config` | Path to config file (default: `configs/default.yaml`) |
-| `--runs-dir` | Override the runs directory |
-| `--knowledge-dir` | Override the knowledge directory |
-
-### `research hypothesis add|list|show|update`
-
-Manual structured hypotheses for a competition (Milestone 2, Plan 2). Stored as
-`knowledge/<slug>/hypotheses/H-NNN.json` (gitignored). Attach one to a run with
-`--hypothesis H-001` on `research run` or `research improve` (auto-marks `proposed` →
-`testing`).
-
-```bash
-research hypothesis add --competition titanic \
-  --observation "Rare classes perform poorly" \
-  --reason "Dataset imbalance" \
-  --prediction "Focal Loss will improve Macro F1" \
-  --confidence 0.74 \
-  --tags loss,class-imbalance
-
-research hypothesis list --competition titanic [--status testing]
-research hypothesis show H-001 --competition titanic
-research hypothesis update H-001 --competition titanic --status confirmed --evidence-run <run_id>
-
-research run --competition titanic --hypothesis H-001
-research improve --run-id <parent> --hypothesis H-001 --strategy tune
-```
-
-| Option | Description |
-|--------|-------------|
-| `--competition, -c` | Kaggle competition slug (required on all hypothesis commands) |
-| `--status` | Filter (`list`) or set (`update`): proposed, testing, confirmed, rejected, inconclusive |
-| `--evidence-run` | Run id appended to `evidence_for` (confirmed) or `evidence_against` (rejected) |
-| `--knowledge-dir` | Override the knowledge directory (default: `knowledge/`) |
-
-### `research resume --run-id <id>`
-
-Resumes a run from its first failed or incomplete stage. Stages already `completed` or
-`skipped` are left untouched; everything else (failed, stuck "running" from a killed process,
-or never reached) is re-executed in pipeline order. One exception: if the run finished with
-`upload_submission` left as `skipped` (i.e. it ran without `--submit`) and you now pass
-`--submit`, that stage is re-run for real instead of staying skipped — so `research resume
---run-id <id> --submit` is the command to upload a submission after the fact, without
-re-running the rest of an already-completed pipeline. Add `--force-submit` when the
-competition deadline has passed but Kaggle may still accept uploads.
-
-**Kernel-only competitions** (e.g. `aerial-cactus-identification`): LabPilot detects
-`submission_mode: kernel` from Kaggle metadata (with a rules-page fallback). Training still
-runs locally; `export_kernel` writes `runs/<id>/kernel/` for Kaggle's notebook API. The same
-`--submit` flag pushes the kernel, waits for the run, submits via `competition_submit_code`,
-and polls the leaderboard. Without `--submit`, `submission_result.json` is written with status
-`kernel_ready`. After upload, the CLI and `reflection.md` include links to the submissions
-page and kernel notebook.
-
-| Option | Description |
-|--------|-------------|
-| `--run-id, -r` | Run ID to resume (required) |
-| `--config` | Path to config file (default: `configs/default.yaml`) |
-| `--runs-dir` | Override the runs directory (must match the original run's) |
-| `--competitions-dir` | Directory with local per-competition contracts |
-| `--submit` | Upload the validated submission to Kaggle (disabled by default) |
-| `--force-submit` | With `--submit`: upload even when the competition deadline has passed |
-| `--yes, -y` | Skip confirmation prompts, e.g. proceed without LLM if unavailable |
-
-`run`/`init`/`build`/`resume` all check LLM availability once up front (before doing any work):
-if neither `OPENAI_API_KEY` nor `GEMINI_API_KEY` is set (or the matching optional package isn't
-installed), they print a warning and ask for confirmation before continuing with template-only
-`brief.md`/`reflection.md` — pass `--yes` to skip the prompt (also skipped automatically for
-non-interactive/CI runs).
-
-### `research doctor`
-
-Checks that the local environment has everything LabPilot needs (Python version, LightGBM
-import, Kaggle credentials) and also reports optional `image`/`deep` dependency status.
-Exits non-zero if a **core** check fails. `run`/`init`/`build`/`resume` run core checks
-automatically and fail fast on a bad environment; optional extras are informational only
-unless the selected baseline template requires them at train time.
-
-### `research status --run-id <id>`
-
-Shows the per-stage status and artifacts for one run.
-
-| Option | Description |
-|--------|-------------|
-| `--run-id, -r` | Run ID to inspect (required) |
-| `--config` | Path to config file (default: `configs/default.yaml`) |
-| `--runs-dir` | Override the runs directory |
-
-### `research report --run-id <id>`
-
-Generate or refresh the standalone HTML report (`report.html`) from existing run artifacts.
-The pipeline writes this automatically at the end of every completed build/run.
-
-| Option | Description |
-|--------|-------------|
-| `--run-id, -r` | Run ID to render (required) |
-| `--config` | Path to config file (default: `configs/default.yaml`) |
-| `--runs-dir` | Override the runs directory |
-
-### `research list-runs`
-
-Lists every run under the runs directory with its competition and overall status
-(`running` / `partial` / `completed` / `failed`).
-
-| Option | Description |
-|--------|-------------|
-| `--config` | Path to config file (default: `configs/default.yaml`) |
-| `--runs-dir` | Override the runs directory |
+Workspace / runtime / templates details: [CLI.md §6](docs/CLI.md#6-environment--project),
+[configs/runtimes/README.md](configs/runtimes/README.md),
+[configs/competitions/README.md](configs/competitions/README.md).
 
 ## Repository Layout
 
@@ -386,9 +148,19 @@ src/labpilot/     Core engine modules
 templates/        Baseline code templates (Jinja2)
 configs/          Default configuration
 runs/             Generated run artifacts (gitignored)
-docs/             Architecture and milestone docs
+knowledge/        Hypotheses + knowledge base + dashboard (gitignored)
+docs/             Architecture, CLI reference, SOP, milestones
 tests/            Unit and integration tests
 ```
+
+## Docs
+
+| Doc | Contents |
+|-----|----------|
+| [docs/SOP.md](docs/SOP.md) | How to use LabPilot (procedure) |
+| [docs/CLI.md](docs/CLI.md) | All `research` commands + examples |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Modules, stages, artifact contracts |
+| [docs/MILESTONES.md](docs/MILESTONES.md) | Roadmap / completed / backlog |
 
 ## License
 

@@ -8,7 +8,9 @@ After a completed baseline run, **`research improve`** forks a child run from th
 
 No multi-agent orchestration, vector stores, or autonomous planning — just a deterministic DAG plus an explicit iteration layer on top.
 
-This document only covers the **current-state design** — module layout, artifact contracts, pipeline flow. Per-milestone history (what P0–P4 each added, validation runs, deferred/backlog items) and in-progress/future design (Milestone 2 — Experiment Scientist) live under [milestones/](milestones/); start at [MILESTONES.md](../MILESTONES.md).
+This document only covers the **current-state design** — module layout, artifact contracts, pipeline flow. Per-milestone history (what P0–P4 each added, validation runs, deferred/backlog items) and in-progress/future design (Milestone 2 — Experiment Scientist) live under [milestones/](milestones/); start at [MILESTONES.md](MILESTONES.md).
+
+**Operator docs:** [CLI.md](CLI.md) (every `research` command + examples), [SOP.md](SOP.md) (how to use LabPilot end-to-end).
 
 ---
 

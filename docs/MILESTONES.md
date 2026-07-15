@@ -29,6 +29,8 @@ competition/dataset before spending time training — split it into `research in
 titanic` (parse → download → profile → brief) followed by `research build --run-id <id>` (baseline
 → code → train → evaluate → submission → upload → log → reflection).
 
+Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
+
 ---
 
 ## Status at a glance
