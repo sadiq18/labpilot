@@ -40,7 +40,7 @@ See [COMPLETED.md](COMPLETED.md).
 |------------|--------------|
 | **Packaging & PyPI** | Bundle `templates/` + default configs in wheel; `pip install labpilot`; release workflow |
 | **P2 remote execution** | Dispatch, polling, artifact sync (`--remote-train`) |
-| Multi-agent systems | Orchestrator + templates are enough; Milestone 3 keeps "no agents package" |
+| Multi-agent systems | No autonomous agents package; M3 Micro Agents (`*Agent`) are single-shot typed extractors only |
 | Vector databases | Milestone 3 starts with structured JSON + search APIs; embeddings optional later |
 | Knowledge graphs | Milestone 3 uses evidence store + synthesis, not a general KG product |
 | Long-term memory | Milestone 2 `knowledge/` + Milestone 3 `intelligence/` are the scoped answer |

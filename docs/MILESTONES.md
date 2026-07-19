@@ -55,7 +55,7 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | **P3** | v0.4 | **Done** | Iteration loop (`research improve`, tuning, run diffs) |
 | **P4** | v1.0 | **Done** | Production quality (workspace, CI, dry-run, HTML reports) |
 | **Milestone 2** | v0.5 | **Shipped** | Experiment Scientist — research memory, comparison, hypotheses, knowledge base, ranking, dashboard |
-| **Milestone 3** | v0.6 | **Design** | Research Intelligence — pluggable analyzers + `research analyze <slug>` |
+| **Milestone 3** | v0.6 | **Design** | Research Intelligence — analyzers + Knowledge System (`research/` + SQLite) |
 
 Details for each track live in the linked documents above. Milestone 2's eight plans are
 documented under

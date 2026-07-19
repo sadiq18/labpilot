@@ -4,14 +4,15 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-**Milestone 3 — Research Intelligence** is in **design** — single design README first;
-sequenced `plan-N-*.md` files come after review. See
-[milestone-3/README.md](milestone-3/README.md).
+**Milestone 3 — Research Intelligence** is in **design** — design README + Knowledge System
+storage doc; sequenced `plan-N-*.md` files come after review. See
+[milestone-3/README.md](milestone-3/README.md) and
+[milestone-3/knowledge-system.md](milestone-3/knowledge-system.md).
 
 **Package layout (design):** `cli/` · `common/` · `research_engine/` (deployable service) with
-`execution/` and `intelligence/` (future: separate package or service each). Explored
-intelligence on disk: `knowledge/<slug>/intelligence/{papers,experiments,repositories,discussions,techniques,models,datasets}/`
-— **local / gitignored**. See [milestone-3/README.md](milestone-3/README.md) §11.
+`execution/` and `intelligence/` (future: separate package or service each). On disk:
+`knowledge/<slug>/research/{raw,extracted,knowledge,experiments,reports}/` + `knowledge.db`
+— **local / gitignored**. See [knowledge-system.md](milestone-3/knowledge-system.md).
 
 **Milestone 2 — Experiment Scientist** — Plans 1–8 shipped (experiment graph through
 dashboard). See [milestone-2/README.md](milestone-2/README.md).
@@ -20,33 +21,22 @@ dashboard). See [milestone-2/README.md](milestone-2/README.md).
 
 ### Milestone 3 at a glance
 
-Architecture center: Research Assistant stack (Readers → Extractor → structured knowledge
-store → retrieval → Hypothesis Assistant) implemented as pluggable Analyzers.
-`Analyzer.analyze(context) → ResearchArtifacts` (batch of **ResearchArtifact**: id, type,
-source, title, summary, concepts, techniques, evidence, references, confidence). Prefer
-**official APIs**. Fetch → cache → normalize → analyze. Literature is a **Paper Research Engine**: collect via
-`LiteratureProvider` (Semantic Scholar → OpenAlex → arXiv → Papers with Code), then extract
-**PaperKnowledge** (contributions / methods / limitations / ideas) — not full summaries.
-Repositories are a **GitHub Intelligence** engine: collect via `RepositoryProvider`, extract
-**RepoKnowledge** (architecture / loss / aug / tricks / files / deps), then **diff vs local**
-(`TransferOpportunity`: effort + expected gain) — not README dumps.
-**Forum Intelligence** (design now, providers gated): extract **ForumKnowledge** (common
-mistakes / discoveries / dataset bugs / LB shakeups / OOD) from Kaggle / GitHub Issues /
-Reddit / blogs — practical signal often absent from papers. Kaggle *access* is a
-non-blocking spike. **Knowledge Extraction hub:** all sources normalize into
-**KnowledgeUnit** (technique / task / problem / benefit / evidence / limitations /
-references / confidence) and accumulate reusable cards in a **layered Research Knowledge
-Base** (Documents → Knowledge → Evidence → Beliefs) — **not** a vector database.
-**Research Retrieval:** given the competition, retrieve papers / experiments / repos /
-discussions / **failures** by **task · metric · dataset · domain · architecture ·
-technique** — not keywords alone. **Hypothesis Assistant:** connects everything → top-10
-recommendations (impact, confidence, evidence, effort) — **no autonomous planner.**
+Architecture center: shared **Knowledge Extraction Pipeline** (Raw → Normalizer → Extractor →
+Validator → Store → Retrieval → Reasoning) over pluggable Analyzers. Everything is a
+**ResearchArtifact** (id, type, source, metadata, summary, techniques, models, datasets,
+claims, references, confidence). Prefer **official APIs**. Literature / GitHub / Forum
+engines extract typed cards — not full summaries. **Knowledge System:** merge into
+techniques / datasets / architectures / tasks in SQLite — **not** a vector DB.
+**Multi-stage retrieval** + **ContextBuilder** (typed `ResearchContext`; LLM never sees DB);
+hierarchical L1–L3 memory; Progressive Context; Query Planner direction — **Knowledge Engine
+is the center**, LLM is an attached reasoner. **Hypothesis Assistant:** top-10 —
+**no autonomous planner.** Optional **Micro Agents**; system works without them.
 
 ```bash
 research analyze birdclef-2026
 research analyze papers birdclef-2026
 research analyze birdclef-2026 --include papers,repositories
-# → knowledge/<slug>/intelligence/analyze.json + terminal summary
+# → knowledge/<slug>/research/reports/analyze.json + terminal summary
 ```
 
 **Phase 1 (ship):** Competition / Paper / Repository / Experiment / Dataset analyzers +
