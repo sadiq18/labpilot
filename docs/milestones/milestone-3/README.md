@@ -111,11 +111,12 @@ Milestone 3 does **not** wait on Kaggle access. No HTML in v1.
 
 ### Guiding decisions
 
-1. **No autonomous `agents/` package.** Same as Milestone 2 — no memory, planning, or
-   multi-step agent loops. Nouns are `ResearchArtifact`, `ResearchArtifacts` (batch),
-   `CompetitionIntelligence`, `Hypothesis` — not chats or roles. **Micro Agents** (`*Agent`
-   suffix) are allowed only as tiny **optional** Reasoning Engine functions (§2.4):
-   `input → prompt → typed artifact`. The system must work with them disabled.
+1. **No autonomous `agents/` package** (no ReAct / memory / multi-step planners). Nouns are
+   `ResearchArtifact`, `CompetitionIntelligence`, `Hypothesis` — not chats or roles.
+   **Micro Agents** live in explicit folders (§11):
+   `research_engine/intelligence/micro_agents/` and
+   `research_engine/execution/micro_agents/` — each agent = `*Agent` class + `skill.md`.
+   Optional: `input → prompt → typed artifact`. System must work with them disabled.
 2. **No LLM code generation.** Jinja2 templates remain the only way training code is
    produced.
 3. **Plugins first — content-type Analyzers, not website scrapers.** Think
@@ -481,19 +482,57 @@ input → prompt → typed artifact (structured output)
 | Network | **No** | Direct Kaggle / GitHub / arXiv calls |
 | Side effects | **No** (caller persists) | Self-writing KB / auto-run |
 
-**Naming — always `*Agent` suffix.** Analyzer **plugins** (`PaperAnalyzer`, …) stay the
-fetch / cache / normalize / orchestrate boundary. Micro Agents are the Reasoning Engine
-slice only — every name ends in `Agent`:
+**Package layout (locked):** each Micro Agent is a small package under the platform that owns
+it — **Agent class + `skill.md`** (prompt / behavior contract; not free-form chat memory).
 
-| Micro Agent | Consumes | Emits (typed) | Closest today |
-|-------------|----------|---------------|---------------|
-| `PaperAnalyzerAgent` | paper abstract / excerpts | `PaperKnowledge` / technique findings | `PaperKnowledgeExtractor` |
-| `RepositoryAnalyzerAgent` | cached README / files | `RepoKnowledge` + effort fields | `RepoKnowledgeExtractor` |
-| `ForumAnalyzerAgent` | `Discussion` | `ForumKnowledge` | `ForumKnowledgeExtractor` |
-| `ReflectionGeneratorAgent` | CV / LB / config diff | structured reflection fields | M2 `reflection/` |
-| `HypothesisGeneratorAgent` | retrieval + claims + failures | `Hypothesis` draft fields | `HypothesisAssistant` drafting |
-| `ExperimentReviewerAgent` | run metrics + graph | review / diagnosis artifact | single-run critique |
-| `ConceptNormalizerAgent` | technique string bag | canonical + aliases | `KnowledgeMerger` LLM path |
+```text
+src/labpilot/research_engine/
+  intelligence/micro_agents/     # Research Intelligence reasoners
+    __init__.py
+    base.py                      # MicroAgent Protocol
+    paper_analyzer/
+      agent.py                   # PaperAnalyzerAgent
+      skill.md
+    repository_analyzer/
+      agent.py                   # RepositoryAnalyzerAgent
+      skill.md
+    forum_analyzer/
+      agent.py
+      skill.md
+    hypothesis_generator/
+      agent.py
+      skill.md
+    concept_normalizer/
+      agent.py
+      skill.md
+    experiment_reviewer/
+      agent.py
+      skill.md
+  execution/micro_agents/        # Execution Platform reasoners (M2 reflection, etc.)
+    __init__.py
+    base.py                      # shared Protocol or re-export from common
+    reflection_generator/
+      agent.py                   # ReflectionGeneratorAgent
+      skill.md
+```
+
+`skill.md` describes inputs, output schema, and prompt skeleton for that agent. Analyzers /
+orchestrators call `micro_agents.*.agent`; extract modules may thin-wrap or delegate here.
+Shared LLM client stays in `common/llm/`.
+
+**Naming — always `*Agent` suffix.** Analyzer **plugins** (`PaperAnalyzer`, …) stay in
+`analyzers/` (fetch / cache / normalize / orchestrate). Micro Agents are the Reasoning Engine
+slice only:
+
+| Micro Agent | Package | Emits (typed) |
+|-------------|---------|---------------|
+| `PaperAnalyzerAgent` | `intelligence/micro_agents/paper_analyzer/` | `PaperKnowledge` / technique findings |
+| `RepositoryAnalyzerAgent` | `intelligence/micro_agents/repository_analyzer/` | `RepoKnowledge` + effort fields |
+| `ForumAnalyzerAgent` | `intelligence/micro_agents/forum_analyzer/` | `ForumKnowledge` |
+| `HypothesisGeneratorAgent` | `intelligence/micro_agents/hypothesis_generator/` | `Hypothesis` draft fields |
+| `ConceptNormalizerAgent` | `intelligence/micro_agents/concept_normalizer/` | canonical + aliases |
+| `ExperimentReviewerAgent` | `intelligence/micro_agents/experiment_reviewer/` | review / diagnosis artifact |
+| `ReflectionGeneratorAgent` | `execution/micro_agents/reflection_generator/` | structured reflection fields |
 
 **LLM as a structured reasoning engine.** Do **not** let LLMs emit free-form text as the
 primary output. Every reasoning step **populates typed artifacts**. Illustrative shapes
@@ -2765,13 +2804,19 @@ src/labpilot/
     │   ├── kernel/
     │   ├── orchestrator/             # research run pipeline
     │   ├── profiler/
-    │   ├── reflection/
+    │   ├── reflection/               # deterministic compare + callers; LLM via micro_agents
     │   ├── report/
     │   ├── runtimes/
     │   ├── submission/
     │   ├── tracking/
     │   ├── training/
-    │   └── brief/
+    │   ├── brief/
+    │   └── micro_agents/             # Execution Micro Agents (*Agent + skill.md)
+    │       ├── __init__.py
+    │       ├── base.py
+    │       └── reflection_generator/
+    │           ├── agent.py          #   ReflectionGeneratorAgent
+    │           └── skill.md
     │
     └── intelligence/                 # Research Intelligence Platform — future: separate package or service
         ├── __init__.py
@@ -2781,7 +2826,7 @@ src/labpilot/
         ├── registry.py
         ├── orchestrator.py           # select → run → merge → synthesize → write analyze.json
         ├── retrieve.py               # ResearchRetriever — multi-axis (§9)
-        ├── hypothesize.py            # HypothesisAssistant — top-10 recommendations (§10)
+        ├── hypothesize.py            # HypothesisAssistant — top-10; may call micro_agents
         ├── synthesize.py             # glue: extract → kb → retrieve → hypothesize
         ├── cache.py                  # shared fetch-cache helpers (path + freshness)
         ├── knowledge/
@@ -2789,9 +2834,30 @@ src/labpilot/
         │   ├── document.py           #   L1 ResearchArtifact → papers/|repos/|…
         │   ├── evidence.py           #   Layer 3 EvidenceLink
         │   ├── belief.py             #   Layer 4 Belief → techniques/beliefs.jsonl
-        │   ├── extractor.py          #   KnowledgeExtractor
+        │   ├── extractor.py          #   KnowledgeExtractor (may delegate to micro_agents)
         │   ├── merger.py             #   KnowledgeMerger
-        │   └── store.py              #   explored-intelligence tree read/write
+        │   └── store.py              #   research/ tree + knowledge.db read/write
+        ├── micro_agents/             # Intelligence Micro Agents (*Agent + skill.md) — §2.4
+        │   ├── __init__.py
+        │   ├── base.py               #   MicroAgent Protocol
+        │   ├── paper_analyzer/
+        │   │   ├── agent.py          #   PaperAnalyzerAgent
+        │   │   └── skill.md
+        │   ├── repository_analyzer/
+        │   │   ├── agent.py
+        │   │   └── skill.md
+        │   ├── forum_analyzer/
+        │   │   ├── agent.py
+        │   │   └── skill.md
+        │   ├── hypothesis_generator/
+        │   │   ├── agent.py
+        │   │   └── skill.md
+        │   ├── concept_normalizer/
+        │   │   ├── agent.py
+        │   │   └── skill.md
+        │   └── experiment_reviewer/
+        │       ├── agent.py
+        │       └── skill.md
         ├── renderers/                # presentation only — consume AnalysisReport
         │   ├── terminal.py           #   v1 human summary
         │   └── json.py               #   v1 serialize / validate (thin)
@@ -2802,7 +2868,7 @@ src/labpilot/
             ├── papers.py             # PaperAnalyzer
             ├── literature/
             │   ├── provider.py
-            │   ├── extract.py
+            │   ├── extract.py        # may call micro_agents.paper_analyzer
             │   ├── semantic_scholar.py
             │   ├── openalex.py
             │   ├── arxiv.py
@@ -3300,6 +3366,7 @@ stdout only (§12.5). No HTML flag in v1.
 | `DiscussionAnalyzer` + `ForumKnowledgeExtractor` + `KaggleDiscussionProvider` | Forum Intelligence after spike go |
 | Other forum providers (same extractor) | GitHub Issues (may ship earlier), Reddit, blogs |
 | `WinningSolutionProvider` HTML backend | Only after separate ToS-safe spike; swap for Null/API |
+| SQLite → embeddings → graph/hybrid retrieval | Deep dive: [knowledge-system.md Appendix A](knowledge-system.md#appendix-a-sqlite-vs-knowledge-graph-vs-graphrag) — **not** GraphRAG as Phase 1 SoR |
 
 ### Provisional plan DAG
 
@@ -3360,8 +3427,11 @@ Plans 2–5 are siblings. Spike does not gate Plans 1–7.
 - Embedding / vector DB / RAG top-N chunks as the Research Knowledge Base SoR (v1 =
   [knowledge-system.md](knowledge-system.md): raw → extracted → knowledge + SQLite;
   embeddings only later inside candidate re-rank)
-- Full knowledge-graph database / Neo4j as a Phase 1 dependency (v1 = local
-  `knowledge/<slug>/research/` — gitignored; SQLite joins)
+- Graph DB as a Phase 1 dependency (v1 = local
+  `knowledge/<slug>/research/` — gitignored; SQLite joins). Deep dive: SQLite vs Neo4j vs
+  GraphRAG — [knowledge-system.md Appendix A](knowledge-system.md#appendix-a-sqlite-vs-knowledge-graph-vs-graphrag)
+- **GraphRAG / Leiden cluster pipelines as Phase 1 knowledge SoR** — ontology + structured
+  extract first; graph as a later *retrieval* strategy only
 - LLM searching or remembering the knowledge base (multi-stage retrieve; LLM last only)
 - Passing the full store (or unfiltered raw blobs) as default LLM context
 - Collapsing `raw/` / `extracted/` / `knowledge/` into one folder
@@ -3461,9 +3531,9 @@ Plans 2–5 are siblings. Spike does not gate Plans 1–7.
 - Selective LLM policy (§2.4): Orchestrator → Deterministic Engine | Reasoning Engine;
   matrix No/Yes; LLM never calls Kaggle/GitHub/arXiv; **never remembers / never searches KB**;
   extract-not-summarize; rank formula for v1; `rule_engine` fallback.
-- Micro Agents (§2.4): all `*Agent`-suffixed; **optional** — system works without them
-  (`rule_engine` / heuristics); when enabled, stateless `input → prompt → typed artifact`;
-  no memory/planning/loops; typed models as primary LLM output — not free-form chat.
+- Micro Agents (§2.4 / §11): under `intelligence/micro_agents/` and
+  `execution/micro_agents/` — each `*Agent` class + `skill.md`; **optional**; same typed
+  schemas with `rule_engine` when disabled.
 - Research Knowledge Base (§8) + Knowledge System ([knowledge-system.md](knowledge-system.md)):
   `knowledge/<slug>/research/{raw,extracted,knowledge,experiments,reports}/` + `knowledge.db`
   — **gitignored**; not a vector DB; multi-stage retrieval (LLM last).

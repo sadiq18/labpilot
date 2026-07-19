@@ -9,10 +9,11 @@ storage doc; sequenced `plan-N-*.md` files come after review. See
 [milestone-3/README.md](milestone-3/README.md) and
 [milestone-3/knowledge-system.md](milestone-3/knowledge-system.md).
 
-**Package layout (design):** `cli/` · `common/` · `research_engine/` (deployable service) with
-`execution/` and `intelligence/` (future: separate package or service each). On disk:
-`knowledge/<slug>/research/{raw,extracted,knowledge,experiments,reports}/` + `knowledge.db`
-— **local / gitignored**. See [knowledge-system.md](milestone-3/knowledge-system.md).
+**Package layout (design):** `cli/` · `common/` · `research_engine/{execution,intelligence}/`
+with Micro Agents in `intelligence/micro_agents/` and `execution/micro_agents/` (`*Agent` +
+`skill.md`). On disk: `knowledge/<slug>/research/{raw,extracted,knowledge,experiments,reports}/`
++ `knowledge.db` — **local / gitignored**. See [milestone-3/README.md](milestone-3/README.md) §11
+and [knowledge-system.md](milestone-3/knowledge-system.md).
 
 **Milestone 2 — Experiment Scientist** — Plans 1–8 shipped (experiment graph through
 dashboard). See [milestone-2/README.md](milestone-2/README.md).

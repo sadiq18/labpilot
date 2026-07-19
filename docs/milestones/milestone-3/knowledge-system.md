@@ -4,6 +4,8 @@ Canonical storage and retrieval design for Milestone 3 Research Intelligence.
 Product / plugin framing lives in [README.md](README.md); **this file is the SoR for how
 knowledge is stored and how it reaches the LLM.**
 
+Deep dive (future): [Appendix A — SQLite vs Knowledge Graph vs GraphRAG](#appendix-a-sqlite-vs-knowledge-graph-vs-graphrag).
+
 ---
 
 ## 1. Framing (locked)
@@ -615,6 +617,7 @@ Canonical detail for product modules remains in [README.md](README.md); when pat
 | Pipeline-diff + structured joins | Full Idea / Research Memory graph |
 | Beliefs + hypotheses write-back | Neo4j / ArangoDB if multi-hop joins insufficient |
 | Intent via rules / competition profile | Richer intent + planner models |
+| **SQLite + ontology + join tables** as SoR | See [Appendix A](#appendix-a-sqlite-vs-knowledge-graph-vs-graphrag) — Neo4j / hybrid retrieval later; **skip GraphRAG as storage** |
 
 Works without Micro Agents — Context Builder still emits `ResearchContext`; reasoning uses
 `rule_engine` templates.
@@ -624,6 +627,8 @@ Works without Micro Agents — Context Builder still emits `ResearchContext`; re
 ## 8. Non-goals (storage)
 
 - Vector DB / chunk RAG as the knowledge system of record
+- **GraphRAG-style pipelines as Phase 1 storage** (chunk → entity discovery → Leiden clusters
+  as SoR) — borrow ideas only; see [Appendix A](#appendix-a-sqlite-vs-knowledge-graph-vs-graphrag)
 - LLM searching or browsing the KB directly (only Context Builder / Retrieval do)
 - LLM as the **center** of the architecture (Knowledge Engine is center)
 - LLM as the **first** step (answering before classify / retrieve / compress)
@@ -631,8 +636,186 @@ Works without Micro Agents — Context Builder still emits `ResearchContext`; re
 - Untyped string concatenation as the only prompt path (use `ResearchContext`)
 - Putting L4 (entire DB) into the LLM window
 - Embedding search over the entire corpus before symbolic filters
-- Graph DB as a Phase 1 dependency (graph *edges* via `references` in SQLite are required)
+- Graph DB as a Phase 1 dependency (graph *edges* via `references` / join tables in SQLite)
 - Collapsing raw / extracted / knowledge into one folder
 - Conversation memory as the place expertise lives
 - Treating `reports/analyze.json` as a second write SoR that drifts from `knowledge.db`
 - Prompt-engineering theater without a Query Planner / Context Builder investment
+
+---
+
+## Appendix A — SQLite vs Knowledge Graph vs GraphRAG
+
+**Future / deep-dive.** The sophisticated solution is not the right **first** solution.
+References conceptually: GraphRAG-style pipelines (e.g. community detection / Leiden
+clustering patterns such as those discussed in breakdowns like
+[ALucek/GraphRAG-Breakdown](https://github.com/ALucek/GraphRAG-Breakdown)).
+
+### A.1 What GraphRAG-style systems typically do
+
+```text
+Documents
+    → Chunk
+    → LLM Extraction
+    → Entity Extraction
+    → Knowledge Graph
+    → Community Detection
+    → Leiden Clustering
+    → Cluster Summaries
+    → GraphRAG Retrieval
+```
+
+Excellent for **large, unstructured corpora** where you do **not** know the schema
+beforehand (enterprise docs, legal, medical literature, Wikipedia-scale search). GraphRAG
+**discovers** structure.
+
+### A.2 Our data is already structured
+
+LabPilot entities are known up front:
+
+Paper · Experiment · GitHub Repository · Technique · Dataset · Competition · Model ·
+Loss · Augmentation · Observation · Hypothesis · Evidence · Finding · Failure · Discussion
+
+We do **not** need an LLM to discover that SpecAugment is a Technique or ConvNeXt is a Model —
+we define those types explicitly. Micro Agents / extractors **populate** the ontology; they
+do not invent the type system.
+
+Our system **creates** knowledge:
+
+```text
+Paper → Extract Technique → Store Technique → Run Experiment
+  → Generate Evidence → Update Confidence
+```
+
+Relationships are known because we wrote them.
+
+### A.3 Separate storage from retrieval
+
+| Concern | Job |
+|---------|-----|
+| **Knowledge Storage** | Source of truth: Technique, Experiment, Paper, Evidence, Hypothesis, … |
+| **Knowledge Retrieval** | How the LLM finds relevant information (multi-stage / Query Planner) |
+
+Graph DB, embeddings, and SQL are **retrieval strategies** (and optional later stores) —
+not interchangeable with “having knowledge.”
+
+### A.4 Phase 1 recommendation — SQLite + ontology
+
+Use **SQLite**. Seriously.
+
+Entity tables (illustrative):
+
+`papers` · `repositories` · `experiments` · `techniques` · `models` · `datasets` ·
+`competitions` · `findings` · `hypotheses` · `evidence` · …
+
+Relationship tables (a **graph stored relationally**):
+
+`paper_techniques` · `experiment_techniques` · `paper_models` · `experiment_models` ·
+`hypothesis_evidence` · …
+
+Example query — experiments where SpecAugment improved Macro F1 — is a join. Instant. No
+graph database required.
+
+Invest in an **ontology** before a graph product:
+
+```text
+Competition · Dataset · Task · Metric · Technique · Model · Loss · Augmentation
+Experiment · Hypothesis · Evidence · Finding · Paper · Repository · Discussion
+```
+
+Typed edges, e.g.:
+
+```text
+Paper —introduces→ Technique
+Technique —used_by→ Experiment
+Experiment —supports→ Hypothesis
+Hypothesis —improves→ Metric
+```
+
+Once every artifact maps into the ontology, exporting to Neo4j (or exposing a graph view)
+later is straightforward because semantics are already explicit.
+
+### A.5 When Neo4j (or similar) becomes worth it
+
+Introduce a graph database only when query patterns need multi-hop traversal, e.g.:
+
+```text
+Find techniques connected to BirdCLEF through repositories within 3 hops,
+excluding failed experiments.
+```
+
+You are not there in Milestone 3 Phase 1.
+
+### A.6 Why not GraphRAG as storage?
+
+GraphRAG builds graphs **from text**. We already have structured extraction:
+
+```json
+{
+  "techniques": ["SpecAugment", "EMA"],
+  "models": ["ConvNeXt"],
+  "datasets": ["BirdCLEF"]
+}
+```
+
+Asking GraphRAG to rediscover those relationships is redundant. Prefer:
+
+```text
+Paper → LLM Extractor → Structured Artifact → Knowledge Normalizer → Knowledge Store
+```
+
+**No graph product yet.** Borrow GraphRAG *ideas* (entity/relationship extraction,
+hierarchical summaries) where they help Compression / Research Memory — do **not** adopt
+the full chunk→Leiden→cluster-summary architecture as the SoR.
+
+### A.7 Evolution path (locked recommendation)
+
+```text
+Phase 1  SQLite + ontology + structured extraction
+            (+ embeddings later for candidate semantic ranking — not SoR)
+
+Phase 2  SQLite + Embeddings (Stage 3 re-rank)
+
+Phase 3  SQLite + Knowledge Graph view / Neo4j + Embeddings
+            (when multi-hop queries dominate)
+
+Phase 4  Hybrid Retrieval Engine
+            (Query Planner chooses SQL | Graph | Embedding per question)
+```
+
+Eventual hybrid (graph is **one retrieval strategy**, not the center):
+
+```text
+                Query
+                  │
+        Intent Classifier
+                  │
+        Query Planner
+                  │
+    ┌─────────────┼─────────────┐
+    ▼             ▼             ▼
+ SQL          Graph         Embedding
+ Search       Search         Search
+    └─────────────┼─────────────┘
+                  ▼
+        Candidate Objects
+                  │
+         Context Builder
+                  │
+              LLM
+```
+
+Two years later (5k papers / 30k experiments / 1.5k techniques / …), technique→BirdCLEF→
+ConvNeXt→paper→experiment→repo walks become valuable — but that graph is **materialized
+from our ontology**, not rediscovered by GraphRAG over PDFs.
+
+### A.8 Principal-engineer verdict
+
+| Now (Phase 1) | Later |
+|---------------|--------|
+| SQLite + well-designed ontology + structured extraction | Graph view / Neo4j when multi-hop queries dominate |
+| Embeddings for semantic ranking **inside candidates** | Hybrid retrieval under Query Planner |
+| Skip GraphRAG as architecture | Borrow ideas only (extraction, hierarchical summaries) |
+
+The technically sophisticated GraphRAG/cluster stack solves a different problem than LabPilot’s
+“generate structured research knowledge from day one.”
