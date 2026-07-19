@@ -40,12 +40,17 @@ See [COMPLETED.md](COMPLETED.md).
 |------------|--------------|
 | **Packaging & PyPI** | Bundle `templates/` + default configs in wheel; `pip install labpilot`; release workflow |
 | **P2 remote execution** | Dispatch, polling, artifact sync (`--remote-train`) |
-| Multi-agent systems | Orchestrator + templates are enough for P0–P4 |
-| Vector databases | Brief uses competition page + profiler, not retrieval |
-| Knowledge graphs | No cross-competition reasoning needed yet |
-| Long-term memory | Each run is self-contained |
-| Autonomous planning | Fixed pipeline DAG is sufficient |
+| Multi-agent systems | Orchestrator + templates are enough; Milestone 3 keeps "no agents package" |
+| Vector databases | Milestone 3 starts with structured JSON + search APIs; embeddings optional later |
+| Knowledge graphs | Milestone 3 uses evidence store + synthesis, not a general KG product |
+| Long-term memory | Milestone 2 `knowledge/` + Milestone 3 `intelligence/` are the scoped answer |
+| Autonomous planning | Ranking + analyze suggest; human still runs `improve` / `run` |
 | Self-modifying code | Templates + parameterization first |
 | AutoML search | One strong baseline proves the loop |
 | Multi-model orchestration | Single model per run |
 | Full-pipeline remote execution | Training-only remote in P2 execution |
+
+**Milestone 3 — Research Intelligence** is no longer "unscheduled" — design lives at
+[milestone-3/README.md](milestone-3/README.md). Items above that overlap (vector DBs,
+long-term memory, autonomous planning) stay deferred as *products*; M3 only takes the
+narrow slice needed for `research analyze`.

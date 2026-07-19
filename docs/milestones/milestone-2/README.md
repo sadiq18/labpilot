@@ -41,8 +41,9 @@ Reflection                          Reflect
 
 **There is still no planner.** `research run` / `research improve` remain the only ways an
 experiment gets executed, and a human still decides which experiment to run next. Milestone 2
-gives that human (and, later, a Milestone-3 planner) the memory, comparison, and ranking tools
-to make that decision well — it does not make the decision autonomously.
+gives that human (and Milestone 3's research intelligence layer) the memory, comparison, and
+ranking tools to make that decision well — it does not make the decision autonomously.
+Milestone 3 design: [../milestone-3/README.md](../milestone-3/README.md).
 
 ### Guiding decisions (carried over from our discussion)
 
