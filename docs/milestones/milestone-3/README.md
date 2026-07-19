@@ -7,8 +7,10 @@ Back to [MILESTONES.md](../../MILESTONES.md).
 formation before any training code runs.
 
 This directory is the architecture/design workspace for Milestone 3. Phase A is **this
-README**. Phase B (after design review) splits the provisional plan sequence below into
-independently buildable `plan-N-*.md` files — same ship-and-review style as Milestone 2.
+README** plus the Knowledge System storage design
+([knowledge-system.md](knowledge-system.md)). Phase B (after design review) splits the
+provisional plan sequence below into independently buildable `plan-N-*.md` files — same
+ship-and-review style as Milestone 2.
 
 ---
 
@@ -100,7 +102,7 @@ Suggested Next Experiments
 Also writes the canonical artifact:
 
 ```text
-knowledge/<slug>/intelligence/analyze.json
+knowledge/<slug>/research/reports/analyze.json
 ```
 
 Terminal output is a **view**. JSON is the **contract**. Forum Intelligence lands only when
@@ -109,8 +111,12 @@ Milestone 3 does **not** wait on Kaggle access. No HTML in v1.
 
 ### Guiding decisions
 
-1. **No `agents/` package.** Same as Milestone 2. Nouns are `ResearchArtifact`,
-   `ResearchArtifacts` (batch), `CompetitionIntelligence`, `Hypothesis` — not chats or roles.
+1. **No autonomous `agents/` package** (no ReAct / memory / multi-step planners). Nouns are
+   `ResearchArtifact`, `CompetitionIntelligence`, `Hypothesis` — not chats or roles.
+   **Micro Agents** live in explicit folders (§11):
+   `research_engine/intelligence/micro_agents/` and
+   `research_engine/execution/micro_agents/` — each agent = `*Agent` class + `skill.md`.
+   Optional: `input → prompt → typed artifact`. System must work with them disabled.
 2. **No LLM code generation.** Jinja2 templates remain the only way training code is
    produced.
 3. **Plugins first — content-type Analyzers, not website scrapers.** Think
@@ -119,15 +125,16 @@ Milestone 3 does **not** wait on Kaggle access. No HTML in v1.
    a *provider* behind a content-type interface.
 4. **Prefer official APIs.** Use authenticated HTML only when the official API does not
    expose needed data **and** the approach complies with that site's Terms of Service.
-5. **Fetch ≠ analyze.** Pipeline is always `Fetch → Cache → Normalize → Analyze → Knowledge`.
-   Re-run extraction/prompts without re-hitting external APIs.
-6. **Artifacts over chat.** Durable explored intelligence under
-   `knowledge/<slug>/intelligence/` (**local only — gitignored**, like `runs/`). Canonical
-   rollup is **`analyze.json`**. Terminal is a renderer over that JSON — not the source of
-   truth. **No HTML in Milestone 3 v1.** Starting M3 the tree is **knowledge-centric**
-   (papers / experiments / repos / discussions / techniques / models / datasets) — §11.
-7. **LLM scoped to synthesis / knowledge extraction** after normalized artifacts exist —
-   with template fallback when no LLM is configured.
+5. **Fetch ≠ analyze.** Knowledge Extraction Pipeline
+   ([knowledge-system.md](knowledge-system.md)): Raw → Normalizer → Extractor → Validator →
+   Knowledge Store → Retrieval → Reasoning. Re-run extract without re-hitting APIs (`raw/`
+   immutable).
+6. **Artifacts over chat.** Durable store under `knowledge/<slug>/research/` (**local /
+   gitignored**). Rollup: `research/reports/analyze.json`. Terminal renders JSON — not SoR.
+   **No HTML in M3 v1.** See [knowledge-system.md](knowledge-system.md) + §11.
+7. **Selective LLM (§2.4) + never remember / never search KB.** LLM only via optional Micro
+   Agents **after** multi-stage retrieval (compressed typed context). Never free-form SoR;
+   never LLM browses the store; works without Micro Agents (`rule_engine`).
 8. **Feed Milestone 2, don't fork a backlog.** Suggested experiments become/update
    `Hypothesis` records and reuse `rank_candidates`. Provenance is modeled as
    `created_by` / `generator` / `origin` / evidence — **not** a single `source: llm|analyze`
@@ -143,6 +150,9 @@ Milestone 3 does **not** wait on Kaggle access. No HTML in v1.
     the intelligence report / hypotheses as **Suggested**; they never auto-write into the
     competition's accepted knowledge base. Only local experiment corroboration promotes
     status (see §12.4).
+12. **Knowledge System storage** — [knowledge-system.md](knowledge-system.md): `raw/` ≠
+    `extracted/` ≠ `knowledge/`; SQLite joins; multi-stage retrieve (optimizer, LLM last);
+    not RAG chunk soup.
 
 ---
 
@@ -171,18 +181,16 @@ Product framing (what the user experiences), then how it maps to the plugin engi
            Evidence · Limitations · References
                            ▼
               Structured Knowledge Store
-           Research KB: Documents → Knowledge
-                    → Evidence → Beliefs (§8)
-           on-disk: knowledge/<slug>/intelligence/
-             papers · experiments · repos · forums
-             techniques · models · datasets
+           [knowledge-system.md](knowledge-system.md): raw → extracted → knowledge
+           + SQLite; Beliefs (§8)
+           on-disk: knowledge/<slug>/research/
                            ▼
-                 Retrieval + Reasoning
+                 Multi-stage Retrieval (§9) → Reasoning
                            ▼
                  Hypothesis Assistant
               (top-10 recommendations only)
                            ▼
-                      analyze.json
+               research/reports/analyze.json
                     (+ terminal view)
 ```
 
@@ -191,11 +199,11 @@ Product framing (what the user experiences), then how it maps to the plugin engi
 | Layer | Job |
 |-------|-----|
 | **Research Assistant** | Product / orchestrator — not an LLM “agent.” CLI selects plugins and runs the pipeline. |
-| **Readers** | Fetch → cache → normalize into **`ResearchArtifact`** (§3.1) — paper, experiment, blog, repo, discussion, note, … |
-| **Knowledge Extractor** | **Hub (§7):** draft claims from every source; upsert Research KB layers (claim + evidence); feed beliefs. |
-| **Structured Knowledge Store** | **Research Knowledge Base (§8)** — layered Documents → Knowledge → Evidence → Beliefs (JSON). **Not** a vector DB. |
-| **Retrieval + Reasoning** | **Research Retrieval (§9):** given competition axes (task/metric/dataset/domain/architecture/technique), retrieve papers / experiments / repos / discussions / **failures** — not keywords alone; then apply belief rules. |
-| **Hypothesis Assistant** | **§10:** connect retrieval + KB + graph + failures → top-10 hypotheses (impact, confidence, evidence, effort). **Recommendations only — no autonomous planner.** |
+| **Readers** | Raw → Normalizer into **`ResearchArtifact`** (§3.1) — paper, experiment, blog, repo, discussion, winning solution, … |
+| **Knowledge Extractor** | Pipeline Extractor → Validator → Store ([knowledge-system.md](knowledge-system.md)); hub (§7) merges objects. |
+| **Structured Knowledge Store** | `research/` + `knowledge.db` — **not** a vector DB. See [knowledge-system.md](knowledge-system.md). |
+| **Retrieval + Reasoning** | **Multi-stage (§9):** Intent → Symbolic → … → Compression → LLM last. Never RAG-first; never LLM searches KB. |
+| **Hypothesis Assistant** | **§10:** compressed retrieval + KB + graph + failures → top-10. **Recommendations only — no autonomous planner.** |
 
 ### 2.2 Mapping to plugins (what we actually build)
 
@@ -209,7 +217,7 @@ Product framing (what the user experiences), then how it maps to the plugin engi
 | Dataset Reader | `research_engine.intelligence` DatasetAnalyzer |
 | Discussion Reader | `research_engine.intelligence` DiscussionAnalyzer + providers + ForumKnowledgeExtractor — **not Phase 1 default** |
 | Knowledge Extractor | hub under `research_engine.intelligence.knowledge` + synthesize |
-| Knowledge Store | `knowledge/<slug>/intelligence/` explored tree (papers…datasets) + layered indexes + M2 via execution |
+| Knowledge Store | `knowledge/<slug>/research/` + `knowledge.db` ([knowledge-system.md](knowledge-system.md)) |
 | Retrieval + Reasoning | `research_engine.intelligence` ResearchRetriever (§9) |
 | Hypothesis Assistant | `research_engine.intelligence` HypothesisAssistant (§10) → execution HypothesisStore |
 
@@ -236,6 +244,368 @@ Product framing (what the user experiences), then how it maps to the plugin engi
 If we ever rename packages for clarity: `Reader` can be an alias for the fetch/normalize
 half of `Analyzer`, with `extract_knowledge` as the extractor half — still one plugin
 boundary so registration stays simple.
+
+### 2.4 Selective LLM policy (locked)
+
+**One of the biggest Milestone 3 design decisions.** Many agent frameworks call a chat model
+for every task — slower, costlier, less reliable. For a research engineer we want the
+opposite:
+
+**Use deterministic code whenever possible. Use an LLM only where semantic understanding
+or reasoning is required — and only after retrieval.**
+
+The LLM is an **information extractor / normalizer / experiment reasoner**, not a chatbot.
+Schema in → structured JSON out via **Micro Agents** (`*Agent` — § below). Never “summarize
+this paper/repo.”
+
+**Fallback / optional Micro Agents:** The product **must work without Micro Agents** (and
+without an LLM). Deterministic Engine alone ships fetch → cache → normalize → store →
+retrieve → rank → terminal / `analyze.json`. Every Yes path must also work with
+`generator=rule_engine` / templates when no LLM is configured (same pattern as brief /
+reflection). Micro Agents **upgrade** semantic quality when enabled; they are never a
+hard dependency for `research analyze`.
+
+#### Preferred architecture
+
+```
+                User Question
+                      │
+                      ▼
+              Orchestrator
+                      │
+        ┌─────────────┴─────────────┐
+        ▼                           ▼
+Deterministic Engine         Reasoning Engine
+        │                           │
+        ▼                           ▼
+ APIs / Database / KB            LLM
+```
+
+| Layer | LabPilot |
+|-------|----------|
+| Orchestrator | `research_engine.intelligence` orchestrator (+ execution for run/reflect) |
+| Deterministic Engine | providers, profiler, comparator, retriever, KB I/O, rank formula |
+| Reasoning Engine | **Optional** Micro Agents (`*Agent`) — extractors / concept normalize / Hypothesis Assistant / reflection / rollup (`common.llm`); absent → `rule_engine` |
+
+**Hard rule:** The LLM **never** talks directly to Kaggle, GitHub, or arXiv. It **never
+searches the knowledge base** and **never remembers** prior chats as SoR. It only sees typed
+**`ResearchContext`** (L1–L3) from the **Context Builder** after multi-stage retrieve +
+compress ([knowledge-system.md](knowledge-system.md)). Knowledge Engine is the center.
+
+```mermaid
+flowchart TB
+  User[User_Question]
+  Orch[Orchestrator]
+  Det[Deterministic_Engine]
+  Reas[Reasoning_Engine]
+  APIs[APIs_and_KB]
+  LLM[LLM]
+
+  User --> Orch
+  Orch --> Det
+  Orch --> Reas
+  Det --> APIs
+  Reas --> LLM
+  Det -->|"structured_context"| Reas
+```
+
+#### Classification matrix
+
+| Module | LabPilot component | LLM? | Reason |
+|--------|-------------------|------|--------|
+| Competition parser | `CompetitionAnalyzer` / `CompetitionParser` | **No** | Kaggle structured info — parse with code |
+| Dataset profiler | `DatasetAnalyzer`, Pandas, NumPy | **No** | Statistics, plots, distributions are deterministic |
+| Paper search | `LiteratureProvider` search/enrich/attach | **No** | APIs and keyword search |
+| GitHub search | `RepositoryProvider` search/fetch | **No** | GitHub search/API is deterministic |
+| Forum scraping | `DiscussionProvider` search/fetch | **No** | Pure retrieval |
+| Embedding generation | optional later retrieval signal | **No** | Embedding models, not chat models |
+| Research Retrieval | `ResearchRetriever` | **No** | Faceted match over KB |
+| Comparator numeric diffs | M2 comparator | **No** | Deterministic CV/LB numbers |
+| Experiment prioritization (v1) | `rank_candidates` | **No** (formula); later Hybrid explain ok | Explicit score — more reproducible |
+| Knowledge extraction | `PaperKnowledgeExtractor`, `ForumKnowledgeExtractor`, hub | **Yes** | Understanding and abstraction |
+| Research summarization / rollup | synthesize across artifacts | **Yes** | Condenses many sources into insights (not doc TL;DRs) |
+| Repository analysis | `RepoKnowledgeExtractor` + `RepoDiffer` | **Yes** | Explains architectures and patterns |
+| Hypothesis generation | `HypothesisAssistant` | **Yes** | Creative reasoning over evidence |
+| Reflection | M2 `reflection/` | **Yes** | Interpreting experiment outcomes |
+| Paper understanding | `PaperKnowledgeExtractor` | **Yes** | Flagship — structured extract (§ below) |
+| GitHub repo understanding | `RepoKnowledgeExtractor` | **Yes** | Flagship — structured card (§ below) |
+| Knowledge normalize | `KnowledgeMerger` | **Yes** | Flagship — concept clustering (§ below) |
+
+#### Hard No (never LLM)
+
+| Task | Never | Use instead |
+|------|-------|-------------|
+| Parsing Kaggle | Never | Deterministic parsing |
+| Reading CSVs | Never | Pandas |
+| Computing statistics | Never | NumPy / profiler |
+| Searching papers | No | APIs first — LLM only **after** retrieval |
+| GitHub / forum search | No | Official APIs / providers |
+| Ranking experiments | Initially no | Explicit score (below) |
+| Direct LLM → Kaggle / GitHub / arXiv | Forbidden | Structured context from Deterministic Engine |
+
+```text
+score = (
+    expected_gain * 0.5 +
+    confidence   * 0.2 -
+    runtime      * 0.1 -
+    gpu_cost     * 0.2
+)
+```
+
+Much more reproducible than asking an LLM to pick the best experiment. Optional later:
+LLM may *explain* tradeoffs among top-K — it must **not** replace this score as the system
+of record for v1 ordering.
+
+#### Flagship Yes patterns (after deterministic context exists)
+
+**1. Paper Understanding** (`PaperAnalyzerAgent`) — Do **not** ask “Summarize this paper.”
+The LLM is an **information extractor**, not a chatbot.
+
+Ask extraction questions, e.g.:
+
+- Main contribution
+- Novel techniques
+- Training tricks
+- Loss functions
+- Dataset assumptions
+- Limitations
+- Ideas worth testing
+
+Output **structured JSON** (validate against schema; reject free-form chat):
+
+```json
+{
+  "techniques": ["SpecAugment", "EMA", "Pseudo Labels"],
+  "limitations": ["Requires large batch sizes"],
+  "hypotheses": ["Technique may improve rare class recall"]
+}
+```
+
+Maps to `PaperKnowledge` (contributions / methods / limitations / ideas_worth_testing) +
+Suggested hyp seeds (`origin=paper`). See §4.
+
+**2. GitHub Repository Understanding** (`RepositoryAnalyzerAgent`) — Point at a winning
+Kaggle repo. Deterministic fetch first; LLM produces a structured card (saves hours of
+manual file reading):
+
+```text
+Architecture
+    ConvNeXt Tiny
+
+Interesting Components
+    SpecAugment
+    Mixup
+    EMA
+    Custom Sampler
+
+Files Worth Reading
+    dataset.py
+    loss.py
+    augment.py
+
+Estimated Integration Difficulty
+    Easy
+```
+
+Maps to `RepoKnowledge` + `TransferOpportunity.effort`. Do **not** ask “Summarize this
+repository.” See §5.
+
+**3. Knowledge Extraction (normalize)** (`ConceptNormalizerAgent`) — Five papers may
+mention related strings that rules cannot reliably unify:
+
+```text
+SpecAugment
+Time Masking
+Frequency Masking
+Random Erasing
+        ↓  LLM normalize
+common concept: spectrogram / input augmentation
+  (canonical technique id + aliases)
+```
+
+Merge evidence into one `KnowledgeClaim`. Hard with rules alone. See §7 / §8.
+
+**4. Experiment Reflection** (`ReflectionGeneratorAgent`) — Deterministic comparator
+inputs, LLM diagnosis:
+
+```text
+Given:
+  Experiment 42
+  CV: +0.012
+  LB: -0.006
+  Changes: Mixup, EMA
+
+LLM might infer:
+  The cross-validation strategy likely doesn't match the hidden test distribution.
+  Consider GroupKFold or time-aware validation before discarding EMA.
+```
+
+→ `reflection.json` + Suggested hyps. Still no auto-run. Comparator stays deterministic (§2.4 No).
+
+#### Example workflow (BirdCLEF)
+
+Expensive reasoning only after evidence is gathered:
+
+| Step | Engine | Action |
+|------|--------|--------|
+| 1 | Deterministic | Search papers → returns ~40 papers |
+| 2 | Deterministic | Download metadata (cache) |
+| 3 | **LLM** | Extract techniques (structured JSON — not summarize) |
+| 4 | Deterministic | Store in knowledge base (`papers/`, `techniques/`, …) |
+| 5 | **LLM** | Find interesting connections / normalize concepts |
+| 6 | Deterministic | Store hypotheses (Suggested only) |
+
+```text
+Search (Det) → Metadata (Det) → Extract (LLM) → Store (Det)
+    → Connections (LLM) → Hypotheses (Det)
+```
+
+#### Micro Agents (locked)
+
+**Optional, not required.** Analyzers, providers, KB, retrieval, ranking, and
+`analyze.json` must succeed with Micro Agents disabled or unconfigured. Without them the
+system still produces useful explored intelligence via deterministic parse / heuristics /
+`rule_engine` templates — thinner semantic depth, same pipeline and typed schemas.
+
+**Micro Agents are not autonomous agents.** When enabled, they are tiny specialized
+reasoning functions inside the Reasoning Engine:
+
+```text
+input → prompt → typed artifact (structured output)
+```
+
+| Property | Micro Agent | Forbidden |
+|----------|-------------|-----------|
+| Required for `research analyze` | **No** — optional upgrade | Hard dependency on LLM / Agents |
+| Memory / planning / loops | **No** | ReAct, scratchpads, multi-step planners |
+| Primary output | **Typed Pydantic artifacts** | Free-form assistant prose as system of record |
+| Network | **No** | Direct Kaggle / GitHub / arXiv calls |
+| Side effects | **No** (caller persists) | Self-writing KB / auto-run |
+
+**Package layout (locked):** each Micro Agent is a small package under the platform that owns
+it — **Agent class + `skill.md`** (prompt / behavior contract; not free-form chat memory).
+
+```text
+src/labpilot/research_engine/
+  intelligence/micro_agents/     # Research Intelligence reasoners
+    __init__.py
+    base.py                      # MicroAgent Protocol
+    paper_analyzer/
+      agent.py                   # PaperAnalyzerAgent
+      skill.md
+    repository_analyzer/
+      agent.py                   # RepositoryAnalyzerAgent
+      skill.md
+    forum_analyzer/
+      agent.py
+      skill.md
+    hypothesis_generator/
+      agent.py
+      skill.md
+    concept_normalizer/
+      agent.py
+      skill.md
+    experiment_reviewer/
+      agent.py
+      skill.md
+  execution/micro_agents/        # Execution Platform reasoners (M2 reflection, etc.)
+    __init__.py
+    base.py                      # shared Protocol or re-export from common
+    reflection_generator/
+      agent.py                   # ReflectionGeneratorAgent
+      skill.md
+```
+
+`skill.md` describes inputs, output schema, and prompt skeleton for that agent. Analyzers /
+orchestrators call `micro_agents.*.agent`; extract modules may thin-wrap or delegate here.
+Shared LLM client stays in `common/llm/`.
+
+**Naming — always `*Agent` suffix.** Analyzer **plugins** (`PaperAnalyzer`, …) stay in
+`analyzers/` (fetch / cache / normalize / orchestrate). Micro Agents are the Reasoning Engine
+slice only:
+
+| Micro Agent | Package | Emits (typed) |
+|-------------|---------|---------------|
+| `PaperAnalyzerAgent` | `intelligence/micro_agents/paper_analyzer/` | `PaperKnowledge` / technique findings |
+| `RepositoryAnalyzerAgent` | `intelligence/micro_agents/repository_analyzer/` | `RepoKnowledge` + effort fields |
+| `ForumAnalyzerAgent` | `intelligence/micro_agents/forum_analyzer/` | `ForumKnowledge` |
+| `HypothesisGeneratorAgent` | `intelligence/micro_agents/hypothesis_generator/` | `Hypothesis` draft fields |
+| `ConceptNormalizerAgent` | `intelligence/micro_agents/concept_normalizer/` | canonical + aliases |
+| `ExperimentReviewerAgent` | `intelligence/micro_agents/experiment_reviewer/` | review / diagnosis artifact |
+| `ReflectionGeneratorAgent` | `execution/micro_agents/reflection_generator/` | structured reflection fields |
+
+**LLM as a structured reasoning engine.** Do **not** let LLMs emit free-form text as the
+primary output. Every reasoning step **populates typed artifacts**. Illustrative shapes
+(align / extend existing models):
+
+```python
+class Technique(BaseModel):
+    name: str
+    category: str
+    evidence: list[str]
+    confidence: float
+
+
+class Hypothesis(BaseModel):  # M3 draft shape — maps to M2 Hypothesis store
+    observation: str
+    prediction: str
+    rationale: str
+    expected_impact: float
+
+
+class ResearchFinding(BaseModel):
+    source: str
+    finding: str
+    applicability: list[str]
+```
+
+The LLM’s job is to **fill these structures** (plus existing `PaperKnowledge`,
+`RepoKnowledge`, `ForumKnowledge`, `KnowledgeClaim`). That yields:
+
+- Deterministic downstream processing
+- Easier evaluation
+- Better search and retrieval
+- Versionable knowledge
+- Ability to swap LLMs without changing the rest of the system
+
+Closer to a production-quality autonomous ML research system than treating the LLM as an
+all-purpose assistant.
+
+```mermaid
+flowchart LR
+  Det[Deterministic_Engine]
+  Ctx[StructuredContext]
+  Agent[MicroAgent_optional]
+  Rules[rule_engine]
+  Art[Typed_artifact]
+  Store[Caller_persists]
+
+  Det --> Ctx
+  Ctx --> Agent
+  Ctx --> Rules
+  Agent --> Art
+  Rules --> Art
+  Art --> Store
+```
+
+**Contract:**
+
+```python
+class MicroAgent(Protocol):
+    name: str  # e.g. "PaperAnalyzerAgent"
+
+    def run(self, context: StructuredContext) -> BaseModel:
+        """prompt → LLM|rule_engine → validate typed artifact."""
+```
+
+Callers always persist the same typed schemas whether filled by a Micro Agent, by
+`rule_engine`, or by deterministic heuristics — so downstream code does not branch on
+“was an Agent present?”
+
+Flagship Yes paths above are implemented as these Micro Agents when available (e.g. Paper
+Understanding → `PaperAnalyzerAgent`; GitHub card → `RepositoryAnalyzerAgent`; concept
+normalize → `ConceptNormalizerAgent`; Experiment Reflection → `ReflectionGeneratorAgent`);
+otherwise the same extractors use `rule_engine` / heuristics.
 
 ---
 
@@ -305,11 +675,11 @@ Dotted edges = post-spike / optional (`DiscussionAnalyzer` not in Phase 1 defaul
 
 ### 3.1 Internal data model: `ResearchArtifact`
 
-**Common abstraction.** Every paper, experiment, blog, GitHub repo, forum thread, or note
-becomes a **`ResearchArtifact`**. Downstream code (KB upsert, retrieval, Hypothesis
-Assistant) should not special-case “this came from Semantic Scholar vs GitHub” — it works
-on the shared envelope. Typed payloads (`Paper`, `RepoKnowledge`, …) live in `payload` /
-side tables when a module needs richer fields.
+**Most important abstraction.** Every paper, experiment, blog, GitHub repo, forum thread,
+winning solution, or note becomes a **`ResearchArtifact`** — same interface. Downstream
+code (KB upsert, multi-stage retrieval, Hypothesis Assistant) does not special-case
+providers. Typed extras live in `metadata` / `payload`. Full storage contract:
+[knowledge-system.md](knowledge-system.md).
 
 ```python
 class ResearchArtifactType(str, Enum):
@@ -322,7 +692,7 @@ class ResearchArtifactType(str, Enum):
     COMPETITION = "competition"     # related-comp or profile slice
     WINNING_SOLUTION = "winning_solution"
     DATASET = "dataset"
-    MODEL = "model"                 # architecture / checkpoint refs in models/
+    MODEL = "model"                 # architecture / checkpoint refs
 
 
 class ResearchArtifact(BaseModel):
@@ -331,36 +701,42 @@ class ResearchArtifact(BaseModel):
     id: str                         # stable: paper:…, exp:14, repo:owner/name, …
     type: ResearchArtifactType
     source: str                     # semantic_scholar | github | m2 | kaggle | reddit | user | …
-    title: str
-    summary: str = ""               # short card text — NOT a full-document TL;DR
-    concepts: list[str] = Field(default_factory=list)
+    title: str = ""                 # human label (also mirrored in metadata if useful)
+    metadata: dict[str, Any] = Field(default_factory=dict)  # type-specific extras
+    summary: str = ""               # short card — NOT a full-document TL;DR
     techniques: list[str] = Field(default_factory=list)
-    evidence: list[str] = Field(default_factory=list)      # ids / labels this artifact cites or rests on
-    references: list[str] = Field(default_factory=list)    # urls / external ids
+    models: list[str] = Field(default_factory=list)
+    datasets: list[str] = Field(default_factory=list)
+    claims: list[str] = Field(default_factory=list)
+    references: list[str] = Field(default_factory=list)    # related artifact ids / evidence
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
     competition_slug: str | None = None
-    payload: dict[str, Any] = Field(default_factory=dict)  # type-specific extras
+    # Deprecated aliases during migration — prefer fields above:
+    # concepts → metadata/tags; evidence → references; payload → metadata
+    concepts: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
 ```
 
 | Field | Role |
 |-------|------|
-| `id` | Stable join key into KB Layer 1 / evidence links / hyp refs |
-| `type` | What kind of thing (paper vs experiment vs …) |
-| `source` | Where it was fetched or created (provider / M2 / user) |
-| `title` | Human label |
-| `summary` | One short blurb for cards/retrieval — **forbidden:** chapter-style paper/thread dumps |
-| `concepts` | Task / domain / dataset / metric-ish tags (feeds Retrieval §9 axes) |
-| `techniques` | Normalized technique tags → claims / beliefs |
-| `evidence` | Supporting ids (other artifacts, runs, datasets) |
-| `references` | External urls / DOIs / arXiv ids |
-| `confidence` | How much we trust *this artifact’s* metadata/extract |
+| `id` | Stable join key into KB / evidence links / hyp refs |
+| `type` | paper / repository / discussion / experiment / winning_solution / … |
+| `source` | Where it was fetched or created |
+| `metadata` | Type-specific extras |
+| `summary` | Short card blurb — **forbidden:** chapter-style dumps |
+| `techniques` / `models` / `datasets` | Structured tags for joins + pipeline-diff |
+| `claims` | Extracted claim strings → merge into knowledge objects |
+| `references` | Related artifact ids / evidence links |
+| `confidence` | Trust in this artifact’s extract |
 
 ```
 Paper ──┐
 Experiment ──┤
-Blog ──┼──→ ResearchArtifact ──→ KB Document (L1) / retrieval / hypotheses
+Blog ──┼──→ ResearchArtifact ──→ extracted/ + knowledge.db / retrieval / hypotheses
 GitHub repo ──┤
 Forum thread ──┤
+Winning solution ──┤
 Note ──┘
 ```
 
@@ -490,7 +866,7 @@ class CapabilityResult(BaseModel):
 |------------|-----------------|----------------|-------|
 | **Metadata** | title, slug, category, tags, description | Kaggle API + existing `CompetitionParser` | Strong today |
 | **Dataset (catalog)** | train/test presence, file patterns, size hints, modality | API + rules/data pages when available; else local `competition.json` / profile | Distinct from deep EDA (`DatasetAnalyzer`) |
-| **Metric** | name, direction, canonical key, description | API + `normalize_metric` (+ LLM enrich already in parser) | Strong today |
+| **Metric** | name, direction, canonical key, description | API + `normalize_metric` (**deterministic only** — no LLM enrich; §2.4) | Strong today |
 | **Rules** | rules excerpt / URL; structured constraints extracted when possible | `rules_url` + existing rules fetch | Prefer structured fields over raw dump |
 | **Constraints** | daily submission limit, team size, code/sharing rules (as available) | API (`max_daily_submissions`) + rules extract | Soft-fail → unavailable fields |
 | **Timeline** | deadline, launch, whether closed | API deadline + `submissions_disabled` | Strong for deadline |
@@ -548,8 +924,8 @@ class RelatedCompetitionProvider(Protocol):
 4. Similar evaluation metric family
 5. Optional: seed list / YAML overrides under `configs/competitions/` for known families
 
-LLM may *rank or explain* candidates after deterministic recall — it must not be the only
-recall path. Results are **Suggested** external context (§12.4), not local KB facts.
+After deterministic recall, an LLM may *explain* related-comp relevance — it must not be the
+only recall path (§2.4). Results are **Suggested** external context (§12.4), not local KB facts.
 
 #### Normalized competition profile (into `analyze.json`)
 
@@ -712,7 +1088,8 @@ LiteratureProvider.search / enrich     ← collect (APIs + cache)
         ↓
 list[Paper]                            ← normalized catalog
         ↓
-PaperKnowledgeExtractor                ← extract (rules + optional LLM)
+PaperKnowledgeExtractor                ← extract (Reasoning Engine / LLM — §2.4)
+                                           # Deterministic LiteratureProvider search first
         ↓
 list[PaperKnowledge]                   ← research knowledge
         ↓
@@ -928,8 +1305,9 @@ class PaperAnalyzer(Analyzer):
 ```
 
 Optional clients (e.g. Papers with Code) soft-fail: chain continues; `notes` record skips.
-Extractor without LLM uses abstract heuristics / template; with LLM still constrained to the
-four fields in `PaperKnowledge`.
+Extractor without LLM (`rule_engine` fallback, §2.4): abstract heuristics / templates. With
+LLM: still constrained to structured JSON fields in `PaperKnowledge` — **never** “summarize
+this paper.” Flagship Paper Understanding pattern in §2.4.
 
 `ideas_worth_testing` feed Hypothesis Assistant with `origin=paper`, `created_by=analyze`,
 status **Suggested** until local validation (§12.4).
@@ -964,7 +1342,8 @@ RepositoryProvider.search / fetch     ← collect (GitHub API + cache)
         ↓
 list[Repository]                      ← normalized catalog (categorized)
         ↓
-RepoKnowledgeExtractor                ← extract (rules + optional LLM)
+RepoKnowledgeExtractor                ← extract (Reasoning Engine / LLM — §2.4)
+                                           # Deterministic RepositoryProvider fetch first
         ↓
 list[RepoKnowledge]                   ← architecture / loss / … / deps
         ↓
@@ -1227,9 +1606,10 @@ class RepositoryAnalyzer(Analyzer):
         return repo_knowledge_to_artifacts(knowledge, diffs)
 ```
 
-Extractor without LLM: regex / AST-light heuristics on loss names, `timm.create_model`,
-common aug class names, `requirements.txt`. With LLM: still constrained to the six extract
-fields + short delta lines — never a chapter-style README rewrite.
+Extractor without LLM (`rule_engine`): regex / AST-light heuristics on loss names,
+`timm.create_model`, common aug class names, `requirements.txt`. With LLM: structured card
+(Architecture / Interesting Components / Files Worth Reading / Integration Difficulty) —
+**never** “summarize this repository.” See §2.4 GitHub Repository Understanding.
 
 Link to papers when `linked_paper_ids` or Papers-with-Code URLs appear: synthesis can join
 `PaperKnowledge` + `RepoKnowledge` for the same technique without either analyzer calling
@@ -1291,7 +1671,8 @@ DiscussionProvider(s).search / fetch   ← collect (API or ToS-safe HTML + cache
         ↓
 list[Discussion]                       ← normalized threads
         ↓
-ForumKnowledgeExtractor                ← extract (rules + optional LLM)
+ForumKnowledgeExtractor                ← extract (Reasoning Engine / LLM — §2.4)
+                                           # Deterministic DiscussionProvider fetch first
         ↓
 list[ForumKnowledge]                   ← practical knowledge
         ↓
@@ -1608,6 +1989,8 @@ Source extractors (per analyzer)
 list[KnowledgeUnit] draft cards   ← normalize_unit(...)
         ↓
 KnowledgeMerger                   ← same technique id → merge evidence/refs/sources
+                                      # LLM may canonicalize aliases (§2.4 Knowledge normalize)
+                                      # rule_engine fallback: exact/slug match only
         ↓
 knowledge/<slug>/intelligence/techniques/ (+ source folders)
         ↓
@@ -1617,7 +2000,8 @@ TechniqueBelief (§12.4) + Hypothesis Assistant
 Merging rule: **same normalized `technique` id** unions `evidence`, `references`,
 `sources`, and `limitations`; recomputes `confidence` (e.g. evidence count × source
 diversity × recency, capped). Never delete local-run evidence when an external source is
-weaker.
+weaker. LLM normalize (Yes): map SpecAugment / Time Masking / Frequency Masking / Random
+Erasing → one canonical concept + aliases before merge — hard with rules alone (§2.4).
 
 ### 7.3 Architecture
 
@@ -1668,7 +2052,7 @@ except via evidence JSON for debugging.
 
 | Scope | Behavior |
 |-------|----------|
-| Per competition | `knowledge/<slug>/intelligence/{papers,experiments,repositories,discussions,techniques,models,datasets}/` |
+| Per competition | `knowledge/<slug>/research/` + `knowledge.db` ([knowledge-system.md](knowledge-system.md)) |
 | Cross-competition (optional v1.1) | Promote high-confidence technique cards into a shared catalog — still **Suggested** for a new slug until local validation (§12.4) |
 
 v1 ships **per-competition accumulation** (re-runs of `analyze` merge into the same file).
@@ -1688,27 +2072,43 @@ externally” never pretends “it works on *this* LB.”
 | Auto-writing units into M2 `knowledge_base.json` as established facts | Belief rules (§12.4) |
 | Skipping the hub (“papers write TechniqueBelief directly”) | Divergent fields; no merge |
 
-Extraction writes into the **Research Knowledge Base** (§8) — layered Documents →
-Knowledge → Evidence → Beliefs — not into a vector index.
+Extraction writes into the **Knowledge System** ([knowledge-system.md](knowledge-system.md))
+— `extracted/` + merged `knowledge/` + SQLite — not into a vector index.
 
 ---
 
 ## 8. Research Knowledge Base (layered store)
 
+**Canonical storage architecture:** [knowledge-system.md](knowledge-system.md)
+(`raw/` → `extracted/` → `knowledge/` + SQLite + multi-stage retrieval). This section keeps
+the layered *meaning* model used by claims / evidence / beliefs.
+
 **This is not a vector database.** Embedding every paper/thread into one similarity soup
 collapses structure: you cannot ask “what supports Mixup for small data?” or separate a
 claim from the documents that back it from the belief you hold *here*.
 
-Think in **layers**:
+Think in **layers** (map to Knowledge System dirs in knowledge-system.md):
 
 ```
-Layer 1 — Documents (`ResearchArtifact`)
+Raw (`research/raw/`) — immutable sources
+            ↓
+Extracted (`research/extracted/`) — ResearchArtifact cards
+            ↓
+Knowledge (`research/knowledge/`) — merged techniques / datasets / …
+            ↓
+Beliefs / hypotheses — competition trust + recommendations
+```
+
+Prior naming Documents → Knowledge → Evidence → Beliefs still applies inside the store:
+
+```
+Layer 1 — Artifacts (`ResearchArtifact` in extracted/ + DB)
     Paper · Repository · Discussion · Blog · Experiment · Note · …
             ↓
-Layer 2 — Knowledge
-    Mixup  helps  small datasets
+Layer 2 — Knowledge objects
+    Mixup  helps  small datasets  (merged Technique)
             ↓
-Layer 3 — Evidence
+Layer 3 — Evidence (`references` rows)
     Supported by
       Paper A · Paper B · Experiment 14 · Experiment 21
             ↓
@@ -1719,19 +2119,21 @@ Layer 4 — Beliefs
 
 This layered model is **much more expressive than embedding everything**. Retrieval can
 walk edges (claim → supporting docs → local runs) instead of hoping cosine distance
-reconstructs provenance.
+reconstructs provenance. See multi-stage retrieval in [knowledge-system.md](knowledge-system.md)
+§5 and README §9.
 
 ### 8.1 Layer meanings
 
 | Layer | Holds | Example |
 |-------|--------|---------|
-| **1 Documents** | Normalized **`ResearchArtifact`** rows (catalog + short summary + concepts/techniques) | Paper, Repository, Discussion, Blog, Experiment, Note, … |
-| **2 Knowledge** | Reusable **claims** — technique-centric facts | `Mixup` **helps** `small datasets` |
-| **3 Evidence** | Links from a claim to supporting documents / runs | Supported by Paper A, Paper B, Exp 14, Exp 21 |
+| **1 Artifacts** | Normalized **`ResearchArtifact`** rows (`extracted/` + DB) | Paper, Repository, Discussion, Experiment, Winning solution, … |
+| **2 Knowledge** | Merged **objects / claims** — technique-centric facts | One SpecAugment object; `Mixup` **helps** `small datasets` |
+| **3 Evidence** | `references` links claim → supporting artifacts / runs | Supported by Paper A, Paper B, Exp 14, Exp 21 |
 | **4 Beliefs** | Competition-scoped confidence + lifecycle | Confidence `0.84`, status `Validated` |
 
-Layer 1 is *what we read*. Layer 2 is *what we think is true in general*. Layer 3 is *why*.
-Layer 4 is *how much we trust it for this competition*.
+Layer 1 is *what we extracted*. Layer 2 is *what we think is true in general*. Layer 3 is *why*.
+Layer 4 is *how much we trust it for this competition*. Raw originals sit **below** Layer 1
+in `research/raw/` (immutable) — see [knowledge-system.md](knowledge-system.md).
 
 ### 8.2 Why not vectors (v1)
 
@@ -1742,14 +2144,15 @@ Layer 4 is *how much we trust it for this competition*.
 | Confidence baked into embedding space | Belief layer is first-class |
 | Hard to promote “external → local” | L3 splits external docs vs local experiments; L4 updates |
 
-A vector index may appear **later** as an optional retrieval aid *over* Layer 1/2 text —
+A vector index may appear **later** only as **semantic re-rank inside** multi-stage
+candidate sets ([knowledge-system.md](knowledge-system.md) §5) — never as the first gate,
 never as the system of record (same non-goal as Neo4j-as-dependency).
 
 ### 8.3 Models per layer
 
-**Layer 1 is `ResearchArtifact` (§3.1)** — not a second competing schema. Persist one artifact
-per line (or one JSON file per id) under the matching explored-intelligence folder
-(`papers/`, `repositories/`, …). Typed extras stay in `payload`.
+**Layer 1 is `ResearchArtifact` (§3.1)** — not a second competing schema. Persist under
+`research/extracted/{papers,repositories,forums,…}/` and in `knowledge.db`
+(`research_artifacts`). Typed extras stay in `metadata`.
 
 ```python
 # Layer 1 upsert: ResearchArtifact → papers/ | experiments/ | repositories/ | …
@@ -1823,41 +2226,29 @@ Layer 4  Beliefs
 | `EvidenceItem` | **Deprecated alias** of `ResearchArtifact` |
 
 `KnowledgeUnit` remains a **read model / projection** for terminals and `analyze.json`
-(join L2+L3+hint of L4). The **system of record** for explored intelligence is the
-knowledge-centric tree under `knowledge/<slug>/intelligence/` (§11). Layer files
-(`claims` / `evidence` / `beliefs`) live primarily under `techniques/` (and document rows
-under each source folder):
+(join L2+L3+hint of L4). The **system of record** is `knowledge/<slug>/research/` +
+`knowledge.db` ([knowledge-system.md](knowledge-system.md); §11):
 
 ```
-knowledge/<slug>/intelligence/
-├── papers/ …                 # L1 ResearchArtifact type=paper
-├── experiments/ …
-├── repositories/ …
-├── discussions/ …
-├── techniques/               # L2 claims + L3 evidence links + L4 beliefs
-│   ├── claims.jsonl
-│   ├── evidence.jsonl
-│   └── beliefs.jsonl
-├── models/ …
-├── datasets/ …
-└── analyze.json              # report contract (projected cards + beliefs + top-10)
+knowledge/<slug>/research/
+├── raw/ …
+├── extracted/{papers,repositories,forums}/   # ResearchArtifact
+├── knowledge/{techniques,datasets,architectures,tasks}/
+├── experiments/
+├── reports/analyze.json
+└── knowledge.db
 ```
 
 ### 8.5 How extraction fills the layers
 
 ```
-Readers fetch Layer 1 Documents
+Raw Source → Normalizer → Extractor → Validator
         ↓
-Source *KnowledgeExtractor → draft claims + candidate evidence
+Knowledge Store: extracted/ ResearchArtifact + merge knowledge/
         ↓
-Knowledge Extraction hub (§7)
+Belief updater (§12.4) → beliefs in DB
         ↓
-Upsert Document · KnowledgeClaim · EvidenceLink
-  → papers/… / techniques/claims.jsonl / …
-        ↓
-Belief updater (§12.4)
-        ↓
-Belief confidence / status → techniques/beliefs.jsonl
+Retrieval Engine (multi-stage) → Reasoning Engine (optional)
 ```
 
 Merging: same claim id (`Mixup helps small datasets`) **adds EvidenceLinks**; it does not
@@ -1875,30 +2266,144 @@ None of these require embedding search.
 
 ---
 
-## 9. Research Retrieval (multi-axis, not keywords)
+## 9. Research Retrieval (multi-stage, not RAG)
 
-**Named in the stack (§2) but previously under-specified** as “query store +
-`rank_candidates`.” This section locks it.
+**Canonical contract:** [knowledge-system.md](knowledge-system.md) §5 — think **query
+optimizer**, not chatbot. **The LLM is the last step, not the first.** It never searches
+the KB and never receives the whole store or “top 20 chunks.”
 
-Given the **current competition**, retrieve:
-
-```
-Relevant papers
-Relevant experiments
-Relevant repositories
-Relevant discussions
-Relevant failures
-```
-
-**Not by keywords alone.** Match on structured axes:
-
-```
-Task · Metric · Dataset · Domain · Architecture · Technique
+```text
+User Question
+    → Intent Understanding          # classify — do not answer
+    → Symbolic Retrieval            # SQL / indexes first
+    → Candidate Knowledge Objects
+    → Semantic Ranking / Embeddings # candidates only (Future in v1)
+    → Evidence Expansion            # technique → papers/exps/repos/forums/winners
+    → Context Compression           # ⭐ typed cards, not raw docs
+    → LLM                           # LAST — optional Micro Agent
 ```
 
-Keyword/title search remains a *fallback signal*, never the primary scorer. The Research
-Knowledge Base (§8) makes multi-axis retrieval natural: filter Layer 2 claims and Layer 1
-documents by facets on the competition profile, then walk evidence links.
+**Phase 1 ships:** Intent + Symbolic + Expansion + Compression (+ locked LLM context shape).
+Semantic Ranking optional/stub.
+
+### Stage 1 — Intent Understanding
+
+First call (rules or small LLM) **classifies**, does not answer. Example —
+“How can I improve BirdCLEF?”:
+
+```json
+{
+  "task": "Audio Classification",
+  "dataset": "BirdCLEF",
+  "goal": "Improve Macro F1",
+  "query_type": "Hypothesis Generation",
+  "need_experiments": true,
+  "need_papers": true,
+  "need_repositories": true
+}
+```
+
+```python
+class RetrievalIntent(BaseModel):
+    task: str | None = None
+    dataset: str | None = None
+    goal: str | None = None
+    query_type: str              # Hypothesis Generation | Explain | Compare | …
+    need_experiments: bool = True
+    need_papers: bool = True
+    need_repositories: bool = True
+    need_forums: bool = False
+    current_pipeline: list[str] = Field(default_factory=list)
+```
+
+### Stage 2 — Symbolic Retrieval
+
+**No embeddings first.** SQLite indexes / joins (removes ~99% noise):
+
+```sql
+SELECT technique FROM techniques WHERE domain = 'Audio';
+SELECT * FROM experiments WHERE technique = 'SpecAugment';
+-- papers/repos via references links to technique_id
+```
+
+Pipeline-diff: similar pipelines by technique-set overlap → **missing techniques**.
+
+### Stage 3 — Semantic Ranking
+
+Embed **only** symbolic candidates (e.g. 120→8 papers, 60→5 experiments, 30→3 repos).
+Never replace Stage 2. Deferred/stub in M3 Phase 1.
+
+### Stage 4 — Evidence Expansion
+
+Selected Technique (e.g. SpecAugment) expands along `references` (graph walk in SQL):
+
+```text
+Technique → Experiments → Papers → GitHub → Forums → Winning solutions
+```
+
+### Stage 5 — Context Compression ⭐
+
+Never send raw 15-page papers. Compress to ~80-token cards:
+
+```text
+Technique: SpecAugment
+Evidence: Paper A · Paper B · Experiment 12 · BirdCLEF Winner
+Benefits: Improves generalization
+Known Issues: Heavy masking hurts small datasets
+Confidence: 0.93
+```
+
+### LLM context contract (what Reasoning sees)
+
+Produced by **Context Builder** from typed `ResearchContext` (serialize — do not hand-concatenate
+ad-hoc text). Progressive steps may rebuild a smaller `ResearchContext` per round.
+
+**Not** Paper / Paper / Forum / Experiment dumps. **Not** L4 entire DB.
+
+**Yes** (L1–L3 compressed brief) — see [knowledge-system.md](knowledge-system.md) §5 / §5b–5d:
+
+```text
+Current Competition
+    BirdCLEF
+
+Current Pipeline
+    ConvNeXt · EMA · Mixup
+
+Current Results
+    Macro F1  0.842
+
+Relevant Knowledge
+    Technique: SpecAugment
+    Confidence: 0.93
+    Supported by: 4 papers · 12 experiments · winning solution
+    Known Tradeoffs: Training +15% time
+    Relevant Failures: Large masking decreased recall
+
+Question
+    Suggest next experiments.
+```
+
+### Context Builder + Query Planner
+
+LLM **never** sees SQLite. `ContextBuilder.build(...)` → `ResearchContext` → prompt.
+`QueryPlan` chooses tables, traversals, limits, compression, agent, and progressive rounds.
+Knowledge Engine is the center; LLM is an attached reasoner.
+Detail: [knowledge-system.md](knowledge-system.md) §5c–5f.
+
+### What we retrieve (knowledge, not documents)
+
+```
+Relevant techniques  →  Relevant experiments  →  Relevant papers  →  Relevant repositories
+(+ relevant failures)
+```
+
+**Flagship improve path** (inside the stages): Intent=Hypothesis Generation + current
+pipeline → Symbolic missing techniques → Expand/Compress → LLM suggest next experiments.
+
+**Structured query:** Macro F1 / Audio / ≥3 papers / ≥2 experiments — primarily Symbolic;
+still Compress before any LLM draft.
+
+Axes: `Task · Metric · Dataset · Domain · Architecture · Technique`.
 
 ### 9.1 Input: competition retrieval context
 
@@ -1906,7 +2411,7 @@ Built from Competition / Dataset / Experiment / local code readers (already in P
 
 ```python
 class RetrievalContext(BaseModel):
-    """What “current competition” means for retrieval — not a search string."""
+    """Competition profile — merged with RetrievalIntent for Symbolic Retrieval."""
 
     competition_slug: str
     task: list[str] = Field(default_factory=list)          # SED, audio classification, …
@@ -1916,6 +2421,7 @@ class RetrievalContext(BaseModel):
     architecture: list[str] = Field(default_factory=list)  # from LocalCodeProfile / KB
     technique: list[str] = Field(default_factory=list)     # from beliefs / hyps / profile
     constraints: list[str] = Field(default_factory=list)   # external data policy, infer limits
+    intent: RetrievalIntent | None = None                  # Stage 1 output
 ```
 
 Example (BirdCLEF):
@@ -1992,8 +2498,9 @@ Rules:
 3. Belief status modulates rank: Validated/Established local techniques surface related
    experiments; Suggested external claims surface papers/repos first.
 4. Soft-fail empty facets (unknown architecture) — do not zero the whole query.
-5. No vector DB required for v1; optional embedding similarity may add a *secondary* signal
-   later (§8 non-goal).
+5. No vector DB / chat-LLM for retrieval scoring in v1 (§2.4 / [knowledge-system.md](knowledge-system.md)).
+   Optional embedding similarity may re-rank **within** symbolic candidates later — never
+   as the first gate; never chat models as “search.”
 
 ```python
 class ResearchRetriever(Protocol):
@@ -2058,8 +2565,17 @@ with local experiments and failures.
 |-----------|-----|
 | Keyword-only retrieval as the product | Misses metric/domain/architecture alignment |
 | Returning only successes | Hides relevant failures |
-| Embedding-only ranking as system of record | Same as §8 — structure first |
-| Retriever calling other analyzers’ network I/O | Fetch stays in readers; retrieve reads KB + M2 |
+| Embedding-only / RAG top-N chunks as SoR | Noisy + lossy; Symbolic first |
+| Embed entire corpus before symbolic filter | Optimizer uses indexes first |
+| LLM answering before Intent / retrieve / compress | LLM is **last** |
+| Sending raw papers / threads to the LLM | Must Context-Compress to cards |
+| Untyped prompt string soup as SoR | Use typed `ResearchContext` + Context Builder |
+| L4 entire DB in the LLM window | Hierarchical memory — L1–L3 only |
+| One-shot mega-context for all steps | Progressive Context — different context per step |
+| LLM as architecture center / search engine | Knowledge Engine + Query Planner center |
+| LLM searching or browsing the KB directly | Only Context Builder / Retrieval |
+| Passing the full store as LLM context | Use locked compressed brief |
+| Retriever calling other analyzers’ network I/O | Fetch stays in readers; retrieve reads store + M2 |
 
 ---
 
@@ -2184,21 +2700,34 @@ Suggested Next Experiments (Top 10)
 
 ### 10.4 How ranking works (sketch)
 
-Reuse and extend M2 `rank_candidates`:
+**v1 ranking is deterministic (§2.4)** — no LLM for ordering. Reuse and extend M2
+`rank_candidates` with an explicit reproducible score, e.g.:
+
+```text
+score = (
+    expected_gain * 0.5 +
+    confidence   * 0.2 -
+    runtime      * 0.1 -
+    gpu_cost     * 0.2
+)
+```
+
+Candidate generation (still deterministic filters + KB / retrieval):
 
 ```
 candidates ← claims (Suggested) ∪ transfer diffs ∪ paper ideas ∪ forum discoveries
              ∪ “fix failure X” patches
              − already-tried / rejected (research graph)
         ↓
-score ← expected_impact_prior
-        × evidence_diversity (paper + repo + local)
-        × (1 − failure_overlap_penalty)
-        × effort_bonus (prefer cheap tests when impact tied)
-        × belief_prior (external vs local split)
+score ← formula above
+        (+ optional evidence_diversity / failure_overlap / effort bonuses as weights)
         ↓
 top 10 → write/update Hypothesis (created_by=analyze, provenance §12.3)
 ```
+
+**Hypothesis drafting** (titles / reasons / predictions) may use the Reasoning Engine (LLM)
+over structured evidence — that is generation, not ranking. Optional later Hybrid: LLM
+*explains* tradeoffs among the already-scored top-K; it must not replace the score as SoR.
 
 Effort may come from `TransferOpportunity.effort` when the idea is repo-shaped; otherwise
 heuristic (config tweak ≪ new architecture). Impact/confidence are **estimates for
@@ -2235,6 +2764,7 @@ cached KB without re-fetch — still recommendations only.
 | Top-10 without evidence refs | Not actionable research intelligence |
 | Treating recommendations as Validated beliefs | Belief lifecycle (§12.4) |
 | Blocking on missing forum provider | Soft-fail |
+| LLM as the ranking SoR | Use explicit score formula (§2.4 / §10.4); LLM may draft text only |
 
 ---
 
@@ -2242,7 +2772,8 @@ cached KB without re-fetch — still recommendations only.
 
 Python package layout (Execution and Intelligence co-located today; path comments mark
 future split). On-disk explored intelligence is **local storage** under
-`knowledge/<slug>/intelligence/` — **gitignored** (see repo `.gitignore`); never commit.
+`knowledge/<slug>/research/` — **gitignored** (see repo `.gitignore`); never commit.
+Canonical layout: [knowledge-system.md](knowledge-system.md).
 
 ```
 src/labpilot/
@@ -2273,13 +2804,19 @@ src/labpilot/
     │   ├── kernel/
     │   ├── orchestrator/             # research run pipeline
     │   ├── profiler/
-    │   ├── reflection/
+    │   ├── reflection/               # deterministic compare + callers; LLM via micro_agents
     │   ├── report/
     │   ├── runtimes/
     │   ├── submission/
     │   ├── tracking/
     │   ├── training/
-    │   └── brief/
+    │   ├── brief/
+    │   └── micro_agents/             # Execution Micro Agents (*Agent + skill.md)
+    │       ├── __init__.py
+    │       ├── base.py
+    │       └── reflection_generator/
+    │           ├── agent.py          #   ReflectionGeneratorAgent
+    │           └── skill.md
     │
     └── intelligence/                 # Research Intelligence Platform — future: separate package or service
         ├── __init__.py
@@ -2289,7 +2826,7 @@ src/labpilot/
         ├── registry.py
         ├── orchestrator.py           # select → run → merge → synthesize → write analyze.json
         ├── retrieve.py               # ResearchRetriever — multi-axis (§9)
-        ├── hypothesize.py            # HypothesisAssistant — top-10 recommendations (§10)
+        ├── hypothesize.py            # HypothesisAssistant — top-10; may call micro_agents
         ├── synthesize.py             # glue: extract → kb → retrieve → hypothesize
         ├── cache.py                  # shared fetch-cache helpers (path + freshness)
         ├── knowledge/
@@ -2297,9 +2834,30 @@ src/labpilot/
         │   ├── document.py           #   L1 ResearchArtifact → papers/|repos/|…
         │   ├── evidence.py           #   Layer 3 EvidenceLink
         │   ├── belief.py             #   Layer 4 Belief → techniques/beliefs.jsonl
-        │   ├── extractor.py          #   KnowledgeExtractor
+        │   ├── extractor.py          #   KnowledgeExtractor (may delegate to micro_agents)
         │   ├── merger.py             #   KnowledgeMerger
-        │   └── store.py              #   explored-intelligence tree read/write
+        │   └── store.py              #   research/ tree + knowledge.db read/write
+        ├── micro_agents/             # Intelligence Micro Agents (*Agent + skill.md) — §2.4
+        │   ├── __init__.py
+        │   ├── base.py               #   MicroAgent Protocol
+        │   ├── paper_analyzer/
+        │   │   ├── agent.py          #   PaperAnalyzerAgent
+        │   │   └── skill.md
+        │   ├── repository_analyzer/
+        │   │   ├── agent.py
+        │   │   └── skill.md
+        │   ├── forum_analyzer/
+        │   │   ├── agent.py
+        │   │   └── skill.md
+        │   ├── hypothesis_generator/
+        │   │   ├── agent.py
+        │   │   └── skill.md
+        │   ├── concept_normalizer/
+        │   │   ├── agent.py
+        │   │   └── skill.md
+        │   └── experiment_reviewer/
+        │       ├── agent.py
+        │       └── skill.md
         ├── renderers/                # presentation only — consume AnalysisReport
         │   ├── terminal.py           #   v1 human summary
         │   └── json.py               #   v1 serialize / validate (thin)
@@ -2310,7 +2868,7 @@ src/labpilot/
             ├── papers.py             # PaperAnalyzer
             ├── literature/
             │   ├── provider.py
-            │   ├── extract.py
+            │   ├── extract.py        # may call micro_agents.paper_analyzer
             │   ├── semantic_scholar.py
             │   ├── openalex.py
             │   ├── arxiv.py
@@ -2340,35 +2898,31 @@ Import hygiene (until a real package/service split):
 | `common` | stdlib / third-party | `cli`, `research_engine.*` |
 
 ```
-knowledge/<slug>/intelligence/          # explored intelligence — LOCAL ONLY (gitignored)
+knowledge/<slug>/research/              # LOCAL ONLY (gitignored); see knowledge-system.md
 │
-│   Knowledge-centric store of what analyze discovered for this competition.
-│
-├── papers/                       # ResearchArtifact type=paper (+ extracts)
-├── experiments/                  # local / linked experiment artifacts
-├── repositories/                 # GitHub repositories
-├── discussions/                  # forum threads / issues (when provider ships)
-├── techniques/                   # technique cards, claims, beliefs, evidence links
-│   ├── claims.jsonl              #   L2 KnowledgeClaim
-│   ├── evidence.jsonl            #   L3 EvidenceLink
-│   └── beliefs.jsonl             #   L4 Belief
-├── models/                       # architectures / model refs discovered
-├── datasets/                     # datasets / benchmarks referenced as evidence
-│
-├── cache/                        # raw provider fetch blobs (internal; also gitignored)
-│   ├── kaggle/…
-│   ├── openalex/…
-│   ├── semantic_scholar/…
-│   ├── arxiv/…
-│   ├── papers_with_code/…
-│   └── github/…
-└── analyze.json                  # CANONICAL rollup contract (report + top-10 hyps)
+├── raw/                            # immutable originals
+│   ├── papers/
+│   ├── repositories/
+│   └── discussions/
+├── extracted/                      # ResearchArtifact per source
+│   ├── papers/
+│   ├── repositories/
+│   └── forums/
+├── knowledge/                      # merged objects
+│   ├── techniques/
+│   ├── datasets/
+│   ├── architectures/
+│   └── tasks/
+├── experiments/
+├── reports/
+│   └── analyze.json                # CANONICAL rollup (projection from DB)
+├── embeddings/                     # Future optional — unused in M3 v1
+└── knowledge.db                    # SQLite query SoR
 ```
 
-Each of `papers/`, `experiments/`, `repositories/`, `discussions/`, `models/`, `datasets/`
-holds normalized **`ResearchArtifact`** records (JSON/JSONL). `techniques/` holds the
-layered Research KB views (claims → evidence → beliefs). `cache/` is fetch staging, not
-curated knowledge. `analyze.json` is the machine-facing rollup for CLI/terminal.
+`raw/` ≠ `extracted/` ≠ `knowledge/`. SQLite (`knowledge.db`) is the join/query SoR;
+`reports/analyze.json` is the machine-facing rollup for CLI/terminal — not a drifting
+second write SoR.
 
 ---
 
@@ -2678,7 +3232,7 @@ CLI  HTML  VS Code   REST / agents
      (later)
 ```
 
-Canonical path: `knowledge/<competition-slug>/intelligence/analyze.json`
+Canonical path: `knowledge/<competition-slug>/research/reports/analyze.json`
 
 Shape (illustrative — exact fields = `CompetitionIntelligence` / `AnalysisReport`):
 
@@ -2767,7 +3321,7 @@ research analyze birdclef-2026 --exclude dataset
 research analyze birdclef-2026 --refresh --format json
 ```
 
-Always persists `knowledge/<slug>/intelligence/analyze.json`. `--format text|json` controls
+Always persists `knowledge/<slug>/research/reports/analyze.json`. `--format text|json` controls
 stdout only (§12.5). No HTML flag in v1.
 
 ---
@@ -2812,6 +3366,7 @@ stdout only (§12.5). No HTML flag in v1.
 | `DiscussionAnalyzer` + `ForumKnowledgeExtractor` + `KaggleDiscussionProvider` | Forum Intelligence after spike go |
 | Other forum providers (same extractor) | GitHub Issues (may ship earlier), Reddit, blogs |
 | `WinningSolutionProvider` HTML backend | Only after separate ToS-safe spike; swap for Null/API |
+| SQLite → embeddings → graph/hybrid retrieval | Deep dive: [knowledge-system.md Appendix A](knowledge-system.md#appendix-a-sqlite-vs-knowledge-graph-vs-graphrag) — **not** GraphRAG as Phase 1 SoR |
 
 ### Provisional plan DAG
 
@@ -2863,23 +3418,41 @@ Plans 2–5 are siblings. Spike does not gate Plans 1–7.
 - Treating `ResearchArtifact.summary` as a full-document TL;DR (short card only)
 - Autonomous experiment planner / agent that auto-runs improve or train from analyze
   (Hypothesis Assistant = **recommendations only**)
+- Autonomous agents with memory, planning, or loops (ReAct / multi-step planners) —
+  Micro Agents (`*Agent`) only (§2.4)
+- Free-form LLM text as the system of record — every reasoning step emits a **typed
+  artifact** (`Technique` / `Hypothesis` / `ResearchFinding` / knowledge models)
 - Keyword-only Research Retrieval as the product (axes: task/metric/dataset/domain/
   architecture/technique; include relevant **failures**)
-- Embedding / vector DB as the Research Knowledge Base (v1 = layered Documents → Knowledge
-  → Evidence → Beliefs; vectors only as optional later retrieval aid)
-- Full knowledge-graph database / Neo4j as a Phase 1 dependency (v1 = local explored
-  intelligence under `knowledge/<slug>/intelligence/` — gitignored)
+- Embedding / vector DB / RAG top-N chunks as the Research Knowledge Base SoR (v1 =
+  [knowledge-system.md](knowledge-system.md): raw → extracted → knowledge + SQLite;
+  embeddings only later inside candidate re-rank)
+- Graph DB as a Phase 1 dependency (v1 = local
+  `knowledge/<slug>/research/` — gitignored; SQLite joins). Deep dive: SQLite vs Neo4j vs
+  GraphRAG — [knowledge-system.md Appendix A](knowledge-system.md#appendix-a-sqlite-vs-knowledge-graph-vs-graphrag)
+- **GraphRAG / Leiden cluster pipelines as Phase 1 knowledge SoR** — ontology + structured
+  extract first; graph as a later *retrieval* strategy only
+- LLM searching or remembering the knowledge base (multi-stage retrieve; LLM last only)
+- Passing the full store (or unfiltered raw blobs) as default LLM context
+- Collapsing `raw/` / `extracted/` / `knowledge/` into one folder
 - Skipping the Knowledge Extraction hub — source-specific schemas as the durable store
-  (everything must flow through layered claims + evidence)
+  (everything must flow through the shared pipeline → merged knowledge)
 - Auto-execution of suggested experiments
 - LLM writing `train.py` / new templates
-- Multi-agent orchestration
+- Multi-agent orchestration (Micro Agents are single-shot `input → typed artifact`)
 - Replacing per-run `brief.md`
 - **Full-thread / forum summarization** as a product output — extract mistakes / discoveries /
   dataset bugs / LB shakeups / OOD only (`ForumKnowledge`)
 - **Production Kaggle forum scraping** before spike go + ToS clearance
 - Website-named analyzers (`KaggleForumAnalyzer`) instead of content types
 - Coupling fetch and LLM extract in one step
+- **LLM for Kaggle parse, CSV reads, statistics, or paper/GitHub/forum search** (§2.4 —
+  deterministic only; LLM only after retrieval)
+- **LLM talking directly to Kaggle, GitHub, or arXiv** (Reasoning Engine consumes structured
+  context only)
+- **LLM as experiment-ranking system of record** (v1 uses explicit score formula; §10.4)
+- **“Summarize this paper/repo” prompts** — structured extract JSON only
+- Calling a chat model on every analyzer step (agent-framework anti-pattern)
 - Treating arXiv as a **search fallback** for Semantic Scholar (wrong responsibility)
 - Treating related-comp / paper techniques as accepted local knowledge without experiments
 - Auto-writing external recommendations into `knowledge_base.json`
@@ -2927,6 +3500,12 @@ Plans 2–5 are siblings. Spike does not gate Plans 1–7.
    official API or **`status: unavailable`** (`NullProvider`). No HTML scrape in M3.
    Future HTMLProvider only after ToS-safe spike; swap provider without changing
    `CompetitionAnalyzer`. See §3.5.
+8. ~~**Where to use LLMs**~~ → **Resolved:** Selective LLM policy (§2.4). Deterministic
+   Engine for APIs/KB/parse/stats/search/rank formula; Reasoning Engine = **optional Micro
+   Agents** (`*Agent`: Paper/Repository/Forum/Reflection/Hypothesis/ExperimentReviewer/
+   ConceptNormalizer) — `input → prompt → typed artifact` — system **works without** them
+   via `rule_engine` / heuristics; **never** LLM→Kaggle/GitHub/arXiv directly; no free-form
+   text as SoR.
 
 ---
 
@@ -2946,19 +3525,28 @@ Plans 2–5 are siblings. Spike does not gate Plans 1–7.
 - Vision, mockup, Research Assistant conceptual stack (§2), plugin architecture, package
   layout (§11: `cli` / `common` / `research_engine/{execution,intelligence}`), and non-goals
   documented.
-- Internal model: **`ResearchArtifact`** (§3.1) — common envelope for paper / experiment /
-  blog / repository / discussion / note (`id type source title summary concepts techniques
-  evidence references confidence`).
-- Research Knowledge Base (§8) + on-disk explored intelligence (§11): local
-  `knowledge/<slug>/intelligence/{papers,experiments,repositories,discussions,techniques,models,datasets}/`
-  — **gitignored**; not a vector DB.
-- Research Retrieval (§9): multi-axis retrieve incl. failures (not keywords alone).
+- Internal model: **`ResearchArtifact`** (§3.1) — `id type source metadata summary
+  techniques models datasets claims references confidence` (+ migration aliases
+  `title` / `concepts` / `evidence` / `payload`).
+- Selective LLM policy (§2.4): Orchestrator → Deterministic Engine | Reasoning Engine;
+  matrix No/Yes; LLM never calls Kaggle/GitHub/arXiv; **never remembers / never searches KB**;
+  extract-not-summarize; rank formula for v1; `rule_engine` fallback.
+- Micro Agents (§2.4 / §11): under `intelligence/micro_agents/` and
+  `execution/micro_agents/` — each `*Agent` class + `skill.md`; **optional**; same typed
+  schemas with `rule_engine` when disabled.
+- Research Knowledge Base (§8) + Knowledge System ([knowledge-system.md](knowledge-system.md)):
+  `knowledge/<slug>/research/{raw,extracted,knowledge,experiments,reports}/` + `knowledge.db`
+  — **gitignored**; not a vector DB; multi-stage retrieval (LLM last).
+- Research Retrieval (§9) + [knowledge-system.md](knowledge-system.md) §5–5f: Intent →
+  Symbolic → Expansion → Compression; **ContextBuilder** / typed `ResearchContext`;
+  hierarchical L1–L3 memory; Progressive Context; Query Planner (stub→Future); Knowledge
+  Engine center — LLM last / attached reasoner only.
 - Hypothesis Assistant (§10): current exp + graph + failures + papers + repos + forums →
   top-10 with expected impact, confidence, supporting evidence, implementation effort —
   **recommendations only; no autonomous planner.**
-- Knowledge Extraction (§7) + layered KB (§8) + provenance / belief lifecycle /
-  presentation contract (`analyze.json` + terminal; no HTML in v1) specified.
+- Knowledge Extraction pipeline + hub (§7) + layered meanings (§8) + provenance / belief
+  lifecycle / presentation contract (`reports/analyze.json` + terminal; no HTML in v1).
 - Phase 1 vs Spike vs Future explicitly separated so **Kaggle access** cannot block M3;
   Forum Intelligence design is not deferred as an afterthought.
-- Open questions #1–#7 resolved (design Phase A complete for locked decisions).
+- Open questions #1–#8 resolved (design Phase A complete for locked decisions).
 - [MILESTONES.md](../../MILESTONES.md) and [IN-PROGRESS.md](../IN-PROGRESS.md) point here.
