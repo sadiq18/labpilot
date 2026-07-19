@@ -38,7 +38,7 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | Track | Document | Summary |
 |-------|----------|---------|
 | **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P2 + P3 + P4 shipped |
-| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Milestone 3 — Research Intelligence (design) |
+| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Milestone 3 — Research Intelligence (plans ready) |
 | **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2 execution dispatch + post-1.0 items |
 | **Backlog** | [milestones/backlog.md](milestones/backlog.md) | Unscheduled extensions (async kernel watcher, webhooks) |
 
@@ -55,7 +55,7 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | **P3** | v0.4 | **Done** | Iteration loop (`research improve`, tuning, run diffs) |
 | **P4** | v1.0 | **Done** | Production quality (workspace, CI, dry-run, HTML reports) |
 | **Milestone 2** | v0.5 | **Shipped** | Experiment Scientist — research memory, comparison, hypotheses, knowledge base, ranking, dashboard |
-| **Milestone 3** | v0.6 | **Design** | Research Intelligence — analyzers + Knowledge System (`research/` + SQLite) |
+| **Milestone 3** | v0.6 | **Plans ready** | Research Intelligence — design locked; implementation plans 1–11 + spike + F |
 
 Details for each track live in the linked documents above. Milestone 2's eight plans are
 documented under
