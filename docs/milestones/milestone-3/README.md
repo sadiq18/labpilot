@@ -2,15 +2,15 @@
 
 Back to [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** Design (single design doc; sequenced `plan-N-*.md` files come after review).
+**Status:** Design Phase A locked; **Phase B implementation plans** authored
+(`plan-1-…` … `plan-11-…`, spike, plan-F). Implementation not started.
 **Depends on:** Milestone 2 shipped (Plans 1–8). **Unlocks:** faster, better hypothesis
 formation before any training code runs.
 
 This directory is the architecture/design workspace for Milestone 3. Phase A is **this
 README** plus the Knowledge System storage design
-([knowledge-system.md](knowledge-system.md)). Phase B (after design review) splits the
-provisional plan sequence below into independently buildable `plan-N-*.md` files — same
-ship-and-review style as Milestone 2.
+([knowledge-system.md](knowledge-system.md)). Phase B plans are the sequenced
+`plan-N-*.md` files below — same ship-and-review style as Milestone 2.
 
 ---
 
@@ -3339,76 +3339,100 @@ stdout only (§12.5). No HTML flag in v1.
 
 ## 15. Milestone plan (Phase 1 vs Spike vs Future)
 
-### Phase 1 — ship in Milestone 3 (official, stable APIs)
+Implementation plans (review independently; ship in order of the DAG):
 
-| Focus | Scope |
-|-------|--------|
-| Registry + orchestrator + cache layer | Plan 1 |
-| `ExperimentAnalyzer` + `DatasetAnalyzer` | Plan 2 |
-| `CompetitionAnalyzer` + `CompetitionProfile` + related-comp provider (external data / inference limits as ok\|unavailable) | Plan 3 |
-| `PaperAnalyzer` + LiteratureProvider + PaperKnowledgeExtractor (contributions/methods/limitations/ideas — no full summaries) | Plan 4 |
-| `RepositoryAnalyzer` + GitHub provider + extract + diff vs local | Plan 5 |
-| Knowledge Extraction + Research Retrieval + **Hypothesis Assistant** (top-10 recs only) | Plan 6 |
-| Capstone: terminal + `analyze.json` polish (mockup parity) | Plan 7 |
+| # | Plan | Doc |
+|---|------|-----|
+| 1 | Foundation (registry, orchestrator, CLI) | [plan-1-foundation.md](plan-1-foundation.md) |
+| 2 | Knowledge Store (SQLite + `research/` tree) | [plan-2-knowledge-store.md](plan-2-knowledge-store.md) |
+| 3 | Micro Agents scaffold | [plan-3-micro-agents.md](plan-3-micro-agents.md) |
+| 4 | ExperimentAnalyzer + DatasetAnalyzer | [plan-4-experiment-dataset.md](plan-4-experiment-dataset.md) |
+| 5 | CompetitionAnalyzer | [plan-5-competition.md](plan-5-competition.md) |
+| 6 | Paper Research Engine | [plan-6-papers.md](plan-6-papers.md) |
+| 7 | Repository / GitHub Intelligence | [plan-7-repositories.md](plan-7-repositories.md) |
+| 8 | Knowledge Extraction hub | [plan-8-knowledge-hub.md](plan-8-knowledge-hub.md) |
+| 9 | Retrieval + Context Builder | [plan-9-retrieval-context.md](plan-9-retrieval-context.md) |
+| 10 | Hypothesis Assistant | [plan-10-hypothesis-assistant.md](plan-10-hypothesis-assistant.md) |
+| 11 | Capstone (terminal + analyze.json) | [plan-11-capstone.md](plan-11-capstone.md) |
+| — | Spike: Kaggle discussion access | [spike-kaggle-discussions.md](spike-kaggle-discussions.md) |
+| F | Forum Intelligence (Future) | [plan-F-forum-intelligence.md](plan-F-forum-intelligence.md) |
 
-**No forum/discussion scraping in Phase 1.**
+### Phase 1 — ship in Milestone 3 (Plans 1–11)
+
+Official/stable APIs and local analyzers. **No forum/discussion scraping in Phase 1**
+(Forum = Plan F). Knowledge System + Micro Agents are Plans 2–3 (not buried in a single
+mega-plan).
 
 ### Spike — parallel, non-blocking
 
 | Spike | Deliverable |
 |-------|-------------|
-| Investigate Kaggle discussion access | Feasibility + ToS + caching notes; go/no-go. Not production code. |
+| Kaggle discussion access | Go/no-go + ToS notes — [spike-kaggle-discussions.md](spike-kaggle-discussions.md) |
 
-### Future — Forum Intelligence providers + optional HTML solutions
+### Future
 
 | Item | Notes |
 |------|--------|
-| `DiscussionAnalyzer` + `ForumKnowledgeExtractor` + `KaggleDiscussionProvider` | Forum Intelligence after spike go |
-| Other forum providers (same extractor) | GitHub Issues (may ship earlier), Reddit, blogs |
-| `WinningSolutionProvider` HTML backend | Only after separate ToS-safe spike; swap for Null/API |
-| SQLite → embeddings → graph/hybrid retrieval | Deep dive: [knowledge-system.md Appendix A](knowledge-system.md#appendix-a-sqlite-vs-knowledge-graph-vs-graphrag) — **not** GraphRAG as Phase 1 SoR |
+| Forum Intelligence | [plan-F-forum-intelligence.md](plan-F-forum-intelligence.md) — after spike go or GitHub Issues first |
+| WinningSolution HTML provider | Separate ToS-safe spike; swap for Null/API |
+| Embeddings Stage 3 / Neo4j / hybrid retrieval | [knowledge-system.md Appendix A](knowledge-system.md#appendix-a-sqlite-vs-knowledge-graph-vs-graphrag) |
 
-### Provisional plan DAG
+### Plan DAG
 
 ```mermaid
 flowchart TD
-    P1[Plan 1 — Models registry orchestrator cache]
-    P2[Plan 2 — Experiment + Dataset analyzers]
-    P3[Plan 3 — CompetitionAnalyzer]
-    P4[Plan 4 — Paper research engine]
-    P5[Plan 5 — Repository / GitHub engine]
-    P6[Plan 6 — KB + Retrieval + Hypothesis Assistant]
-    P7[Plan 7 — Capstone terminal + analyze.json]
-    Spike[Spike — Kaggle discussions]
-    Fut[Future — Forum Intelligence providers]
+  P1[Plan1_Foundation]
+  P2[Plan2_KnowledgeStore]
+  P3[Plan3_MicroAgents]
+  P4[Plan4_ExperimentDataset]
+  P5[Plan5_Competition]
+  P6[Plan6_Papers]
+  P7[Plan7_Repositories]
+  P8[Plan8_KnowledgeHub]
+  P9[Plan9_RetrievalContext]
+  P10[Plan10_HypothesisAssistant]
+  P11[Plan11_Capstone]
+  Spike[Spike_KaggleDiscussions]
+  PF[PlanF_Forum]
 
-    P1 --> P2
-    P1 --> P3
-    P1 --> P4
-    P1 --> P5
-    P1 --> P6
-    P2 --> P6
-    P3 --> P6
-    P4 --> P6
-    P5 --> P6
-    P6 --> P7
-    Spike -.-> Fut
-    P1 -.-> Fut
+  P1 --> P2
+  P1 --> P3
+  P1 --> P4
+  P1 --> P5
+  P1 --> P6
+  P1 --> P7
+  P2 --> P8
+  P3 --> P6
+  P3 --> P7
+  P3 --> P8
+  P4 --> P8
+  P5 --> P8
+  P6 --> P8
+  P7 --> P8
+  P8 --> P9
+  P9 --> P10
+  P10 --> P11
+  Spike -.-> PF
+  P1 -.-> PF
 ```
 
-| Order | Plan | Standalone value | Depends on |
-|-------|------|------------------|------------|
-| 1 | Models + Analyzer + registry + orchestrator + fetch-cache helpers | `research analyze <slug>` skeleton | M2 |
-| 2 | ExperimentAnalyzer + DatasetAnalyzer | Local-only briefing | Plan 1 |
-| 3 | CompetitionAnalyzer + CompetitionProfile + RelatedCompetitionProvider | Kaggle expert brief; related comps; solutions may be unavailable | Plan 1 |
-| 4 | PaperAnalyzer + LiteratureProvider + PaperKnowledgeExtractor | Catalog + research knowledge (not TL;DRs) | Plan 1 |
-| 5 | RepositoryAnalyzer + RepositoryProvider + RepoKnowledgeExtractor + RepoDiffer | Catalog + extract + transfer diffs (not README dumps) | Plan 1 |
-| 6 | KB + Research Retrieval + Hypothesis Assistant (top-10: impact/confidence/evidence/effort) | Recommendations only — no planner | Plan 1 + any |
-| 7 | Capstone: terminal + analyze.json contract | Mockup deliverable, no HTML | Plan 6 |
-| — | **Spike:** Kaggle discussion access | Go/no-go doc | — |
-| F | Forum Intelligence: DiscussionAnalyzer + ForumKnowledgeExtractor + providers | Practical knowledge (mistakes/bugs/OOD/LB) | Spike go (or GitHub Issues) + Plan 1 |
+| Order | Standalone value | Depends on |
+|-------|------------------|------------|
+| 1 | `research analyze` skeleton | M2 |
+| 2 | Queryable SQLite knowledge store | 1 |
+| 3 | Optional `*Agent` + skill.md layout | 1 |
+| 4 | Local experiment/dataset briefing | 1 |
+| 5 | Kaggle competition profile | 1 |
+| 6 | Paper catalog + structured extract | 1, 3 |
+| 7 | Repo catalog + transfer diffs | 1, 3 |
+| 8 | Merged techniques + Suggested beliefs | 2, 3 (+ 4–7) |
+| 9 | Multi-stage retrieve + ContextBuilder | 8 |
+| 10 | Top-10 recommendations only | 9 |
+| 11 | Terminal + analyze.json mockup | 10 |
+| Spike | Kaggle discussions go/no-go | — |
+| F | Forum Intelligence | Spike go or GitHub Issues + 1 |
 
-Plans 2–5 are siblings. Spike does not gate Plans 1–7.
+Plans 4–5 are siblings after 1; 6–7 need 3. Spike does not gate Plans 1–11.
 
 ---
 
@@ -3509,14 +3533,18 @@ Plans 2–5 are siblings. Spike does not gate Plans 1–7.
 
 ---
 
-## 18. Phase B — after design review
+## 18. Phase B — implementation plans
 
-1. Split into `plan-1-….md` … `plan-7-….md` + `spike-kaggle-discussions.md` using §15.
-2. Implement Plan 1 first, then Plans 2–5 in any order, then 6–7.
-3. Run the discussion spike in parallel; do not block Phase 1.
+Phase B plan docs are authored (§15). **Implementation** proceeds plan-by-plan:
+
+1. Implement [Plan 1](plan-1-foundation.md) first, then Plans 2–3, then sibling analyzers
+   4–7 (6–7 need Plan 3), then 8 → 9 → 10 → 11.
+2. Run [spike-kaggle-discussions.md](spike-kaggle-discussions.md) in parallel; do not block
+   Plans 1–11.
+3. [Plan F](plan-F-forum-intelligence.md) after spike go or with GitHub Issues first.
 4. Update [CLI.md](../../CLI.md) / [SOP.md](../../SOP.md) as commands ship.
 
-**Phase B is out of scope until this design README is reviewed.**
+**Code implementation is out of scope of the design/plan-authoring pass.**
 
 ---
 
@@ -3549,4 +3577,6 @@ Plans 2–5 are siblings. Spike does not gate Plans 1–7.
 - Phase 1 vs Spike vs Future explicitly separated so **Kaggle access** cannot block M3;
   Forum Intelligence design is not deferred as an afterthought.
 - Open questions #1–#8 resolved (design Phase A complete for locked decisions).
+- Implementation plans §15 authored: Plans 1–11 + spike + Plan F (Phase B docs ready;
+  code not started).
 - [MILESTONES.md](../../MILESTONES.md) and [IN-PROGRESS.md](../IN-PROGRESS.md) point here.
