@@ -8,6 +8,7 @@ Import hygiene: this package may import ``common`` utilities and read-only
 execution libraries, but must never import ``labpilot.cli``.
 """
 
+from labpilot.research_engine.intelligence.knowledge import KnowledgeStore, RawStore
 from labpilot.research_engine.intelligence.models import (
     AnalysisReport,
     AnalyzeContext,
@@ -16,6 +17,7 @@ from labpilot.research_engine.intelligence.models import (
     ResearchArtifactType,
 )
 from labpilot.research_engine.intelligence.orchestrator import AnalyzeOrchestrator
+from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.intelligence.registry import AnalyzerRegistry
 
 __all__ = [
@@ -23,7 +25,10 @@ __all__ = [
     "AnalyzeContext",
     "AnalyzeOrchestrator",
     "AnalyzerRegistry",
+    "KnowledgeStore",
+    "RawStore",
     "ResearchArtifact",
     "ResearchArtifacts",
     "ResearchArtifactType",
+    "ResearchPaths",
 ]

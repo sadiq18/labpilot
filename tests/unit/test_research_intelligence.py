@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,17 @@ from labpilot.research_engine.intelligence.renderers.json import (
 )
 
 runner = CliRunner()
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI codes and collapse whitespace.
+
+    Typer/rich renders --help inside a panel and folds long option tokens across
+    lines at narrow terminal widths (which differ between local and CI). Collapsing
+    whitespace makes flag assertions robust to that wrapping.
+    """
+    without_ansi = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    return re.sub(r"\s+", "", without_ansi)
 
 
 class FakeAnalyzer:
@@ -238,10 +250,13 @@ def test_json_round_trip_and_write(tmp_path: Path):
 
 
 def test_analyze_help_documents_flags():
-    result = runner.invoke(cli_main.app, ["analyze", "--help"])
+    result = runner.invoke(
+        cli_main.app, ["analyze", "--help"], env={"COLUMNS": "200", "NO_COLOR": "1"}
+    )
     assert result.exit_code == 0
+    plain = _plain(result.stdout)
     for flag in ("--include", "--exclude", "--format", "--refresh"):
-        assert flag in result.stdout
+        assert flag in plain
 
 
 def test_analyze_cli_writes_stub_report(tmp_path: Path, monkeypatch):
