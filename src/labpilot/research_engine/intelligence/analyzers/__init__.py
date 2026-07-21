@@ -1,8 +1,12 @@
 """Content-type analyzers (plugins).
 
-Real analyzers (competition / papers / repositories / experiments / dataset /
-discussions) land in Plans 4–7 and F. Plan 1 ships only the ``Analyzer``
-Protocol and a ``BaseAnalyzer`` helper.
+Plan 1 shipped the ``Analyzer`` Protocol + ``BaseAnalyzer`` helper. Plan 4 adds
+the local-only ExperimentAnalyzer + DatasetAnalyzer; paper / repository /
+discussion analyzers land in Plans 6–7 and F.
+
+The concrete analyzers are intentionally **not** imported here — they pull the
+execution stack / pandas. Import them from their submodules (as
+``build_default_registry`` does) to keep ``import ...analyzers`` cheap.
 """
 
 from labpilot.research_engine.intelligence.analyzers.base import Analyzer, BaseAnalyzer
