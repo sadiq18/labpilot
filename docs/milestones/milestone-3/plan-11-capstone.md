@@ -45,12 +45,19 @@ makes Milestone 3 demoable and reviewable as a product slice.
 - Offline e2e writes analyze.json that validates against schema.
 - Terminal output includes top-10 and does not claim Established for external-only techniques.
 - No HTML artifacts required.
+- **Success-criteria gate (README §1):** the five north-star questions each return the
+  expected grounded answer against the seeded fixture store — evidence ids resolve, Q3 is
+  exact, provider-gated facts (Q2 winning solutions) report `Unavailable` with a reason, and
+  Q5 excludes already-tried techniques. Passes with Micro Agents disabled (`rule_engine`).
 
 ## Test plan
 
 - Golden or snapshot terminal (stable fields).
 - Schema validation test.
 - Full analyze with include flags on fixture slug.
+- **Success-criteria tests:** one test per README §1 question over the seeded fixture store,
+  asserting the expected evidence-id set (deterministic parts) and honest `Unavailable` for
+  ungated providers — run with Micro Agents both on and off.
 
 ## Review notes
 

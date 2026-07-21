@@ -154,6 +154,40 @@ Milestone 3 does **not** wait on Kaggle access. No HTML in v1.
     `extracted/` ≠ `knowledge/`; SQLite joins; multi-stage retrieve (optimizer, LLM last);
     not RAG chunk soup.
 
+### Success criteria — end of Milestone 3 (north star)
+
+The design-pass acceptance in §19 says the *architecture* is complete. This subsection is the
+**product** definition of done: the questions a fully-shipped Milestone 3 (Plans 1–11) must be
+able to answer. If the system answers these reliably, it has moved past an automation tool and
+become a research collaborator.
+
+| # | Question I should be able to ask | Answered by | Depends on |
+|---|----------------------------------|-------------|------------|
+| 1 | *What techniques consistently improve Macro F1 on imbalanced audio-classification tasks?* | Merged `Technique` **Knowledge Objects** whose evidence links to ≥N experiments with positive Macro-F1 deltas on that task/domain — symbolic join (`experiment_techniques` × metric × task/tag), not keyword search | Plans 4, 6–8, 9 |
+| 2 | *Which winning BirdCLEF solutions used EMA?* | `WinningSolution` artifacts joined to the `EMA` technique. **Honesty bound:** with only `NullWinningSolutionProvider`, the answer is an explicit *Unavailable (no provider)*, plus any EMA usage evidenced from papers/repos — never a fabricated list | Plans 5–8, 9 (+ Future winning-solution provider) |
+| 3 | *Show experiments where Focal Loss hurt performance.* | Local M2 experiment memory: `experiment_techniques` where technique = Focal Loss and metric delta < 0 (**failures are first-class**). Fully local → must be exact and deterministic | Plans 4, 9 |
+| 4 | *Find GitHub implementations compatible with my current training pipeline.* | `RepositoryAnalyzer` catalog + `TransferOpportunity` diffs vs the current pipeline (effort · expected gain), not raw repo dumps | Plans 7, 9 |
+| 5 | *Suggest five experiments with strong literature support that I haven't tried yet.* | Hypothesis Assistant: rank techniques with external evidence (papers/repos), **subtract already-tried** from local history, return top-N with expected impact · confidence · supporting evidence · effort — recommendations only | Plans 6–8, 9, 10 |
+
+**What "reliably" means here (not vibes):**
+
+- **Grounded** — every claim in an answer resolves to stored `ResearchArtifact` /
+  Knowledge Object / experiment ids (provenance + evidence), never LLM recall (§2.4:
+  *never remembers / never searches KB*).
+- **Deterministic where it must be** — Q3 (local experiments) and the symbolic parts of
+  Q1/Q2/Q4 come from SQLite joins; the LLM is the **last** step and only interprets the
+  compressed typed context (`ResearchContext`).
+- **Reproducible** — the same question over the same store yields the same evidence set;
+  answers are reconstructible from `research/reports/analyze.json` (contract, not the
+  terminal view).
+- **Honest about gaps** — provider-gated facts (winning solutions, forum discussions)
+  report `Unavailable` with a reason rather than guessing (Q2 today; Forum = Plan F).
+- **Works with Micro Agents disabled** — the `rule_engine` fallback still returns the
+  symbolic/evidence answer; LLM reasoning only sharpens phrasing and ranking.
+
+These are validated at the end of Plan 11 (capstone) against a seeded fixture store so each
+question has a known-good expected answer set.
+
 ---
 
 ## 2. Conceptual stack — Research Assistant
@@ -3579,4 +3613,9 @@ Phase B plan docs are authored (§15). **Implementation** proceeds plan-by-plan:
 - Open questions #1–#8 resolved (design Phase A complete for locked decisions).
 - Implementation plans §15 authored: Plans 1–11 + spike + Plan F (Phase B docs ready;
   code not started).
+- **Product success criteria (§1)** — the five north-star questions (technique consistency,
+  winning-solution technique lookup, negative-delta experiments, repo transfer fit, untried
+  literature-backed suggestions) mapped to plans, with the *reliably* contract (grounded /
+  deterministic / reproducible / honest-about-gaps / works with agents disabled); validated
+  in Plan 11 against a seeded fixture store.
 - [MILESTONES.md](../../MILESTONES.md) and [IN-PROGRESS.md](../IN-PROGRESS.md) point here.
