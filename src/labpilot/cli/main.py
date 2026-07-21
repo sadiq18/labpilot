@@ -45,6 +45,14 @@ from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
 from labpilot.orchestrator.manifest import StageStatus, load_manifest
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
 from labpilot.report.generator import ReportGenerator
+from labpilot.research_engine.intelligence.context import build_context
+from labpilot.research_engine.intelligence.orchestrator import AnalyzeOrchestrator
+from labpilot.research_engine.intelligence.registry import (
+    UnknownAnalyzerError,
+    build_default_registry,
+)
+from labpilot.research_engine.intelligence.renderers.json import to_json, write_report
+from labpilot.research_engine.intelligence.renderers.terminal import render_terminal
 from labpilot.runtimes.doctor import check_all_runtimes
 from labpilot.runtimes.registry import get_runtime, list_runtimes
 from labpilot.runtimes.templates import runtime_to_yaml_dict, scaffold_runtime
@@ -661,6 +669,100 @@ def improve(
         f"\nCompare: [cyan]research runs diff --base {run_id} --compare {manifest.run_id}[/cyan]"
     )
     _print_submission_links_if_present(run_dir, submit)
+
+
+def _parse_analyzer_csv(value: str | None) -> set[str] | None:
+    if not value:
+        return None
+    names = {item.strip() for item in value.split(",") if item.strip()}
+    return names or None
+
+
+@app.command()
+def analyze(
+    target: str = typer.Argument(
+        ...,
+        help="Competition slug/URL, or an analyzer name when a slug follows",
+    ),
+    competition: str | None = typer.Argument(
+        None,
+        help="Competition slug/URL (when the first argument is an analyzer name)",
+    ),
+    include: str | None = typer.Option(
+        None, "--include", help="Comma-separated analyzers to run (e.g. papers,repositories)"
+    ),
+    exclude: str | None = typer.Option(
+        None, "--exclude", help="Comma-separated analyzers to skip (e.g. dataset)"
+    ),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        help="What to print to stdout: text or json (always writes analyze.json)",
+    ),
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Re-fetch sources into cache instead of reusing cached raw data"
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    project_dir: Path | None = typer.Option(
+        None, "--project-dir", help="Project root containing project.yaml"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Analyze a competition's research landscape (writes analyze.json).
+
+    Run every default analyzer, a single one (``research analyze papers
+    <slug>``), or a subset via ``--include`` / ``--exclude``. Always persists
+    ``knowledge/<slug>/research/reports/analyze.json``; ``--format`` controls
+    stdout only.
+    """
+    if output_format not in {"text", "json"}:
+        raise typer.BadParameter("--format must be 'text' or 'json'.")
+
+    # First arg is an analyzer name only when a second (slug) arg is given.
+    if competition is not None:
+        only: str | None = target
+        slug_or_url = competition
+    else:
+        only = None
+        slug_or_url = target
+
+    include_set = _parse_analyzer_csv(include)
+    exclude_set = _parse_analyzer_csv(exclude)
+    if only is not None and (include_set or exclude_set):
+        raise typer.BadParameter(
+            "A single analyzer argument cannot be combined with --include/--exclude."
+        )
+
+    config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
+    context = build_context(
+        slug_or_url,
+        runs_dir=config.runs_dir,
+        knowledge_dir=config.knowledge_dir,
+        refresh=refresh,
+    )
+
+    orchestrator = AnalyzeOrchestrator(build_default_registry())
+    try:
+        report = orchestrator.analyze(
+            context, only=only, include=include_set, exclude=exclude_set
+        )
+    except UnknownAnalyzerError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    path = write_report(report, context.report_path)
+
+    if output_format == "json":
+        # Plain print — rich would soft-wrap and corrupt JSON meant for piping.
+        print(to_json(report))
+    else:
+        render_terminal(report, console=console)
+        console.print(f"\n[green]Wrote:[/green] {path}")
 
 
 @runs_app.command("diff")

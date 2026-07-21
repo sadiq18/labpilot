@@ -1,0 +1,313 @@
+import json
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from labpilot.cli import main as cli_main
+from labpilot.research_engine.intelligence.context import build_context, normalize_competition
+from labpilot.research_engine.intelligence.models import (
+    AnalysisReport,
+    AnalyzeContext,
+    ResearchArtifact,
+    ResearchArtifacts,
+    ResearchArtifactType,
+)
+from labpilot.research_engine.intelligence.orchestrator import AnalyzeOrchestrator
+from labpilot.research_engine.intelligence.registry import (
+    AnalyzerRegistry,
+    UnknownAnalyzerError,
+    build_default_registry,
+)
+from labpilot.research_engine.intelligence.renderers.json import (
+    to_json,
+    validate_json,
+    write_report,
+)
+
+runner = CliRunner()
+
+
+class FakeAnalyzer:
+    def __init__(self, name: str, *, default_enabled: bool = True, items=None, notes=None):
+        self.name = name
+        self.default_enabled = default_enabled
+        self._items = items or []
+        self._notes = notes or []
+
+    def analyze(self, context: AnalyzeContext) -> ResearchArtifacts:
+        return ResearchArtifacts(analyzer=self.name, items=self._items, notes=self._notes)
+
+
+class BoomAnalyzer:
+    name = "boom"
+    default_enabled = True
+
+    def analyze(self, context: AnalyzeContext) -> ResearchArtifacts:
+        raise RuntimeError("provider exploded")
+
+
+def _artifact(id_: str = "paper:1") -> ResearchArtifact:
+    return ResearchArtifact(
+        id=id_,
+        type=ResearchArtifactType.PAPER,
+        source="semantic_scholar",
+        title="Attention Is All You Need",
+        techniques=["attention"],
+        confidence=0.9,
+    )
+
+
+# --- ResearchArtifact schema ------------------------------------------------
+
+
+def test_research_artifact_round_trip():
+    original = _artifact()
+    restored = ResearchArtifact.model_validate_json(original.model_dump_json())
+    assert restored == original
+    assert restored.type is ResearchArtifactType.PAPER
+
+
+def test_research_artifact_defaults_are_present():
+    art = ResearchArtifact(id="x", type=ResearchArtifactType.NOTE, source="user")
+    assert art.confidence == 0.5
+    assert art.techniques == [] and art.references == []
+    # migration aliases exist but default empty
+    assert art.concepts == [] and art.evidence == [] and art.payload == {}
+
+
+def test_research_artifact_confidence_bounds():
+    with pytest.raises(ValueError):
+        ResearchArtifact(id="x", type=ResearchArtifactType.NOTE, source="user", confidence=1.5)
+
+
+# --- Registry ---------------------------------------------------------------
+
+
+def test_registry_register_and_list_preserves_order():
+    reg = AnalyzerRegistry()
+    reg.register(FakeAnalyzer("competition"))
+    reg.register(FakeAnalyzer("papers"))
+    assert reg.names() == ["competition", "papers"]
+
+
+def test_registry_rejects_duplicate_and_empty_names():
+    reg = AnalyzerRegistry()
+    reg.register(FakeAnalyzer("papers"))
+    with pytest.raises(ValueError):
+        reg.register(FakeAnalyzer("papers"))
+    with pytest.raises(ValueError):
+        reg.register(FakeAnalyzer(""))
+
+
+def test_registry_select_default_respects_default_enabled():
+    reg = AnalyzerRegistry()
+    reg.register(FakeAnalyzer("papers"))
+    reg.register(FakeAnalyzer("discussions", default_enabled=False))
+    selected = [a.name for a in reg.select()]
+    assert selected == ["papers"]
+
+
+def test_registry_select_only_include_exclude():
+    reg = AnalyzerRegistry()
+    reg.register(FakeAnalyzer("competition"))
+    reg.register(FakeAnalyzer("papers"))
+    reg.register(FakeAnalyzer("dataset"))
+
+    assert [a.name for a in reg.select(only="dataset")] == ["dataset"]
+    assert [a.name for a in reg.select(include={"papers", "dataset"})] == ["papers", "dataset"]
+    assert [a.name for a in reg.select(exclude={"dataset"})] == ["competition", "papers"]
+
+
+def test_registry_unknown_names_raise():
+    reg = AnalyzerRegistry()
+    reg.register(FakeAnalyzer("papers"))
+    with pytest.raises(UnknownAnalyzerError):
+        reg.get("nope")
+    with pytest.raises(UnknownAnalyzerError):
+        reg.select(include={"nope"})
+    with pytest.raises(ValueError):
+        reg.select(only="papers", include={"papers"})
+
+
+def test_default_registry_is_empty_in_plan_1():
+    assert build_default_registry().names() == []
+
+
+# --- Context normalization --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value,expected_slug",
+    [
+        ("birdclef-2026", "birdclef-2026"),
+        ("birdclef-2026/", "birdclef-2026"),
+        ("https://www.kaggle.com/competitions/birdclef-2026", "birdclef-2026"),
+        ("https://www.kaggle.com/competitions/birdclef-2026/overview", "birdclef-2026"),
+        ("https://www.kaggle.com/c/titanic", "titanic"),
+        ("www.kaggle.com/competitions/spaceship-titanic", "spaceship-titanic"),
+    ],
+)
+def test_normalize_competition(value, expected_slug):
+    slug, url = normalize_competition(value)
+    assert slug == expected_slug
+    if "kaggle.com" in value:
+        assert url is not None
+    else:
+        assert url is None
+
+
+def test_normalize_competition_rejects_empty():
+    with pytest.raises(ValueError):
+        normalize_competition("   ")
+
+
+def test_build_context_paths(tmp_path: Path):
+    ctx = build_context(
+        "birdclef-2026", runs_dir=tmp_path / "runs", knowledge_dir=tmp_path / "knowledge"
+    )
+    assert ctx.competition == "birdclef-2026"
+    assert ctx.report_path == tmp_path / "knowledge/birdclef-2026/research/reports/analyze.json"
+
+
+# --- Orchestrator -----------------------------------------------------------
+
+
+def _ctx(tmp_path: Path) -> AnalyzeContext:
+    return build_context(
+        "birdclef-2026", runs_dir=tmp_path / "runs", knowledge_dir=tmp_path / "knowledge"
+    )
+
+
+def test_orchestrator_empty_registry_writes_stub(tmp_path: Path):
+    orch = AnalyzeOrchestrator(AnalyzerRegistry())
+    report = orch.analyze(_ctx(tmp_path))
+    assert report.competition["slug"] == "birdclef-2026"
+    assert report.analyzers == []
+    assert any("No analyzers" in note for note in report.notes)
+
+
+def test_orchestrator_merges_artifacts(tmp_path: Path):
+    reg = AnalyzerRegistry()
+    reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")], notes=["cache hit"]))
+    reg.register(FakeAnalyzer("dataset", items=[_artifact("dataset:1")]))
+    report = AnalyzeOrchestrator(reg).analyze(_ctx(tmp_path))
+    assert report.analyzers == ["papers", "dataset"]
+    assert {a.id for a in report.artifacts} == {"paper:1", "dataset:1"}
+    assert "[papers] cache hit" in report.notes
+    assert report.summary["artifact_count"] == 2
+
+
+def test_orchestrator_soft_fails_on_analyzer_exception(tmp_path: Path):
+    reg = AnalyzerRegistry()
+    reg.register(BoomAnalyzer())
+    reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")]))
+    report = AnalyzeOrchestrator(reg).analyze(_ctx(tmp_path))
+    # boom still counted as run, but contributed a failure note, no crash
+    assert "boom" in report.analyzers
+    assert any("analyzer failed" in note for note in report.notes)
+    assert {a.id for a in report.artifacts} == {"paper:1"}
+
+
+def test_orchestrator_url_recorded(tmp_path: Path):
+    ctx = build_context(
+        "https://www.kaggle.com/competitions/birdclef-2026",
+        runs_dir=tmp_path / "runs",
+        knowledge_dir=tmp_path / "knowledge",
+    )
+    report = AnalyzeOrchestrator(AnalyzerRegistry()).analyze(ctx)
+    assert report.competition["url"].endswith("birdclef-2026")
+
+
+# --- JSON renderer ----------------------------------------------------------
+
+
+def test_json_round_trip_and_write(tmp_path: Path):
+    report = AnalysisReport(competition={"slug": "birdclef-2026"}, analyzers=["papers"])
+    text = to_json(report)
+    assert validate_json(text) == report
+
+    path = write_report(report, tmp_path / "a/b/analyze.json")
+    assert path.is_file()
+    loaded = json.loads(path.read_text())
+    assert loaded["competition"]["slug"] == "birdclef-2026"
+    assert loaded["schema_version"] == 1
+
+
+# --- CLI --------------------------------------------------------------------
+
+
+def test_analyze_help_documents_flags():
+    result = runner.invoke(cli_main.app, ["analyze", "--help"])
+    assert result.exit_code == 0
+    for flag in ("--include", "--exclude", "--format", "--refresh"):
+        assert flag in result.stdout
+
+
+def test_analyze_cli_writes_stub_report(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cli_main, "build_default_registry", lambda: AnalyzerRegistry())
+    result = runner.invoke(
+        cli_main.app,
+        [
+            "analyze",
+            "birdclef-2026",
+            "--knowledge-dir",
+            str(tmp_path / "knowledge"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    report_path = tmp_path / "knowledge/birdclef-2026/research/reports/analyze.json"
+    assert report_path.is_file()
+    validate_json(report_path.read_text())
+
+
+def test_analyze_cli_single_analyzer_and_json_format(tmp_path: Path, monkeypatch):
+    def _registry():
+        reg = AnalyzerRegistry()
+        reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")]))
+        reg.register(FakeAnalyzer("dataset", items=[_artifact("dataset:1")]))
+        return reg
+
+    monkeypatch.setattr(cli_main, "build_default_registry", _registry)
+    result = runner.invoke(
+        cli_main.app,
+        [
+            "analyze",
+            "papers",
+            "birdclef-2026",
+            "--format",
+            "json",
+            "--knowledge-dir",
+            str(tmp_path / "knowledge"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["analyzers"] == ["papers"]
+    assert [a["id"] for a in payload["artifacts"]] == ["paper:1"]
+
+
+def test_analyze_cli_unknown_analyzer_fails_clearly(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cli_main, "build_default_registry", lambda: AnalyzerRegistry())
+    result = runner.invoke(
+        cli_main.app,
+        [
+            "analyze",
+            "nope",
+            "birdclef-2026",
+            "--knowledge-dir",
+            str(tmp_path / "knowledge"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Unknown analyzer" in result.stdout
+
+
+def test_analyze_cli_rejects_bad_format(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(cli_main, "build_default_registry", lambda: AnalyzerRegistry())
+    result = runner.invoke(cli_main.app, ["analyze", "birdclef-2026", "--format", "html"])
+    assert result.exit_code != 0
