@@ -14,7 +14,9 @@ venv/
 runs/
 
 # Research memory (hypotheses, knowledge base) — local, like runs/
-knowledge/
+# Anchored to repo root so it never ignores the source package
+# src/labpilot/research_engine/intelligence/knowledge/.
+/knowledge/
 
 # Local Obsidian reference (plans/milestones copies — not part of the package)
 obsidian-vault/

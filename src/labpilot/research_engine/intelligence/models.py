@@ -15,6 +15,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from labpilot.research_engine.intelligence.paths import ResearchPaths
+
 SCHEMA_VERSION = 1
 
 
@@ -77,18 +79,23 @@ class AnalyzeContext(BaseModel):
     url: str | None = None  # original URL when a URL was passed instead of a slug
 
     @property
+    def paths(self) -> ResearchPaths:
+        """Canonical research-tree layout for this competition."""
+        return ResearchPaths(self.knowledge_dir, self.competition)
+
+    @property
     def research_dir(self) -> Path:
         """Local (gitignored) research tree root for this competition."""
-        return self.knowledge_dir / self.competition / "research"
+        return self.paths.root
 
     @property
     def reports_dir(self) -> Path:
-        return self.research_dir / "reports"
+        return self.paths.reports_dir
 
     @property
     def report_path(self) -> Path:
         """Canonical analyze.json path (design §12.5)."""
-        return self.reports_dir / "analyze.json"
+        return self.paths.report_path
 
 
 class RetrievalSlice(BaseModel):
