@@ -1,9 +1,9 @@
 """Thin orchestrator for ``research analyze`` (design §3).
 
 Flow: select analyzers → run each (soft-fail) → merge ``ResearchArtifacts`` →
-write the stub ``analyze.json``. Knowledge extraction, retrieval, and the
-Hypothesis Assistant are wired in later plans; this stage only proves the
-envelope and CLI contract.
+write ``analyze.json``. Knowledge extraction, retrieval, and the Hypothesis
+Assistant are wired in later plans; this stage merges analyzer emissions into
+the stable report envelope.
 """
 
 from __future__ import annotations
@@ -11,10 +11,15 @@ from __future__ import annotations
 import logging
 
 from labpilot.research_engine.intelligence.analyzers.base import Analyzer
+from labpilot.research_engine.intelligence.analyzers.competition import (
+    profile_dict_for_report,
+    related_dict_for_report,
+)
 from labpilot.research_engine.intelligence.models import (
     AnalysisReport,
     AnalyzeContext,
     ResearchArtifacts,
+    ResearchArtifactType,
 )
 from labpilot.research_engine.intelligence.registry import AnalyzerRegistry
 
@@ -51,6 +56,7 @@ class AnalyzeOrchestrator:
             report.artifacts.extend(emission.items)
             for note in emission.notes:
                 report.notes.append(f"[{analyzer.name}] {note}")
+            self._merge_competition_emission(report, emission)
 
         report.summary = {
             "analyzer_count": len(report.analyzers),
@@ -68,3 +74,19 @@ class AnalyzeOrchestrator:
                 analyzer=analyzer.name,
                 notes=[f"analyzer failed: {exc}"],
             )
+
+    def _merge_competition_emission(
+        self, report: AnalysisReport, emission: ResearchArtifacts
+    ) -> None:
+        """Fold CompetitionAnalyzer profile / related comps into report sections."""
+        for artifact in emission.items:
+            if artifact.type is not ResearchArtifactType.COMPETITION:
+                continue
+            profile = profile_dict_for_report(artifact)
+            if profile is not None:
+                # Keep the slug/url envelope keys; overlay the expert brief.
+                report.competition = {**report.competition, **profile}
+                continue
+            related = related_dict_for_report(artifact)
+            if related is not None:
+                report.related_competitions.append(related)

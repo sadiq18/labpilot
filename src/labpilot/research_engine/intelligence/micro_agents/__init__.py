@@ -14,6 +14,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from labpilot.common.micro_agents import BaseMicroAgent, MicroAgent, StructuredContext
+from labpilot.research_engine.intelligence.micro_agents.competition_page_analyzer import (
+    CompetitionPageAnalyzerAgent,
+)
 from labpilot.research_engine.intelligence.micro_agents.concept_normalizer import (
     ConceptNormalizerAgent,
 )
@@ -39,6 +42,7 @@ _AGENT_TYPES: tuple[type[BaseMicroAgent], ...] = (
     HypothesisGeneratorAgent,
     ConceptNormalizerAgent,
     ExperimentReviewerAgent,
+    CompetitionPageAnalyzerAgent,
 )
 
 _AGENTS_BY_NAME: dict[str, type[BaseMicroAgent]] = {cls.name: cls for cls in _AGENT_TYPES}
@@ -75,6 +79,7 @@ def build_agents(*, llm_client: LLMClient | None = None) -> dict[str, MicroAgent
 
 __all__ = [
     "BaseMicroAgent",
+    "CompetitionPageAnalyzerAgent",
     "ConceptNormalizerAgent",
     "ExperimentReviewerAgent",
     "ForumAnalyzerAgent",

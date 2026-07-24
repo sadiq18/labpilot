@@ -90,7 +90,18 @@ class AnalyzerRegistry:
 def build_default_registry() -> AnalyzerRegistry:
     """Registry wired with the built-in analyzers available so far.
 
-    Plan 1 registers none (analyzers arrive in Plans 4–7); the orchestrator
-    still produces a valid stub report. Later plans append registrations here.
+    Plan 4: local ExperimentAnalyzer + DatasetAnalyzer.
+    Plan 5: CompetitionAnalyzer (Kaggle-expert brief; Null winning solutions).
+    Paper / repository / discussion analyzers append in Plans 6–7 / Plan F.
     """
-    return AnalyzerRegistry()
+    # Imported here (not at module top) so importing the registry stays cheap
+    # and does not pull pandas / the execution stack unless a registry is built.
+    from labpilot.research_engine.intelligence.analyzers.competition import CompetitionAnalyzer
+    from labpilot.research_engine.intelligence.analyzers.dataset import DatasetAnalyzer
+    from labpilot.research_engine.intelligence.analyzers.experiments import ExperimentAnalyzer
+
+    registry = AnalyzerRegistry()
+    registry.register(CompetitionAnalyzer())
+    registry.register(ExperimentAnalyzer())
+    registry.register(DatasetAnalyzer())
+    return registry

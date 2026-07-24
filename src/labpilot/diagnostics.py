@@ -35,16 +35,21 @@ def _check_python_version() -> CheckResult:
     return CheckResult("Python version", ok, detail, "" if ok else fix)
 
 
-def _check_kaggle_credentials() -> CheckResult:
-    # Mirrors how `load_config()` actually resolves credentials (env vars or
-    # a local .env file via pydantic Settings), not just raw os.environ, so
-    # this check can't disagree with what a real run will do.
+def kaggle_credentials_present() -> bool:
+    """True when LabPilot can see any configured Kaggle credential source."""
     settings = Settings()
     has_token = bool(settings.kaggle_api_token)
     has_legacy = bool(settings.kaggle_username) and bool(settings.kaggle_key)
     has_token_file = (Path.home() / ".kaggle" / "access_token").exists()
     has_legacy_file = (Path.home() / ".kaggle" / "kaggle.json").exists()
-    ok = has_token or has_legacy or has_token_file or has_legacy_file
+    return has_token or has_legacy or has_token_file or has_legacy_file
+
+
+def _check_kaggle_credentials() -> CheckResult:
+    # Mirrors how `load_config()` actually resolves credentials (env vars or
+    # a local .env file via pydantic Settings), not just raw os.environ, so
+    # this check can't disagree with what a real run will do.
+    ok = kaggle_credentials_present()
     detail = "found" if ok else "not found"
     fix = (
         "Set KAGGLE_API_TOKEN in .env, or save a token to ~/.kaggle/access_token "

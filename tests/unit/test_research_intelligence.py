@@ -142,8 +142,13 @@ def test_registry_unknown_names_raise():
         reg.select(only="papers", include={"papers"})
 
 
-def test_default_registry_is_empty_in_plan_1():
-    assert build_default_registry().names() == []
+def test_default_registry_has_local_analyzers():
+    # Plans 4–5: competition + local experiment/dataset analyzers.
+    assert build_default_registry().names() == [
+        "competition",
+        "experiments",
+        "dataset",
+    ]
 
 
 # --- Context normalization --------------------------------------------------

@@ -83,3 +83,26 @@ class ExperimentReview(BaseModel):
     diagnosis: str = ""
     suggestions: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+
+
+class CompetitionPageExtract(BaseModel):
+    """Structured extract from competition overview + rules pages (Plan 5b).
+
+    Same schema whether filled by LLM or ``rule_engine``. Maps into
+    ``CompetitionProfile`` fields — never a free-form page dump as SoR.
+    """
+
+    external_data_allowed: bool | None = None
+    pretrained_weights_allowed: bool | None = None
+    external_data_notes: str = ""
+    runtime_notes: str = ""
+    hardware_notes: str = ""
+    internet_allowed: bool | None = None
+    inference_notes: str = ""
+    evaluation_formula: str = ""
+    evaluation_description: str = ""
+    submission_format: str = ""
+    submission_columns_notes: str = ""
+    sample_submission_notes: str = ""
+    overview_summary: str = ""
+    other_notes: str = ""
