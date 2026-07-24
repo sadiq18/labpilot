@@ -16,6 +16,7 @@ from labpilot.research_engine.intelligence.analyzers.competition import (
     related_dict_for_report,
 )
 from labpilot.research_engine.intelligence.analyzers.papers import paper_dict_for_report
+from labpilot.research_engine.intelligence.analyzers.repositories import repo_dict_for_report
 from labpilot.research_engine.intelligence.models import (
     AnalysisReport,
     AnalyzeContext,
@@ -58,11 +59,14 @@ class AnalyzeOrchestrator:
             for note in emission.notes:
                 report.notes.append(f"[{analyzer.name}] {note}")
             self._merge_emission(report, emission)
+            report.transfer_opportunities.extend(emission.transfers)
 
         report.summary = {
             "analyzer_count": len(report.analyzers),
             "artifact_count": len(report.artifacts),
             "paper_count": len(report.papers),
+            "repository_count": len(report.repositories),
+            "transfer_count": len(report.transfer_opportunities),
         }
         return report
 
@@ -86,16 +90,9 @@ class AnalyzeOrchestrator:
                     report.papers.append(card)
                 continue
             if artifact.type is ResearchArtifactType.REPOSITORY:
-                report.repositories.append(
-                    {
-                        "id": artifact.id,
-                        "title": artifact.title,
-                        "summary": artifact.summary,
-                        "techniques": artifact.techniques,
-                        "source": artifact.source,
-                        "metadata": artifact.metadata,
-                    }
-                )
+                card = repo_dict_for_report(artifact)
+                if card is not None:
+                    report.repositories.append(card)
                 continue
             if artifact.type is not ResearchArtifactType.COMPETITION:
                 continue

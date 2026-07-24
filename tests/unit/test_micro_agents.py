@@ -31,7 +31,10 @@ from labpilot.research_engine.intelligence.micro_agents.artifacts import (
     ExperimentReview,
     ForumExtract,
     HypothesisDraft,
-    RepoExtract,
+)
+from labpilot.research_engine.intelligence.repositories.models import (
+    RepoKnowledge,
+    RepoSearchPlan,
 )
 
 
@@ -54,6 +57,7 @@ class _BoomClient:
 
 INTEL_NAMES = [
     "PaperAnalyzerAgent",
+    "RepoQueryPlannerAgent",
     "RepositoryAnalyzerAgent",
     "ForumAnalyzerAgent",
     "HypothesisGeneratorAgent",
@@ -123,13 +127,33 @@ def test_experiment_reviewer_diagnoses_mismatch() -> None:
     assert out.suggestions == ["Re-examine effect of: Mixup"]
 
 
-def test_repo_agent_defaults_components_to_techniques() -> None:
+def test_repo_agent_extracts_repo_knowledge() -> None:
     agent = intel_agents.get_agent("RepositoryAnalyzerAgent")
-    ctx = StructuredContext(data={"techniques": ["EMA"], "integration_difficulty": "wat"})
+    ctx = StructuredContext(
+        text="Uses focal loss, Mixup and EMA.",
+        data={"repo_id": "github:o/r", "full_name": "o/r", "techniques": ["EMA"]},
+    )
     out = agent.run(ctx)
-    assert isinstance(out, RepoExtract)
-    assert out.components == ["EMA"]
-    assert out.integration_difficulty == "unknown"  # invalid value normalized
+    assert isinstance(out, RepoKnowledge)
+    assert out.repo_id == "github:o/r"
+    assert "focal loss" in out.loss
+    assert "mixup" in out.augmentation
+    assert "EMA" in out.techniques
+
+
+def test_repo_query_planner_rule_engine_returns_seed() -> None:
+    agent = intel_agents.get_agent("RepoQueryPlannerAgent")
+    out = agent.run(
+        StructuredContext(
+            data={
+                "seed_queries": [
+                    {"category": "baseline", "query": "birdclef baseline"}
+                ]
+            }
+        )
+    )
+    assert isinstance(out, RepoSearchPlan)
+    assert out.queries[0].category.value == "baseline"
 
 
 def test_forum_and_hypothesis_rule_engine() -> None:
