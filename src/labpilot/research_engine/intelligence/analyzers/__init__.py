@@ -2,8 +2,8 @@
 
 Plan 1 shipped the ``Analyzer`` Protocol + ``BaseAnalyzer`` helper. Plan 4 adds
 the local-only ExperimentAnalyzer + DatasetAnalyzer; Plan 5 adds
-CompetitionAnalyzer; Plan 6 adds PaperAnalyzer. Repository / discussion
-analyzers land in Plans 7 and F.
+CompetitionAnalyzer; Plan 6 adds PaperAnalyzer; Plan 7 adds RepositoryAnalyzer.
+Discussion analyzers land in Plan F.
 
 The concrete analyzers are intentionally **not** imported here — they pull the
 execution stack / pandas / Kaggle clients. Import them from their submodules

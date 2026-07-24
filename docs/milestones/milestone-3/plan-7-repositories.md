@@ -2,7 +2,7 @@
 
 Back to [Milestone 3](README.md). Design: README §5.
 
-**Status:** Not started. **Depends on:** Plans 1, 3 (Plan 2 for persist). **Unlocks:** Plan 8.
+**Status:** Implemented. **Depends on:** Plans 1, 3 (Plan 2 for persist). **Unlocks:** Plan 8.
 
 ---
 
@@ -34,8 +34,10 @@ dumps are not.
 
 | Path | Work |
 |------|------|
-| `analyzers/repositories/*` | Analyzer, provider, differ, local_profile |
-| `micro_agents/repository_analyzer/` | Agent + skill.md |
+| `analyzers/repositories.py` | Analyzer, artifact/report mapping, persist |
+| `intelligence/repositories/` | Models, GitHub provider/client, cache, query, ranking, differ, local profile |
+| `micro_agents/repository_analyzer/` | RepoKnowledge extractor + skill.md |
+| `micro_agents/repo_query_planner/` | Typed category-aware query planner + skill.md |
 | Tests | Fixture README + file set |
 
 ## Acceptance criteria
@@ -53,3 +55,16 @@ dumps are not.
 ## Review notes
 
 - Network only in provider; Agent sees cached text only.
+- `GITHUB_TOKEN` is optional but recommended; unauthenticated GitHub search is rate-limited.
+- The provider uses the official REST API, never HTML scraping or wholesale clones.
+
+## Decisions (shipped)
+
+| Concern | Decision |
+|---------|----------|
+| Discovery | Five typed query categories; optional LLM `RepoQueryPlannerAgent`, deterministic fallback |
+| Fetch | README + shallow/capped tree + at most 12 high-signal files |
+| Cache | Versioned `RawStore` blobs under `research/raw/repositories/` |
+| Extract | `RepositoryAnalyzerAgent` → typed `RepoKnowledge`; no README summary |
+| Compare | Deterministic `LocalCodeProfiler` + `RepoDiffer` → effort/gain suggestions |
+| Report | Repository cards plus `transfer_opportunities`; no workspace code modification |

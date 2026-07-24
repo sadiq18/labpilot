@@ -42,7 +42,7 @@ class PaperExtract(BaseModel):
 
 
 class RepoExtract(BaseModel):
-    """Structured card for a GitHub repository."""
+    """Legacy thin extract; Plan 7 uses ``repositories.models.RepoKnowledge``."""
 
     architecture: str = ""
     components: list[str] = Field(default_factory=list)

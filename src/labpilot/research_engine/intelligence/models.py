@@ -67,6 +67,7 @@ class ResearchArtifacts(BaseModel):
     notes: list[str] = Field(default_factory=list)
     techniques: list[str] = Field(default_factory=list)  # rollup convenience
     opportunities: list[str] = Field(default_factory=list)
+    transfers: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AnalyzeContext(BaseModel):

@@ -31,12 +31,16 @@ from labpilot.research_engine.intelligence.micro_agents.paper_analyzer import Pa
 from labpilot.research_engine.intelligence.micro_agents.repository_analyzer import (
     RepositoryAnalyzerAgent,
 )
+from labpilot.research_engine.intelligence.micro_agents.repo_query_planner import (
+    RepoQueryPlannerAgent,
+)
 
 if TYPE_CHECKING:
     from labpilot.llm.client import LLMClient
 
 _AGENT_TYPES: tuple[type[BaseMicroAgent], ...] = (
     PaperAnalyzerAgent,
+    RepoQueryPlannerAgent,
     RepositoryAnalyzerAgent,
     ForumAnalyzerAgent,
     HypothesisGeneratorAgent,
@@ -86,6 +90,7 @@ __all__ = [
     "HypothesisGeneratorAgent",
     "MicroAgent",
     "PaperAnalyzerAgent",
+    "RepoQueryPlannerAgent",
     "RepositoryAnalyzerAgent",
     "StructuredContext",
     "UnknownMicroAgentError",

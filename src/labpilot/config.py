@@ -142,6 +142,7 @@ class Settings(BaseSettings):
     openalex_mailto: str = ""
     openalex_api_key: str = ""
     hf_token: str = ""
+    github_token: str = ""
     labpilot_runs_dir: str = "runs"
     labpilot_knowledge_dir: str = "knowledge"
     labpilot_llm_provider: str = ""

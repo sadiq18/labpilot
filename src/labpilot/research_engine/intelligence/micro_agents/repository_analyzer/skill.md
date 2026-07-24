@@ -1,39 +1,41 @@
 # RepositoryAnalyzerAgent
 
-Turns a GitHub repository into a structured card. **Not** a summarizer.
-Deterministic fetch happens upstream; this agent explains architecture and
-reuse effort.
+Extracts transferable ML engineering knowledge from cached GitHub content.
+**Not** a README or repository summarizer. Deterministic fetch happens upstream.
 
 ## Inputs (`StructuredContext`)
 
 - `text` — normalized repo content (README, key files) fetched upstream.
-- `data` — optional `rule_engine` signals: `architecture` (str),
-  `components`/`techniques`/`files_worth_reading` (`list[str]`),
-  `integration_difficulty` (`Easy`|`Medium`|`Hard`).
+- `data` — identity, dependencies, key paths, and deterministic signals.
 
-## Output schema (`RepoExtract`)
+## Output schema (`RepoKnowledge`)
 
 ```json
 {
-  "architecture": "ConvNeXt Tiny",
-  "components": ["SpecAugment", "Mixup", "EMA", "Custom Sampler"],
-  "files_worth_reading": ["dataset.py", "loss.py", "augment.py"],
+  "repo_id": "github:owner/repo",
+  "full_name": "owner/repo",
+  "architecture": ["ConvNeXt Tiny"],
+  "loss": ["Focal Loss"],
+  "augmentation": ["SpecAugment", "Mixup"],
+  "training_tricks": ["EMA"],
+  "interesting_files": ["dataset.py", "loss.py", "augment.py"],
+  "dependencies": ["torch", "timm"],
   "techniques": ["SpecAugment", "Mixup", "EMA"],
-  "integration_difficulty": "Easy"
+  "confidence": 0.8,
+  "grounded_in": "mixed"
 }
 ```
 
 ## Prompt skeleton
 
-- **System:** "You analyze an ML GitHub repository … respond ONLY with the JSON
-  object above."
+- **System:** extract only supported engineering choices into the JSON above.
 - **User:** the repository text.
 
 ## Fallback (`rule_engine`)
 
-Reads `context.data`; `components` defaults to `techniques` when absent;
-`integration_difficulty` normalizes to `unknown` if unrecognized.
+Combines upstream dependency/path signals with deterministic term detection for
+architectures, losses, augmentation, and training tricks.
 
 ## Notes
 
-Later plans (7) map this to `RepoKnowledge` + `TransferOpportunity.effort`.
+The agent never calls GitHub. `RepoDiffer` computes effort/gain separately.
