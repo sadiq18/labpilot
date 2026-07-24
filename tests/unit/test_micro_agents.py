@@ -59,6 +59,7 @@ INTEL_NAMES = [
     "HypothesisGeneratorAgent",
     "ConceptNormalizerAgent",
     "ExperimentReviewerAgent",
+    "CompetitionPageAnalyzerAgent",
 ]
 
 
@@ -198,6 +199,7 @@ AGENT_CLASSES: list[type[BaseMicroAgent]] = [
     intel_agents.HypothesisGeneratorAgent,
     intel_agents.ConceptNormalizerAgent,
     intel_agents.ExperimentReviewerAgent,
+    intel_agents.CompetitionPageAnalyzerAgent,
     ReflectionGeneratorAgent,
 ]
 

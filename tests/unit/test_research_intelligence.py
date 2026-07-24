@@ -143,8 +143,12 @@ def test_registry_unknown_names_raise():
 
 
 def test_default_registry_has_local_analyzers():
-    # Plan 4: local-only analyzers are wired by default.
-    assert build_default_registry().names() == ["experiments", "dataset"]
+    # Plans 4–5: competition + local experiment/dataset analyzers.
+    assert build_default_registry().names() == [
+        "competition",
+        "experiments",
+        "dataset",
+    ]
 
 
 # --- Context normalization --------------------------------------------------

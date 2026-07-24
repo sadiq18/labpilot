@@ -478,11 +478,13 @@ class KaggleClient:
         try:
             api = self.authenticate()
             response = api.competitions_list(search=competition)
-        except Exception:
-            logger.warning(
-                "Could not resolve metadata for '%s' from the Kaggle API.",
+        except Exception as exc:
+            # Auth / network misses are expected soft-fails for analyze — don't
+            # dump a traceback (kaggle's SystemExit→RuntimeError path is noisy).
+            logger.info(
+                "Could not resolve metadata for '%s' from the Kaggle API (%s).",
                 competition,
-                exc_info=True,
+                exc,
             )
             return None
 
