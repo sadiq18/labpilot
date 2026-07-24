@@ -148,6 +148,7 @@ def test_default_registry_has_local_analyzers():
         "competition",
         "experiments",
         "dataset",
+        "papers",
     ]
 
 
@@ -213,6 +214,57 @@ def test_orchestrator_merges_artifacts(tmp_path: Path):
     assert {a.id for a in report.artifacts} == {"paper:1", "dataset:1"}
     assert "[papers] cache hit" in report.notes
     assert report.summary["artifact_count"] == 2
+    # PAPER artifacts land in report.papers (terminal Papers count).
+    assert len(report.papers) == 2
+    assert report.papers[0]["id"] == "paper:1"
+    assert report.summary["paper_count"] == 2
+
+
+def test_micro_agent_retries_transient_llm_errors(monkeypatch) -> None:
+    from labpilot.common.micro_agents import BaseMicroAgent, StructuredContext
+    from labpilot.research_engine.intelligence.literature.models import PaperKnowledge
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("labpilot.common.micro_agents.time.sleep", lambda s: sleeps.append(s))
+
+    class Flaky:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, system: str, user: str) -> str:
+            self.calls += 1
+            if self.calls < 3:
+                raise RuntimeError("503 UNAVAILABLE high demand")
+            return (
+                '{"paper_id":"p","title":"T","contributions":["c"],"methods":[],'
+                '"limitations":[],"ideas_worth_testing":[],"techniques":["EMA"],'
+                '"datasets_used":[],"benchmarks":[],"code_urls":[],"confidence":0.7,'
+                '"grounded_in":"abstract"}'
+            )
+
+    class Agent(BaseMicroAgent):
+        name = "RetryAgent"
+        output_model = PaperKnowledge
+        llm_max_attempts = 3
+        llm_retry_delay_seconds = 0.01
+
+        def system_prompt(self) -> str:
+            return "sys"
+
+        def user_prompt(self, context: StructuredContext) -> str:
+            return "user"
+
+        def _run_rule_engine(self, context: StructuredContext) -> PaperKnowledge:
+            return PaperKnowledge(paper_id="fallback")
+
+    client = Flaky()
+    agent = Agent(llm_client=client)
+    out = agent.run(StructuredContext(text="paper"))
+    assert isinstance(out, PaperKnowledge)
+    assert out.techniques == ["EMA"]
+    assert client.calls == 3
+    assert agent.last_used_llm is True
+    assert len(sleeps) == 2
 
 
 def test_orchestrator_soft_fails_on_analyzer_exception(tmp_path: Path):

@@ -25,12 +25,12 @@ from labpilot.research_engine.execution.micro_agents.reflection_generator import
     ReflectionGeneratorAgent,
 )
 from labpilot.research_engine.intelligence import micro_agents as intel_agents
+from labpilot.research_engine.intelligence.literature.models import PaperKnowledge
 from labpilot.research_engine.intelligence.micro_agents.artifacts import (
     ConceptNormalization,
     ExperimentReview,
     ForumExtract,
     HypothesisDraft,
-    PaperExtract,
     RepoExtract,
 )
 
@@ -96,10 +96,9 @@ def test_paper_agent_rule_engine_echoes_signals() -> None:
         data={"techniques": ["SpecAugment", "EMA"], "models": "ConvNeXt"},
     )
     out = agent.run(ctx)
-    assert isinstance(out, PaperExtract)
+    assert isinstance(out, PaperKnowledge)
     assert out.techniques == ["SpecAugment", "EMA"]
-    assert out.models == ["ConvNeXt"]  # scalar coerced to a one-item list
-    assert out.datasets == []
+    assert out.datasets_used == []
 
 
 def test_concept_normalizer_rule_engine_dedupes() -> None:
@@ -149,20 +148,25 @@ def test_forum_and_hypothesis_rule_engine() -> None:
 
 
 def test_llm_path_parses_json_into_model() -> None:
-    client = _StaticClient('{"techniques": ["EMA"], "claims": ["+1.2% F1"]}')
+    client = _StaticClient(
+        '{"paper_id":"p","title":"T","contributions": ["+1.2% F1"],"methods":[],'
+        '"limitations":[],"ideas_worth_testing":[],"techniques": ["EMA"],'
+        '"datasets_used":[],"benchmarks":[],"code_urls":[],"confidence":0.5,'
+        '"grounded_in":"abstract"}'
+    )
     agent = intel_agents.get_agent("PaperAnalyzerAgent", llm_client=client)
     assert agent.uses_llm
     out = agent.run(StructuredContext(text="paper"))
-    assert isinstance(out, PaperExtract)
+    assert isinstance(out, PaperKnowledge)
     assert out.techniques == ["EMA"]
-    assert out.claims == ["+1.2% F1"]
+    assert out.contributions == ["+1.2% F1"]
     assert client.calls == 1
 
 
 def test_llm_failure_soft_falls_back_to_rule_engine() -> None:
     agent = intel_agents.get_agent("PaperAnalyzerAgent", llm_client=_BoomClient())
     out = agent.run(StructuredContext(data={"techniques": ["EMA"]}))
-    assert isinstance(out, PaperExtract)
+    assert isinstance(out, PaperKnowledge)
     assert out.techniques == ["EMA"]  # deterministic fallback, no raise
 
 
@@ -171,7 +175,7 @@ def test_llm_garbage_falls_back_to_rule_engine() -> None:
         "PaperAnalyzerAgent", llm_client=_StaticClient("not json at all")
     )
     out = agent.run(StructuredContext(data={"techniques": ["Mixup"]}))
-    assert isinstance(out, PaperExtract)
+    assert isinstance(out, PaperKnowledge)
     assert out.techniques == ["Mixup"]
 
 

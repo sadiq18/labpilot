@@ -651,7 +651,7 @@ pipeline over content types**:
 ```
 Analyzer (interface)
     ├── CompetitionAnalyzer     # metadata, related comps, leaderboard (official APIs)
-    ├── PaperAnalyzer           # LiteratureProvider chain (S2 → OpenAlex → arXiv → PwC)
+    ├── PaperAnalyzer           # LiteratureProvider chain (S2 → OpenAlex → arXiv → HF)
     ├── RepositoryAnalyzer      # GitHub API + extract + diff vs local (name = "repositories")
     ├── ExperimentAnalyzer      # local M2 graph / KB / hypotheses
     ├── DatasetAnalyzer         # profile / competition.json / data shape
@@ -856,7 +856,7 @@ Default bare `research analyze <slug>` runs analyzers with `default_enabled=True
 | Analyzer `name` | Phase | Responsibility | Providers / inputs |
 |-----------------|-------|----------------|--------------------|
 | `competition` | **M3 Phase 1** | Metadata, dataset, rules, evaluation, timeline, related comps, leaderboard; winning solutions via provider (often unavailable) | Kaggle API + capability providers (see §3.5) |
-| `papers` | **M3 Phase 1** | Relevant literature | `LiteratureProvider` chain: Semantic Scholar → OpenAlex → arXiv → Papers with Code |
+| `papers` | **M3 Phase 1** | Relevant literature | `LiteratureProvider` chain: Semantic Scholar → OpenAlex → arXiv → Hugging Face Papers |
 | `repositories` | **M3 Phase 1** | Useful code repos + extract + diff vs local | `RepositoryProvider` (GitHub API) + `RepoKnowledgeExtractor` + `RepoDiffer` |
 | `experiments` | **M3 Phase 1** | Local M2 graph / KB / hypothesis backlog | `experiments/*` |
 | `dataset` | **M3 Phase 1** | Profile / contract / data-shape signals | `competition.json`, `profile.json` |
