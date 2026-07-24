@@ -1,41 +1,49 @@
 # PaperAnalyzerAgent
 
-Structured extraction from a single ML paper. **Not** a summarizer — the LLM
-is used as an information extractor that populates a typed artifact.
+Structured extraction from a single ML paper into **`PaperKnowledge`**.
+**Not** a summarizer — the LLM fills typed fields only.
 
 ## Inputs (`StructuredContext`)
 
-- `text` — normalized paper body (deterministically fetched upstream).
-- `data` — optional pre-parsed signals used by the `rule_engine` fallback:
-  `techniques`, `models`, `datasets`, `limitations`, `hypotheses`, `claims`
-  (each a `list[str]`).
+- `text` — abstract / metadata prose (deterministically fetched upstream).
+- `competition` — slug so ideas_worth_testing can be competition-grounded.
+- `data` — optional pre-parsed signals for `rule_engine`:
+  `paper_id`, `title`, `contributions`, `methods`, `limitations`,
+  `ideas_worth_testing` / `hypotheses`, `techniques`, `datasets_used` /
+  `datasets`, `benchmarks`, `code_urls` / `github_urls`, `claims`,
+  `grounded_in`, `confidence`.
 
-## Output schema (`PaperExtract`)
+## Output schema (`PaperKnowledge`)
 
 ```json
 {
-  "techniques": ["SpecAugment", "EMA"],
-  "models": ["ConvNeXt"],
-  "datasets": ["BirdCLEF"],
-  "limitations": ["Requires large batch sizes"],
-  "hypotheses": ["EMA may improve rare-class recall"],
-  "claims": ["EMA improved Macro F1 by 1.2%"]
+  "paper_id": "arxiv:1912.09732",
+  "title": "SpecAugment",
+  "contributions": ["Time/freq masking improves ASR without LM changes"],
+  "methods": ["time mask", "freq mask", "time warp"],
+  "limitations": ["tuned on speech; may need retuning for sparse bird calls"],
+  "ideas_worth_testing": ["narrower freq masks for rare species"],
+  "techniques": ["SpecAugment"],
+  "datasets_used": ["LibriSpeech"],
+  "benchmarks": [],
+  "code_urls": [],
+  "confidence": 0.7,
+  "grounded_in": "abstract"
 }
 ```
 
 ## Prompt skeleton
 
-- **System:** "You extract structured research knowledge from an ML paper …
-  respond ONLY with the JSON object above; do not summarize."
-- **User:** the paper text.
+- **System:** extract contributions / methods / limitations / ideas — respond
+  ONLY with the JSON object; do not summarize.
+- **User:** competition + paper abstract/metadata text.
 
 ## Fallback (`rule_engine`)
 
-With no LLM configured, echoes the pre-parsed lists from `context.data` so the
-pipeline still produces a valid `PaperExtract` (thinner semantic depth).
+Echoes pre-parsed lists from `context.data`, or applies thin abstract
+heuristics when only free text is present.
 
 ## Notes
 
-Later plans (6) may replace `PaperExtract` with a richer `PaperKnowledge` and
-seed `origin=paper` hypotheses. The agent never calls arXiv/GitHub/Kaggle and
-never persists — the caller stores the result.
+Never calls literature APIs or persists — the Deterministic Engine
+(`PaperAnalyzer` / `LiteratureProvider`) owns fetch + cache.

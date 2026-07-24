@@ -22,6 +22,7 @@ importing ``intelligence`` (import-hygiene rule).
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -45,6 +46,23 @@ def coerce_str_list(value: object) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [str(item) for item in value if str(item).strip()]
     return [str(value)]
+
+
+def _is_transient_llm_error(exc: BaseException) -> bool:
+    """True for rate-limit / high-demand errors that often clear on retry."""
+    text = str(exc).upper()
+    markers = (
+        "429",
+        "503",
+        "UNAVAILABLE",
+        "RESOURCE_EXHAUSTED",
+        "RATE LIMIT",
+        "HIGH DEMAND",
+        "TEMPORARY",
+        "TIMEOUT",
+        "TIMED OUT",
+    )
+    return any(marker in text for marker in markers)
 
 
 class StructuredContext(BaseModel):
@@ -96,21 +114,43 @@ class BaseMicroAgent:
 
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self.llm_client = llm_client
+        self.last_used_llm = False
 
     @property
     def uses_llm(self) -> bool:
         return self.llm_client is not None
 
     def run(self, context: StructuredContext) -> BaseModel:
+        self.last_used_llm = False
         if self.llm_client is not None:
-            try:
-                return self._run_llm(context)
-            except Exception as exc:  # noqa: BLE001 - soft-fail to deterministic path
-                logger.warning(
-                    "Micro agent %s LLM path failed (%s); using rule_engine fallback.",
-                    self.name or type(self).__name__,
-                    exc,
-                )
+            max_attempts = max(1, int(getattr(self, "llm_max_attempts", 3)))
+            retry_delay = float(getattr(self, "llm_retry_delay_seconds", 20.0))
+            last_exc: Exception | None = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    result = self._run_llm(context)
+                    self.last_used_llm = True
+                    return result
+                except Exception as exc:  # noqa: BLE001 - soft-fail to deterministic path
+                    last_exc = exc
+                    if attempt < max_attempts and _is_transient_llm_error(exc):
+                        logger.warning(
+                            "Micro agent %s LLM path failed (%s); retrying in %.0fs "
+                            "(attempt %d/%d).",
+                            self.name or type(self).__name__,
+                            exc,
+                            retry_delay,
+                            attempt,
+                            max_attempts,
+                        )
+                        time.sleep(retry_delay)
+                        continue
+                    logger.warning(
+                        "Micro agent %s LLM path failed (%s); using rule_engine fallback.",
+                        self.name or type(self).__name__,
+                        last_exc,
+                    )
+                    break
         return self._run_rule_engine(context)
 
     # --- LLM path ---------------------------------------------------------

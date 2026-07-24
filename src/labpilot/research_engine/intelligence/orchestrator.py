@@ -15,6 +15,7 @@ from labpilot.research_engine.intelligence.analyzers.competition import (
     profile_dict_for_report,
     related_dict_for_report,
 )
+from labpilot.research_engine.intelligence.analyzers.papers import paper_dict_for_report
 from labpilot.research_engine.intelligence.models import (
     AnalysisReport,
     AnalyzeContext,
@@ -56,11 +57,12 @@ class AnalyzeOrchestrator:
             report.artifacts.extend(emission.items)
             for note in emission.notes:
                 report.notes.append(f"[{analyzer.name}] {note}")
-            self._merge_competition_emission(report, emission)
+            self._merge_emission(report, emission)
 
         report.summary = {
             "analyzer_count": len(report.analyzers),
             "artifact_count": len(report.artifacts),
+            "paper_count": len(report.papers),
         }
         return report
 
@@ -75,11 +77,26 @@ class AnalyzeOrchestrator:
                 notes=[f"analyzer failed: {exc}"],
             )
 
-    def _merge_competition_emission(
-        self, report: AnalysisReport, emission: ResearchArtifacts
-    ) -> None:
-        """Fold CompetitionAnalyzer profile / related comps into report sections."""
+    def _merge_emission(self, report: AnalysisReport, emission: ResearchArtifacts) -> None:
+        """Fold analyzer emissions into typed report sections."""
         for artifact in emission.items:
+            if artifact.type is ResearchArtifactType.PAPER:
+                card = paper_dict_for_report(artifact)
+                if card is not None:
+                    report.papers.append(card)
+                continue
+            if artifact.type is ResearchArtifactType.REPOSITORY:
+                report.repositories.append(
+                    {
+                        "id": artifact.id,
+                        "title": artifact.title,
+                        "summary": artifact.summary,
+                        "techniques": artifact.techniques,
+                        "source": artifact.source,
+                        "metadata": artifact.metadata,
+                    }
+                )
+                continue
             if artifact.type is not ResearchArtifactType.COMPETITION:
                 continue
             profile = profile_dict_for_report(artifact)

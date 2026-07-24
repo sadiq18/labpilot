@@ -92,16 +92,19 @@ def build_default_registry() -> AnalyzerRegistry:
 
     Plan 4: local ExperimentAnalyzer + DatasetAnalyzer.
     Plan 5: CompetitionAnalyzer (Kaggle-expert brief; Null winning solutions).
-    Paper / repository / discussion analyzers append in Plans 6–7 / Plan F.
+    Plan 6: PaperAnalyzer (LiteratureProvider + PaperKnowledge).
+    Repository / discussion analyzers append in Plans 7 / F.
     """
     # Imported here (not at module top) so importing the registry stays cheap
     # and does not pull pandas / the execution stack unless a registry is built.
     from labpilot.research_engine.intelligence.analyzers.competition import CompetitionAnalyzer
     from labpilot.research_engine.intelligence.analyzers.dataset import DatasetAnalyzer
     from labpilot.research_engine.intelligence.analyzers.experiments import ExperimentAnalyzer
+    from labpilot.research_engine.intelligence.analyzers.papers import PaperAnalyzer
 
     registry = AnalyzerRegistry()
     registry.register(CompetitionAnalyzer())
     registry.register(ExperimentAnalyzer())
     registry.register(DatasetAnalyzer())
+    registry.register(PaperAnalyzer())
     return registry

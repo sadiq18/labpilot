@@ -28,7 +28,10 @@ class ResearchFinding(BaseModel):
 
 
 class PaperExtract(BaseModel):
-    """Structured extraction from a single paper (never a free-form summary)."""
+    """Legacy thin extract — prefer ``literature.models.PaperKnowledge`` (Plan 6).
+
+    Kept for older fixtures; ``PaperAnalyzerAgent`` emits ``PaperKnowledge``.
+    """
 
     techniques: list[str] = Field(default_factory=list)
     models: list[str] = Field(default_factory=list)
