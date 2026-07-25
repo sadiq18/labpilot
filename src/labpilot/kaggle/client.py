@@ -548,6 +548,90 @@ class KaggleClient:
                 count += 1
         return count
 
+    # -- Catalog fetch (kernels + competition discussions) -----------------
+
+    def list_kernels(
+        self,
+        competition: str,
+        *,
+        sort_by: str = "voteCount",
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List competition kernels via official ``kernels_list`` (normalized dicts)."""
+        api = self.authenticate()
+        try:
+            rows = api.kernels_list(
+                page=page,
+                page_size=page_size,
+                competition=competition,
+                sort_by=sort_by,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unable to list kernels for '{competition}' (sort_by={sort_by}): {exc}"
+            ) from exc
+        return [_kernel_row_to_dict(row) for row in (rows or []) if row is not None]
+
+    def pull_kernel(
+        self,
+        kernel_ref: str,
+        destination: Path,
+        *,
+        metadata: bool = True,
+    ) -> Path:
+        """Pull kernel source (+ optional metadata) into ``destination``."""
+        destination.mkdir(parents=True, exist_ok=True)
+        api = self.authenticate()
+        try:
+            api.kernels_pull(kernel_ref, path=str(destination), metadata=metadata, quiet=True)
+        except Exception as exc:
+            raise RuntimeError(f"Unable to pull kernel '{kernel_ref}': {exc}") from exc
+        return destination
+
+    def list_competition_topics(
+        self,
+        competition: str,
+        *,
+        sort_by: str = "top",
+        page: int = 1,
+    ) -> list[dict[str, Any]]:
+        """List competition forum topics via official API (normalized dicts).
+
+        UI ``sort=votes`` maps to API ``top``.
+        """
+        api = self.authenticate()
+        try:
+            response = api.competition_list_topics(
+                competition, sort_by=sort_by, page=page
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unable to list discussion topics for '{competition}': {exc}"
+            ) from exc
+        topics = getattr(response, "topics", None) or []
+        return [_topic_row_to_dict(topic) for topic in topics if topic is not None]
+
+    def fetch_topic_messages(
+        self,
+        competition: str,
+        topic_id: int,
+        *,
+        page_size: int = -1,
+    ) -> list[dict[str, Any]]:
+        """Fetch messages for one competition discussion topic (tree flattened lightly)."""
+        api = self.authenticate()
+        try:
+            response = api.competition_list_topic_messages(
+                competition, int(topic_id), page_size=page_size
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unable to fetch topic {topic_id} messages for '{competition}': {exc}"
+            ) from exc
+        messages = getattr(response, "messages", None) or []
+        return _flatten_topic_messages(messages)
+
     @staticmethod
     def _format_deadline(value: Any) -> str | None:
         if value is None:
@@ -591,3 +675,75 @@ class KaggleClient:
         output = run_dir / "submission_result.json"
         output.write_text(result.model_dump_json(indent=2))
         return output
+
+
+def _kernel_row_to_dict(row: Any) -> dict[str, Any]:
+    ref = str(getattr(row, "ref", None) or "").strip()
+    author = str(getattr(row, "author", None) or "").strip()
+    slug = str(getattr(row, "slug", None) or "").strip()
+    if not ref and author and slug:
+        ref = f"{author}/{slug}"
+    return {
+        "id": getattr(row, "id", None),
+        "ref": ref,
+        "title": str(getattr(row, "title", None) or ref or ""),
+        "author": author,
+        "slug": slug,
+        "language": getattr(row, "language", None),
+        "kernel_type": getattr(row, "kernel_type", None),
+        "total_votes": int(getattr(row, "total_votes", None) or 0),
+        "current_version_number": getattr(row, "current_version_number", None),
+        "last_run_time": _iso_or_none(getattr(row, "last_run_time", None)),
+    }
+
+
+def _topic_row_to_dict(topic: Any) -> dict[str, Any]:
+    topic_id = getattr(topic, "id", None)
+    return {
+        "id": int(topic_id) if topic_id is not None else 0,
+        "title": str(getattr(topic, "title", None) or ""),
+        "topic_url": str(getattr(topic, "topic_url", None) or ""),
+        "author_name": getattr(topic, "author_name", None),
+        "comment_count": int(getattr(topic, "comment_count", None) or 0),
+        "votes": int(getattr(topic, "votes", None) or 0),
+        "post_date": _iso_or_none(getattr(topic, "post_date", None)),
+        "is_sticky": bool(getattr(topic, "is_sticky", False)),
+    }
+
+
+def _flatten_topic_messages(messages: list[Any] | None) -> list[dict[str, Any]]:
+    flat: list[dict[str, Any]] = []
+
+    def _walk(nodes: list[Any] | None, *, depth: int = 0) -> None:
+        for node in nodes or []:
+            if node is None:
+                continue
+            content = (
+                getattr(node, "raw_markdown", None)
+                or getattr(node, "content", None)
+                or ""
+            )
+            flat.append(
+                {
+                    "id": getattr(node, "id", None),
+                    "author_name": getattr(node, "author_name", None),
+                    "votes": int(getattr(node, "votes", None) or 0),
+                    "post_date": _iso_or_none(getattr(node, "post_date", None)),
+                    "content": str(content),
+                    "depth": depth,
+                    "is_deleted": bool(getattr(node, "is_deleted", False)),
+                }
+            )
+            _walk(getattr(node, "replies", None) or [], depth=depth + 1)
+
+    _walk(messages)
+    return flat
+
+
+def _iso_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    text = str(value).strip()
+    return text or None

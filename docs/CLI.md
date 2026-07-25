@@ -22,7 +22,7 @@ research <command> ...
 3. [Inspect a run](#3-inspect-a-run) — `status`, `report`, `list-runs`, `runs diff`
 4. [Experiments](#4-experiments) — graph, show, compare, knowledge, rank, search, report, dashboard
 5. [Hypotheses](#5-hypotheses) — add, list, show, update
-6. [Research Intelligence](#6-research-intelligence) — `analyze`, `ingest`, `retrieve`, `hypothesize`
+6. [Research Intelligence](#6-research-intelligence) — `analyze`, `ingest`, `retrieve`, `hypothesize`, `fetch`
 7. [Environment & project](#7-environment--project) — doctor, workspace, runtime, templates
 8. [Common option patterns](#8-common-option-patterns)
 
@@ -460,6 +460,44 @@ research hypothesize birdclef-2026 -q "Suggest five literature-backed experiment
 | `--limit` | 1–10 recommendations (default 10) |
 | `--format` | `text` or `json` |
 
+### `research fetch`
+
+Pull Kaggle **kernels** and/or **competition discussions** into the local research
+store via the **official Kaggle API** (no HTML scrape). Designed so a later cron /
+worker can call the same library.
+
+```bash
+# Both sources — 20 unique NEW artifacts each
+research fetch birdclef-2026
+
+# Kernels only (most votes / best scores)
+research fetch birdclef-2026 --source kernels --sort votes --limit 10
+research fetch birdclef-2026 --source kernels --sort score --limit 10
+
+# Discussions only (UI votes → API top)
+research fetch birdclef-2026 --source discussions --limit 15
+
+# Re-pull existing ids
+research fetch birdclef-2026 --refresh
+```
+
+| Option | Description |
+|--------|-------------|
+| `--source` | `discussions` \| `kernels` \| `all` (default) |
+| `--sort` | `votes` (default) or `score` — applies to kernels; discussions always use vote/top order |
+| `--limit` | Unique **new** artifacts to store **per selected source** (pages until met) |
+| `--refresh` | Re-fetch and rewrite existing artifacts / raw versions |
+| `--config`, `--project-dir`, `--knowledge-dir` | Same idea as analyze |
+
+Storage:
+
+- Kernels → `ResearchArtifact(type=repository, source=kaggle)`, id `kaggle-kernel:{owner}/{slug}`
+- Discussions → `ResearchArtifact(type=discussion, source=kaggle)`, id `kaggle-discussion:{slug}:{topic_id}`
+- Raw blobs under `research/raw/kernels/` and `research/raw/discussions/`
+- Micro Agents enrich when an LLM is configured; otherwise `rule_engine`
+
+Does **not** register `DiscussionAnalyzer` — run `research ingest` later if you want hub beliefs.
+
 ---
 
 ## 7. Environment & project
@@ -545,5 +583,6 @@ confirm unless `--yes` (or non-TTY / CI).
 | Research landscape + top-10 ideas | `research analyze <slug>` |
 | Offline retrieve from knowledge.db | `research retrieve <slug> -q "…"` |
 | Rank untried literature-backed ideas | `research hypothesize <slug>` |
+| Pull Kaggle kernels / discussions | `research fetch <slug> [--source kernels\|discussions\|all]` |
 
 Workflow narrative: [SOP.md](SOP.md).

@@ -139,6 +139,9 @@ When you want literature / repo / cross-comp context before picking the next run
 # Landscape + top-10 recommendations (writes analyze.json; terminal is a view)
 uv run research analyze <slug>
 
+# Pull popular kernels / forum threads into knowledge/ (official API)
+uv run research fetch <slug> --source all --limit 20
+
 # Ask a grounded question against knowledge.db (offline)
 uv run research retrieve <slug> -q "Show experiments where Focal Loss hurt"
 
@@ -148,6 +151,9 @@ uv run research hypothesize <slug> --limit 5
 
 Treat suggestions as a backlog — pick one, attach a hypothesis, then `improve`.
 External techniques stay **Suggested** until local runs promote them.
+`research fetch` stores kernels as repository artifacts (`source=kaggle`) and
+discussions as discussion artifacts; Forum Intelligence extraction still lands in
+Plan F analyzers.
 
 ### Step 4 — Improve a completed parent
 
@@ -221,6 +227,7 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 | “What have we learned about recipe X?” | `experiments knowledge list --technique …` |
 | “Show me everything” | `experiments report` + `dashboard` |
 | Need papers/repos + next experiments | `research analyze <slug>` → read `analyze.json` / top-10 |
+| Pull Kaggle code/forum into the store | `research fetch <slug>` |
 | Grounded Q over the knowledge store | `research retrieve <slug> -q "…"` |
 | Literature-backed untried ideas | `research hypothesize <slug>` |
 | Need another operator on the team | Point them at this SOP + [CLI.md](CLI.md) |
