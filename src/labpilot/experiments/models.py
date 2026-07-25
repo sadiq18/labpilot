@@ -15,6 +15,37 @@ class HypothesisStatus(StrEnum):
     INCONCLUSIVE = "inconclusive"
 
 
+class HypothesisOrigin(StrEnum):
+    PAPER = "paper"
+    EXPERIMENT = "experiment"
+    FORUM = "forum"
+    REPOSITORY = "repository"
+    COMPETITION = "competition"
+    USER = "user"
+    MIXED = "mixed"
+
+
+class HypothesisGenerator(StrEnum):
+    LLM = "llm"
+    RULE_ENGINE = "rule_engine"
+    HUMAN = "human"
+    IMPORTED = "imported"
+
+
+class HypothesisCreatedBy(StrEnum):
+    ANALYZE = "analyze"
+    REFLECTION = "reflection"
+    MANUAL = "manual"
+    IMPORT = "import"
+    HYPOTHESIZE = "hypothesize"
+
+
+class HypothesisEvidenceRef(BaseModel):
+    kind: HypothesisOrigin | str
+    ref: str
+    note: str = ""
+
+
 class Hypothesis(BaseModel):
     """Durable, reusable unit of research intent — independent of any one run.
 
@@ -31,7 +62,13 @@ class Hypothesis(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     status: HypothesisStatus = HypothesisStatus.PROPOSED
     tags: list[str] = Field(default_factory=list)
-    source: Literal["manual", "reflection", "llm"] = "manual"
+    # Deprecated M2 alias — prefer created_by / generator / origin (§12.3).
+    source: Literal["manual", "reflection", "llm", "analyze"] = "manual"
+    created_by: HypothesisCreatedBy | None = None
+    generator: HypothesisGenerator | None = None
+    origin: HypothesisOrigin | None = None
+    origins: list[HypothesisOrigin] = Field(default_factory=list)
+    evidence: list[HypothesisEvidenceRef] = Field(default_factory=list)
     evidence_for: list[str] = Field(default_factory=list)
     evidence_against: list[str] = Field(default_factory=list)
     created_at: datetime

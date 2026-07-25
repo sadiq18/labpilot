@@ -2,7 +2,7 @@
 
 Back to [Milestone 3](README.md). Design: README §10 · §2.4 · Micro Agents.
 
-**Status:** Not started. **Depends on:** Plan 9. **Unlocks:** Plan 11.
+**Status:** Implemented (progressive ContextBuilder + top-10; recommendations only). **Depends on:** Plan 9. **Unlocks:** Plan 11.
 
 ---
 
