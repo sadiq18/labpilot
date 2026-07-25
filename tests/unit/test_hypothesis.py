@@ -101,6 +101,82 @@ def test_mark_testing_if_proposed_only_from_proposed(tmp_path: Path):
     assert again.status == HypothesisStatus.CONFIRMED
 
 
+def test_create_mirrors_hypothesis_into_knowledge_db(tmp_path: Path):
+    import json
+
+    from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
+
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    hyp = store.create(
+        observation="Rare classes underperform",
+        reason="Imbalance",
+        prediction="Focal loss helps",
+        confidence=0.7,
+        tags=["focal_loss"],
+    )
+    with KnowledgeStore(tmp_path / "knowledge", "titanic") as kstore:
+        row = kstore.get_hypothesis(hyp.id)
+        assert row is not None
+        assert row["observation"] == "Rare classes underperform"
+        assert row["prediction"] == "Focal loss helps"
+        assert row["rationale"] == "Imbalance"
+        assert row["status"] == "proposed"
+        assert row["confidence"] == pytest.approx(0.7)
+        meta = json.loads(row["metadata"])
+        assert meta["tags"] == ["focal_loss"]
+
+    store.update_status(hyp.id, HypothesisStatus.TESTING)
+    with KnowledgeStore(tmp_path / "knowledge", "titanic") as kstore:
+        row = kstore.get_hypothesis(hyp.id)
+        assert row is not None
+        assert row["status"] == "testing"
+
+
+def test_proposed_hypothesis_tags_are_not_tried(tmp_path: Path):
+    from labpilot.research_engine.intelligence.hypothesis.persist import (
+        load_existing_technique_tags,
+    )
+    from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
+    from labpilot.research_engine.intelligence.models import (
+        ResearchArtifact,
+        ResearchArtifactType,
+    )
+
+    knowledge_dir = tmp_path / "knowledge"
+    store = HypothesisStore(knowledge_dir, "titanic")
+    store.create(
+        observation="a",
+        reason="b",
+        prediction="c",
+        confidence=0.5,
+        tags=["Focal Loss"],
+    )
+    testing = store.create(
+        observation="d",
+        reason="e",
+        prediction="f",
+        confidence=0.5,
+        tags=["SpecAugment"],
+    )
+    store.update_status(testing.id, HypothesisStatus.TESTING)
+
+    with KnowledgeStore(knowledge_dir, "titanic") as kstore:
+        kstore.upsert_artifact(
+            ResearchArtifact(
+                id="exp:1",
+                type=ResearchArtifactType.EXPERIMENT,
+                source="m2",
+                title="run",
+                techniques=["Mixup"],
+            )
+        )
+
+    tried = load_existing_technique_tags(knowledge_dir, "titanic")
+    assert "focal loss" not in tried
+    assert "specaugment" in tried
+    assert "mixup" in tried
+
+
 def test_mark_testing_missing_raises(tmp_path: Path):
     store = HypothesisStore(tmp_path / "knowledge", "titanic")
     with pytest.raises(FileNotFoundError, match="H-999"):

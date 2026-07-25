@@ -9,6 +9,7 @@ from labpilot.experiments.models import (
     HypothesisCreatedBy,
     HypothesisGenerator,
     HypothesisOrigin,
+    HypothesisStatus,
 )
 from labpilot.research_engine.intelligence.hypothesis.models import HypothesisRecommendation
 
@@ -77,11 +78,27 @@ def as_generator(used_llm: bool) -> HypothesisGenerator:
     return HypothesisGenerator.LLM if used_llm else HypothesisGenerator.RULE_ENGINE
 
 
-def load_existing_technique_tags(knowledge_dir: Path, competition: str) -> set[str]:
-    """Techniques already tried or proposed — used to avoid duplicate suggestions.
+# Statuses that mean the technique was run or explicitly dispositioned —
+# ``proposed`` alone must not block new suggestions.
+_TRIED_HYPOTHESIS_STATUSES = frozenset(
+    {
+        HypothesisStatus.TESTING,
+        HypothesisStatus.CONFIRMED,
+        HypothesisStatus.REJECTED,
+        HypothesisStatus.INCONCLUSIVE,
+    }
+)
 
-    Sources: M2 hypothesis tags **and** local experiment artifacts in the
-    knowledge store (Plan 11 / README §1 Q5 — subtract already-tried history).
+
+def load_existing_technique_tags(knowledge_dir: Path, competition: str) -> set[str]:
+    """Techniques already tried — used to avoid duplicate suggestions.
+
+    A hypothesis counts only after a run attaches it (``testing``) or it is
+    explicitly marked (``confirmed`` / ``rejected`` / ``inconclusive``).
+    ``proposed`` backlog items are not treated as tried.
+
+    Also includes techniques from local experiment artifacts in the knowledge
+    store (Plan 11 / README §1 Q5 — subtract already-tried history).
     """
     from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
     from labpilot.research_engine.intelligence.models import ResearchArtifactType
@@ -90,6 +107,8 @@ def load_existing_technique_tags(knowledge_dir: Path, competition: str) -> set[s
     tried: set[str] = set()
     store = HypothesisStore(knowledge_dir, competition)
     for hyp in store.list():
+        if hyp.status not in _TRIED_HYPOTHESIS_STATUSES:
+            continue
         for tag in hyp.tags:
             tried.add(normalize_label(tag))
 
@@ -99,6 +118,6 @@ def load_existing_technique_tags(knowledge_dir: Path, competition: str) -> set[s
                 for technique in artifact.techniques:
                     tried.add(normalize_label(technique))
     except Exception:
-        # Store may be absent on early hypothesize CLI calls — tags alone suffice.
+        # Store may be absent on early hypothesize CLI calls — status tags suffice.
         pass
     return tried

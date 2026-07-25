@@ -156,6 +156,36 @@ def test_paper_techniques_view(tmp_path: Path):
         assert [r["paper_id"] for r in rows] == ["paper:1"]
 
 
+def test_upsert_hypothesis_round_trip(tmp_path: Path):
+    with KnowledgeStore(tmp_path / "knowledge", "birdclef-2026") as store:
+        store.upsert_hypothesis(
+            hypothesis_id="H-001",
+            observation="Rare classes underperform",
+            prediction="Focal loss helps",
+            rationale="Imbalance",
+            confidence=0.7,
+            status="proposed",
+            metadata={"tags": ["focal_loss"]},
+        )
+        row = store.get_hypothesis("H-001")
+        assert row is not None
+        assert row["status"] == "proposed"
+        assert row["prediction"] == "Focal loss helps"
+        assert store.list_hypotheses(status="proposed")[0]["id"] == "H-001"
+
+        store.upsert_hypothesis(
+            hypothesis_id="H-001",
+            observation="Rare classes underperform",
+            prediction="Focal loss helps",
+            rationale="Imbalance",
+            confidence=0.8,
+            status="testing",
+            metadata={"tags": ["focal_loss"]},
+        )
+        assert store.get_hypothesis("H-001")["status"] == "testing"
+        assert store.get_hypothesis("H-001")["confidence"] == pytest.approx(0.8)
+
+
 def test_evidence_link_insert(tmp_path: Path):
     with KnowledgeStore(tmp_path / "knowledge", "c") as store:
         store.upsert_artifact(_artifact("paper:1", ResearchArtifactType.PAPER))
