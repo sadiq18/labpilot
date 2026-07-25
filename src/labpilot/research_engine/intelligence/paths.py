@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-RAW_SUBDIRS = ("papers", "repositories", "discussions", "competitions")
+RAW_SUBDIRS = ("papers", "repositories", "kernels", "discussions", "competitions")
 EXTRACTED_SUBDIRS = ("papers", "repositories", "forums")
 KNOWLEDGE_SUBDIRS = ("techniques", "datasets", "architectures", "tasks")
 

@@ -116,11 +116,10 @@ class TechniqueBuckets(BaseModel):
 
 
 class AnalysisReport(BaseModel):
-    """Canonical ``analyze.json`` contract (design §12.5).
+    """Canonical ``analyze.json`` contract (design §12.5 / Plan 11).
 
-    Milestone 3 Plan 1 writes a stub: the envelope is stable, but most sections
-    are empty until later plans (analyzers, knowledge hub, retrieval, hypothesis
-    assistant) fill them.
+    Pydantic validation *is* the public schema. Renderers consume this model;
+    analyzers never import presentation code.
     """
 
     schema_version: int = SCHEMA_VERSION

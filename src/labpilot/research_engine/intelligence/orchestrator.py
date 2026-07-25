@@ -30,6 +30,7 @@ from labpilot.research_engine.intelligence.models import (
     AnalyzeContext,
     ResearchArtifacts,
     ResearchArtifactType,
+    TechniqueBuckets,
 )
 from labpilot.research_engine.intelligence.registry import AnalyzerRegistry
 from labpilot.research_engine.intelligence.repositories.local_profile import LocalCodeProfiler
@@ -106,11 +107,12 @@ class AnalyzeOrchestrator:
                 result = KnowledgeHub(store, llm_client=self._llm_client).ingest(
                     report.artifacts
                 )
+                self._merge_knowledge(report, result)
+                self._refresh_technique_buckets(report, store)
         except Exception as exc:  # soft-fail: merged knowledge is best-effort
             logger.warning("Knowledge hub ingest failed: %s", exc)
             report.notes.append(f"[knowledge-hub] ingest failed: {exc}")
             return
-        self._merge_knowledge(report, result)
 
     def _hypothesize_run(self, report: AnalysisReport, context: AnalyzeContext) -> None:
         """Top-N recommendations only — soft-fail; never executes training."""
@@ -137,9 +139,10 @@ class AnalyzeOrchestrator:
             report.notes.append(f"[hypothesis] failed: {exc}")
             return
 
-        report.hypothesis_recommendations.extend(
-            card.model_dump(mode="json") for card in result.recommendations
-        )
+        cards = [card.model_dump(mode="json") for card in result.recommendations]
+        report.hypothesis_recommendations.extend(cards)
+        # Contract §12.5 lists both keys; keep them aligned in v1.
+        report.suggested_experiments.extend(cards)
         report.hypotheses.extend(
             {
                 "id": card.hypothesis_id,
@@ -177,13 +180,39 @@ class AnalyzeOrchestrator:
         report.knowledge_units.extend(unit.model_dump(mode="json") for unit in result.units)
         for note in result.notes:
             report.notes.append(f"[knowledge-hub] {note}")
+        # Provisional buckets from this ingest; `_refresh_technique_buckets`
+        # rebuilds from the store so Validated/Established (promoted outside
+        # the hub) land in locally_validated.
         for belief in result.beliefs:
-            # External reading is only ever a suggestion; local evidence moves a
-            # technique to unverified-but-being-tested, never to validated here.
             if belief.status is BeliefStatus.SUGGESTED:
                 report.techniques.external_recommendations.append(belief.technique)
-            else:
+            elif belief.status in (BeliefStatus.VALIDATED, BeliefStatus.ESTABLISHED):
+                report.techniques.locally_validated.append(belief.technique)
+            elif belief.status is BeliefStatus.TESTING:
                 report.techniques.unverified.append(belief.technique)
+
+    @staticmethod
+    def _refresh_technique_buckets(report: AnalysisReport, store: KnowledgeStore) -> None:
+        """Rebuild technique buckets from durable beliefs (source of truth)."""
+        external: list[str] = []
+        local: list[str] = []
+        unverified: list[str] = []
+        for belief in store.list_beliefs():
+            status = str(belief.get("status") or "").lower()
+            technique = str(belief.get("technique") or "").strip()
+            if not technique:
+                continue
+            if status == BeliefStatus.SUGGESTED:
+                external.append(technique)
+            elif status in (BeliefStatus.VALIDATED, BeliefStatus.ESTABLISHED):
+                local.append(technique)
+            elif status == BeliefStatus.TESTING:
+                unverified.append(technique)
+        report.techniques = TechniqueBuckets(
+            external_recommendations=_unique(external),
+            locally_validated=_unique(local),
+            unverified=_unique(unverified),
+        )
 
     def _run_one(self, analyzer: Analyzer, context: AnalyzeContext) -> ResearchArtifacts:
         """Run a single analyzer, converting any exception into a soft-fail note."""
@@ -238,3 +267,7 @@ def _pipeline_from_context(context: AnalyzeContext) -> list[str]:
             ]
         )
     )
+
+
+def _unique(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))

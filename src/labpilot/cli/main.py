@@ -47,6 +47,7 @@ from labpilot.orchestrator.manifest import StageStatus, load_manifest
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
 from labpilot.report.generator import ReportGenerator
 from labpilot.research_engine.intelligence.context import build_context
+from labpilot.research_engine.intelligence.fetch import KaggleFetchService
 from labpilot.research_engine.intelligence.hypothesis import HypothesisAssistant
 from labpilot.research_engine.intelligence.knowledge import KnowledgeHub, KnowledgeStore
 from labpilot.research_engine.intelligence.orchestrator import AnalyzeOrchestrator
@@ -1083,6 +1084,105 @@ def hypothesize(
             console.print(f"      evidence: {refs}")
         if card.avoids_failure_ids:
             console.print(f"      avoids: {', '.join(card.avoids_failure_ids)}")
+    if result.notes:
+        console.print("\n[bold]Notes[/bold]")
+        for note in result.notes:
+            console.print(f"  [yellow]•[/yellow] {note}")
+
+
+@app.command("fetch")
+def fetch_cmd(
+    competition: str = typer.Argument(..., help="Competition slug"),
+    source: str = typer.Option(
+        "all",
+        "--source",
+        help="What to pull: discussions, kernels, or all",
+    ),
+    sort: str = typer.Option(
+        "votes",
+        "--sort",
+        help="kernels: votes|score; discussions always use votes→top",
+    ),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        help="Unique NEW artifacts to store per selected source",
+    ),
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        help="Re-pull and overwrite existing artifacts / raw versions",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    project_dir: Path | None = typer.Option(
+        None, "--project-dir", help="Project root containing project.yaml"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Fetch Kaggle kernels and/or discussions into the research store.
+
+    Uses the official Kaggle API (no HTML scrape). Stores
+    ``ResearchArtifact`` rows (kernels as ``repository``/``kaggle``,
+    discussions as ``discussion``/``kaggle``) plus RawStore blobs.
+    ``--limit`` counts newly written unique ids only — pages until the
+    unique count is met. Micro Agents enrich when an LLM is configured.
+    """
+    source_key = source.strip().lower()
+    if source_key not in {"discussions", "kernels", "all"}:
+        raise typer.BadParameter("--source must be discussions, kernels, or all.")
+    sort_key = sort.strip().lower()
+    if sort_key not in {"votes", "score"}:
+        raise typer.BadParameter("--sort must be votes or score.")
+    if limit < 1:
+        raise typer.BadParameter("--limit must be >= 1.")
+
+    sources: set[str]
+    if source_key == "all":
+        sources = {"discussions", "kernels"}
+    else:
+        sources = {source_key}
+
+    kernel_sort = "scoreDescending" if sort_key == "score" else "voteCount"
+    # Discussions: UI votes ↔ API top (score sort does not apply).
+    discussion_sort = "top"
+
+    config = _load_app_config(config_path, None, project_dir, knowledge_dir)
+    from labpilot.kaggle.client import KaggleClient
+
+    service = KaggleFetchService(
+        llm_client=resolve_llm_client(config.llm),
+        kaggle=KaggleClient(config.kaggle),
+    )
+    result = service.fetch(
+        competition,
+        sources=sources,  # type: ignore[arg-type]
+        kernel_sort=kernel_sort,  # type: ignore[arg-type]
+        discussion_sort=discussion_sort,  # type: ignore[arg-type]
+        limit=limit,
+        refresh=refresh,
+        knowledge_dir=config.knowledge_dir,
+    )
+
+    console.print(f"\n[bold]Kaggle fetch[/bold] — [cyan]{competition}[/cyan]")
+    console.print(f"[dim]Sources:[/dim] {', '.join(result.sources)}")
+    console.print(
+        f"  fetched={result.fetched}  skipped_existing={result.skipped_existing}  "
+        f"written={result.written}  pages={result.pages_scanned}"
+    )
+    console.print(
+        f"  enriched llm={result.llm_enriched}  "
+        f"rule_engine={result.rule_engine_enriched}"
+    )
+    if result.artifact_ids:
+        console.print("\n[bold]Wrote[/bold]")
+        for artifact_id in result.artifact_ids[:20]:
+            console.print(f"  • {artifact_id}")
+        if len(result.artifact_ids) > 20:
+            console.print(f"  [dim]… +{len(result.artifact_ids) - 20} more[/dim]")
     if result.notes:
         console.print("\n[bold]Notes[/bold]")
         for note in result.notes:

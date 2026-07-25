@@ -2,8 +2,8 @@
 
 Back to [Milestone 3](README.md). Design: README §6.7, §15 Spike.
 
-**Status:** Not started. **Depends on:** nothing (parallel). **Unlocks:** Plan F go/no-go for Kaggle provider;
-also go/no-go for related-competition search + winning-solution providers.
+**Status:** Implemented (notes + `research fetch`). **Depends on:** nothing (parallel). **Unlocks:** Plan F go for Kaggle provider;
+also clarifies winning-solution / related-comp search posture.
 
 ---
 
@@ -16,8 +16,13 @@ discussions (official API vs authenticated HTML), **and** evaluate ToS-safe acce
 2. Winning writeups / code links for those competitions
 3. Technique-oriented discussion threads
 
-**Not production code.** Does not block Plans 1–11. Plan 5 keeps
-`NullWinningSolutionProvider` until this spike clears a provider swap.
+Also ships a production **fetch/store** path (`research fetch`) for kernels + discussions
+so a later cron/worker can call the same library — without wiring Plan F analyzers yet.
+
+## Why this matters
+
+Forum + popular kernels carry failure modes and recipes absent from papers. Access must be
+API-first so Phase 1 / Plan F are not blocked by HTML scraping risk.
 
 ## In scope
 
@@ -26,16 +31,18 @@ discussions (official API vs authenticated HTML), **and** evaluate ToS-safe acce
 - Caching implications if ever allowed
 - Go / no-go / “GitHub Issues first” recommendation
 - Recommendation for winning-solution / related-comp search providers (API vs HTML)
+- `research fetch` library + CLI (unique-count `--limit`, Micro Agent enrichment)
 
 ## Out of scope
 
-- Shipping `DiscussionAnalyzer` or production scrapers
-- Changing Phase 1 scope / rewriting `CompetitionAnalyzer` before go
+- Shipping `DiscussionAnalyzer` / retrieve wiring (Plan F)
+- Changing Phase 1 analyzer registry defaults
+- HTML scrape of competition SPA pages while official APIs work
 
 ## Deliverable
 
-`docs/milestones/milestone-3/spike-kaggle-discussions-notes.md` (or section in this file
-filled after investigation) with explicit recommendation.
+- [spike-kaggle-discussions-notes.md](spike-kaggle-discussions-notes.md) — dated go/no-go
+- `KaggleFetchService` + `research fetch` CLI
 
 ## Acceptance criteria
 
@@ -43,6 +50,7 @@ filled after investigation) with explicit recommendation.
 - Clear statement whether Plan F Kaggle provider may proceed.
 - Clear statement whether a `SearchWinningSolutionProvider` / related-comp search provider
   may proceed (and under what constraints).
+- Offline tests for unique-limit + enrichment (no live Kaggle in CI).
 
 ## Review notes
 

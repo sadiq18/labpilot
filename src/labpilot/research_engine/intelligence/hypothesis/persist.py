@@ -78,13 +78,27 @@ def as_generator(used_llm: bool) -> HypothesisGenerator:
 
 
 def load_existing_technique_tags(knowledge_dir: Path, competition: str) -> set[str]:
-    """Techniques already proposed/rejected — used to avoid duplicate suggestions."""
+    """Techniques already tried or proposed — used to avoid duplicate suggestions.
+
+    Sources: M2 hypothesis tags **and** local experiment artifacts in the
+    knowledge store (Plan 11 / README §1 Q5 — subtract already-tried history).
+    """
+    from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
+    from labpilot.research_engine.intelligence.models import ResearchArtifactType
     from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_label
 
-    store = HypothesisStore(knowledge_dir, competition)
     tried: set[str] = set()
+    store = HypothesisStore(knowledge_dir, competition)
     for hyp in store.list():
         for tag in hyp.tags:
             tried.add(normalize_label(tag))
-        # Also fold observation/prediction tokens lightly via tags only.
+
+    try:
+        with KnowledgeStore(knowledge_dir, competition) as kstore:
+            for artifact in kstore.list_artifacts(type=ResearchArtifactType.EXPERIMENT):
+                for technique in artifact.techniques:
+                    tried.add(normalize_label(technique))
+    except Exception:
+        # Store may be absent on early hypothesize CLI calls — tags alone suffice.
+        pass
     return tried

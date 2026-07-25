@@ -1,34 +1,28 @@
 # ForumAnalyzerAgent
 
-Mines actionable signals from a Kaggle discussion thread. **Not a Phase 1
-default** — Discussion analysis is provider-gated (§2.2). When no provider or
-LLM is present, the `rule_engine` path surfaces pre-parsed signals only.
+Mines actionable signals from a Kaggle discussion thread. Used by
+``research fetch`` to enrich discussion artifacts (LLM optional).
+Plan F may later call the same agent from ``DiscussionAnalyzer``.
 
-## Inputs (`StructuredContext`)
+## Inputs
 
 - `text` — normalized discussion thread text.
-- `data` — optional `rule_engine` lists: `mistakes`, `discoveries`,
-  `dataset_bugs`, `lb_shakeups`, `ood_notes`.
+- `data` — optional pre-parsed lists (`mistakes`, `discoveries`,
+  `dataset_bugs`, `lb_shakeups`, `ood_notes`). When present, rule_engine
+  returns them as-is; otherwise applies keyword heuristics on `text`.
 
-## Output schema (`ForumExtract`)
+## Output
 
-```json
-{
-  "mistakes": ["Leaky validation split"],
-  "discoveries": ["Public LB does not reflect hidden test"],
-  "dataset_bugs": ["Duplicate audio clips"],
-  "lb_shakeups": ["Top-10 reshuffled on private LB"],
-  "ood_notes": ["Test contains unseen locations"]
-}
-```
+`ForumExtract` JSON:
 
-## Prompt skeleton
+- `mistakes`, `discoveries`, `dataset_bugs`, `lb_shakeups`, `ood_notes`
 
-- **System:** "You extract actionable signals from a Kaggle discussion thread …
-  respond ONLY with the JSON object above."
+## Behaviour
+
+- **System:** extract actionable signals; JSON only.
 - **User:** the discussion text.
+- **rule_engine:** pre-parsed lists or light keyword heuristics (never empty
+  inventing). Soft-fail path leaves empty lists when nothing matches.
 
-## Notes
-
-Maps to `ForumKnowledge` in the discussion plan (Plan F). Never scrapes
-directly — a `DiscussionProvider` fetches upstream.
+Maps toward `ForumKnowledge` in Plan F. Never scrapes the web itself —
+callers supply cached thread text from the official Kaggle topics API.

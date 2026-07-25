@@ -2,8 +2,8 @@
 
 Back to [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** Design Phase A locked; **Phase B implementation plans** authored
-(`plan-1-…` … `plan-11-…`, spike, plan-F). Implementation not started.
+**Status:** Design Phase A locked; **Phase 1 (Plans 1–11) implemented.** Spike + Plan F
+(Forum) remain future. Capstone gate: seeded fixture answers README §1 Q1–Q5 offline.
 **Depends on:** Milestone 2 shipped (Plans 1–8). **Unlocks:** faster, better hypothesis
 formation before any training code runs.
 

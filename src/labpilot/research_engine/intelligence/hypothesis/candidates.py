@@ -145,7 +145,9 @@ def generate_candidates(
         summary = str(failure.get("summary") or failure.get("why") or "")
         technique = _technique_from_failure(label, summary, context)
         key_label = normalize_label(f"fix:{technique or label}")
-        if key_label in tried:
+        technique_label = normalize_label(technique) if technique else ""
+        # Skip when this failure's technique was already tried locally (Q5).
+        if key_label in tried or (technique_label and technique_label in tried):
             continue
         evidence = [
             HypothesisEvidenceRef(

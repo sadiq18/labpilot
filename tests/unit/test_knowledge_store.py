@@ -36,6 +36,7 @@ def test_creating_store_yields_locked_tree(tmp_path: Path):
         assert directory.is_dir()
     assert (paths.raw_dir / "papers").is_dir()
     assert (paths.raw_dir / "discussions").is_dir()
+    assert (paths.raw_dir / "kernels").is_dir()
     assert (paths.raw_dir / "competitions").is_dir()
     assert (paths.extracted_dir / "forums").is_dir()
     assert (paths.knowledge_dir / "techniques").is_dir()

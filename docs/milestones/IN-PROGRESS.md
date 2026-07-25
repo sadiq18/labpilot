@@ -4,8 +4,9 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-**Milestone 3 — Research Intelligence** — design Phase A locked; **implementation plans**
-ready ([milestone-3/README.md](milestone-3/README.md) §15). Code not started.
+**Milestone 3 — Research Intelligence** — Phase 1 (Plans 1–11) implemented;
+[spike notes](milestone-3/spike-kaggle-discussions-notes.md) + `research fetch` shipped.
+Plan F (Forum Intelligence analyzer wiring) remains future.
 
 **Design:** [milestone-3/README.md](milestone-3/README.md) ·
 [milestone-3/knowledge-system.md](milestone-3/knowledge-system.md)
