@@ -59,6 +59,9 @@ class HypothesisRecommendation(BaseModel):
     reason: str = ""
     prediction: str = ""
     expected_impact: ExpectedGain = ExpectedGain.UNKNOWN
+    #: Numeric estimate of the metric delta (e.g. 0.015) — LLM draft when
+    #: available, otherwise mapped from the qualitative ``expected_impact``.
+    expected_impact_value: float = 0.0
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
     supporting_evidence: list[HypothesisEvidenceRef] = Field(default_factory=list)
     implementation_effort: EffortEstimate = EffortEstimate.UNKNOWN

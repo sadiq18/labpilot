@@ -212,6 +212,10 @@ def test_assistant_emits_at_most_10_and_persists_suggested(tmp_path: Path) -> No
     with KnowledgeStore(knowledge_dir, "birdclef-2026") as kstore:
         db_rows = kstore.list_hypotheses(status="proposed")
         assert {row["id"] for row in db_rows} == {h.id for h in hyps}
+        # Every generated hypothesis must carry a non-zero impact estimate.
+        assert all(row["expected_impact"] > 0.0 for row in db_rows)
+    assert all(h.expected_impact > 0.0 for h in hyps)
+    assert all(card.expected_impact_value > 0.0 for card in result.recommendations)
 
     report_path = knowledge_dir / "birdclef-2026/research/reports/hypotheses.json"
     assert report_path.is_file()

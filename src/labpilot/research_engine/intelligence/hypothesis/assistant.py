@@ -133,6 +133,9 @@ class HypothesisAssistant:
                     reason=drafted.rationale or candidate.reason,
                     prediction=drafted.prediction or candidate.prediction,
                     expected_impact=candidate.expected_impact,
+                    expected_impact_value=(
+                        drafted.expected_impact or _impact_float(candidate)
+                    ),
                     confidence=min(
                         1.0, max(0.0, drafted.confidence or candidate.confidence)
                     ),

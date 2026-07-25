@@ -245,7 +245,7 @@ class KaggleFetchService:
                     "owner": row.get("author"),
                     "slug": row.get("slug"),
                     "votes": row.get("total_votes"),
-                    "score": None,
+                    "public_score": row.get("public_score"),
                     "sort": sort_by,
                     "url": url,
                     "language": row.get("language"),

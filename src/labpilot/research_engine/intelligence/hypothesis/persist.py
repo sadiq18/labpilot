@@ -29,6 +29,7 @@ def persist_recommendations(
             reason=card.reason or card.title,
             prediction=card.prediction,
             confidence=card.confidence,
+            expected_impact=card.expected_impact_value,
             tags=card.tags,
             source="analyze",
             created_by=card.created_by,

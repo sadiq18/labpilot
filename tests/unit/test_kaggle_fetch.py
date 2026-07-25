@@ -74,7 +74,9 @@ class _Obj:
             setattr(self, key, value)
 
 
-def _kernel(ref: str, title: str, votes: int = 1) -> _Obj:
+def _kernel(
+    ref: str, title: str, votes: int = 1, public_score: float | None = None
+) -> _Obj:
     owner, slug = ref.split("/", 1)
     return _Obj(
         id=hash(ref) % 10_000,
@@ -85,6 +87,7 @@ def _kernel(ref: str, title: str, votes: int = 1) -> _Obj:
         language="python",
         kernel_type="notebook",
         total_votes=votes,
+        best_public_score=public_score,
         current_version_number=1,
         last_run_time=None,
     )
@@ -124,7 +127,7 @@ def _client(api: FakeFetchApi) -> KaggleClient:
 def test_unique_limit_stops_and_skips_existing(tmp_path: Path) -> None:
     api = FakeFetchApi()
     api.kernel_pages[1] = [
-        _kernel("a/one", "One", 10),
+        _kernel("a/one", "One", 10, public_score=0.973),
         _kernel("a/two", "Two", 9),
         _kernel("a/three", "Three", 8),
     ]
@@ -179,6 +182,13 @@ def test_unique_limit_stops_and_skips_existing(tmp_path: Path) -> None:
         # Rule engine should pick up Mixup / Focal / EMA from fake train.py.
         labels = {t.lower() for t in artifact.techniques}
         assert labels & {"mixup", "focal loss", "ema"}
+        # Public score (when the API exposes one) must survive into metadata.
+        scored = store.get_artifact("kaggle-kernel:a/one")
+        assert scored is not None
+        assert scored.metadata.get("public_score") == 0.973
+        unscored = store.get_artifact("kaggle-kernel:a/two")
+        assert unscored is not None
+        assert unscored.metadata.get("public_score") is None
 
 
 def test_discussions_enrich_rule_engine(tmp_path: Path) -> None:

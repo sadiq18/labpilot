@@ -1889,6 +1889,10 @@ def hypothesis_show(
     table.add_row("Competition", hypothesis.competition)
     table.add_row("Status", hypothesis.status.value)
     table.add_row("Confidence", f"{hypothesis.confidence:.2f}")
+    table.add_row(
+        "Expected impact",
+        f"{hypothesis.expected_impact:+.4f}" if hypothesis.expected_impact else "-",
+    )
     table.add_row("Observation", hypothesis.observation)
     table.add_row("Reason", hypothesis.reason)
     table.add_row("Prediction", hypothesis.prediction)
