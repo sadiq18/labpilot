@@ -29,6 +29,7 @@ def persist_recommendations(
             reason=card.reason or card.title,
             prediction=card.prediction,
             confidence=card.confidence,
+            expected_impact=card.expected_impact_value,
             tags=card.tags,
             source="analyze",
             created_by=card.created_by,
@@ -89,6 +90,17 @@ _TRIED_HYPOTHESIS_STATUSES = frozenset(
     }
 )
 
+# Statuses that mean an idea is still live in the backlog, so re-generating it
+# would only create a duplicate. ``rejected`` / ``inconclusive`` stay eligible
+# for a fresh hypothesis when new evidence arrives.
+_OPEN_HYPOTHESIS_STATUSES = frozenset(
+    {
+        HypothesisStatus.PROPOSED,
+        HypothesisStatus.TESTING,
+        HypothesisStatus.CONFIRMED,
+    }
+)
+
 
 def load_existing_technique_tags(knowledge_dir: Path, competition: str) -> set[str]:
     """Techniques already tried — used to avoid duplicate suggestions.
@@ -121,3 +133,20 @@ def load_existing_technique_tags(knowledge_dir: Path, competition: str) -> set[s
         # Store may be absent on early hypothesize CLI calls — status tags suffice.
         pass
     return tried
+
+
+def load_open_hypothesis_tags(knowledge_dir: Path, competition: str) -> set[str]:
+    """Technique tags already covered by a live hypothesis (proposed/testing/confirmed).
+
+    Generation subtracts these so re-running only produces genuinely new
+    hypotheses instead of duplicating the existing backlog.
+    """
+    from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_label
+
+    open_tags: set[str] = set()
+    for hyp in HypothesisStore(knowledge_dir, competition).list():
+        if hyp.status not in _OPEN_HYPOTHESIS_STATUSES:
+            continue
+        for tag in hyp.tags:
+            open_tags.add(normalize_label(tag))
+    return open_tags

@@ -99,15 +99,31 @@ Suggested Next Experiments
     (recommendations only — no autonomous planner)
 ```
 
-Also writes the canonical artifact:
+Also writes canonical artifacts:
 
 ```text
 knowledge/<slug>/research/reports/analyze.json
+knowledge/<slug>/research/reports/research_brief.md
 ```
 
-Terminal output is a **view**. JSON is the **contract**. Forum Intelligence lands only when
-a discussion provider ships (Kaggle after spike, or GitHub Issues earlier) — the rest of
-Milestone 3 does **not** wait on Kaggle access. No HTML in v1.
+`research analyze` is the **understand the problem** command. Six products:
+
+1. **Competition artifact** — profile + related comps
+2. **Dataset artifact** — modality / shape / target / warnings (default on; stored in `knowledge.db`)
+3. **Research artifacts** — papers, repos, experiments, and (opt-in) kernels/discussions
+4. **Beliefs** — Knowledge Hub trust overlay
+5. **Hypotheses** — new Suggested ideas only
+6. **Research Brief** — durable briefing with these sections: problem summary, dataset
+   overview, rules & metric, related papers, similar competitions, repositories, winning
+   techniques, beliefs, top hypotheses, known risks, suggested next experiments
+
+Kernels / discussions stay on `research fetch` by default. Pass `--fetch-kaggle` to pull
+5 kernels by votes, 5 by score, and 5 discussions during analyze (then ingest/hypothesize/brief
+see that evidence).
+
+Terminal output is a **view**. JSON + Research Brief markdown are the **contracts**. Forum
+Intelligence lands only when a discussion provider ships (Kaggle after spike, or GitHub
+Issues earlier) — the rest of Milestone 3 does **not** wait on Kaggle access. No HTML in v1.
 
 ### Guiding decisions
 
@@ -660,7 +676,9 @@ Analyzer (interface)
 ```
 
 `research analyze` is a thin orchestrator: resolve competition → build `AnalyzeContext` →
-select analyzers → run each → merge `ResearchArtifacts` → optional synthesis → render.
+select analyzers → run each → optional `--fetch-kaggle` → upsert **all** artifacts into
+`knowledge.db` (including dataset + experiment) → Knowledge Hub → Hypothesis Assistant →
+Research Brief → write `analyze.json` + `research_brief.md`.
 
 ```mermaid
 flowchart TB
@@ -674,10 +692,11 @@ flowchart TB
   Data[DatasetAnalyzer]
   Disc[DiscussionAnalyzer]
   Merge[Merge ResearchArtifacts]
-  Hub[Knowledge Extraction hub]
-  Retr[Research Retrieval]
+  OptFetch["Optional --fetch-kaggle"]
+  Hub[Knowledge Hub]
   Hyp[Hypothesis Assistant]
-  Out[Top-10 recommendations + analyze.json]
+  Brief[Research Brief]
+  Out["analyze.json + research_brief.md"]
 
   CLI --> Registry
   CLI --> Ctx
@@ -699,13 +718,16 @@ flowchart TB
   Exp --> Merge
   Data --> Merge
   Disc -.-> Merge
-  Merge --> Hub
-  Hub --> Retr
-  Retr --> Hyp
-  Hyp --> Out
+  Merge --> OptFetch
+  OptFetch --> Hub
+  Hub --> Hyp
+  Hyp --> Brief
+  Brief --> Out
 ```
 
 Dotted edges = post-spike / optional (`DiscussionAnalyzer` not in Phase 1 default set).
+`--fetch-kaggle` uses `KaggleFetchService` (same as `research fetch`) with fixed limits
+5 / 5 / 5 — it does not enable `DiscussionAnalyzer`.
 
 ### 3.1 Internal data model: `ResearchArtifact`
 
@@ -3321,12 +3343,15 @@ labpilot.research_engine.intelligence.renderers/
 CLI:
 
 ```bash
-research analyze birdclef-2026                 # write analyze.json + print terminal
+research analyze birdclef-2026                 # analyze.json + research_brief.md + terminal
 research analyze birdclef-2026 --format json   # stdout JSON (same schema as file)
-research analyze birdclef-2026 --format text   # terminal only (still writes analyze.json)
+research analyze birdclef-2026 --format text   # terminal only (still writes files)
+research analyze birdclef-2026 --fetch-kaggle  # also kernels 5+5 + discussions 5
+research analyze birdclef-2026 --skip-brief    # skip research_brief.md
 ```
 
-Default: always persist `analyze.json`; `--format` chooses what is printed.
+Default: always persist `analyze.json`; Research Brief when ingest+hypothesize ran;
+`--format` chooses what is printed.
 
 Add HTML when relationships (experiment graph, belief timelines, citations) are worth
 visualizing — roughly Milestone 4/5 — as `HTMLRenderer` over the same JSON, not a second
@@ -3352,6 +3377,8 @@ research analyze dataset birdclef-2026
 
 research analyze birdclef-2026 --include papers,repositories
 research analyze birdclef-2026 --exclude dataset
+research analyze birdclef-2026 --fetch-kaggle
+research analyze birdclef-2026 --skip-brief
 research analyze birdclef-2026 --refresh --format json
 ```
 

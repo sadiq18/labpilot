@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generated_at": "<stable>",
   "competition": {
     "slug": "birdclef-2026",
@@ -613,6 +613,7 @@
       "reason": "Pipeline-diff: SpecAugment is present in domain knowledge but not in [\u2014].",
       "prediction": "Inserting SpecAugment will raise validation score vs the current stack.",
       "expected_impact": "high",
+      "expected_impact_value": 0.03,
       "confidence": 0.65,
       "supporting_evidence": [
         {
@@ -643,6 +644,7 @@
       "reason": "Pipeline-diff: EMA is present in domain knowledge but not in [\u2014].",
       "prediction": "Inserting EMA will raise validation score vs the current stack.",
       "expected_impact": "medium",
+      "expected_impact_value": 0.015,
       "confidence": 0.45,
       "supporting_evidence": [
         {
@@ -673,6 +675,7 @@
       "reason": "Retrieved technique card: confidence=0.60; papers=1; experiments=0; repos=0",
       "prediction": "Adopting SpecAugment will improve the primary metric.",
       "expected_impact": "medium",
+      "expected_impact_value": 0.015,
       "confidence": 0.6,
       "supporting_evidence": [
         {
@@ -703,6 +706,7 @@
       "reason": "Retrieved technique card: confidence=0.40; papers=1; experiments=0; repos=0",
       "prediction": "Adopting EMA will improve the primary metric.",
       "expected_impact": "low",
+      "expected_impact_value": 0.005,
       "confidence": 0.4,
       "supporting_evidence": [
         {
@@ -781,6 +785,7 @@
       "reason": "Pipeline-diff: SpecAugment is present in domain knowledge but not in [\u2014].",
       "prediction": "Inserting SpecAugment will raise validation score vs the current stack.",
       "expected_impact": "high",
+      "expected_impact_value": 0.03,
       "confidence": 0.65,
       "supporting_evidence": [
         {
@@ -811,6 +816,7 @@
       "reason": "Pipeline-diff: EMA is present in domain knowledge but not in [\u2014].",
       "prediction": "Inserting EMA will raise validation score vs the current stack.",
       "expected_impact": "medium",
+      "expected_impact_value": 0.015,
       "confidence": 0.45,
       "supporting_evidence": [
         {
@@ -841,6 +847,7 @@
       "reason": "Retrieved technique card: confidence=0.60; papers=1; experiments=0; repos=0",
       "prediction": "Adopting SpecAugment will improve the primary metric.",
       "expected_impact": "medium",
+      "expected_impact_value": 0.015,
       "confidence": 0.6,
       "supporting_evidence": [
         {
@@ -871,6 +878,7 @@
       "reason": "Retrieved technique card: confidence=0.40; papers=1; experiments=0; repos=0",
       "prediction": "Adopting EMA will improve the primary metric.",
       "expected_impact": "low",
+      "expected_impact_value": 0.005,
       "confidence": 0.4,
       "supporting_evidence": [
         {
@@ -894,6 +902,57 @@
       ]
     }
   ],
+  "research_brief": {
+    "problem_summary": "BirdCLEF 2026 is a Audio Classification competition. metric=macro_f1.",
+    "dataset_overview": "",
+    "rules_and_metric": "metric=macro_f1",
+    "related_papers": [
+      "Mixup improves Macro F1 on imbalanced audio [Mixup]",
+      "EMA for BirdCLEF fine-tuning [EMA]",
+      "Focal Loss for rare classes [Focal Loss]",
+      "SpecAugment for ASR [SpecAugment]"
+    ],
+    "similar_competitions": [
+      "birdclef-2025 (previous_edition)"
+    ],
+    "repositories": [
+      "owner/audio-pipeline [Focal Loss, SpecAugment]",
+      "transfer: Focal Loss vs your CE"
+    ],
+    "winning_techniques": [
+      "winning_solutions: unavailable",
+      "EMA (external)",
+      "SpecAugment (external)",
+      "Focal Loss (unverified)",
+      "Mixup (unverified)"
+    ],
+    "beliefs": [
+      "EMA [suggested, conf=0.35]",
+      "Focal Loss [testing, conf=0.50]",
+      "Mixup [testing, conf=0.50]",
+      "SpecAugment [suggested, conf=0.50]"
+    ],
+    "top_hypotheses": [
+      "H-001: Add SpecAugment to the current pipeline",
+      "H-002: Add EMA to the current pipeline",
+      "H-003: Try SpecAugment",
+      "H-004: Try EMA"
+    ],
+    "known_risks": [
+      "Mixup hurt rare classes when alpha was too high.",
+      "Focal Loss hurt performance on the rare-species head (delta < 0)."
+    ],
+    "suggested_experiments": [
+      "Add SpecAugment to the current pipeline",
+      "Add EMA to the current pipeline",
+      "Try SpecAugment",
+      "Try EMA"
+    ],
+    "generated_by": "rule_engine",
+    "notes": [
+      "dataset overview unavailable (no profile artifact yet)"
+    ]
+  },
   "summary": {
     "analyzer_count": 4,
     "artifact_count": 10,
@@ -901,7 +960,8 @@
     "repository_count": 1,
     "transfer_count": 1,
     "knowledge_unit_count": 4,
-    "hypothesis_count": 4
+    "hypothesis_count": 4,
+    "has_research_brief": true
   },
   "notes": [
     "[knowledge-hub] knowledge hub: 9 mention(s) merged into 4 unit(s) (alias_seed=4).",
@@ -915,6 +975,7 @@
     "[hypothesis] symbolic: 4 technique(s), 4 paper(s), 3 experiment(s), 1 repo(s), 2 failure(s).",
     "[hypothesis] context: brief=1389/14700 chars (dropped_sections=0).",
     "[hypothesis] hypothesis: 4 candidate(s) \u2192 top 4 (generator=rule_engine drafts).",
-    "[hypothesis] hypothesis: persisted 4 Suggested hypothesis file(s) (status=proposed)."
+    "[hypothesis] hypothesis: 4 new hypothesis generated (status=proposed).",
+    "[research-brief] generated_by=rule_engine"
   ]
 }

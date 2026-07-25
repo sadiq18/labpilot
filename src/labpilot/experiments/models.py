@@ -60,6 +60,8 @@ class Hypothesis(BaseModel):
     reason: str
     prediction: str
     confidence: float = Field(ge=0.0, le=1.0)
+    #: Estimated metric delta if the prediction holds (e.g. 0.015); 0.0 = unknown.
+    expected_impact: float = 0.0
     status: HypothesisStatus = HypothesisStatus.PROPOSED
     tags: list[str] = Field(default_factory=list)
     # Deprecated M2 alias — prefer created_by / generator / origin (§12.3).

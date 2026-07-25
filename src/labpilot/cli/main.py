@@ -1,12 +1,14 @@
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import typer
 import yaml
 from rich.console import Console
 from rich.prompt import Confirm
 from rich.table import Table
+from typer.core import TyperGroup
 
 from labpilot.baseline.registry import list_templates
 from labpilot.competition.models import CompetitionSpec
@@ -84,8 +86,27 @@ experiments_app = typer.Typer(help="Explore the experiment graph.")
 app.add_typer(experiments_app, name="experiments")
 knowledge_app = typer.Typer(help="Explore the accumulated experiment knowledge base.")
 experiments_app.add_typer(knowledge_app, name="knowledge")
-hypothesis_app = typer.Typer(help="Manage structured hypotheses.")
-app.add_typer(hypothesis_app, name="hypothesis")
+
+
+class _HypothesizeGroup(TyperGroup):
+    """Treat ``research hypothesize <slug>`` as ``research hypothesize new <slug>``.
+
+    Click groups cannot own a required positional argument alongside
+    subcommands, so the bare-slug form is rewritten to the default subcommand.
+    """
+
+    def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
+        if args and not args[0].startswith("-") and args[0] not in self.commands:
+            args = ["new", *args]
+        return super().parse_args(ctx, args)
+
+
+hypothesize_app = typer.Typer(
+    cls=_HypothesizeGroup,
+    help="Generate, inspect, and update hypotheses.",
+    no_args_is_help=True,
+)
+app.add_typer(hypothesize_app, name="hypothesize")
 console = Console()
 
 
@@ -712,12 +733,25 @@ def analyze(
     skip_ingest: bool = typer.Option(
         False,
         "--skip-ingest",
-        help="Store analyzer artifacts but defer Knowledge Hub ingestion",
+        help="Store analyzer artifacts but defer Knowledge Hub ingestion (also skips hypotheses)",
     ),
     skip_hypothesize: bool = typer.Option(
         False,
         "--skip-hypothesize",
-        help="Skip Hypothesis Assistant top-N recommendations",
+        help="Skip generating new hypotheses after ingestion",
+    ),
+    skip_brief: bool = typer.Option(
+        False,
+        "--skip-brief",
+        help="Skip writing the Research Brief (requires ingest + hypothesize)",
+    ),
+    fetch_kaggle: bool = typer.Option(
+        False,
+        "--fetch-kaggle",
+        help=(
+            "Also pull Kaggle kernels (5 by votes + 5 by score) and discussions (5), "
+            "then ingest/hypothesize/brief over that evidence"
+        ),
     ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
@@ -730,12 +764,11 @@ def analyze(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
 ) -> None:
-    """Analyze a competition's research landscape (writes analyze.json).
+    """Understand the problem: artifacts, beliefs, hypotheses, and Research Brief.
 
-    Run every default analyzer, a single one (``research analyze papers
-    <slug>``), or a subset via ``--include`` / ``--exclude``. Always persists
-    ``knowledge/<slug>/research/reports/analyze.json``; ``--format`` controls
-    stdout only.
+    Runs default analyzers (or a subset), persists competition/dataset/research
+    artifacts into ``knowledge.db``, ingests beliefs, generates new hypotheses,
+    and writes ``analyze.json`` plus ``research_brief.md``.
     """
     if output_format not in {"text", "json"}:
         raise typer.BadParameter("--format must be 'text' or 'json'.")
@@ -763,11 +796,16 @@ def analyze(
         refresh=refresh,
     )
 
+    do_ingest = not skip_ingest
+    do_hypothesize = not skip_hypothesize and do_ingest
+    do_brief = not skip_brief and do_ingest and do_hypothesize
     orchestrator = AnalyzeOrchestrator(
         build_default_registry(),
         llm_client=resolve_llm_client(config.llm),
-        ingest_knowledge=not skip_ingest,
-        hypothesize=not skip_hypothesize,
+        ingest_knowledge=do_ingest,
+        hypothesize=do_hypothesize,
+        brief=do_brief,
+        fetch_kaggle=fetch_kaggle,
     )
     try:
         report = orchestrator.analyze(
@@ -778,6 +816,15 @@ def analyze(
         raise typer.Exit(code=1) from None
 
     path = write_report(report, context.report_path)
+    brief_path = None
+    if report.research_brief:
+        from labpilot.research_engine.intelligence.brief.models import ResearchBrief
+        from labpilot.research_engine.intelligence.renderers.markdown import write_brief
+
+        brief_path = write_brief(
+            ResearchBrief.model_validate(report.research_brief),
+            context.paths.brief_path,
+        )
 
     if output_format == "json":
         # Plain print — rich would soft-wrap and corrupt JSON meant for piping.
@@ -785,6 +832,8 @@ def analyze(
     else:
         render_terminal(report, console=console)
         console.print(f"\n[green]Wrote:[/green] {path}")
+        if brief_path is not None:
+            console.print(f"[green]Research Brief:[/green] {brief_path}")
 
 
 @app.command()
@@ -794,6 +843,11 @@ def ingest(
         False,
         "--force",
         help="Re-ingest all stored artifacts even when every receipt is current",
+    ),
+    skip_hypothesize: bool = typer.Option(
+        False,
+        "--skip-hypothesize",
+        help="Skip generating new hypotheses after ingestion",
     ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
@@ -807,9 +861,10 @@ def ingest(
 ) -> None:
     """Merge stored Layer-2 artifacts into Knowledge Units and beliefs.
 
-    By default this is a no-op when every stored artifact has a current,
-    successful Knowledge Hub receipt. If anything is new or changed, the full
-    stored artifact set is merged so existing cross-source evidence is retained.
+    Hub merging is a no-op when every stored artifact has a current, successful
+    receipt. If anything is new or changed, the full stored artifact set is
+    merged so existing cross-source evidence is retained. New hypotheses are
+    generated afterwards unless ``--skip-hypothesize`` is passed.
     """
     config = _load_app_config(config_path, None, project_dir, knowledge_dir)
     with KnowledgeStore(config.knowledge_dir, competition) as store:
@@ -831,18 +886,25 @@ def ingest(
                 f"[green]Knowledge Hub is up to date:[/green] "
                 f"{len(artifacts)} artifact(s), 0 pending."
             )
-            return
+        else:
+            result = hub.ingest(artifacts)
+            console.print(
+                f"[green]Knowledge ingestion complete:[/green] "
+                f"{len(result.units)} unit(s), {len(result.beliefs)} belief(s) "
+                f"from {len(artifacts)} artifact(s) "
+                f"({len(pending)} pending{' before forced rebuild' if force else ''})."
+            )
+            for note in result.notes:
+                console.print(f"  [yellow]•[/yellow] {note}")
 
-        result = hub.ingest(artifacts)
+    if skip_hypothesize:
+        console.print("[dim]Hypothesis generation skipped by request.[/dim]")
+        return
 
-    console.print(
-        f"[green]Knowledge ingestion complete:[/green] "
-        f"{len(result.units)} unit(s), {len(result.beliefs)} belief(s) "
-        f"from {len(artifacts)} artifact(s) "
-        f"({len(pending)} pending{' before forced rebuild' if force else ''})."
-    )
-    for note in result.notes:
-        console.print(f"  [yellow]•[/yellow] {note}")
+    hypotheses = _generate_hypotheses(competition, config)
+    console.print(f"[green]{hypotheses.new_count} new hypothesis generated.[/green]")
+    for card in hypotheses.recommendations:
+        console.print(f"  [cyan]{card.hypothesis_id}[/cyan] {card.title}")
 
 
 @app.command("retrieve")
@@ -975,8 +1037,64 @@ def retrieve_cmd(
             console.print(f"  [yellow]•[/yellow] {note}")
 
 
-@app.command()
-def hypothesize(
+def _profile_pipeline(competition: str, config: AppConfig) -> list[str]:
+    """Best-effort current-pipeline techniques from local code (empty on failure)."""
+    if config.runs_dir is None:
+        return []
+    try:
+        from labpilot.research_engine.intelligence.repositories.local_profile import (
+            LocalCodeProfiler,
+        )
+
+        ctx = build_context(
+            competition,
+            runs_dir=config.runs_dir,
+            knowledge_dir=config.knowledge_dir,
+        )
+        profile = LocalCodeProfiler().profile(ctx)
+        if profile is None:
+            return []
+        return list(
+            dict.fromkeys(
+                [
+                    *profile.architecture,
+                    *profile.augmentation,
+                    *profile.training_tricks,
+                    *profile.loss,
+                ]
+            )
+        )
+    except Exception:
+        return []
+
+
+def _generate_hypotheses(
+    competition: str,
+    config: AppConfig,
+    *,
+    question: str = "Suggest next experiments",
+    pipeline: list[str] | None = None,
+    limit: int = 10,
+    write_report: bool = True,
+):
+    """Run the Hypothesis Assistant, persisting only newly generated hypotheses."""
+    return HypothesisAssistant(
+        llm_client=resolve_llm_client(config.llm),
+        created_by=HypothesisCreatedBy.HYPOTHESIZE,
+    ).recommend(
+        knowledge_dir=config.knowledge_dir,
+        competition=competition,
+        question=question,
+        pipeline=pipeline if pipeline is not None else _profile_pipeline(competition, config),
+        limit=limit,
+        persist=True,
+        write_report=write_report,
+        progressive=True,
+    )
+
+
+@hypothesize_app.command("new")
+def hypothesize_new(
     competition: str = typer.Argument(..., help="Competition slug"),
     question: str = typer.Option(
         "Suggest next experiments",
@@ -989,7 +1107,7 @@ def hypothesize(
         "--pipeline",
         help="Comma-separated current techniques (e.g. EMA,Mixup)",
     ),
-    limit: int = typer.Option(10, "--limit", help="Max recommendations (≤10)"),
+    limit: int = typer.Option(10, "--limit", help="Max new hypotheses (≤10)"),
     output_format: str = typer.Option(
         "text",
         "--format",
@@ -1006,11 +1124,11 @@ def hypothesize(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
 ) -> None:
-    """Recommend top-N next experiments from the Knowledge Store (Plan 10).
+    """Generate new hypotheses from the Knowledge Store (Plan 10).
 
     Recommendations only — does not train, fork, or call research improve.
-    Persists Suggested hypotheses into the M2 HypothesisStore and writes
-    ``research/reports/hypotheses.json``.
+    Techniques already tried or already covered by an open hypothesis are
+    skipped, so re-running only adds genuinely new hypotheses.
     """
     if output_format not in {"text", "json"}:
         raise typer.BadParameter("--format must be 'text' or 'json'.")
@@ -1019,47 +1137,14 @@ def hypothesize(
 
     config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
     pipeline_list = (
-        [item.strip() for item in pipeline.split(",") if item.strip()] if pipeline else []
+        [item.strip() for item in pipeline.split(",") if item.strip()] if pipeline else None
     )
-    if not pipeline_list and config.runs_dir is not None:
-        try:
-            from labpilot.research_engine.intelligence.context import build_context
-            from labpilot.research_engine.intelligence.repositories.local_profile import (
-                LocalCodeProfiler,
-            )
-
-            ctx = build_context(
-                competition,
-                runs_dir=config.runs_dir,
-                knowledge_dir=config.knowledge_dir,
-            )
-            profile = LocalCodeProfiler().profile(ctx)
-            if profile is not None:
-                pipeline_list = list(
-                    dict.fromkeys(
-                        [
-                            *profile.architecture,
-                            *profile.augmentation,
-                            *profile.training_tricks,
-                            *profile.loss,
-                        ]
-                    )
-                )
-        except Exception:
-            pipeline_list = []
-
-    result = HypothesisAssistant(
-        llm_client=resolve_llm_client(config.llm),
-        created_by=HypothesisCreatedBy.HYPOTHESIZE,
-    ).recommend(
-        knowledge_dir=config.knowledge_dir,
-        competition=competition,
+    result = _generate_hypotheses(
+        competition,
+        config,
         question=question,
         pipeline=pipeline_list,
         limit=limit,
-        persist=True,
-        write_report=True,
-        progressive=True,
     )
 
     if output_format == "json":
@@ -1067,7 +1152,7 @@ def hypothesize(
         return
 
     console.print(f"\n[bold]Hypothesis Assistant[/bold] — [cyan]{competition}[/cyan]")
-    console.print(f"[dim]Recommendations:[/dim] {len(result.recommendations)}")
+    console.print(f"[green]{result.new_count} new hypothesis generated.[/green]")
     for card in result.recommendations:
         console.print(
             f"  [cyan]#{card.rank}[/cyan] {card.title}  "
@@ -1473,7 +1558,7 @@ def experiments_rank(
     if not ranked:
         console.print(
             f"No proposed hypotheses to rank for [cyan]{competition}[/cyan] "
-            "(add some with `research hypothesis add`, or wait for reflection drafts)."
+            "(generate some with `research hypothesize`, or wait for reflection drafts)."
         )
         raise typer.Exit()
 
@@ -1758,44 +1843,7 @@ def experiments_knowledge_list(
     console.print(table)
 
 
-@hypothesis_app.command("add")
-def hypothesis_add(
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
-    observation: str = typer.Option(..., "--observation", help="What was observed"),
-    reason: str = typer.Option(..., "--reason", help="Why that might be happening"),
-    prediction: str = typer.Option(..., "--prediction", help="What we predict will help"),
-    confidence: float = typer.Option(
-        ..., "--confidence", help="Prior confidence in 0.0–1.0", min=0.0, max=1.0
-    ),
-    tags: str = typer.Option(
-        "",
-        "--tags",
-        help="Comma-separated tags (e.g. loss,class-imbalance)",
-    ),
-    config_path: Path = typer.Option(
-        Path("configs/default.yaml"), "--config", help="Path to config file"
-    ),
-    knowledge_dir: Path | None = typer.Option(
-        None, "--knowledge-dir", help="Override knowledge directory"
-    ),
-) -> None:
-    """Create a new structured hypothesis for a competition."""
-    config = _load_app_config(config_path, None, None, knowledge_dir)
-    store = HypothesisStore(config.knowledge_dir, competition)
-    tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
-    hypothesis = store.create(
-        observation=observation,
-        reason=reason,
-        prediction=prediction,
-        confidence=confidence,
-        tags=tag_list,
-        source="manual",
-    )
-    path = config.knowledge_dir / competition / "hypotheses" / f"{hypothesis.id}.json"
-    console.print(f"[green]Created[/green] [cyan]{hypothesis.id}[/cyan] → {path}")
-
-
-@hypothesis_app.command("list")
+@hypothesize_app.command("list")
 def hypothesis_list(
     competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
     status: str | None = typer.Option(
@@ -1839,7 +1887,7 @@ def hypothesis_list(
     console.print(table)
 
 
-@hypothesis_app.command("show")
+@hypothesize_app.command("show")
 def hypothesis_show(
     hypothesis_id: str = typer.Argument(..., help="Hypothesis ID (e.g. H-001)"),
     competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
@@ -1868,6 +1916,10 @@ def hypothesis_show(
     table.add_row("Competition", hypothesis.competition)
     table.add_row("Status", hypothesis.status.value)
     table.add_row("Confidence", f"{hypothesis.confidence:.2f}")
+    table.add_row(
+        "Expected impact",
+        f"{hypothesis.expected_impact:+.4f}" if hypothesis.expected_impact else "-",
+    )
     table.add_row("Observation", hypothesis.observation)
     table.add_row("Reason", hypothesis.reason)
     table.add_row("Prediction", hypothesis.prediction)
@@ -1887,7 +1939,7 @@ def hypothesis_show(
     )
 
 
-@hypothesis_app.command("update")
+@hypothesize_app.command("update")
 def hypothesis_update(
     hypothesis_id: str = typer.Argument(..., help="Hypothesis ID (e.g. H-001)"),
     competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),

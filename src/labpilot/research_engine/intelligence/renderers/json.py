@@ -30,6 +30,7 @@ PUBLIC_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
         "techniques",
         "hypotheses",
         "suggested_experiments",
+        "research_brief",
         "summary",
         "notes",
     }

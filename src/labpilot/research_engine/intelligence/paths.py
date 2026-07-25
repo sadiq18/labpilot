@@ -67,6 +67,11 @@ class ResearchPaths:
     def report_path(self) -> Path:
         return self.reports_dir / "analyze.json"
 
+    @property
+    def brief_path(self) -> Path:
+        """Durable Research Brief markdown written by ``research analyze``."""
+        return self.reports_dir / "research_brief.md"
+
     def all_dirs(self) -> list[Path]:
         dirs = [
             self.raw_dir,

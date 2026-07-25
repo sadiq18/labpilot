@@ -692,9 +692,25 @@ def _kernel_row_to_dict(row: Any) -> dict[str, Any]:
         "language": getattr(row, "language", None),
         "kernel_type": getattr(row, "kernel_type", None),
         "total_votes": int(getattr(row, "total_votes", None) or 0),
+        # Best-effort: the official SDK sorts by score (SCORE_DESCENDING) but its
+        # ApiKernelMetadata does not expose the score value today. Probe common
+        # field names so the score is captured as soon as the SDK adds one.
+        "public_score": _kernel_public_score(row),
         "current_version_number": getattr(row, "current_version_number", None),
         "last_run_time": _iso_or_none(getattr(row, "last_run_time", None)),
     }
+
+
+def _kernel_public_score(row: Any) -> float | None:
+    for name in ("best_public_score", "public_score", "best_score", "score"):
+        value = getattr(row, name, None)
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _topic_row_to_dict(topic: Any) -> dict[str, Any]:

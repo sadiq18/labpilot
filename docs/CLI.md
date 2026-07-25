@@ -317,30 +317,30 @@ research experiments dashboard --competition titanic
 
 ## 5. Hypotheses
 
-Stored under `knowledge/<slug>/hypotheses/H-NNN.json` (local / gitignored).
+Stored under `knowledge/<slug>/hypotheses/H-NNN.json` (local / gitignored) and mirrored
+into `knowledge/<slug>/research/knowledge.db`. Every hypothesis command lives under the
+single `research hypothesize` verb — hypotheses are generated from evidence, not hand
+authored.
 
-### `research hypothesis add`
+### `research hypothesize <slug>`
 
-```bash
-research hypothesis add --competition titanic \
-  --observation "Rare classes perform poorly" \
-  --reason "Dataset imbalance" \
-  --prediction "Focal Loss will improve Macro F1" \
-  --confidence 0.74 \
-  --tags loss,class-imbalance
-```
+Generate new hypotheses (see [§6](#6-research-intelligence) for options). Techniques
+already tried, or already covered by an open hypothesis, are skipped, so re-running
+only adds genuinely new items.
 
-### `research hypothesis list` / `show` / `update`
+### `research hypothesize list` / `show` / `update`
 
 ```bash
-research hypothesis list --competition titanic
-research hypothesis list -c titanic --status proposed
-research hypothesis show H-001 --competition titanic
-research hypothesis update H-001 -c titanic --status confirmed --evidence-run <run_id>
-research hypothesis update H-001 -c titanic --status rejected --evidence-run <run_id>
+research hypothesize list --competition titanic
+research hypothesize list -c titanic --status proposed
+research hypothesize show H-001 --competition titanic
+research hypothesize update H-001 -c titanic --status confirmed --evidence-run <run_id>
+research hypothesize update H-001 -c titanic --status rejected --evidence-run <run_id>
 ```
 
-Statuses: `proposed`, `testing`, `confirmed`, `rejected`, `inconclusive`.
+Statuses: `proposed`, `testing`, `confirmed`, `rejected`, `inconclusive`. A technique
+counts as *tried* only once a run attaches its hypothesis (`testing`) or you mark it
+explicitly — `proposed` alone never blocks new suggestions.
 
 Attach to execution:
 
@@ -357,19 +357,34 @@ Milestone 3 research partner: synthesize papers / repos / local experiments into
 validated `analyze.json` contract, then retrieve or hypothesize offline. **No HTML**
 in v1; terminal is a view over JSON. Never auto-trains.
 
-Canonical artifact:
+Canonical artifacts:
 
 ```text
 knowledge/<slug>/research/reports/analyze.json
+knowledge/<slug>/research/reports/research_brief.md
 ```
 
 ### `research analyze`
 
-Run default-enabled analyzers (or a subset), ingest into the Knowledge Hub, rank
-top-N hypotheses, write `analyze.json`, and print a mockup-parity terminal summary.
+Understand the problem before experimentation: run analyzers, persist artifacts into
+`knowledge.db`, ingest beliefs, generate hypotheses, and write a durable Research Brief.
+
+**Products**
+
+| Product | Where |
+|---------|--------|
+| Competition artifact | `analyze.json` + `knowledge.db` |
+| Dataset artifact | `analyze.json` + `knowledge.db` (default analyzer) |
+| Research artifacts (papers, repos, experiments, …) | `analyze.json` + `knowledge.db` |
+| Beliefs | `knowledge.db` (Knowledge Hub) |
+| Hypotheses | `hypotheses/H-*.json` + `knowledge.db` |
+| Research Brief | `reports/research_brief.md` + `analyze.json` field `research_brief` |
+
+Kernels / discussions stay on `research fetch` by default. Pass `--fetch-kaggle` to
+pull 5 kernels by votes, 5 by score, and 5 discussions during analyze.
 
 ```bash
-# All default analyzers
+# All default analyzers (+ brief)
 research analyze birdclef-2026
 
 # Single analyzer
@@ -382,13 +397,17 @@ research analyze competition birdclef-2026
 research analyze birdclef-2026 --include papers,repositories
 research analyze birdclef-2026 --exclude dataset
 
-# Stdout format (file is always written)
+# Also pull popular Kaggle kernels + discussions (5 / 5 / 5)
+research analyze birdclef-2026 --fetch-kaggle
+
+# Stdout format (files are always written when produced)
 research analyze birdclef-2026 --format text
 research analyze birdclef-2026 --format json
 
-# Defer hub / hypothesis steps
+# Defer hub / hypothesis / brief (--skip-ingest also skips hypothesize + brief)
 research analyze birdclef-2026 --skip-ingest
 research analyze birdclef-2026 --skip-hypothesize
+research analyze birdclef-2026 --skip-brief
 
 # Re-fetch cached raw sources
 research analyze birdclef-2026 --refresh
@@ -400,27 +419,33 @@ research analyze birdclef-2026 --refresh
 | `--exclude` | Comma-separated analyzers to skip |
 | `--format` | `text` (default) or `json` — stdout only; always writes `analyze.json` |
 | `--refresh` | Re-fetch sources into cache |
-| `--skip-ingest` | Store artifacts but defer Knowledge Hub ingestion |
-| `--skip-hypothesize` | Skip Hypothesis Assistant top-N |
+| `--fetch-kaggle` | Pull kernels (votes×5 + score×5) and discussions (×5), then ingest over the full store |
+| `--skip-ingest` | Defer Knowledge Hub ingestion (also skips hypotheses and Research Brief) |
+| `--skip-hypothesize` | Skip generating new hypotheses after ingestion (also skips brief) |
+| `--skip-brief` | Skip writing `research_brief.md` |
 | `--config`, `--project-dir`, `--runs-dir`, `--knowledge-dir` | Same idea as pipeline |
 
 Technique buckets in the report: **External Recommendations** are Suggested only;
 external-only techniques are never labeled Established. Locally Validated fills only
 after local promotion (e.g. improve corroboration).
 
+Read `research_brief.md` first for the briefing; `analyze.json` is the full contract.
 ### `research ingest`
 
 Run the Knowledge Hub over artifacts already in `knowledge.db` (after
-`--skip-ingest` or a partial analyze).
+`--skip-ingest`, `research fetch`, or a partial analyze), then generate new
+hypotheses from the merged knowledge.
 
 ```bash
 research ingest birdclef-2026
 research ingest birdclef-2026 --force
+research ingest birdclef-2026 --skip-hypothesize
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--force` | Re-ingest all stored artifacts even when receipts are current |
+| `--skip-hypothesize` | Merge knowledge only; do not generate new hypotheses |
 
 ### `research retrieve`
 
@@ -443,12 +468,17 @@ research retrieve birdclef-2026 -q "Show experiments where Focal Loss hurt" \
 
 ### `research hypothesize`
 
-Hypothesis Assistant top-N recommendations only (persists Suggested M2 hypotheses +
-`research/reports/hypotheses.json`). Excludes techniques already tried in local
-experiments / hypothesis tags.
+Generate **new** hypotheses only (persists Suggested M2 hypotheses +
+`research/reports/hypotheses.json`) and report `N new hypothesis generated`. Skips
+techniques already tried in local experiments / dispositioned hypotheses, and skips
+ideas already covered by an open (`proposed` / `testing` / `confirmed`) hypothesis.
+
+`research analyze` and `research ingest` run this automatically, so the standalone
+command is for re-ranking without re-fetching.
 
 ```bash
 research hypothesize birdclef-2026
+research hypothesize new birdclef-2026          # explicit form
 research hypothesize birdclef-2026 -q "Suggest five literature-backed experiments" \
   --limit 5 --format json
 ```
@@ -457,8 +487,11 @@ research hypothesize birdclef-2026 -q "Suggest five literature-backed experiment
 |--------|-------------|
 | `--question` / `-q` | Ranking question (default: suggest next experiments) |
 | `--pipeline` | CSV current pipeline (auto when omitted) |
-| `--limit` | 1–10 recommendations (default 10) |
+| `--limit` | 1–10 new hypotheses (default 10) |
 | `--format` | `text` or `json` |
+
+Backlog management uses the same verb: `research hypothesize list` / `show` / `update`
+(see [§5](#5-hypotheses)).
 
 ### `research fetch`
 
@@ -580,9 +613,9 @@ confirm unless `--yes` (or non-TTY / CI).
 | What to try next | `research experiments rank -c <slug>` |
 | Competition summary | `research experiments report -c <slug>` |
 | Shareable HTML overview | `research experiments dashboard -c <slug>` |
-| Research landscape + top-10 ideas | `research analyze <slug>` |
+| Research landscape + briefing | `research analyze <slug>` (read `research_brief.md`) |
 | Offline retrieve from knowledge.db | `research retrieve <slug> -q "…"` |
 | Rank untried literature-backed ideas | `research hypothesize <slug>` |
-| Pull Kaggle kernels / discussions | `research fetch <slug> [--source kernels\|discussions\|all]` |
+| Pull Kaggle kernels / discussions | `research fetch <slug>` or `analyze --fetch-kaggle` |
 
 Workflow narrative: [SOP.md](SOP.md).

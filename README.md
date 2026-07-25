@@ -127,7 +127,7 @@ How to run LabPilot day-to-day (baseline → improve → rank → submit):
 | Fork + retrain | `research improve --run-id <parent>` (`--strategy auto`, `tune`, or `features`) |
 | Environment check | `research doctor` |
 | Lineage / compare / KB / rank / search | `research experiments …` — see [CLI.md](docs/CLI.md#4-experiments) |
-| Hypothesis CRUD | `research hypothesis add` / `list` / `show` / `update` — see [CLI.md](docs/CLI.md#5-hypotheses) |
+| Hypotheses | `research hypothesize <slug>` to generate; `list` / `show` / `update` to manage — see [CLI.md](docs/CLI.md#5-hypotheses) |
 | Per-run HTML | `research report --run-id <id>` |
 | Competition HTML | `research experiments dashboard --competition <slug>` |
 

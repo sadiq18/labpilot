@@ -212,6 +212,10 @@ def test_assistant_emits_at_most_10_and_persists_suggested(tmp_path: Path) -> No
     with KnowledgeStore(knowledge_dir, "birdclef-2026") as kstore:
         db_rows = kstore.list_hypotheses(status="proposed")
         assert {row["id"] for row in db_rows} == {h.id for h in hyps}
+        # Every generated hypothesis must carry a non-zero impact estimate.
+        assert all(row["expected_impact"] > 0.0 for row in db_rows)
+    assert all(h.expected_impact > 0.0 for h in hyps)
+    assert all(card.expected_impact_value > 0.0 for card in result.recommendations)
 
     report_path = knowledge_dir / "birdclef-2026/research/reports/hypotheses.json"
     assert report_path.is_file()
@@ -322,4 +326,51 @@ def test_hypothesize_cli(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.stdout
     assert "Hypothesis Assistant" in result.stdout
+    assert "new hypothesis generated" in result.stdout
     assert "#" in result.stdout
+
+
+def test_hypothesize_new_subcommand_matches_bare_slug(tmp_path: Path) -> None:
+    knowledge_dir = tmp_path / "knowledge"
+    with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
+        _seed(store)
+
+    result = runner.invoke(
+        cli_main.app,
+        [
+            "hypothesize",
+            "new",
+            "birdclef-2026",
+            "--pipeline",
+            "EMA",
+            "--knowledge-dir",
+            str(knowledge_dir),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "new hypothesis generated" in result.stdout
+
+
+def test_rerun_generates_no_duplicate_hypotheses(tmp_path: Path) -> None:
+    """Second pass must not re-mint hypotheses already open in the backlog."""
+    knowledge_dir = tmp_path / "knowledge"
+    with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
+        _seed(store)
+
+    def _run():
+        return HypothesisAssistant(created_by=HypothesisCreatedBy.HYPOTHESIZE).recommend(
+            knowledge_dir=knowledge_dir,
+            competition="birdclef-2026",
+            pipeline=["EMA"],
+            persist=True,
+            progressive=True,
+        )
+
+    first = _run()
+    assert first.new_count == len(first.recommendations) >= 1
+
+    second = _run()
+    assert second.new_count == 0
+    assert len(HypothesisStore(knowledge_dir, "birdclef-2026").list()) == first.new_count

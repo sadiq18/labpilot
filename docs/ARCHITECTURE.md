@@ -155,7 +155,7 @@ Commands:
 - `research experiments rank --competition <slug>` — ranked hypothesis backlog (Milestone 2)
 - `research experiments search --competition <slug> [filters]` — filter experiments (Milestone 2)
 - `research experiments report|dashboard --competition <slug>` — competition rollup (Milestone 2)
-- `research hypothesis add|list|show|update` — structured hypotheses under `knowledge/` (Milestone 2)
+- `research hypothesize <slug>|list|show|update` — generate and manage structured hypotheses under `knowledge/` (Milestone 2–3)
 - `research doctor` — environment diagnostics
 
 ### 2. Competition Parser
@@ -364,8 +364,9 @@ One file per hypothesis. Attaching a hypothesis to a run auto-transitions `propo
 when the link resolves. See
 [milestones/milestone-2/plan-2-hypothesis.md](milestones/milestone-2/plan-2-hypothesis.md).
 
-Commands: `research hypothesis add|list|show|update` (all require `--competition`), plus
-`--hypothesis H-NNN` on `research run` / `research improve`.
+Commands: `research hypothesize <slug>` to generate, and `research hypothesize
+list|show|update` (all require `--competition`) to manage, plus `--hypothesis H-NNN` on
+`research run` / `research improve`.
 
 ### 18. Automatic Comparator (Milestone 2, Plan 3)
 
@@ -445,6 +446,33 @@ The whole `knowledge/` directory remains gitignored (local research memory, like
 Dashboard is regenerated on demand. Per-run `report.html` links to the competition dashboard
 when that file exists; dashboard rows link back to per-run reports and `comparison.md`.
 
+### 24. Research Intelligence (Milestone 3)
+
+| | |
+|---|---|
+| **Path** | `research_engine/intelligence/` |
+| **Responsibility** | Understand the problem before experimentation |
+| **CLI** | `research analyze`, `research fetch`, `research ingest`, `research retrieve`, `research hypothesize` |
+| **Status** | Implemented (Phase 1) |
+
+`research analyze` is the “understand the problem” command. It produces six products:
+
+| Product | Durable home |
+|---------|--------------|
+| Competition artifact | `knowledge.db` + `reports/analyze.json` |
+| Dataset artifact | `knowledge.db` + `reports/analyze.json` (default analyzer) |
+| Research artifacts (papers, repos, experiments, …) | `knowledge.db` + `reports/analyze.json` |
+| Beliefs | `knowledge.db` (Knowledge Hub) |
+| Hypotheses | `hypotheses/H-*.json` + `knowledge.db` |
+| Research Brief | `reports/research_brief.md` + `analyze.json` → `research_brief` |
+
+Flow: analyzers → optional `--fetch-kaggle` (kernels votes×5 + score×5 + discussions×5) →
+upsert **all** analyzer artifacts (including `DATASET` and `EXPERIMENT`) → Knowledge Hub →
+Hypothesis Assistant → Research Brief. Kernels/discussions default to `research fetch`;
+analyze only pulls them when `--fetch-kaggle` is set.
+
+Design detail: [milestones/milestone-3/README.md](milestones/milestone-3/README.md).
+
 ## Repository Structure
 
 ```
@@ -472,6 +500,7 @@ labpilot/
 │   ├── improvement/           # Run fork, planner, tuner, feature recipes (P3)
 │   ├── tracking/              # Experiment logger, store, cross-run index
 │   ├── experiments/           # Experiment graph, hypotheses, comparator (Milestone 2)
+│   ├── research_engine/       # M3 Research Intelligence + execution helpers
 │   ├── reflection/            # Reflection generation + prompts
 │   └── config.py              # AppConfig + Settings
 │

@@ -112,8 +112,10 @@ def test_create_mirrors_hypothesis_into_knowledge_db(tmp_path: Path):
         reason="Imbalance",
         prediction="Focal loss helps",
         confidence=0.7,
+        expected_impact=0.015,
         tags=["focal_loss"],
     )
+    assert hyp.expected_impact == pytest.approx(0.015)
     with KnowledgeStore(tmp_path / "knowledge", "titanic") as kstore:
         row = kstore.get_hypothesis(hyp.id)
         assert row is not None
@@ -122,6 +124,7 @@ def test_create_mirrors_hypothesis_into_knowledge_db(tmp_path: Path):
         assert row["rationale"] == "Imbalance"
         assert row["status"] == "proposed"
         assert row["confidence"] == pytest.approx(0.7)
+        assert row["expected_impact"] == pytest.approx(0.015)
         meta = json.loads(row["metadata"])
         assert meta["tags"] == ["focal_loss"]
 

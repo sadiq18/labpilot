@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from labpilot.cli import main as cli_main
+from labpilot.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.intelligence.context import build_context, normalize_competition
 from labpilot.research_engine.intelligence.knowledge import KnowledgeHub, KnowledgeStore
 from labpilot.research_engine.intelligence.models import (
@@ -302,7 +303,7 @@ def test_json_round_trip_and_write(tmp_path: Path):
     assert path.is_file()
     loaded = json.loads(path.read_text())
     assert loaded["competition"]["slug"] == "birdclef-2026"
-    assert loaded["schema_version"] == 1
+    assert loaded["schema_version"] == 2
 
 
 # --- CLI --------------------------------------------------------------------
@@ -321,6 +322,8 @@ def test_analyze_help_documents_flags():
         "--refresh",
         "--skip-ingest",
         "--skip-hypothesize",
+        "--skip-brief",
+        "--fetch-kaggle",
     ):
         assert flag in plain
 
@@ -392,6 +395,173 @@ def test_ingest_cli_processes_pending_stored_artifacts(tmp_path: Path, monkeypat
     second = runner.invoke(cli_main.app, args)
     assert second.exit_code == 0, second.stdout
     assert "0 pending" in second.stdout
+
+
+def test_ingest_cli_generates_hypotheses_unless_skipped(tmp_path: Path, monkeypatch):
+    knowledge_dir = tmp_path / "knowledge"
+    with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
+        store.upsert_artifact(_artifact("paper:1"))
+
+    monkeypatch.setattr(cli_main, "resolve_llm_client", lambda _config: None)
+    base = ["ingest", "birdclef-2026", "--knowledge-dir", str(knowledge_dir)]
+
+    skipped = runner.invoke(cli_main.app, [*base, "--skip-hypothesize"])
+    assert skipped.exit_code == 0, skipped.stdout
+    assert "Hypothesis generation skipped" in skipped.stdout
+    assert HypothesisStore(knowledge_dir, "birdclef-2026").list() == []
+
+    generated = runner.invoke(cli_main.app, base)
+    assert generated.exit_code == 0, generated.stdout
+    assert "new hypothesis generated" in generated.stdout
+    assert HypothesisStore(knowledge_dir, "birdclef-2026").list()
+
+
+def test_analyze_skip_ingest_also_skips_hypotheses(tmp_path: Path, monkeypatch):
+    def _registry():
+        reg = AnalyzerRegistry()
+        reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")]))
+        return reg
+
+    monkeypatch.setattr(cli_main, "build_default_registry", _registry)
+    knowledge_dir = tmp_path / "knowledge"
+    result = runner.invoke(
+        cli_main.app,
+        [
+            "analyze",
+            "birdclef-2026",
+            "--skip-ingest",
+            "--knowledge-dir",
+            str(knowledge_dir),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert HypothesisStore(knowledge_dir, "birdclef-2026").list() == []
+    brief = knowledge_dir / "birdclef-2026" / "research" / "reports" / "research_brief.md"
+    assert not brief.is_file()
+
+
+def test_analyze_persists_dataset_and_experiment_artifacts(tmp_path: Path) -> None:
+    dataset = ResearchArtifact(
+        id="dataset:birdclef-2026",
+        type=ResearchArtifactType.DATASET,
+        source="m2",
+        title="dataset card",
+        competition_slug="birdclef-2026",
+        metadata={"modality": "audio", "row_count": 100},
+    )
+    experiment = ResearchArtifact(
+        id="exp:12",
+        type=ResearchArtifactType.EXPERIMENT,
+        source="m2",
+        title="exp-12",
+        techniques=["Focal Loss"],
+        competition_slug="birdclef-2026",
+    )
+    reg = AnalyzerRegistry()
+    reg.register(FakeAnalyzer("dataset", items=[dataset]))
+    reg.register(FakeAnalyzer("experiments", items=[experiment]))
+    knowledge_dir = tmp_path / "knowledge"
+    ctx = build_context(
+        "birdclef-2026",
+        runs_dir=tmp_path / "runs",
+        knowledge_dir=knowledge_dir,
+    )
+    report = AnalyzeOrchestrator(reg, llm_client=None).analyze(ctx)
+    assert report.research_brief
+    with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
+        assert store.get_artifact("dataset:birdclef-2026") is not None
+        assert store.get_artifact("exp:12") is not None
+
+
+def test_analyze_skip_brief_writes_no_markdown(tmp_path: Path, monkeypatch) -> None:
+    def _registry():
+        reg = AnalyzerRegistry()
+        reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")]))
+        return reg
+
+    monkeypatch.setattr(cli_main, "build_default_registry", _registry)
+    knowledge_dir = tmp_path / "knowledge"
+    result = runner.invoke(
+        cli_main.app,
+        [
+            "analyze",
+            "birdclef-2026",
+            "--skip-brief",
+            "--knowledge-dir",
+            str(knowledge_dir),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    brief = knowledge_dir / "birdclef-2026" / "research" / "reports" / "research_brief.md"
+    assert not brief.is_file()
+    assert HypothesisStore(knowledge_dir, "birdclef-2026").list()
+
+
+def test_analyze_fetch_kaggle_runs_three_fetches(tmp_path: Path) -> None:
+    from labpilot.research_engine.intelligence.fetch.models import FetchResult
+    from labpilot.research_engine.intelligence.models import ResearchArtifactType
+
+    calls: list[tuple[frozenset[str], dict]] = []
+
+    class FakeFetchService:
+        def fetch(self, competition, *, sources, knowledge_dir, refresh=False, **kwargs):
+            calls.append((frozenset(sources), dict(kwargs)))
+            artifact = ResearchArtifact(
+                id=f"fetched:{len(calls)}",
+                type=(
+                    ResearchArtifactType.DISCUSSION
+                    if "discussions" in sources
+                    else ResearchArtifactType.REPOSITORY
+                ),
+                source="kaggle",
+                title=f"fetched-{len(calls)}",
+                competition_slug=competition,
+                techniques=["Mixup"] if "kernels" in sources else [],
+            )
+            with KnowledgeStore(knowledge_dir, competition) as store:
+                store.upsert_artifact(artifact)
+            return FetchResult(
+                competition=competition,
+                sources=sorted(sources),
+                written=1,
+                skipped_existing=0,
+                fetched=1,
+                artifact_ids=[artifact.id],
+                notes=[],
+            )
+
+    reg = AnalyzerRegistry()
+    reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")]))
+    knowledge_dir = tmp_path / "knowledge"
+    ctx = build_context(
+        "birdclef-2026",
+        runs_dir=tmp_path / "runs",
+        knowledge_dir=knowledge_dir,
+    )
+    report = AnalyzeOrchestrator(
+        reg,
+        llm_client=None,
+        fetch_kaggle=True,
+        kaggle_fetch_service=FakeFetchService(),  # type: ignore[arg-type]
+    ).analyze(ctx)
+
+    assert len(calls) == 3
+    assert calls[0][0] == frozenset({"kernels"})
+    assert calls[0][1].get("kernel_sort") == "voteCount"
+    assert calls[0][1].get("limit") == 5
+    assert calls[1][0] == frozenset({"kernels"})
+    assert calls[1][1].get("kernel_sort") == "scoreDescending"
+    assert calls[2][0] == frozenset({"discussions"})
+    assert any("[fetch-kaggle]" in note for note in report.notes)
+    with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
+        ids = {a.id for a in store.list_artifacts()}
+        assert "paper:1" in ids
+        assert "fetched:1" in ids
+        assert "fetched:3" in ids
 
 
 def test_analyze_cli_single_analyzer_and_json_format(tmp_path: Path, monkeypatch):
