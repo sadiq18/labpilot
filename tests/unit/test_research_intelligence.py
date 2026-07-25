@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from labpilot.cli import main as cli_main
 from labpilot.research_engine.intelligence.context import build_context, normalize_competition
+from labpilot.research_engine.intelligence.knowledge import KnowledgeHub, KnowledgeStore
 from labpilot.research_engine.intelligence.models import (
     AnalysisReport,
     AnalyzeContext,
@@ -313,7 +314,7 @@ def test_analyze_help_documents_flags():
     )
     assert result.exit_code == 0
     plain = _plain(result.stdout)
-    for flag in ("--include", "--exclude", "--format", "--refresh"):
+    for flag in ("--include", "--exclude", "--format", "--refresh", "--skip-ingest"):
         assert flag in plain
 
 
@@ -334,6 +335,56 @@ def test_analyze_cli_writes_stub_report(tmp_path: Path, monkeypatch):
     report_path = tmp_path / "knowledge/birdclef-2026/research/reports/analyze.json"
     assert report_path.is_file()
     validate_json(report_path.read_text())
+
+
+def test_analyze_cli_can_skip_knowledge_ingestion(tmp_path: Path, monkeypatch):
+    def _registry():
+        reg = AnalyzerRegistry()
+        reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")]))
+        return reg
+
+    monkeypatch.setattr(cli_main, "build_default_registry", _registry)
+    result = runner.invoke(
+        cli_main.app,
+        [
+            "analyze",
+            "birdclef-2026",
+            "--skip-ingest",
+            "--format",
+            "json",
+            "--knowledge-dir",
+            str(tmp_path / "knowledge"),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)["knowledge_units"] == []
+
+
+def test_ingest_cli_processes_pending_stored_artifacts(tmp_path: Path, monkeypatch):
+    knowledge_dir = tmp_path / "knowledge"
+    with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
+        store.upsert_artifact(_artifact("paper:1"))
+
+    monkeypatch.setattr(cli_main, "resolve_llm_client", lambda _config: None)
+    args = [
+        "ingest",
+        "birdclef-2026",
+        "--knowledge-dir",
+        str(knowledge_dir),
+    ]
+    first = runner.invoke(cli_main.app, args)
+    assert first.exit_code == 0, first.stdout
+    assert "1 unit(s), 1 belief(s)" in first.stdout
+
+    with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
+        artifacts = store.list_artifacts()
+        assert KnowledgeHub(store).pending_artifacts(artifacts) == []
+
+    second = runner.invoke(cli_main.app, args)
+    assert second.exit_code == 0, second.stdout
+    assert "0 pending" in second.stdout
 
 
 def test_analyze_cli_single_analyzer_and_json_format(tmp_path: Path, monkeypatch):

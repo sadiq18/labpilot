@@ -46,6 +46,7 @@ from labpilot.orchestrator.manifest import StageStatus, load_manifest
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
 from labpilot.report.generator import ReportGenerator
 from labpilot.research_engine.intelligence.context import build_context
+from labpilot.research_engine.intelligence.knowledge import KnowledgeHub, KnowledgeStore
 from labpilot.research_engine.intelligence.orchestrator import AnalyzeOrchestrator
 from labpilot.research_engine.intelligence.registry import (
     UnknownAnalyzerError,
@@ -702,6 +703,11 @@ def analyze(
     refresh: bool = typer.Option(
         False, "--refresh", help="Re-fetch sources into cache instead of reusing cached raw data"
     ),
+    skip_ingest: bool = typer.Option(
+        False,
+        "--skip-ingest",
+        help="Store analyzer artifacts but defer Knowledge Hub ingestion",
+    ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
@@ -746,7 +752,11 @@ def analyze(
         refresh=refresh,
     )
 
-    orchestrator = AnalyzeOrchestrator(build_default_registry())
+    orchestrator = AnalyzeOrchestrator(
+        build_default_registry(),
+        llm_client=resolve_llm_client(config.llm),
+        ingest_knowledge=not skip_ingest,
+    )
     try:
         report = orchestrator.analyze(
             context, only=only, include=include_set, exclude=exclude_set
@@ -763,6 +773,64 @@ def analyze(
     else:
         render_terminal(report, console=console)
         console.print(f"\n[green]Wrote:[/green] {path}")
+
+
+@app.command()
+def ingest(
+    competition: str = typer.Argument(..., help="Competition slug"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Re-ingest all stored artifacts even when every receipt is current",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    project_dir: Path | None = typer.Option(
+        None, "--project-dir", help="Project root containing project.yaml"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Merge stored Layer-2 artifacts into Knowledge Units and beliefs.
+
+    By default this is a no-op when every stored artifact has a current,
+    successful Knowledge Hub receipt. If anything is new or changed, the full
+    stored artifact set is merged so existing cross-source evidence is retained.
+    """
+    config = _load_app_config(config_path, None, project_dir, knowledge_dir)
+    with KnowledgeStore(config.knowledge_dir, competition) as store:
+        artifacts = store.list_artifacts()
+        if not artifacts:
+            console.print(
+                f"[yellow]No stored artifacts found for {competition}.[/yellow] "
+                "Run research analyze first."
+            )
+            return
+
+        hub = KnowledgeHub(
+            store,
+            llm_client=resolve_llm_client(config.llm),
+        )
+        pending = hub.pending_artifacts(artifacts)
+        if not pending and not force:
+            console.print(
+                f"[green]Knowledge Hub is up to date:[/green] "
+                f"{len(artifacts)} artifact(s), 0 pending."
+            )
+            return
+
+        result = hub.ingest(artifacts)
+
+    console.print(
+        f"[green]Knowledge ingestion complete:[/green] "
+        f"{len(result.units)} unit(s), {len(result.beliefs)} belief(s) "
+        f"from {len(artifacts)} artifact(s) "
+        f"({len(pending)} pending{' before forced rebuild' if force else ''})."
+    )
+    for note in result.notes:
+        console.print(f"  [yellow]•[/yellow] {note}")
 
 
 @runs_app.command("diff")

@@ -32,5 +32,15 @@ become `aliases`. Deterministic but does not do semantic clustering.
 
 ## Notes
 
-Feeds the Knowledge Merger (§7/§8): merged evidence lands in one
-`KnowledgeClaim` / `Technique` Knowledge Object.
+Feeds the Knowledge Merger (§7/§8): merged evidence lands in one `KnowledgeUnit`
+row (`techniques` table) with one evidence link per artifact.
+
+How the merger calls this agent (Plan 8):
+
+- Clustering is decided **before** the agent runs — normalized keys, the
+  `ALIAS_SEEDS` table, then a conservative containment pass. The agent is only
+  asked to pick the canonical label for an already-formed cluster.
+- `canonical` must be one of the supplied `items`. Anything else is discarded and
+  the deterministic pick (most frequent variant) is used instead, so a
+  hallucinated label can never rename a technique.
+- `category` is stored on the `KnowledgeUnit` when returned.
