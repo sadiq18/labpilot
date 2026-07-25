@@ -500,6 +500,77 @@ class KnowledgeStore:
         path.write_text(payload if payload.endswith("\n") else payload + "\n")
         return path
 
+    # -- hypotheses (M2 HypothesisStore mirror) ----------------------------
+
+    def upsert_hypothesis(
+        self,
+        *,
+        hypothesis_id: str,
+        observation: str = "",
+        prediction: str = "",
+        rationale: str = "",
+        expected_impact: float = 0.0,
+        confidence: float = 0.5,
+        status: str = "proposed",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Upsert one hypothesis row (dual-write target for M2 HypothesisStore)."""
+        now = _now()
+        existing = self._conn.execute(
+            "SELECT created_at FROM hypotheses WHERE id = ?", (hypothesis_id,)
+        ).fetchone()
+        created_at = existing["created_at"] if existing else now
+        self._conn.execute(
+            """
+            INSERT INTO hypotheses (
+                id, competition_slug, observation, prediction, rationale,
+                expected_impact, confidence, status, metadata, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                competition_slug=excluded.competition_slug,
+                observation=excluded.observation,
+                prediction=excluded.prediction,
+                rationale=excluded.rationale,
+                expected_impact=excluded.expected_impact,
+                confidence=excluded.confidence,
+                status=excluded.status,
+                metadata=excluded.metadata,
+                updated_at=excluded.updated_at
+            """,
+            (
+                hypothesis_id,
+                self.competition,
+                observation,
+                prediction,
+                rationale,
+                expected_impact,
+                confidence,
+                status,
+                json.dumps(metadata or {}),
+                created_at,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return hypothesis_id
+
+    def get_hypothesis(self, hypothesis_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM hypotheses WHERE id = ?", (hypothesis_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_hypotheses(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        if status is not None:
+            rows = self._conn.execute(
+                "SELECT * FROM hypotheses WHERE status = ? ORDER BY id", (status,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM hypotheses ORDER BY id"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     # -- beliefs (Layer 4) -------------------------------------------------
 
     def upsert_belief(

@@ -113,15 +113,19 @@ class HypothesisStore:
         if not self.hypotheses_dir.is_dir():
             return []
         results: list[Hypothesis] = []
+        pending: list[Hypothesis] = []
         for path in sorted(self.hypotheses_dir.glob("H-*.json")):
             try:
                 hypothesis = Hypothesis.model_validate_json(path.read_text())
             except (OSError, ValueError) as exc:
                 logger.debug("Skipping unreadable hypothesis %s: %s", path, exc)
                 continue
+            pending.append(hypothesis)
             if status is not None and hypothesis.status != status:
                 continue
             results.append(hypothesis)
+        # Backfill knowledge.db for file-only hypotheses created before dual-write.
+        self._mirror_many_to_db(pending)
         return results
 
     def update_status(
@@ -178,6 +182,53 @@ class HypothesisStore:
         self.hypotheses_dir.mkdir(parents=True, exist_ok=True)
         path = self._path_for(hypothesis.id)
         path.write_text(hypothesis.model_dump_json(indent=2))
+        self._mirror_to_db(hypothesis)
+
+    def _mirror_to_db(self, hypothesis: Hypothesis) -> None:
+        """Dual-write into ``knowledge.db`` hypotheses table (M3 KnowledgeStore)."""
+        self._mirror_many_to_db([hypothesis])
+
+    def _mirror_many_to_db(self, hypotheses: list[Hypothesis]) -> None:
+        if not hypotheses:
+            return
+        from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
+
+        with KnowledgeStore(self.knowledge_dir, self.competition) as store:
+            for hypothesis in hypotheses:
+                metadata = {
+                    "tags": list(hypothesis.tags),
+                    "source": hypothesis.source,
+                    "created_by": (
+                        str(hypothesis.created_by)
+                        if hypothesis.created_by is not None
+                        else None
+                    ),
+                    "generator": (
+                        str(hypothesis.generator)
+                        if hypothesis.generator is not None
+                        else None
+                    ),
+                    "origin": (
+                        str(hypothesis.origin) if hypothesis.origin is not None else None
+                    ),
+                    "origins": [str(item) for item in hypothesis.origins],
+                    "evidence": [
+                        item.model_dump(mode="json") for item in hypothesis.evidence
+                    ],
+                    "evidence_for": list(hypothesis.evidence_for),
+                    "evidence_against": list(hypothesis.evidence_against),
+                    "file_created_at": hypothesis.created_at.isoformat(),
+                    "file_updated_at": hypothesis.updated_at.isoformat(),
+                }
+                store.upsert_hypothesis(
+                    hypothesis_id=hypothesis.id,
+                    observation=hypothesis.observation,
+                    prediction=hypothesis.prediction,
+                    rationale=hypothesis.reason,
+                    confidence=hypothesis.confidence,
+                    status=str(hypothesis.status),
+                    metadata=metadata,
+                )
 
 
 def _coerce_created_by(
