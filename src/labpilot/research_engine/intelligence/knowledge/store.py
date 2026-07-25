@@ -347,6 +347,28 @@ class KnowledgeStore:
         row = self._conn.execute("SELECT * FROM techniques WHERE id = ?", (tid,)).fetchone()
         return dict(row) if row else None
 
+    def list_techniques(
+        self, *, domain: str | None = None, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Merged technique rows, optionally domain-filtered, highest confidence first."""
+        if domain:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM techniques
+                WHERE lower(domain) = lower(?) OR domain = ''
+                ORDER BY confidence DESC, name
+                """,
+                (domain,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM techniques ORDER BY confidence DESC, name"
+            ).fetchall()
+        techniques = [dict(row) for row in rows]
+        if limit is not None:
+            return techniques[: max(0, limit)]
+        return techniques
+
     # -- generic merged entities (technique / dataset / architecture / task) ---
 
     def merge_entity(

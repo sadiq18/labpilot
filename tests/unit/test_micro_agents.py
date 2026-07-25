@@ -56,14 +56,15 @@ class _BoomClient:
 
 
 INTEL_NAMES = [
+    "CompetitionPageAnalyzerAgent",
+    "ConceptNormalizerAgent",
+    "ExperimentReviewerAgent",
+    "ForumAnalyzerAgent",
+    "HypothesisGeneratorAgent",
+    "IntentClassifierAgent",
     "PaperAnalyzerAgent",
     "RepoQueryPlannerAgent",
     "RepositoryAnalyzerAgent",
-    "ForumAnalyzerAgent",
-    "HypothesisGeneratorAgent",
-    "ConceptNormalizerAgent",
-    "ExperimentReviewerAgent",
-    "CompetitionPageAnalyzerAgent",
 ]
 
 
