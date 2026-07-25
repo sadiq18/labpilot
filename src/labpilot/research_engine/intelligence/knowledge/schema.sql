@@ -33,6 +33,18 @@ CREATE TABLE IF NOT EXISTS research_artifacts (
 CREATE INDEX IF NOT EXISTS idx_artifacts_type ON research_artifacts(type);
 CREATE INDEX IF NOT EXISTS idx_artifacts_comp ON research_artifacts(competition_slug);
 
+-- Knowledge Hub processing receipt. The fingerprint changes whenever the
+-- stored artifact changes; signature changes when hub semantics/config change.
+-- Missing or mismatched rows are pending ingestion.
+CREATE TABLE IF NOT EXISTS artifact_ingestions (
+    artifact_id TEXT PRIMARY KEY REFERENCES research_artifacts(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    signature   TEXT NOT NULL,
+    ingested_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_ingestions_signature
+    ON artifact_ingestions(signature);
+
 -- Layer 3 — merged knowledge objects (one per concept across many sources).
 CREATE TABLE IF NOT EXISTS techniques (
     id           TEXT PRIMARY KEY,

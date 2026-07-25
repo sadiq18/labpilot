@@ -25,6 +25,7 @@ def render_terminal(report: AnalysisReport, *, console: Console | None = None) -
     table.add_row("Papers", str(len(report.papers)))
     table.add_row("Repositories", str(len(report.repositories)))
     table.add_row("Related competitions", str(len(report.related_competitions)))
+    table.add_row("Knowledge units", str(len(report.knowledge_units)))
     table.add_row("Hypothesis recommendations", str(len(report.hypothesis_recommendations)))
     console.print(table)
 

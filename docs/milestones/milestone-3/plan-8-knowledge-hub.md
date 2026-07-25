@@ -2,7 +2,7 @@
 
 Back to [Milestone 3](README.md). Design: README §7 · §8 · knowledge-system merge.
 
-**Status:** Not started. **Depends on:** Plans 2, 3; benefits from 4–7 artifacts. **Unlocks:** Plans 9–10.
+**Status:** Implemented (techniques; entity_type extensible). **Depends on:** Plans 2, 3; benefits from 4–7 artifacts. **Unlocks:** Plans 9–10.
 
 ---
 

@@ -9,6 +9,7 @@ retrieval ranking (that is Plans 8–9). ``knowledge.db`` wins for joins;
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -23,7 +24,7 @@ from labpilot.research_engine.intelligence.models import (
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 # Which extracted/ subfolder a per-source card is written to.
 _EXTRACTED_BUCKET = {
@@ -44,10 +45,34 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_") or "artifact"
 
 
+#: Per-entity table, id prefix, and ``research/knowledge/`` bucket. Adding a new
+#: entity type is a row here, not new store methods.
+_ENTITY_TABLES: dict[str, tuple[str, str, str]] = {
+    "technique": ("techniques", "tech", "techniques"),
+    "dataset": ("datasets", "ds", "datasets"),
+    "architecture": ("architectures", "arch", "architectures"),
+    "task": ("tasks", "task", "tasks"),
+}
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+
+
 def technique_id(name: str) -> str:
     """Deterministic id so the same technique name always merges to one row."""
-    slug = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+    slug = _slug(name)
     return f"tech_{slug}" if slug else "tech_unknown"
+
+
+def entity_id(entity_type: str, name: str) -> str:
+    """Deterministic id for any merged knowledge object."""
+    table = _ENTITY_TABLES.get(str(entity_type))
+    if table is None:
+        raise ValueError(f"unknown entity_type {entity_type!r}")
+    prefix = table[1]
+    slug = _slug(name)
+    return f"{prefix}_{slug}" if slug else f"{prefix}_unknown"
 
 
 class KnowledgeStore:
@@ -153,6 +178,80 @@ class KnowledgeStore:
             ).fetchall()
         return [self._row_to_artifact(row) for row in rows]
 
+    # -- Knowledge Hub ingestion receipts ---------------------------------
+
+    @staticmethod
+    def artifact_fingerprint(artifact: ResearchArtifact) -> str:
+        """Stable digest of the complete normalized Layer-2 artifact."""
+        payload = json.dumps(
+            artifact.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return hashlib.sha256(payload).hexdigest()
+
+    def pending_artifacts(
+        self,
+        artifacts: list[ResearchArtifact],
+        *,
+        signature: str,
+    ) -> list[ResearchArtifact]:
+        """Artifacts without a matching successful Hub receipt."""
+        if not artifacts:
+            return []
+        ids = [artifact.id for artifact in artifacts]
+        placeholders = ",".join("?" for _ in ids)
+        rows = self._conn.execute(
+            f"""
+            SELECT artifact_id, fingerprint, signature
+            FROM artifact_ingestions
+            WHERE artifact_id IN ({placeholders})
+            """,  # noqa: S608 - placeholders contain only bound parameters
+            ids,
+        ).fetchall()
+        receipts = {row["artifact_id"]: row for row in rows}
+        return [
+            artifact
+            for artifact in artifacts
+            if (receipt := receipts.get(artifact.id)) is None
+            or receipt["signature"] != signature
+            or receipt["fingerprint"] != self.artifact_fingerprint(artifact)
+        ]
+
+    def mark_artifacts_ingested(
+        self,
+        artifacts: list[ResearchArtifact],
+        *,
+        signature: str,
+    ) -> int:
+        """Record successful Hub processing for persisted artifacts only."""
+        existing = self.existing_artifact_ids([artifact.id for artifact in artifacts])
+        now = _now()
+        rows = [
+            (
+                artifact.id,
+                self.artifact_fingerprint(artifact),
+                signature,
+                now,
+            )
+            for artifact in artifacts
+            if artifact.id in existing
+        ]
+        self._conn.executemany(
+            """
+            INSERT INTO artifact_ingestions (
+                artifact_id, fingerprint, signature, ingested_at
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(artifact_id) DO UPDATE SET
+                fingerprint=excluded.fingerprint,
+                signature=excluded.signature,
+                ingested_at=excluded.ingested_at
+            """,
+            rows,
+        )
+        self._conn.commit()
+        return len(rows)
+
     @staticmethod
     def _row_to_artifact(row: sqlite3.Row) -> ResearchArtifact:
         return ResearchArtifact(
@@ -247,6 +346,197 @@ class KnowledgeStore:
     def get_technique(self, tid: str) -> dict[str, Any] | None:
         row = self._conn.execute("SELECT * FROM techniques WHERE id = ?", (tid,)).fetchone()
         return dict(row) if row else None
+
+    # -- generic merged entities (technique / dataset / architecture / task) ---
+
+    def merge_entity(
+        self,
+        entity_type: str,
+        name: str,
+        *,
+        category: str = "",
+        domain: str = "",
+        summary: str = "",
+        known_issues: str = "",
+        confidence: float = 0.5,
+        evidence: list[str] | None = None,
+        relation: str = "supports",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Upsert any merged knowledge object; techniques also get join links.
+
+        Non-technique tables carry only name/domain/summary/metadata today, so
+        technique-specific fields are folded into ``metadata`` for them.
+        """
+        entity_type = str(entity_type)
+        if entity_type == "technique":
+            return self.merge_technique(
+                name,
+                category=category,
+                domain=domain,
+                summary=summary,
+                known_issues=known_issues,
+                confidence=confidence,
+                evidence=evidence,
+                relation=relation,
+                metadata=metadata,
+            )
+
+        table, _prefix, _bucket = self._entity_table(entity_type)
+        eid = entity_id(entity_type, name)
+        now = _now()
+        extra = {"category": category, "confidence": confidence, **(metadata or {})}
+        row = self._conn.execute(
+            f"SELECT * FROM {table} WHERE id = ?", (eid,)  # noqa: S608 - internal table map
+        ).fetchone()
+        if row is None:
+            self._conn.execute(
+                f"""
+                INSERT INTO {table} (id, name, domain, summary, metadata, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,  # noqa: S608 - internal table map
+                (eid, name, domain, summary, json.dumps(extra), now, now),
+            )
+        else:
+            merged_meta = json.loads(row["metadata"])
+            merged_meta.update(extra)
+            self._conn.execute(
+                f"""
+                UPDATE {table} SET domain = ?, summary = ?, metadata = ?, updated_at = ?
+                WHERE id = ?
+                """,  # noqa: S608 - internal table map
+                (
+                    domain or row["domain"],
+                    summary or row["summary"],
+                    json.dumps(merged_meta),
+                    now,
+                    eid,
+                ),
+            )
+        for artifact_id in evidence or []:
+            if self._has_evidence_link(entity_type, eid, artifact_id, relation):
+                continue
+            self.add_evidence_link(
+                target_kind=entity_type,
+                target_id=eid,
+                artifact_id=artifact_id,
+                relation=relation,
+            )
+        self._conn.commit()
+        return eid
+
+    def _has_evidence_link(
+        self, target_kind: str, target_id: str, artifact_id: str, relation: str
+    ) -> bool:
+        """Keep re-ingest idempotent (``evidence_links`` has no natural key)."""
+        row = self._conn.execute(
+            """
+            SELECT 1 FROM evidence_links
+            WHERE target_kind = ? AND target_id = ? AND artifact_id = ? AND relation = ?
+            LIMIT 1
+            """,
+            (target_kind, target_id, artifact_id, relation),
+        ).fetchone()
+        return row is not None
+
+    def existing_artifact_ids(self, ids: list[str]) -> set[str]:
+        """Subset of ``ids`` present in ``research_artifacts``.
+
+        Join tables have a foreign key on artifacts, so callers must filter out
+        artifacts an analyzer chose not to persist before linking evidence.
+        """
+        if not ids:
+            return set()
+        unique = sorted(set(ids))
+        placeholders = ",".join("?" for _ in unique)
+        rows = self._conn.execute(
+            f"SELECT id FROM research_artifacts WHERE id IN ({placeholders})",  # noqa: S608 - bound params
+            unique,
+        ).fetchall()
+        return {row["id"] for row in rows}
+
+    def get_entity(self, entity_type: str, eid: str) -> dict[str, Any] | None:
+        table, _prefix, _bucket = self._entity_table(str(entity_type))
+        row = self._conn.execute(
+            f"SELECT * FROM {table} WHERE id = ?", (eid,)  # noqa: S608 - internal table map
+        ).fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
+    def _entity_table(entity_type: str) -> tuple[str, str, str]:
+        table = _ENTITY_TABLES.get(entity_type)
+        if table is None:
+            raise ValueError(f"unknown entity_type {entity_type!r}")
+        return table
+
+    def write_knowledge_unit(self, entity_type: str, unit_id: str, payload: str) -> Path:
+        """Persist a Layer-3 card under ``research/knowledge/<bucket>/``."""
+        _table, _prefix, bucket = self._entity_table(str(entity_type))
+        directory = self.paths.knowledge_dir / bucket
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{_safe_name(unit_id)}.json"
+        path.write_text(payload if payload.endswith("\n") else payload + "\n")
+        return path
+
+    # -- beliefs (Layer 4) -------------------------------------------------
+
+    def upsert_belief(
+        self,
+        *,
+        belief_id: str,
+        technique: str,
+        status: str = "suggested",
+        effect: str = "unknown",
+        confidence: float = 0.5,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Upsert one belief row. Status policy is owned by the Knowledge Hub."""
+        now = _now()
+        existing = self._conn.execute(
+            "SELECT created_at FROM beliefs WHERE id = ?", (belief_id,)
+        ).fetchone()
+        created_at = existing["created_at"] if existing else now
+        self._conn.execute(
+            """
+            INSERT INTO beliefs (
+                id, competition_slug, technique, effect, status, confidence,
+                metadata, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                competition_slug=excluded.competition_slug, technique=excluded.technique,
+                effect=excluded.effect, status=excluded.status,
+                confidence=excluded.confidence, metadata=excluded.metadata,
+                updated_at=excluded.updated_at
+            """,
+            (
+                belief_id,
+                self.competition,
+                technique,
+                effect,
+                status,
+                confidence,
+                json.dumps(metadata or {}),
+                created_at,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return belief_id
+
+    def get_belief(self, belief_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM beliefs WHERE id = ?", (belief_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_beliefs(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        if status is not None:
+            rows = self._conn.execute(
+                "SELECT * FROM beliefs WHERE status = ? ORDER BY id", (status,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute("SELECT * FROM beliefs ORDER BY id").fetchall()
+        return [dict(row) for row in rows]
 
     def link_artifact_technique(
         self, artifact_id: str, tid: str, *, relation: str = "mentions", weight: float = 1.0
