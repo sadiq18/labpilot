@@ -267,4 +267,6 @@ and knowledge base exist so you don’t have to rediscover failures by hand.
 | Dashboard / hyps missing later | `knowledge/` is gitignored — local only unless you sync it yourself |
 
 More architecture detail: [ARCHITECTURE.md](ARCHITECTURE.md).  
-Milestone 2 design: [milestones/milestone-2/README.md](milestones/milestone-2/README.md).
+Experiment Scientist design: [milestones/experiment-scientist/README.md](milestones/experiment-scientist/README.md).  
+Research Intelligence design: [milestones/research-intelligence/README.md](milestones/research-intelligence/README.md).  
+Research Planner design (Phase A): [milestones/research-planner/README.md](milestones/research-planner/README.md).

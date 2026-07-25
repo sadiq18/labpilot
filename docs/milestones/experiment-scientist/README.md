@@ -43,7 +43,8 @@ Reflection                          Reflect
 experiment gets executed, and a human still decides which experiment to run next. Milestone 2
 gives that human (and Milestone 3's research intelligence layer) the memory, comparison, and
 ranking tools to make that decision well — it does not make the decision autonomously.
-Milestone 3 design: [../milestone-3/README.md](../milestone-3/README.md).
+Research Intelligence design: [../research-intelligence/README.md](../research-intelligence/README.md).
+Research Planner design (next track): [../research-planner/README.md](../research-planner/README.md).
 
 ### Guiding decisions (carried over from our discussion)
 

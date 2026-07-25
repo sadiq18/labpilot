@@ -40,17 +40,20 @@ See [COMPLETED.md](COMPLETED.md).
 |------------|--------------|
 | **Packaging & PyPI** | Bundle `templates/` + default configs in wheel; `pip install labpilot`; release workflow |
 | **P2 remote execution** | Dispatch, polling, artifact sync (`--remote-train`) |
-| Multi-agent systems | No autonomous `agents/` package; Micro Agents live in `intelligence/micro_agents/` and `execution/micro_agents/` (`*Agent` + `skill.md`) |
-| Vector databases | Milestone 3 starts with structured JSON + search APIs; embeddings optional later |
-| Knowledge graphs | Milestone 3 uses evidence store + synthesis, not a general KG product |
-| Long-term memory | Milestone 2 `knowledge/` + Milestone 3 `intelligence/` are the scoped answer |
-| Autonomous planning | Ranking + analyze suggest; human still runs `improve` / `run` |
+| Multi-agent systems | No autonomous `agents/` package; Micro Agents live under intelligence / planner / execution (`*Agent` + `skill.md`) |
+| Vector databases | Research Intelligence starts with structured JSON + search APIs; embeddings optional later |
+| Knowledge graphs | Research Intelligence uses evidence store + synthesis, not a general KG product |
+| Long-term memory | Experiment Scientist `knowledge/` + Research Intelligence `intelligence/` are the scoped answer |
+| Autonomous **execution** | Ranking + analyze + (future) plan suggest; human still runs `improve` / `run` until an executor consumes DAGs |
 | Self-modifying code | Templates + parameterization first |
 | AutoML search | One strong baseline proves the loop |
 | Multi-model orchestration | Single model per run |
 | Full-pipeline remote execution | Training-only remote in P2 execution |
 
-**Milestone 3 — Research Intelligence** is no longer "unscheduled" — design lives at
-[milestone-3/README.md](milestone-3/README.md). Items above that overlap (vector DBs,
-long-term memory, autonomous planning) stay deferred as *products*; M3 only takes the
-narrow slice needed for `research analyze`.
+**Research Intelligence** design + Phase 1 plans: [research-intelligence/README.md](research-intelligence/README.md).
+
+**Research Planner** is the next design track — Phase A (design only) lives at
+[research-planner/README.md](research-planner/README.md). That is a **plan-only compiler**
+(Hypothesis → DAG), not autonomous execution. Items above that overlap (multi-agent systems,
+autonomous execution) stay deferred as *products*; the planner design explicitly rejects a
+multi-agent planner and defers capability executors.
