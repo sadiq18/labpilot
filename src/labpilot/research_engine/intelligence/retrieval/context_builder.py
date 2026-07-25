@@ -48,6 +48,8 @@ class ContextBuilder:
         competition: dict[str, Any] | None = None,
         constraints: list[str] | None = None,
         step: str | None = None,
+        progressive: bool = False,
+        core_technique_limit: int = 8,
     ) -> ResearchContext:
         intent = self._resolve_intent(
             query,
@@ -56,13 +58,94 @@ class ContextBuilder:
             query_type=query_type,
         )
         resolved_plan = plan or plan_for(intent.query_type)
+        competition_meta = competition or {
+            "slug": self.store.competition,
+            **(profile or {}),
+        }
+
+        if progressive:
+            return self._build_progressive(
+                intent,
+                resolved_plan,
+                competition=competition_meta,
+                constraints=constraints,
+                core_technique_limit=core_technique_limit,
+            )
+
         bundle = self.fetcher.fetch(intent, resolved_plan)
         bundle = self._rank_stub(bundle)  # Stage 3: identity pass-through
+        return self._finalize(
+            bundle,
+            intent=intent,
+            plan=resolved_plan,
+            competition=competition_meta,
+            constraints=constraints,
+            step=step,
+        )
+
+    def _build_progressive(
+        self,
+        intent: RetrievalIntent,
+        plan: QueryPlan,
+        *,
+        competition: dict[str, Any],
+        constraints: list[str] | None,
+        core_technique_limit: int,
+    ) -> ResearchContext:
+        """Fixed 3-pass flow: core techniques → expand survivors → compress."""
+        # Pass 1 — core selection (L2 technique metadata only).
+        core_plan = plan.model_copy(deep=True)
+        core_plan.limits = {
+            **core_plan.limits,
+            "techniques": core_technique_limit,
+            "papers": 0,
+            "experiments": 0,
+            "repositories": 0,
+            "failures": 0,
+        }
+        core = self.fetcher.fetch(intent, core_plan, expand=False)
+        survivor_ids = [str(row["id"]) for row in core.techniques[:core_technique_limit]]
+
+        # Pass 2 — targeted expansion for survivors only.
+        expanded = self.fetcher.fetch(
+            intent,
+            plan,
+            technique_ids=survivor_ids or None,
+            expand=True,
+        )
+        expanded = self._rank_stub(expanded)
+
+        # Pass 3 — budget compression.
+        context = self._finalize(
+            expanded,
+            intent=intent,
+            plan=plan,
+            competition=competition,
+            constraints=constraints,
+            step="progressive_compress",
+        )
+        context.notes = [
+            f"progressive: pass1_core={len(core.techniques)} "
+            f"survivors={len(survivor_ids)}.",
+            *core.notes,
+            *context.notes,
+        ]
+        return context
+
+    def _finalize(
+        self,
+        bundle: SymbolicBundle,
+        *,
+        intent: RetrievalIntent,
+        plan: QueryPlan,
+        competition: dict[str, Any],
+        constraints: list[str] | None,
+        step: str | None,
+    ) -> ResearchContext:
         cards, fields, brief, budget = compress_bundle(
             bundle,
             intent=intent,
-            competition=competition
-            or {"slug": self.store.competition, **(profile or {})},
+            competition=competition,
             constraints=constraints,
         )
         notes = list(bundle.notes)
@@ -71,7 +154,9 @@ class ContextBuilder:
             f"(dropped_sections={budget['dropped']})."
         )
         if not _brief_excludes_raw(brief):
-            notes.append("context: validation warning — brief may contain raw dump markers.")
+            notes.append(
+                "context: validation warning — brief may contain raw dump markers."
+            )
 
         return ResearchContext(
             competition=fields["competition"],
@@ -82,7 +167,7 @@ class ContextBuilder:
             failures=fields["failures"],
             constraints=fields["constraints"],
             question=fields["question"],
-            step=step or (resolved_plan.rounds[-1] if resolved_plan.rounds else "compress"),
+            step=step or (plan.rounds[-1] if plan.rounds else "compress"),
             intent=intent,
             brief=brief,
             budget=budget,

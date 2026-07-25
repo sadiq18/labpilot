@@ -1,7 +1,7 @@
 """Terminal renderer — human-facing view of an ``AnalysisReport``.
 
-Plan 1 keeps this minimal (envelope + counts + notes). The mockup-parity
-sections (competition profile, techniques, transfers, top-10) land in Plan 11.
+Plan 1 envelope + counts; Plan 10 adds a short top-N hypothesis preview.
+Mockup-parity polish remains Plan 11.
 """
 
 from __future__ import annotations
@@ -31,6 +31,23 @@ def render_terminal(report: AnalysisReport, *, console: Console | None = None) -
 
     if report.analyzers:
         console.print(f"\n[dim]Analyzers:[/dim] {', '.join(report.analyzers)}")
+
+    if report.hypothesis_recommendations:
+        console.print("\n[bold]Suggested Next Experiments[/bold]")
+        for card in report.hypothesis_recommendations[:10]:
+            rank = card.get("rank", "?")
+            title = card.get("title") or card.get("prediction") or "(untitled)"
+            impact = card.get("expected_impact", "unknown")
+            confidence = card.get("confidence", 0.0)
+            effort = card.get("implementation_effort", "unknown")
+            hyp_id = card.get("hypothesis_id") or ""
+            console.print(
+                f"  [cyan]#{rank}[/cyan] {title}"
+                + (f"  [dim]({hyp_id})[/dim]" if hyp_id else "")
+            )
+            console.print(
+                f"      impact={impact}  confidence={confidence:.2f}  effort={effort}"
+            )
 
     if report.notes:
         console.print("\n[bold]Notes[/bold]")

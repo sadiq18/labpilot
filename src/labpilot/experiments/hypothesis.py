@@ -8,7 +8,15 @@ from pathlib import Path
 from typing import Literal
 
 from labpilot.experiments.graph import ExperimentGraph
-from labpilot.experiments.models import Experiment, Hypothesis, HypothesisStatus
+from labpilot.experiments.models import (
+    Experiment,
+    Hypothesis,
+    HypothesisCreatedBy,
+    HypothesisEvidenceRef,
+    HypothesisGenerator,
+    HypothesisOrigin,
+    HypothesisStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +57,28 @@ class HypothesisStore:
         prediction: str,
         confidence: float,
         tags: Iterable[str] = (),
-        source: Literal["manual", "reflection", "llm"] = "manual",
+        source: Literal["manual", "reflection", "llm", "analyze"] = "manual",
+        created_by: HypothesisCreatedBy | str | None = None,
+        generator: HypothesisGenerator | str | None = None,
+        origin: HypothesisOrigin | str | None = None,
+        origins: Iterable[HypothesisOrigin | str] = (),
+        evidence: Iterable[HypothesisEvidenceRef | dict] = (),
     ) -> Hypothesis:
         now = _now()
+        resolved_created_by = _coerce_created_by(created_by, source)
+        resolved_generator = _coerce_generator(generator, source)
+        resolved_origin = _coerce_origin(origin, source)
+        resolved_origins = [
+            HypothesisOrigin(str(item)) for item in origins if str(item).strip()
+        ]
+        if not resolved_origins and resolved_origin is not None:
+            resolved_origins = [resolved_origin]
+        evidence_refs = [
+            item
+            if isinstance(item, HypothesisEvidenceRef)
+            else HypothesisEvidenceRef.model_validate(item)
+            for item in evidence
+        ]
         hypothesis = Hypothesis(
             id=self._allocate_id(),
             competition=self.competition,
@@ -61,6 +88,11 @@ class HypothesisStore:
             confidence=confidence,
             tags=list(tags),
             source=source,
+            created_by=resolved_created_by,
+            generator=resolved_generator,
+            origin=resolved_origin,
+            origins=resolved_origins,
+            evidence=evidence_refs,
             created_at=now,
             updated_at=now,
         )
@@ -146,6 +178,51 @@ class HypothesisStore:
         self.hypotheses_dir.mkdir(parents=True, exist_ok=True)
         path = self._path_for(hypothesis.id)
         path.write_text(hypothesis.model_dump_json(indent=2))
+
+
+def _coerce_created_by(
+    value: HypothesisCreatedBy | str | None,
+    source: str,
+) -> HypothesisCreatedBy:
+    if value is not None:
+        return HypothesisCreatedBy(str(value))
+    mapping = {
+        "manual": HypothesisCreatedBy.MANUAL,
+        "reflection": HypothesisCreatedBy.REFLECTION,
+        "llm": HypothesisCreatedBy.MANUAL,
+        "analyze": HypothesisCreatedBy.ANALYZE,
+    }
+    return mapping.get(source, HypothesisCreatedBy.MANUAL)
+
+
+def _coerce_generator(
+    value: HypothesisGenerator | str | None,
+    source: str,
+) -> HypothesisGenerator:
+    if value is not None:
+        return HypothesisGenerator(str(value))
+    mapping = {
+        "manual": HypothesisGenerator.HUMAN,
+        "reflection": HypothesisGenerator.LLM,
+        "llm": HypothesisGenerator.LLM,
+        "analyze": HypothesisGenerator.RULE_ENGINE,
+    }
+    return mapping.get(source, HypothesisGenerator.HUMAN)
+
+
+def _coerce_origin(
+    value: HypothesisOrigin | str | None,
+    source: str,
+) -> HypothesisOrigin:
+    if value is not None:
+        return HypothesisOrigin(str(value))
+    mapping = {
+        "manual": HypothesisOrigin.USER,
+        "reflection": HypothesisOrigin.EXPERIMENT,
+        "llm": HypothesisOrigin.USER,
+        "analyze": HypothesisOrigin.MIXED,
+    }
+    return mapping.get(source, HypothesisOrigin.USER)
 
 
 def linked_experiments(hypothesis_id: str, graph: ExperimentGraph) -> list[Experiment]:

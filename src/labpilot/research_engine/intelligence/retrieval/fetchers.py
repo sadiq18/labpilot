@@ -38,7 +38,14 @@ class SymbolicFetcher:
     def __init__(self, store: KnowledgeStore) -> None:
         self.store = store
 
-    def fetch(self, intent: RetrievalIntent, plan: QueryPlan) -> SymbolicBundle:
+    def fetch(
+        self,
+        intent: RetrievalIntent,
+        plan: QueryPlan,
+        *,
+        technique_ids: list[str] | None = None,
+        expand: bool = True,
+    ) -> SymbolicBundle:
         limits = plan.limits
         tech_limit = int(limits.get("techniques", 12))
         paper_limit = int(limits.get("papers", 8))
@@ -47,6 +54,13 @@ class SymbolicFetcher:
         fail_limit = int(limits.get("failures", 6))
 
         techniques = self._select_techniques(intent, limit=tech_limit)
+        if technique_ids is not None:
+            allowed = set(technique_ids)
+            techniques = [row for row in techniques if str(row["id"]) in allowed]
+            # Preserve caller order when restricting to survivors.
+            order = {tid: index for index, tid in enumerate(technique_ids)}
+            techniques.sort(key=lambda row: order.get(str(row["id"]), 10_000))
+
         bundle = SymbolicBundle(techniques=techniques)
         if not techniques:
             bundle.notes.append("symbolic: no techniques matched intent filters.")
@@ -54,22 +68,26 @@ class SymbolicFetcher:
             bundle.notes.append("discussions: stub empty until Plan F.")
             return bundle
 
-        for technique in techniques:
-            tid = str(technique["id"])
-            self._expand_technique(
-                bundle,
-                tid,
-                technique_name=str(technique.get("name") or tid),
-                intent=intent,
-                paper_limit=paper_limit,
-                exp_limit=exp_limit,
-                repo_limit=repo_limit,
-            )
+        if expand:
+            for technique in techniques:
+                tid = str(technique["id"])
+                self._expand_technique(
+                    bundle,
+                    tid,
+                    technique_name=str(technique.get("name") or tid),
+                    intent=intent,
+                    paper_limit=paper_limit,
+                    exp_limit=exp_limit,
+                    repo_limit=repo_limit,
+                )
 
-        bundle.papers = _dedupe_hits(bundle.papers)[:paper_limit]
-        bundle.experiments = _dedupe_hits(bundle.experiments)[:exp_limit]
-        bundle.repositories = _dedupe_hits(bundle.repositories)[:repo_limit]
-        bundle.failures = self._collect_failures(techniques, bundle, limit=fail_limit)
+            bundle.papers = _dedupe_hits(bundle.papers)[:paper_limit]
+            bundle.experiments = _dedupe_hits(bundle.experiments)[:exp_limit]
+            bundle.repositories = _dedupe_hits(bundle.repositories)[:repo_limit]
+            bundle.failures = self._collect_failures(techniques, bundle, limit=fail_limit)
+        else:
+            bundle.notes.append("symbolic: core selection only (expansion deferred).")
+
         bundle.discussions = []
         bundle.notes.append("discussions: stub empty until Plan F.")
         bundle.notes.append(

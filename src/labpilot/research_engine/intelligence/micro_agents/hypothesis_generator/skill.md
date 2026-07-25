@@ -30,5 +30,6 @@ Recommendation only — never executes and never auto-runs (§2.3).
 
 ## Notes
 
-Draft shape maps to the M2 Hypothesis store (`origin=paper|repo|reflection`).
-The caller persists; the agent does not.
+Draft shape maps to the M2 Hypothesis store. The caller sets provenance
+(`created_by` / `generator` / `origin` / `evidence`) — the agent does not
+persist and never executes.

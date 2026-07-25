@@ -1,18 +1,19 @@
 """Thin orchestrator for ``research analyze`` (design §3).
 
 Flow: select analyzers → run each (soft-fail) → merge ``ResearchArtifacts`` →
-ingest into the Knowledge Extraction hub once → write ``analyze.json``.
-Retrieval and the Hypothesis Assistant are wired in later plans.
+ingest into the Knowledge Extraction hub once → Hypothesis Assistant top-N →
+write ``analyze.json``.
 
 The hub runs **after** every analyzer so one failed source cannot leave a
-partially merged knowledge base, and the orchestrator only depends on the
-``KnowledgeHub.ingest`` contract — not on how units are stored or indexed.
+partially merged knowledge base. Hypothesis Assistant reads the store via
+progressive ContextBuilder and never executes runs.
 """
 
 from __future__ import annotations
 
 import logging
 
+from labpilot.experiments.models import HypothesisCreatedBy
 from labpilot.research_engine.intelligence.analyzers.base import Analyzer
 from labpilot.research_engine.intelligence.analyzers.competition import (
     profile_dict_for_report,
@@ -20,6 +21,7 @@ from labpilot.research_engine.intelligence.analyzers.competition import (
 )
 from labpilot.research_engine.intelligence.analyzers.papers import paper_dict_for_report
 from labpilot.research_engine.intelligence.analyzers.repositories import repo_dict_for_report
+from labpilot.research_engine.intelligence.hypothesis import HypothesisAssistant
 from labpilot.research_engine.intelligence.knowledge.hub import KnowledgeHub
 from labpilot.research_engine.intelligence.knowledge.models import BeliefStatus, IngestResult
 from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
@@ -30,6 +32,7 @@ from labpilot.research_engine.intelligence.models import (
     ResearchArtifactType,
 )
 from labpilot.research_engine.intelligence.registry import AnalyzerRegistry
+from labpilot.research_engine.intelligence.repositories.local_profile import LocalCodeProfiler
 
 logger = logging.getLogger("labpilot.research_engine.intelligence.orchestrator")
 
@@ -41,10 +44,12 @@ class AnalyzeOrchestrator:
         *,
         llm_client: object | None = None,
         ingest_knowledge: bool = True,
+        hypothesize: bool = True,
     ) -> None:
         self._registry = registry
         self._llm_client = llm_client
         self._ingest_knowledge = ingest_knowledge
+        self._hypothesize = hypothesize
 
     def analyze(
         self,
@@ -76,6 +81,7 @@ class AnalyzeOrchestrator:
             report.transfer_opportunities.extend(emission.transfers)
 
         self._ingest(report, context)
+        self._hypothesize_run(report, context)
 
         report.summary = {
             "analyzer_count": len(report.analyzers),
@@ -84,6 +90,7 @@ class AnalyzeOrchestrator:
             "repository_count": len(report.repositories),
             "transfer_count": len(report.transfer_opportunities),
             "knowledge_unit_count": len(report.knowledge_units),
+            "hypothesis_count": len(report.hypothesis_recommendations),
         }
         return report
 
@@ -104,6 +111,66 @@ class AnalyzeOrchestrator:
             report.notes.append(f"[knowledge-hub] ingest failed: {exc}")
             return
         self._merge_knowledge(report, result)
+
+    def _hypothesize_run(self, report: AnalysisReport, context: AnalyzeContext) -> None:
+        """Top-N recommendations only — soft-fail; never executes training."""
+        if not self._hypothesize:
+            report.notes.append("[hypothesis] skipped by request.")
+            return
+        pipeline = _pipeline_from_context(context)
+        try:
+            result = HypothesisAssistant(
+                llm_client=self._llm_client,
+                created_by=HypothesisCreatedBy.ANALYZE,
+            ).recommend(
+                knowledge_dir=context.knowledge_dir,
+                competition=context.competition,
+                question="Suggest next experiments for this competition",
+                pipeline=pipeline,
+                transfers=report.transfer_opportunities,
+                persist=True,
+                write_report=False,
+                progressive=True,
+            )
+        except Exception as exc:  # soft-fail
+            logger.warning("Hypothesis Assistant failed: %s", exc)
+            report.notes.append(f"[hypothesis] failed: {exc}")
+            return
+
+        report.hypothesis_recommendations.extend(
+            card.model_dump(mode="json") for card in result.recommendations
+        )
+        report.hypotheses.extend(
+            {
+                "id": card.hypothesis_id,
+                "title": card.title,
+                "status": "proposed",
+                "created_by": str(card.created_by),
+                "generator": str(card.generator),
+                "origin": str(card.origin),
+            }
+            for card in result.recommendations
+            if card.hypothesis_id
+        )
+        for note in result.notes:
+            report.notes.append(f"[hypothesis] {note}")
+        if result.context is not None:
+            report.retrieval.papers = [
+                str(item.get("document_id") or item.get("label") or "")
+                for item in result.context.papers
+            ]
+            report.retrieval.experiments = [
+                str(item.get("document_id") or item.get("label") or "")
+                for item in result.context.experiments
+            ]
+            report.retrieval.repositories = [
+                str(item.get("document_id") or item.get("label") or "")
+                for item in result.context.repositories
+            ]
+            report.retrieval.failures = [
+                str(item.get("document_id") or item.get("label") or "")
+                for item in result.context.failures
+            ]
 
     @staticmethod
     def _merge_knowledge(report: AnalysisReport, result: IngestResult) -> None:
@@ -152,3 +219,22 @@ class AnalyzeOrchestrator:
             related = related_dict_for_report(artifact)
             if related is not None:
                 report.related_competitions.append(related)
+
+
+def _pipeline_from_context(context: AnalyzeContext) -> list[str]:
+    try:
+        profile = LocalCodeProfiler().profile(context)
+    except Exception:
+        return []
+    if profile is None:
+        return []
+    return list(
+        dict.fromkeys(
+            [
+                *profile.architecture,
+                *profile.augmentation,
+                *profile.training_tricks,
+                *profile.loss,
+            ]
+        )
+    )

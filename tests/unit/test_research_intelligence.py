@@ -314,7 +314,14 @@ def test_analyze_help_documents_flags():
     )
     assert result.exit_code == 0
     plain = _plain(result.stdout)
-    for flag in ("--include", "--exclude", "--format", "--refresh", "--skip-ingest"):
+    for flag in (
+        "--include",
+        "--exclude",
+        "--format",
+        "--refresh",
+        "--skip-ingest",
+        "--skip-hypothesize",
+    ):
         assert flag in plain
 
 

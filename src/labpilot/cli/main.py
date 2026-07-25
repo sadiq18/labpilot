@@ -11,6 +11,7 @@ from rich.table import Table
 from labpilot.baseline.registry import list_templates
 from labpilot.competition.models import CompetitionSpec
 from labpilot.config import (
+    AppConfig,
     load_config,
     resolve_competitions_dir,
     resolve_runtimes_dir,
@@ -24,7 +25,7 @@ from labpilot.experiments.comparator import compare, load_comparison, render_mar
 from labpilot.experiments.graph import assemble_experiment, build_graph
 from labpilot.experiments.hypothesis import HypothesisStore, linked_experiments
 from labpilot.experiments.knowledge import KnowledgeBase
-from labpilot.experiments.models import HypothesisStatus, Verdict
+from labpilot.experiments.models import HypothesisCreatedBy, HypothesisStatus, Verdict
 from labpilot.experiments.ranking import RankingWeights, rank_candidates
 from labpilot.experiments.report import (
     NoExperimentsError,
@@ -46,6 +47,7 @@ from labpilot.orchestrator.manifest import StageStatus, load_manifest
 from labpilot.orchestrator.pipeline import Pipeline, find_manifest
 from labpilot.report.generator import ReportGenerator
 from labpilot.research_engine.intelligence.context import build_context
+from labpilot.research_engine.intelligence.hypothesis import HypothesisAssistant
 from labpilot.research_engine.intelligence.knowledge import KnowledgeHub, KnowledgeStore
 from labpilot.research_engine.intelligence.orchestrator import AnalyzeOrchestrator
 from labpilot.research_engine.intelligence.registry import (
@@ -115,8 +117,7 @@ def _load_app_config(
     runs_dir: Path | None,
     project_dir: Path | None,
     knowledge_dir: Path | None = None,
-) -> "AppConfig":
-    from labpilot.config import AppConfig
+) -> AppConfig:
 
     config = load_config(config_path, project_dir=project_dir)
     if runs_dir:
@@ -712,6 +713,11 @@ def analyze(
         "--skip-ingest",
         help="Store analyzer artifacts but defer Knowledge Hub ingestion",
     ),
+    skip_hypothesize: bool = typer.Option(
+        False,
+        "--skip-hypothesize",
+        help="Skip Hypothesis Assistant top-N recommendations",
+    ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
@@ -760,6 +766,7 @@ def analyze(
         build_default_registry(),
         llm_client=resolve_llm_client(config.llm),
         ingest_knowledge=not skip_ingest,
+        hypothesize=not skip_hypothesize,
     )
     try:
         report = orchestrator.analyze(
@@ -964,6 +971,121 @@ def retrieve_cmd(
     if context.notes:
         console.print("\n[bold]Notes[/bold]")
         for note in context.notes:
+            console.print(f"  [yellow]•[/yellow] {note}")
+
+
+@app.command()
+def hypothesize(
+    competition: str = typer.Argument(..., help="Competition slug"),
+    question: str = typer.Option(
+        "Suggest next experiments",
+        "--question",
+        "-q",
+        help="Framing question for ContextBuilder / drafts",
+    ),
+    pipeline: str | None = typer.Option(
+        None,
+        "--pipeline",
+        help="Comma-separated current techniques (e.g. EMA,Mixup)",
+    ),
+    limit: int = typer.Option(10, "--limit", help="Max recommendations (≤10)"),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        help="What to print: text or json",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    project_dir: Path | None = typer.Option(
+        None, "--project-dir", help="Project root containing project.yaml"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Recommend top-N next experiments from the Knowledge Store (Plan 10).
+
+    Recommendations only — does not train, fork, or call research improve.
+    Persists Suggested hypotheses into the M2 HypothesisStore and writes
+    ``research/reports/hypotheses.json``.
+    """
+    if output_format not in {"text", "json"}:
+        raise typer.BadParameter("--format must be 'text' or 'json'.")
+    if limit < 1 or limit > 10:
+        raise typer.BadParameter("--limit must be between 1 and 10.")
+
+    config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
+    pipeline_list = (
+        [item.strip() for item in pipeline.split(",") if item.strip()] if pipeline else []
+    )
+    if not pipeline_list and config.runs_dir is not None:
+        try:
+            from labpilot.research_engine.intelligence.context import build_context
+            from labpilot.research_engine.intelligence.repositories.local_profile import (
+                LocalCodeProfiler,
+            )
+
+            ctx = build_context(
+                competition,
+                runs_dir=config.runs_dir,
+                knowledge_dir=config.knowledge_dir,
+            )
+            profile = LocalCodeProfiler().profile(ctx)
+            if profile is not None:
+                pipeline_list = list(
+                    dict.fromkeys(
+                        [
+                            *profile.architecture,
+                            *profile.augmentation,
+                            *profile.training_tricks,
+                            *profile.loss,
+                        ]
+                    )
+                )
+        except Exception:
+            pipeline_list = []
+
+    result = HypothesisAssistant(
+        llm_client=resolve_llm_client(config.llm),
+        created_by=HypothesisCreatedBy.HYPOTHESIZE,
+    ).recommend(
+        knowledge_dir=config.knowledge_dir,
+        competition=competition,
+        question=question,
+        pipeline=pipeline_list,
+        limit=limit,
+        persist=True,
+        write_report=True,
+        progressive=True,
+    )
+
+    if output_format == "json":
+        print(result.model_dump_json(indent=2))
+        return
+
+    console.print(f"\n[bold]Hypothesis Assistant[/bold] — [cyan]{competition}[/cyan]")
+    console.print(f"[dim]Recommendations:[/dim] {len(result.recommendations)}")
+    for card in result.recommendations:
+        console.print(
+            f"  [cyan]#{card.rank}[/cyan] {card.title}  "
+            f"[dim]({card.hypothesis_id})[/dim]"
+        )
+        console.print(
+            f"      impact={card.expected_impact}  "
+            f"confidence={card.confidence:.2f}  "
+            f"effort={card.implementation_effort}  "
+            f"score={card.score:.3f}"
+        )
+        if card.supporting_evidence:
+            refs = ", ".join(f"{e.kind}:{e.ref}" for e in card.supporting_evidence[:4])
+            console.print(f"      evidence: {refs}")
+        if card.avoids_failure_ids:
+            console.print(f"      avoids: {', '.join(card.avoids_failure_ids)}")
+    if result.notes:
+        console.print("\n[bold]Notes[/bold]")
+        for note in result.notes:
             console.print(f"  [yellow]•[/yellow] {note}")
 
 
