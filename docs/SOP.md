@@ -133,10 +133,17 @@ This scores **proposed** ideas only; it does not start training.
 When you want literature / repo / cross-comp context before picking the next run:
 
 ```bash
-# Landscape + top-10 recommendations (writes analyze.json; terminal is a view)
+# Understand the problem — artifacts, beliefs, hypotheses, Research Brief
 uv run research analyze <slug>
+# Read the briefing first:
+#   knowledge/<slug>/research/reports/research_brief.md
+# Full contract:
+#   knowledge/<slug>/research/reports/analyze.json
 
-# Pull popular kernels / forum threads into knowledge/ (official API)
+# Also pull popular kernels (votes×5 + score×5) and discussions (×5)
+uv run research analyze <slug> --fetch-kaggle
+
+# Deeper Kaggle code/forum pull into knowledge/
 uv run research fetch <slug> --source all --limit 20
 
 # Ask a grounded question against knowledge.db (offline)
@@ -150,7 +157,8 @@ Treat suggestions as a backlog — pick one, attach a hypothesis, then `improve`
 External techniques stay **Suggested** until local runs promote them.
 `research fetch` stores kernels as repository artifacts (`source=kaggle`) and
 discussions as discussion artifacts; Forum Intelligence extraction still lands in
-Plan F analyzers.
+Plan F analyzers. Analyze defaults leave kernels/discussions to `fetch` unless
+you pass `--fetch-kaggle`.
 
 ### Step 4 — Improve a completed parent
 
@@ -223,8 +231,8 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 | “Did child help?” | `experiments compare` or open `comparison.md` |
 | “What have we learned about recipe X?” | `experiments knowledge list --technique …` |
 | “Show me everything” | `experiments report` + `dashboard` |
-| Need papers/repos + next experiments | `research analyze <slug>` → read `analyze.json` / top-10 |
-| Pull Kaggle code/forum into the store | `research fetch <slug>` |
+| Need landscape + briefing | `research analyze <slug>` → read `research_brief.md`, then `analyze.json` / hypotheses |
+| Pull Kaggle code/forum into the store | `research fetch <slug>` (or `analyze --fetch-kaggle`) |
 | Grounded Q over the knowledge store | `research retrieve <slug> -q "…"` |
 | Literature-backed untried ideas | `research hypothesize <slug>` |
 | Need another operator on the team | Point them at this SOP + [CLI.md](CLI.md) |
@@ -234,7 +242,7 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 ## 7. Suggested weekly loop
 
 1. `experiments report` / `dashboard` — where are we?
-2. Optional: `research analyze` — refresh landscape + top-10 suggestions.
+2. Optional: `research analyze` — refresh landscape + Research Brief (+ `--fetch-kaggle` when needed).
 3. `experiments rank` or `research hypothesize` — pick one proposed hypothesis (or add one).
 4. `improve --hypothesis H-xxx --strategy …` — one change at a time when possible.
 5. `experiments compare` — keep / discard.

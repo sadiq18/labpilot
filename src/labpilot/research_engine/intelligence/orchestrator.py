@@ -1,17 +1,14 @@
 """Thin orchestrator for ``research analyze`` (design §3).
 
-Flow: select analyzers → run each (soft-fail) → merge ``ResearchArtifacts`` →
-ingest into the Knowledge Extraction hub once → Hypothesis Assistant top-N →
-write ``analyze.json``.
-
-The hub runs **after** every analyzer so one failed source cannot leave a
-partially merged knowledge base. Hypothesis Assistant reads the store via
-progressive ContextBuilder and never executes runs.
+Flow: select analyzers → run each (soft-fail) → optional Kaggle fetch →
+upsert all artifacts → Knowledge Hub ingest → Hypothesis Assistant →
+Research Brief → write ``analyze.json``.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from labpilot.experiments.models import HypothesisCreatedBy
 from labpilot.research_engine.intelligence.analyzers.base import Analyzer
@@ -21,6 +18,8 @@ from labpilot.research_engine.intelligence.analyzers.competition import (
 )
 from labpilot.research_engine.intelligence.analyzers.papers import paper_dict_for_report
 from labpilot.research_engine.intelligence.analyzers.repositories import repo_dict_for_report
+from labpilot.research_engine.intelligence.brief.builder import build_research_brief
+from labpilot.research_engine.intelligence.fetch import KaggleFetchService
 from labpilot.research_engine.intelligence.hypothesis import HypothesisAssistant
 from labpilot.research_engine.intelligence.knowledge.hub import KnowledgeHub
 from labpilot.research_engine.intelligence.knowledge.models import BeliefStatus, IngestResult
@@ -37,6 +36,10 @@ from labpilot.research_engine.intelligence.repositories.local_profile import Loc
 
 logger = logging.getLogger("labpilot.research_engine.intelligence.orchestrator")
 
+_FETCH_KERNEL_VOTE_LIMIT = 5
+_FETCH_KERNEL_SCORE_LIMIT = 5
+_FETCH_DISCUSSION_LIMIT = 5
+
 
 class AnalyzeOrchestrator:
     def __init__(
@@ -46,11 +49,17 @@ class AnalyzeOrchestrator:
         llm_client: object | None = None,
         ingest_knowledge: bool = True,
         hypothesize: bool = True,
+        brief: bool = True,
+        fetch_kaggle: bool = False,
+        kaggle_fetch_service: KaggleFetchService | None = None,
     ) -> None:
         self._registry = registry
         self._llm_client = llm_client
         self._ingest_knowledge = ingest_knowledge
         self._hypothesize = hypothesize
+        self._brief = brief
+        self._fetch_kaggle = fetch_kaggle
+        self._kaggle_fetch_service = kaggle_fetch_service
 
     def analyze(
         self,
@@ -65,7 +74,7 @@ class AnalyzeOrchestrator:
         if context.url:
             report.competition["url"] = context.url
 
-        if not selected:
+        if not selected and not self._fetch_kaggle:
             report.notes.append(
                 "No analyzers selected/registered — wrote stub report only "
                 "(real analyzers land in Plans 4–7)."
@@ -81,8 +90,10 @@ class AnalyzeOrchestrator:
             self._merge_emission(report, emission)
             report.transfer_opportunities.extend(emission.transfers)
 
+        self._fetch_kaggle_run(report, context)
         self._ingest(report, context)
         self._hypothesize_run(report, context)
+        self._brief_run(report, context)
 
         report.summary = {
             "analyzer_count": len(report.analyzers),
@@ -92,21 +103,77 @@ class AnalyzeOrchestrator:
             "transfer_count": len(report.transfer_opportunities),
             "knowledge_unit_count": len(report.knowledge_units),
             "hypothesis_count": len(report.hypothesis_recommendations),
+            "has_research_brief": bool(report.research_brief),
         }
         return report
 
+    def _fetch_kaggle_run(self, report: AnalysisReport, context: AnalyzeContext) -> None:
+        """Opt-in: pull popular kernels + discussions before hub ingest."""
+        if not self._fetch_kaggle:
+            return
+        try:
+            service = self._kaggle_fetch_service or KaggleFetchService(
+                llm_client=self._llm_client
+            )
+            calls: list[tuple[set[str], dict[str, Any]]] = [
+                ({"kernels"}, {"kernel_sort": "voteCount", "limit": _FETCH_KERNEL_VOTE_LIMIT}),
+                (
+                    {"kernels"},
+                    {"kernel_sort": "scoreDescending", "limit": _FETCH_KERNEL_SCORE_LIMIT},
+                ),
+                ({"discussions"}, {"limit": _FETCH_DISCUSSION_LIMIT}),
+            ]
+            fetched_ids: list[str] = []
+            for sources, kwargs in calls:
+                result = service.fetch(
+                    context.competition,
+                    sources=sources,  # type: ignore[arg-type]
+                    knowledge_dir=context.knowledge_dir,
+                    refresh=context.refresh,
+                    **kwargs,
+                )
+                fetched_ids.extend(result.artifact_ids)
+                report.notes.append(
+                    f"[fetch-kaggle] sources={sorted(sources)} "
+                    f"written={result.written} skipped={result.skipped_existing} "
+                    f"fetched={result.fetched}"
+                )
+                for note in result.notes:
+                    report.notes.append(f"[fetch-kaggle] {note}")
+
+            if not fetched_ids:
+                return
+            with KnowledgeStore(context.knowledge_dir, context.competition) as store:
+                existing_ids = {a.id for a in report.artifacts}
+                for artifact_id in dict.fromkeys(fetched_ids):
+                    if artifact_id in existing_ids:
+                        continue
+                    artifact = store.get_artifact(artifact_id)
+                    if artifact is not None:
+                        report.artifacts.append(artifact)
+                        existing_ids.add(artifact_id)
+        except Exception as exc:  # soft-fail
+            logger.warning("Kaggle fetch during analyze failed: %s", exc)
+            report.notes.append(f"[fetch-kaggle] failed: {exc}")
+
     def _ingest(self, report: AnalysisReport, context: AnalyzeContext) -> None:
-        """Single end-of-run hub call; a hub failure must not lose the report."""
+        """Upsert analyzer artifacts, then hub-ingest (soft-fail)."""
         if not self._ingest_knowledge:
             report.notes.append("[knowledge-hub] ingestion skipped by request.")
             return
-        if not report.artifacts:
+        if not report.artifacts and not self._fetch_kaggle:
             return
         try:
             with KnowledgeStore(context.knowledge_dir, context.competition) as store:
-                result = KnowledgeHub(store, llm_client=self._llm_client).ingest(
-                    report.artifacts
+                for artifact in report.artifacts:
+                    store.upsert_artifact(artifact)
+                to_ingest = (
+                    store.list_artifacts() if self._fetch_kaggle else list(report.artifacts)
                 )
+                if not to_ingest:
+                    report.notes.append("[knowledge-hub] nothing to ingest.")
+                    return
+                result = KnowledgeHub(store, llm_client=self._llm_client).ingest(to_ingest)
                 self._merge_knowledge(report, result)
                 self._refresh_technique_buckets(report, store)
         except Exception as exc:  # soft-fail: merged knowledge is best-effort
@@ -141,7 +208,6 @@ class AnalyzeOrchestrator:
 
         cards = [card.model_dump(mode="json") for card in result.recommendations]
         report.hypothesis_recommendations.extend(cards)
-        # Contract §12.5 lists both keys; keep them aligned in v1.
         report.suggested_experiments.extend(cards)
         report.hypotheses.extend(
             {
@@ -175,14 +241,32 @@ class AnalyzeOrchestrator:
                 for item in result.context.failures
             ]
 
+    def _brief_run(self, report: AnalysisReport, context: AnalyzeContext) -> None:
+        """Durable Research Brief after ingest + hypothesize — soft-fail."""
+        if not self._brief:
+            report.notes.append("[research-brief] skipped by request.")
+            return
+        if not self._ingest_knowledge or not self._hypothesize:
+            report.notes.append(
+                "[research-brief] skipped (requires ingest + hypothesize)."
+            )
+            return
+        try:
+            with KnowledgeStore(context.knowledge_dir, context.competition) as store:
+                brief = build_research_brief(
+                    report, store, llm_client=self._llm_client
+                )
+            report.research_brief = brief.model_dump(mode="json")
+            report.notes.append(f"[research-brief] generated_by={brief.generated_by}")
+        except Exception as exc:  # soft-fail
+            logger.warning("Research brief failed: %s", exc)
+            report.notes.append(f"[research-brief] failed: {exc}")
+
     @staticmethod
     def _merge_knowledge(report: AnalysisReport, result: IngestResult) -> None:
         report.knowledge_units.extend(unit.model_dump(mode="json") for unit in result.units)
         for note in result.notes:
             report.notes.append(f"[knowledge-hub] {note}")
-        # Provisional buckets from this ingest; `_refresh_technique_buckets`
-        # rebuilds from the store so Validated/Established (promoted outside
-        # the hub) land in locally_validated.
         for belief in result.beliefs:
             if belief.status is BeliefStatus.SUGGESTED:
                 report.techniques.external_recommendations.append(belief.technique)
@@ -242,7 +326,6 @@ class AnalyzeOrchestrator:
                 continue
             profile = profile_dict_for_report(artifact)
             if profile is not None:
-                # Keep the slug/url envelope keys; overlay the expert brief.
                 report.competition = {**report.competition, **profile}
                 continue
             related = related_dict_for_report(artifact)

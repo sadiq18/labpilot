@@ -740,6 +740,19 @@ def analyze(
         "--skip-hypothesize",
         help="Skip generating new hypotheses after ingestion",
     ),
+    skip_brief: bool = typer.Option(
+        False,
+        "--skip-brief",
+        help="Skip writing the Research Brief (requires ingest + hypothesize)",
+    ),
+    fetch_kaggle: bool = typer.Option(
+        False,
+        "--fetch-kaggle",
+        help=(
+            "Also pull Kaggle kernels (5 by votes + 5 by score) and discussions (5), "
+            "then ingest/hypothesize/brief over that evidence"
+        ),
+    ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
@@ -751,12 +764,11 @@ def analyze(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
 ) -> None:
-    """Analyze a competition's research landscape (writes analyze.json).
+    """Understand the problem: artifacts, beliefs, hypotheses, and Research Brief.
 
-    Run every default analyzer, a single one (``research analyze papers
-    <slug>``), or a subset via ``--include`` / ``--exclude``. Always persists
-    ``knowledge/<slug>/research/reports/analyze.json``; ``--format`` controls
-    stdout only.
+    Runs default analyzers (or a subset), persists competition/dataset/research
+    artifacts into ``knowledge.db``, ingests beliefs, generates new hypotheses,
+    and writes ``analyze.json`` plus ``research_brief.md``.
     """
     if output_format not in {"text", "json"}:
         raise typer.BadParameter("--format must be 'text' or 'json'.")
@@ -784,12 +796,16 @@ def analyze(
         refresh=refresh,
     )
 
+    do_ingest = not skip_ingest
+    do_hypothesize = not skip_hypothesize and do_ingest
+    do_brief = not skip_brief and do_ingest and do_hypothesize
     orchestrator = AnalyzeOrchestrator(
         build_default_registry(),
         llm_client=resolve_llm_client(config.llm),
-        ingest_knowledge=not skip_ingest,
-        # Hypotheses are only meaningful over ingested knowledge.
-        hypothesize=not skip_hypothesize and not skip_ingest,
+        ingest_knowledge=do_ingest,
+        hypothesize=do_hypothesize,
+        brief=do_brief,
+        fetch_kaggle=fetch_kaggle,
     )
     try:
         report = orchestrator.analyze(
@@ -800,6 +816,15 @@ def analyze(
         raise typer.Exit(code=1) from None
 
     path = write_report(report, context.report_path)
+    brief_path = None
+    if report.research_brief:
+        from labpilot.research_engine.intelligence.brief.models import ResearchBrief
+        from labpilot.research_engine.intelligence.renderers.markdown import write_brief
+
+        brief_path = write_brief(
+            ResearchBrief.model_validate(report.research_brief),
+            context.paths.brief_path,
+        )
 
     if output_format == "json":
         # Plain print — rich would soft-wrap and corrupt JSON meant for piping.
@@ -807,6 +832,8 @@ def analyze(
     else:
         render_terminal(report, console=console)
         console.print(f"\n[green]Wrote:[/green] {path}")
+        if brief_path is not None:
+            console.print(f"[green]Research Brief:[/green] {brief_path}")
 
 
 @app.command()

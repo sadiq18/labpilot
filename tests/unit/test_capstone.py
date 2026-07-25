@@ -65,8 +65,9 @@ def test_analyze_json_validates_public_contract(tmp_path: Path) -> None:
     report, path = run_capstone_analyze(tmp_path)
     loaded = validate_json(path.read_text())
     assert_public_contract(loaded)
-    assert loaded.schema_version == 1
+    assert loaded.schema_version == 2
     assert set(loaded.model_dump(mode="json")) >= PUBLIC_TOP_LEVEL_KEYS
+    assert "research_brief" in loaded.model_dump(mode="json")
     assert loaded.competition["slug"] == CAPSTONE_SLUG
     assert loaded.techniques.locally_validated  # Mixup promoted in fixture
     assert "Mixup" in loaded.techniques.locally_validated
@@ -112,6 +113,7 @@ def test_terminal_mockup_parity_and_no_established_external(tmp_path: Path) -> N
         "External Recommendations",
         "Locally Validated",
         "Suggested Next Experiments",
+        "Research Brief",
     ):
         assert heading in text
     assert "Unavailable" in text

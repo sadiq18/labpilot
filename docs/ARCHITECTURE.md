@@ -446,6 +446,33 @@ The whole `knowledge/` directory remains gitignored (local research memory, like
 Dashboard is regenerated on demand. Per-run `report.html` links to the competition dashboard
 when that file exists; dashboard rows link back to per-run reports and `comparison.md`.
 
+### 24. Research Intelligence (Milestone 3)
+
+| | |
+|---|---|
+| **Path** | `research_engine/intelligence/` |
+| **Responsibility** | Understand the problem before experimentation |
+| **CLI** | `research analyze`, `research fetch`, `research ingest`, `research retrieve`, `research hypothesize` |
+| **Status** | Implemented (Phase 1) |
+
+`research analyze` is the “understand the problem” command. It produces six products:
+
+| Product | Durable home |
+|---------|--------------|
+| Competition artifact | `knowledge.db` + `reports/analyze.json` |
+| Dataset artifact | `knowledge.db` + `reports/analyze.json` (default analyzer) |
+| Research artifacts (papers, repos, experiments, …) | `knowledge.db` + `reports/analyze.json` |
+| Beliefs | `knowledge.db` (Knowledge Hub) |
+| Hypotheses | `hypotheses/H-*.json` + `knowledge.db` |
+| Research Brief | `reports/research_brief.md` + `analyze.json` → `research_brief` |
+
+Flow: analyzers → optional `--fetch-kaggle` (kernels votes×5 + score×5 + discussions×5) →
+upsert **all** analyzer artifacts (including `DATASET` and `EXPERIMENT`) → Knowledge Hub →
+Hypothesis Assistant → Research Brief. Kernels/discussions default to `research fetch`;
+analyze only pulls them when `--fetch-kaggle` is set.
+
+Design detail: [milestones/milestone-3/README.md](milestones/milestone-3/README.md).
+
 ## Repository Structure
 
 ```
@@ -473,6 +500,7 @@ labpilot/
 │   ├── improvement/           # Run fork, planner, tuner, feature recipes (P3)
 │   ├── tracking/              # Experiment logger, store, cross-run index
 │   ├── experiments/           # Experiment graph, hypotheses, comparator (Milestone 2)
+│   ├── research_engine/       # M3 Research Intelligence + execution helpers
 │   ├── reflection/            # Reflection generation + prompts
 │   └── config.py              # AppConfig + Settings
 │

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class ResearchArtifactType(StrEnum):
@@ -138,5 +138,6 @@ class AnalysisReport(BaseModel):
     techniques: TechniqueBuckets = Field(default_factory=TechniqueBuckets)
     hypotheses: list[dict[str, Any]] = Field(default_factory=list)
     suggested_experiments: list[dict[str, Any]] = Field(default_factory=list)
+    research_brief: dict[str, Any] = Field(default_factory=dict)
     summary: dict[str, Any] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)

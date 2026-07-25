@@ -152,6 +152,21 @@ def render_terminal(report: AnalysisReport, *, console: Console | None = None) -
             f"effort={effort}  evidence={len(evidence)}"
         )
 
+    brief = report.research_brief or {}
+    if brief:
+        console.print("\n[bold]Research Brief[/bold]")
+        summary = str(brief.get("problem_summary") or "").strip()
+        if summary:
+            console.print(f"    {summary}")
+        risks = brief.get("known_risks") or []
+        if risks:
+            console.print("    [dim]Risks:[/dim]")
+            for risk in risks[:5]:
+                console.print(f"      • {risk}")
+        console.print(
+            "    [dim]→ knowledge/<slug>/research/reports/research_brief.md[/dim]"
+        )
+
     # Compact counts for operators who want a rollup.
     table = Table(show_header=True, header_style="bold", title="Counts")
     table.add_column("Section", style="cyan")

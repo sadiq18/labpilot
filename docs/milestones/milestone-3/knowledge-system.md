@@ -162,7 +162,7 @@ knowledge/<slug>/research/
         tasks/
 
     experiments/                    # Experiment artifacts / pipeline membership
-    reports/                        # analyze.json + rollups
+    reports/                        # analyze.json + research_brief.md + rollups
     embeddings/                     # Future optional — unused / empty in M3 v1
 
     knowledge.db                    # SQLite — artifacts + knowledge + joins
@@ -199,10 +199,13 @@ flowchart TB
 | Blobs | `raw/` files (immutable / versioned append; `--refresh` adds a version) |
 | Per-source cards | `extracted/` JSON + `research_artifacts` rows |
 | Merged knowledge | `knowledge/` + SQLite technique/dataset/… tables |
-| CLI rollup | `reports/analyze.json` — **projection**, not a second SoR |
+| CLI rollup | `reports/analyze.json` + `reports/research_brief.md` — **projections**, not a second SoR |
 | Query | **`knowledge.db` wins** for joins / retrieval |
 
 Re-extract rebuilds `extracted/` from `raw/` without re-fetch when blobs exist.
+
+`research analyze` upserts **every** analyzer artifact into `knowledge.db` before hub ingest —
+including `DATASET` and `EXPERIMENT` cards (not only competition / papers / repos).
 
 ### SQLite (`knowledge.db`)
 

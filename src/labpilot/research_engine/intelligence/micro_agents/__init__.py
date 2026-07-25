@@ -37,6 +37,9 @@ from labpilot.research_engine.intelligence.micro_agents.repository_analyzer impo
 from labpilot.research_engine.intelligence.micro_agents.repo_query_planner import (
     RepoQueryPlannerAgent,
 )
+from labpilot.research_engine.intelligence.micro_agents.research_brief import (
+    ResearchBriefAgent,
+)
 
 if TYPE_CHECKING:
     from labpilot.llm.client import LLMClient
@@ -51,6 +54,7 @@ _AGENT_TYPES: tuple[type[BaseMicroAgent], ...] = (
     ExperimentReviewerAgent,
     CompetitionPageAnalyzerAgent,
     IntentClassifierAgent,
+    ResearchBriefAgent,
 )
 
 _AGENTS_BY_NAME: dict[str, type[BaseMicroAgent]] = {cls.name: cls for cls in _AGENT_TYPES}
@@ -97,6 +101,7 @@ __all__ = [
     "PaperAnalyzerAgent",
     "RepoQueryPlannerAgent",
     "RepositoryAnalyzerAgent",
+    "ResearchBriefAgent",
     "StructuredContext",
     "UnknownMicroAgentError",
     "available_agents",

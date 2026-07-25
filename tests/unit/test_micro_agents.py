@@ -65,6 +65,7 @@ INTEL_NAMES = [
     "PaperAnalyzerAgent",
     "RepoQueryPlannerAgent",
     "RepositoryAnalyzerAgent",
+    "ResearchBriefAgent",
 ]
 
 
