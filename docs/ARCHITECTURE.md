@@ -121,7 +121,7 @@ Run IDs follow the pattern `{timestamp}-{competition-slug}` (e.g. `20260711-1430
 Child improves also write `comparison.json` + `comparison.md` (Plan 3) whenever both
 parent and child can be assembled — even if a later pipeline stage fails.
 
-See [milestones/milestone-2/plan-1-experiment-graph.md](milestones/milestone-2/plan-1-experiment-graph.md)
+See [milestones/experiment-scientist/plan-1-experiment-graph.md](milestones/experiment-scientist/plan-1-experiment-graph.md)
 for how `config.json`/`git_commit` and the parent/child graph are assembled into a read-side
 `Experiment` model, viewable via `research experiments graph`/`research experiments show`.
 
@@ -295,7 +295,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 | **Output** | `reflection.json`, `reflection.md` |
 | **Status** | Implemented — LLM JSON via `llm/client.py` + `parse_json_object`; template fallback if no key/package/call/parse succeeds |
 
-See [milestones/milestone-2/plan-4-reflection-engine.md](milestones/milestone-2/plan-4-reflection-engine.md).
+See [milestones/experiment-scientist/plan-4-reflection-engine.md](milestones/experiment-scientist/plan-4-reflection-engine.md).
 `Experiment.reflection` is loaded from `reflection.json` at assemble time (Plan 4).
 
 ### 14. HTML Report Generator
@@ -342,7 +342,7 @@ Not a new writer — every field is either already written elsewhere (`manifest.
 `config.json`, `baseline_choice.json`, ...) or computed at read time (`progress`, `description`,
 `artifacts`, `runtime_seconds`). `tracking/index.py:scan_runs()` reuses `assemble_experiment()`
 instead of its own directory walk. See
-[milestones/milestone-2/plan-1-experiment-graph.md](milestones/milestone-2/plan-1-experiment-graph.md)
+[milestones/experiment-scientist/plan-1-experiment-graph.md](milestones/experiment-scientist/plan-1-experiment-graph.md)
 for the full design.
 
 Commands: `research experiments graph --competition <slug> [--metric <key>]` (ASCII lineage
@@ -362,7 +362,7 @@ One file per hypothesis. Attaching a hypothesis to a run auto-transitions `propo
 `testing`. Status updates with `--evidence-run` append to `evidence_for` (`confirmed`) or
 `evidence_against` (`rejected`). `Experiment.description` prefers `hypothesis.prediction`
 when the link resolves. See
-[milestones/milestone-2/plan-2-hypothesis.md](milestones/milestone-2/plan-2-hypothesis.md).
+[milestones/experiment-scientist/plan-2-hypothesis.md](milestones/experiment-scientist/plan-2-hypothesis.md).
 
 Commands: `research hypothesize <slug>` to generate, and `research hypothesize
 list|show|update` (all require `--competition`) to manage, plus `--hypothesis H-NNN` on
@@ -381,7 +381,7 @@ list|show|update` (all require `--competition`) to manage, plus `--hypothesis H-
 No LLM. Verdicts: `worth_keeping` / `not_worth_keeping` / `regression` / `inconclusive`.
 `research runs diff` is unchanged for callers — it reuses comparator metric deltas under the
 hood while keeping its legacy `RunDiff` shape. See
-[milestones/milestone-2/plan-3-comparator.md](milestones/milestone-2/plan-3-comparator.md).
+[milestones/experiment-scientist/plan-3-comparator.md](milestones/experiment-scientist/plan-3-comparator.md).
 
 ### 19. Structured Reflection (Milestone 2, Plan 4)
 
@@ -410,7 +410,7 @@ children need a comparison). Cap: `experiments.reflection.max_new_hypotheses` (d
 Keyed by `(technique, metric_key)`. Technique names come from field/recipe short names.
 Comparator updates use signed primary-metric deltas; reflection adds UNKNOWN entries (confidence
 ≤ 0.4) only when that technique is not already corroborated. See
-[milestones/milestone-2/plan-5-knowledge-base.md](milestones/milestone-2/plan-5-knowledge-base.md).
+[milestones/experiment-scientist/plan-5-knowledge-base.md](milestones/experiment-scientist/plan-5-knowledge-base.md).
 
 ### 21. Experiment Ranking (Milestone 2, Plan 6)
 
@@ -471,7 +471,12 @@ upsert **all** analyzer artifacts (including `DATASET` and `EXPERIMENT`) → Kno
 Hypothesis Assistant → Research Brief. Kernels/discussions default to `research fetch`;
 analyze only pulls them when `--fetch-kaggle` is set.
 
-Design detail: [milestones/milestone-3/README.md](milestones/milestone-3/README.md).
+Design detail: [milestones/research-intelligence/README.md](milestones/research-intelligence/README.md).
+
+**Research Planner** (next design track — Phase A only): Hypothesis → planning compiler →
+executable DAG. Package will be a sibling `research_engine/planner/` pillar. Design:
+[milestones/research-planner/README.md](milestones/research-planner/README.md). No planner
+code in the tree yet.
 
 ## Repository Structure
 
@@ -526,10 +531,12 @@ labpilot/
     ├── MILESTONES.md          # Roadmap index
     └── milestones/
         ├── COMPLETED.md       # Shipped milestones (P0–P4) + per-milestone architecture changes
-        ├── IN-PROGRESS.md     # Active work (Milestone 2 design)
+        ├── IN-PROGRESS.md     # Active work (Research Planner design Phase A)
         ├── TODO.md            # P2 execution (deferred) + post-1.0 planned
         ├── backlog.md         # Unscheduled future work
-        └── milestone-2/       # Experiment Scientist design docs (README + 8 plans)
+        ├── experiment-scientist/   # Experiment Scientist (README + 8 plans) — shipped
+        ├── research-intelligence/  # Research Intelligence (README + plans 1–11) — Phase 1 shipped
+        └── research-planner/       # Research Planner — design Phase A only (no code yet)
 ```
 
 ---
@@ -664,6 +671,6 @@ Everything above describes the shipped P0–P4 pipeline. The next milestone does
 pipeline — it adds a memory/reasoning layer on top of it (an `experiments/` package plus a new
 per-competition `knowledge/` data directory) so that dozens or hundreds of runs accumulate into
 a queryable, comparable, rankable research history instead of a flat list of directories. See
-[milestones/milestone-2/README.md](milestones/milestone-2/README.md) for the full design. This
+[milestones/experiment-scientist/README.md](milestones/experiment-scientist/README.md) for the full design. This
 section will be expanded into the Module Catalog and Repository Structure above once
 implementation begins.

@@ -41,6 +41,9 @@ Execute via run / improve        →    Still execute via run / improve (unchang
 `research improve` remain the only executors. A human still decides what to run. Milestone 3
 gives that human a research partner that synthesizes external evidence *with* local M2 memory
 so the next hypothesis is better and faster — it does not run the experiment for you.
+The **Research Planner** design track (plan-only compiler: Hypothesis → DAG) lives at
+[../research-planner/README.md](../research-planner/README.md) — Phase A design; not yet
+implementation.
 
 ### Capstone vision
 
@@ -1908,7 +1911,7 @@ Goals (yes/no + constraints; **do not** merge a production scraper in Phase 1):
 - Download once → cache forever for re-analysis?
 - Which fields feed ForumKnowledge best?
 
-Spike output: `docs/milestones/milestone-3/spike-kaggle-discussions.md` + go/no-go.
+Spike output: `docs/milestones/research-intelligence/spike-kaggle-discussions.md` + go/no-go.
 
 If spike succeeds:
 

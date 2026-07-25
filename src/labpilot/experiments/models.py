@@ -109,7 +109,7 @@ class Experiment(BaseModel):
     Not a new file written to `runs/<id>/` — there is exactly one writer per
     field elsewhere in the pipeline (manifest, baseline_choice.json, ...);
     this model just aggregates them for display/comparison. See
-    docs/milestones/milestone-2/plan-1-experiment-graph.md for the full
+    docs/milestones/experiment-scientist/plan-1-experiment-graph.md for the full
     design rationale.
     """
 
