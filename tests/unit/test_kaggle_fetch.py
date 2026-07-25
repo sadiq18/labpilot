@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -247,14 +248,26 @@ def test_forum_agent_heuristics_without_preparsed_data() -> None:
     assert out.mistakes or out.discoveries or out.dataset_bugs
 
 
+def _plain(text: str) -> str:
+    """Strip ANSI codes and collapse whitespace.
+
+    Typer/rich renders --help inside a panel and folds long option tokens across
+    lines at terminal widths that differ between local and CI. Collapsing
+    whitespace makes flag assertions robust to that wrapping.
+    """
+    without_ansi = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    return re.sub(r"\s+", "", without_ansi)
+
+
 def test_fetch_cli_help() -> None:
     result = runner.invoke(
         cli_main.app, ["fetch", "--help"], env={"COLUMNS": "200", "NO_COLOR": "1"}
     )
     assert result.exit_code == 0
-    assert "--source" in result.stdout
-    assert "--limit" in result.stdout
-    assert "--sort" in result.stdout
+    plain = _plain(result.stdout)
+    assert "--source" in plain
+    assert "--limit" in plain
+    assert "--sort" in plain
 
 
 def test_paths_include_kernels_raw(tmp_path: Path) -> None:
