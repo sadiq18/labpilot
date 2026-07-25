@@ -155,7 +155,7 @@ Commands:
 - `research experiments rank --competition <slug>` — ranked hypothesis backlog (Milestone 2)
 - `research experiments search --competition <slug> [filters]` — filter experiments (Milestone 2)
 - `research experiments report|dashboard --competition <slug>` — competition rollup (Milestone 2)
-- `research hypothesis add|list|show|update` — structured hypotheses under `knowledge/` (Milestone 2)
+- `research hypothesize <slug>|list|show|update` — generate and manage structured hypotheses under `knowledge/` (Milestone 2–3)
 - `research doctor` — environment diagnostics
 
 ### 2. Competition Parser
@@ -364,8 +364,9 @@ One file per hypothesis. Attaching a hypothesis to a run auto-transitions `propo
 when the link resolves. See
 [milestones/milestone-2/plan-2-hypothesis.md](milestones/milestone-2/plan-2-hypothesis.md).
 
-Commands: `research hypothesis add|list|show|update` (all require `--competition`), plus
-`--hypothesis H-NNN` on `research run` / `research improve`.
+Commands: `research hypothesize <slug>` to generate, and `research hypothesize
+list|show|update` (all require `--competition`) to manage, plus `--hypothesis H-NNN` on
+`research run` / `research improve`.
 
 ### 18. Automatic Comparator (Milestone 2, Plan 3)
 

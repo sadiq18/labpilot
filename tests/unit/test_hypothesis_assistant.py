@@ -322,4 +322,51 @@ def test_hypothesize_cli(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.stdout
     assert "Hypothesis Assistant" in result.stdout
+    assert "new hypothesis generated" in result.stdout
     assert "#" in result.stdout
+
+
+def test_hypothesize_new_subcommand_matches_bare_slug(tmp_path: Path) -> None:
+    knowledge_dir = tmp_path / "knowledge"
+    with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
+        _seed(store)
+
+    result = runner.invoke(
+        cli_main.app,
+        [
+            "hypothesize",
+            "new",
+            "birdclef-2026",
+            "--pipeline",
+            "EMA",
+            "--knowledge-dir",
+            str(knowledge_dir),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "new hypothesis generated" in result.stdout
+
+
+def test_rerun_generates_no_duplicate_hypotheses(tmp_path: Path) -> None:
+    """Second pass must not re-mint hypotheses already open in the backlog."""
+    knowledge_dir = tmp_path / "knowledge"
+    with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
+        _seed(store)
+
+    def _run():
+        return HypothesisAssistant(created_by=HypothesisCreatedBy.HYPOTHESIZE).recommend(
+            knowledge_dir=knowledge_dir,
+            competition="birdclef-2026",
+            pipeline=["EMA"],
+            persist=True,
+            progressive=True,
+        )
+
+    first = _run()
+    assert first.new_count == len(first.recommendations) >= 1
+
+    second = _run()
+    assert second.new_count == 0
+    assert len(HypothesisStore(knowledge_dir, "birdclef-2026").list()) == first.new_count

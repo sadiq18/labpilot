@@ -73,5 +73,7 @@ class HypothesisRecommendation(BaseModel):
 
 class HypothesisAssistantResult(BaseModel):
     recommendations: list[HypothesisRecommendation] = Field(default_factory=list)
+    #: Hypotheses newly created by this run (0 when everything was already covered).
+    new_count: int = 0
     notes: list[str] = Field(default_factory=list)
     context: ResearchContext | None = None

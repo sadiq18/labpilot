@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from labpilot.cli import main as cli_main
+from labpilot.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.intelligence.context import build_context, normalize_competition
 from labpilot.research_engine.intelligence.knowledge import KnowledgeHub, KnowledgeStore
 from labpilot.research_engine.intelligence.models import (
@@ -392,6 +393,49 @@ def test_ingest_cli_processes_pending_stored_artifacts(tmp_path: Path, monkeypat
     second = runner.invoke(cli_main.app, args)
     assert second.exit_code == 0, second.stdout
     assert "0 pending" in second.stdout
+
+
+def test_ingest_cli_generates_hypotheses_unless_skipped(tmp_path: Path, monkeypatch):
+    knowledge_dir = tmp_path / "knowledge"
+    with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
+        store.upsert_artifact(_artifact("paper:1"))
+
+    monkeypatch.setattr(cli_main, "resolve_llm_client", lambda _config: None)
+    base = ["ingest", "birdclef-2026", "--knowledge-dir", str(knowledge_dir)]
+
+    skipped = runner.invoke(cli_main.app, [*base, "--skip-hypothesize"])
+    assert skipped.exit_code == 0, skipped.stdout
+    assert "Hypothesis generation skipped" in skipped.stdout
+    assert HypothesisStore(knowledge_dir, "birdclef-2026").list() == []
+
+    generated = runner.invoke(cli_main.app, base)
+    assert generated.exit_code == 0, generated.stdout
+    assert "new hypothesis generated" in generated.stdout
+    assert HypothesisStore(knowledge_dir, "birdclef-2026").list()
+
+
+def test_analyze_skip_ingest_also_skips_hypotheses(tmp_path: Path, monkeypatch):
+    def _registry():
+        reg = AnalyzerRegistry()
+        reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")]))
+        return reg
+
+    monkeypatch.setattr(cli_main, "build_default_registry", _registry)
+    knowledge_dir = tmp_path / "knowledge"
+    result = runner.invoke(
+        cli_main.app,
+        [
+            "analyze",
+            "birdclef-2026",
+            "--skip-ingest",
+            "--knowledge-dir",
+            str(knowledge_dir),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert HypothesisStore(knowledge_dir, "birdclef-2026").list() == []
 
 
 def test_analyze_cli_single_analyzer_and_json_format(tmp_path: Path, monkeypatch):

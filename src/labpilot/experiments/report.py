@@ -242,7 +242,7 @@ def _pipeline_step_label(exp: Experiment) -> str:
 
 def _print_recommended(console: Console, candidate: RankedCandidate | None) -> None:
     if candidate is None:
-        console.print("  (no proposed hypotheses — add with `research hypothesis add`)")
+        console.print("  (no proposed hypotheses — generate with `research hypothesize`)")
         return
     hyp = candidate.hypothesis
     console.print(f"  {hyp.prediction}")

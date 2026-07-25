@@ -22,6 +22,7 @@ from labpilot.research_engine.intelligence.hypothesis.persist import (
     as_generator,
     default_origin,
     load_existing_technique_tags,
+    load_open_hypothesis_tags,
     persist_recommendations,
     write_hypotheses_report,
 )
@@ -33,10 +34,22 @@ from labpilot.research_engine.intelligence.micro_agents.hypothesis_generator imp
 )
 from labpilot.research_engine.intelligence.repositories.models import TransferOpportunity
 from labpilot.research_engine.intelligence.retrieval.context_builder import ContextBuilder
+from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_label
 from labpilot.research_engine.intelligence.retrieval.models import (
     QueryType,
     ResearchContext,
 )
+
+#: Candidate-kind marker tags — not techniques, so they never match a backlog tag.
+_KIND_TAGS = frozenset({"technique", "pipeline_diff", "transfer", "failure_fix"})
+
+
+def _candidate_labels(candidate: HypothesisCandidate) -> set[str]:
+    """Normalized technique labels a candidate would be filed under."""
+    labels = {normalize_label(tag) for tag in candidate.tags if tag not in _KIND_TAGS}
+    if candidate.technique:
+        labels.add(normalize_label(candidate.technique))
+    return {label for label in labels if label}
 
 
 class HypothesisAssistant:
@@ -90,6 +103,19 @@ class HypothesisAssistant:
             notes.append("hypothesis: no candidates generated from ResearchContext.")
             return HypothesisAssistantResult(notes=notes, context=research_context)
 
+        open_tags = load_open_hypothesis_tags(knowledge_dir, competition)
+        fresh = [c for c in candidates if not _candidate_labels(c) & open_tags]
+        skipped = len(candidates) - len(fresh)
+        if skipped:
+            notes.append(
+                f"hypothesis: skipped {skipped} candidate(s) already covered by an "
+                "open hypothesis."
+            )
+        if not fresh:
+            notes.append("hypothesis: 0 new hypothesis generated (backlog already covers these).")
+            return HypothesisAssistantResult(notes=notes, context=research_context)
+        candidates = fresh
+
         ranked = rank_candidates(candidates, limit=limit)
         created_by = self.created_by or HypothesisCreatedBy.ANALYZE
         recommendations: list[HypothesisRecommendation] = []
@@ -127,16 +153,15 @@ class HypothesisAssistant:
             f"(generator={'llm' if used_llm_any else 'rule_engine'} drafts)."
         )
 
+        new_count = 0
         if persist:
             recommendations = persist_recommendations(
                 recommendations,
                 knowledge_dir=knowledge_dir,
                 competition=competition,
             )
-            notes.append(
-                f"hypothesis: persisted {len(recommendations)} Suggested "
-                "hypothesis file(s) (status=proposed)."
-            )
+            new_count = len(recommendations)
+            notes.append(f"hypothesis: {new_count} new hypothesis generated (status=proposed).")
 
         if write_report:
             report_path = (
@@ -149,6 +174,7 @@ class HypothesisAssistant:
 
         return HypothesisAssistantResult(
             recommendations=recommendations,
+            new_count=new_count,
             notes=notes,
             context=research_context,
         )

@@ -107,20 +107,17 @@ uv run research experiments graph --competition <slug> --metric <primary_metric>
 uv run research experiments show <run_id>
 ```
 
-### Step 2 — Capture or review hypotheses
+### Step 2 — Review hypotheses
 
-Reflection may already have drafted hypotheses under `knowledge/<slug>/hypotheses/`.
+`research analyze` / `research ingest` / reflection generate hypotheses under
+`knowledge/<slug>/hypotheses/` (also mirrored into `knowledge.db`).
 
 ```bash
-uv run research hypothesis list --competition <slug>
+uv run research hypothesize list --competition <slug>
+uv run research hypothesize show H-001 --competition <slug>
 
-# Or add your own:
-uv run research hypothesis add --competition <slug> \
-  --observation "..." \
-  --reason "..." \
-  --prediction "..." \
-  --confidence 0.7 \
-  --tags features,target_encoding
+# Generate more from current knowledge (new ones only):
+uv run research hypothesize <slug>
 ```
 
 ### Step 3 — Rank what to try next
@@ -222,7 +219,7 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 | Want to read brief before CPU time | `init` → review → `build` |
 | Crash / failed stage | `resume -r <id>` |
 | Parent looks good; try a tweak | `improve -r <parent> [--strategy …]` |
-| Idea written down, not run yet | `hypothesis add` → `rank` → `improve --hypothesis` |
+| Idea captured, not run yet | `hypothesize <slug>` → `rank` → `improve --hypothesis` |
 | “Did child help?” | `experiments compare` or open `comparison.md` |
 | “What have we learned about recipe X?” | `experiments knowledge list --technique …` |
 | “Show me everything” | `experiments report` + `dashboard` |
