@@ -19,7 +19,7 @@ from labpilot.research_engine.intelligence.renderers.json import (
 from labpilot.research_engine.intelligence.renderers.terminal import render_terminal_text
 from labpilot.research_engine.intelligence.retrieval import ContextBuilder, QueryType
 from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_label
-from tests.unit.capstone_fixture import (
+from helpers.capstone_fixture import (
     CAPSTONE_SLUG,
     run_capstone_analyze,
     seed_capstone_store,
