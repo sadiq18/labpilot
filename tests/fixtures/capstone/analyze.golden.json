@@ -1,0 +1,920 @@
+{
+  "schema_version": 1,
+  "generated_at": "<stable>",
+  "competition": {
+    "slug": "birdclef-2026",
+    "title": "BirdCLEF 2026",
+    "url": "https://www.kaggle.com/competitions/birdclef-2026",
+    "problem_type": "Audio Classification",
+    "metric": {
+      "name": "macro_f1",
+      "maximize": true
+    },
+    "metadata": {
+      "domain": "bioacoustics",
+      "task": "Audio Classification"
+    },
+    "winning_solutions": {
+      "available": false,
+      "status": "unavailable",
+      "reason": "Not available through configured provider.",
+      "items": []
+    },
+    "related_competitions": [
+      {
+        "slug": "birdclef-2025",
+        "title": "BirdCLEF 2025",
+        "relation": "previous_edition",
+        "score": 0.9
+      }
+    ],
+    "capability_notes": [],
+    "page_enrichment_source": "rule_engine"
+  },
+  "analyzers": [
+    "competition",
+    "papers",
+    "experiments",
+    "repositories"
+  ],
+  "artifacts": [
+    {
+      "id": "competition:birdclef-2026:profile",
+      "type": "competition",
+      "source": "kaggle",
+      "title": "BirdCLEF 2026",
+      "metadata": {
+        "kind": "profile",
+        "profile": {
+          "slug": "birdclef-2026",
+          "title": "BirdCLEF 2026",
+          "url": "https://www.kaggle.com/competitions/birdclef-2026",
+          "problem_type": "Audio Classification",
+          "metric": {
+            "name": "macro_f1",
+            "maximize": true
+          },
+          "metadata": {
+            "domain": "bioacoustics",
+            "task": "Audio Classification"
+          },
+          "winning_solutions": {
+            "available": false,
+            "status": "unavailable",
+            "reason": "Not available through configured provider.",
+            "items": []
+          },
+          "related_competitions": [
+            {
+              "slug": "birdclef-2025",
+              "title": "BirdCLEF 2025",
+              "relation": "previous_edition",
+              "score": 0.9
+            }
+          ],
+          "capability_notes": [],
+          "page_enrichment_source": "rule_engine"
+        }
+      },
+      "summary": "Imbalanced bioacoustics classification (Macro F1).",
+      "techniques": [],
+      "models": [],
+      "datasets": [],
+      "claims": [],
+      "references": [],
+      "confidence": 0.9,
+      "competition_slug": "birdclef-2026",
+      "concepts": [],
+      "evidence": [],
+      "payload": {}
+    },
+    {
+      "id": "competition:birdclef-2025",
+      "type": "competition",
+      "source": "kaggle",
+      "title": "BirdCLEF 2025",
+      "metadata": {
+        "kind": "related",
+        "related_slug": "birdclef-2025",
+        "relation": "previous_edition",
+        "score": 0.9,
+        "rationale": "Previous edition",
+        "tags_overlap": [
+          "audio",
+          "birds"
+        ]
+      },
+      "summary": "",
+      "techniques": [],
+      "models": [],
+      "datasets": [],
+      "claims": [],
+      "references": [],
+      "confidence": 0.8,
+      "competition_slug": "birdclef-2026",
+      "concepts": [],
+      "evidence": [],
+      "payload": {}
+    },
+    {
+      "id": "paper:mixup-macro-f1",
+      "type": "paper",
+      "source": "semantic_scholar",
+      "title": "Mixup improves Macro F1 on imbalanced audio",
+      "metadata": {},
+      "summary": "Mixup consistently improves Macro F1 on imbalanced audio tasks.",
+      "techniques": [
+        "Mixup"
+      ],
+      "models": [],
+      "datasets": [],
+      "claims": [],
+      "references": [],
+      "confidence": 0.85,
+      "competition_slug": "birdclef-2026",
+      "concepts": [],
+      "evidence": [],
+      "payload": {}
+    },
+    {
+      "id": "paper:ema-birdclef",
+      "type": "paper",
+      "source": "semantic_scholar",
+      "title": "EMA for BirdCLEF fine-tuning",
+      "metadata": {},
+      "summary": "EMA stabilizes training; no official winning-solution dump.",
+      "techniques": [
+        "EMA"
+      ],
+      "models": [],
+      "datasets": [],
+      "claims": [],
+      "references": [],
+      "confidence": 0.7,
+      "competition_slug": "birdclef-2026",
+      "concepts": [],
+      "evidence": [],
+      "payload": {}
+    },
+    {
+      "id": "paper:focal-rare",
+      "type": "paper",
+      "source": "semantic_scholar",
+      "title": "Focal Loss for rare classes",
+      "metadata": {},
+      "summary": "Focal Loss can help rare species heads when tuned carefully.",
+      "techniques": [
+        "Focal Loss"
+      ],
+      "models": [],
+      "datasets": [],
+      "claims": [],
+      "references": [],
+      "confidence": 0.75,
+      "competition_slug": "birdclef-2026",
+      "concepts": [],
+      "evidence": [],
+      "payload": {}
+    },
+    {
+      "id": "paper:specaugment",
+      "type": "paper",
+      "source": "semantic_scholar",
+      "title": "SpecAugment for ASR",
+      "metadata": {},
+      "summary": "SpecAugment improves generalization on audio.",
+      "techniques": [
+        "SpecAugment"
+      ],
+      "models": [],
+      "datasets": [],
+      "claims": [],
+      "references": [],
+      "confidence": 0.8,
+      "competition_slug": "birdclef-2026",
+      "concepts": [],
+      "evidence": [],
+      "payload": {}
+    },
+    {
+      "id": "exp:12",
+      "type": "experiment",
+      "source": "m2",
+      "title": "Exp 12",
+      "metadata": {},
+      "summary": "Mixup improved macro F1 on BirdCLEF fold (+0.03).",
+      "techniques": [
+        "Mixup"
+      ],
+      "models": [],
+      "datasets": [],
+      "claims": [],
+      "references": [],
+      "confidence": 0.92,
+      "competition_slug": "birdclef-2026",
+      "concepts": [],
+      "evidence": [],
+      "payload": {}
+    },
+    {
+      "id": "exp:14",
+      "type": "experiment",
+      "source": "m2",
+      "title": "Exp 14",
+      "metadata": {
+        "effect": "hurts"
+      },
+      "summary": "Mixup hurt rare classes when alpha was too high.",
+      "techniques": [
+        "Mixup"
+      ],
+      "models": [],
+      "datasets": [],
+      "claims": [],
+      "references": [],
+      "confidence": 0.88,
+      "competition_slug": "birdclef-2026",
+      "concepts": [],
+      "evidence": [],
+      "payload": {}
+    },
+    {
+      "id": "exp:19",
+      "type": "experiment",
+      "source": "m2",
+      "title": "Exp 19",
+      "metadata": {
+        "effect": "hurts",
+        "metric_delta": -0.02
+      },
+      "summary": "Focal Loss hurt performance on the rare-species head (delta < 0).",
+      "techniques": [
+        "Focal Loss"
+      ],
+      "models": [],
+      "datasets": [],
+      "claims": [],
+      "references": [],
+      "confidence": 0.9,
+      "competition_slug": "birdclef-2026",
+      "concepts": [],
+      "evidence": [],
+      "payload": {}
+    },
+    {
+      "id": "repo:owner/audio-pipeline",
+      "type": "repository",
+      "source": "github",
+      "title": "owner/audio-pipeline",
+      "metadata": {},
+      "summary": "Compatible PyTorch training stack with Focal Loss head.",
+      "techniques": [
+        "Focal Loss",
+        "SpecAugment"
+      ],
+      "models": [],
+      "datasets": [],
+      "claims": [],
+      "references": [],
+      "confidence": 0.7,
+      "competition_slug": "birdclef-2026",
+      "concepts": [],
+      "evidence": [],
+      "payload": {}
+    }
+  ],
+  "related_competitions": [
+    {
+      "slug": "birdclef-2025",
+      "title": "BirdCLEF 2025",
+      "relation": "previous_edition",
+      "score": 0.9,
+      "rationale": "Previous edition",
+      "tags_overlap": [
+        "audio",
+        "birds"
+      ]
+    }
+  ],
+  "papers": [
+    {
+      "id": "paper:mixup-macro-f1",
+      "title": "Mixup improves Macro F1 on imbalanced audio",
+      "summary": "Mixup consistently improves Macro F1 on imbalanced audio tasks.",
+      "techniques": [
+        "Mixup"
+      ],
+      "claims": [],
+      "datasets": [],
+      "confidence": 0.85,
+      "source": "semantic_scholar",
+      "arxiv_id": null,
+      "doi": null,
+      "citations": null,
+      "bucket": null,
+      "grounded_in": null,
+      "ideas_worth_testing": [],
+      "methods": [],
+      "limitations": []
+    },
+    {
+      "id": "paper:ema-birdclef",
+      "title": "EMA for BirdCLEF fine-tuning",
+      "summary": "EMA stabilizes training; no official winning-solution dump.",
+      "techniques": [
+        "EMA"
+      ],
+      "claims": [],
+      "datasets": [],
+      "confidence": 0.7,
+      "source": "semantic_scholar",
+      "arxiv_id": null,
+      "doi": null,
+      "citations": null,
+      "bucket": null,
+      "grounded_in": null,
+      "ideas_worth_testing": [],
+      "methods": [],
+      "limitations": []
+    },
+    {
+      "id": "paper:focal-rare",
+      "title": "Focal Loss for rare classes",
+      "summary": "Focal Loss can help rare species heads when tuned carefully.",
+      "techniques": [
+        "Focal Loss"
+      ],
+      "claims": [],
+      "datasets": [],
+      "confidence": 0.75,
+      "source": "semantic_scholar",
+      "arxiv_id": null,
+      "doi": null,
+      "citations": null,
+      "bucket": null,
+      "grounded_in": null,
+      "ideas_worth_testing": [],
+      "methods": [],
+      "limitations": []
+    },
+    {
+      "id": "paper:specaugment",
+      "title": "SpecAugment for ASR",
+      "summary": "SpecAugment improves generalization on audio.",
+      "techniques": [
+        "SpecAugment"
+      ],
+      "claims": [],
+      "datasets": [],
+      "confidence": 0.8,
+      "source": "semantic_scholar",
+      "arxiv_id": null,
+      "doi": null,
+      "citations": null,
+      "bucket": null,
+      "grounded_in": null,
+      "ideas_worth_testing": [],
+      "methods": [],
+      "limitations": []
+    }
+  ],
+  "repositories": [
+    {
+      "id": "repo:owner/audio-pipeline",
+      "title": "owner/audio-pipeline",
+      "url": null,
+      "summary": "Compatible PyTorch training stack with Focal Loss head.",
+      "stars": null,
+      "primary_category": null,
+      "techniques": [
+        "Focal Loss",
+        "SpecAugment"
+      ],
+      "architecture": [],
+      "loss": [],
+      "augmentation": [],
+      "training_tricks": [],
+      "interesting_files": [],
+      "confidence": 0.7
+    }
+  ],
+  "transfer_opportunities": [
+    {
+      "repo_id": "github:owner/audio-pipeline",
+      "summary": "Focal Loss vs your CE",
+      "deltas": [
+        "loss:ce\u2192focal"
+      ],
+      "local_baseline": "CrossEntropy",
+      "remote_choice": "Focal Loss",
+      "effort": "20m",
+      "expected_gain": "medium",
+      "interesting_files": [
+        "train.py"
+      ],
+      "hypothesis_hint": "Swap CE \u2192 Focal Loss on rare species head"
+    }
+  ],
+  "forum_knowledge": [],
+  "knowledge_units": [
+    {
+      "id": "tech_focal_loss",
+      "entity_type": "technique",
+      "name": "Focal Loss",
+      "aliases": [],
+      "category": "",
+      "domain": "",
+      "summary": "",
+      "known_issues": "",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "artifact_id": "exp:19",
+          "artifact_type": "experiment",
+          "source": "m2",
+          "relation": "mentions",
+          "weight": 0.9,
+          "mention": "Focal Loss"
+        },
+        {
+          "artifact_id": "paper:focal-rare",
+          "artifact_type": "paper",
+          "source": "semantic_scholar",
+          "relation": "mentions",
+          "weight": 0.75,
+          "mention": "Focal Loss"
+        },
+        {
+          "artifact_id": "repo:owner/audio-pipeline",
+          "artifact_type": "repository",
+          "source": "github",
+          "relation": "mentions",
+          "weight": 0.7,
+          "mention": "Focal Loss"
+        }
+      ],
+      "competition_slug": "birdclef-2026",
+      "normalized_by": "alias_seed",
+      "metadata": {
+        "mention_count": 3,
+        "alias_count": 0,
+        "linked_evidence": [
+          "exp:19",
+          "paper:focal-rare",
+          "repo:owner/audio-pipeline"
+        ]
+      }
+    },
+    {
+      "id": "tech_mixup",
+      "entity_type": "technique",
+      "name": "Mixup",
+      "aliases": [],
+      "category": "",
+      "domain": "",
+      "summary": "",
+      "known_issues": "",
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "artifact_id": "exp:12",
+          "artifact_type": "experiment",
+          "source": "m2",
+          "relation": "mentions",
+          "weight": 0.92,
+          "mention": "Mixup"
+        },
+        {
+          "artifact_id": "exp:14",
+          "artifact_type": "experiment",
+          "source": "m2",
+          "relation": "mentions",
+          "weight": 0.88,
+          "mention": "Mixup"
+        },
+        {
+          "artifact_id": "paper:mixup-macro-f1",
+          "artifact_type": "paper",
+          "source": "semantic_scholar",
+          "relation": "mentions",
+          "weight": 0.85,
+          "mention": "Mixup"
+        }
+      ],
+      "competition_slug": "birdclef-2026",
+      "normalized_by": "alias_seed",
+      "metadata": {
+        "mention_count": 3,
+        "alias_count": 0,
+        "linked_evidence": [
+          "exp:12",
+          "exp:14",
+          "paper:mixup-macro-f1"
+        ]
+      }
+    },
+    {
+      "id": "tech_specaugment",
+      "entity_type": "technique",
+      "name": "SpecAugment",
+      "aliases": [],
+      "category": "",
+      "domain": "",
+      "summary": "",
+      "known_issues": "",
+      "confidence": 0.6,
+      "evidence": [
+        {
+          "artifact_id": "paper:specaugment",
+          "artifact_type": "paper",
+          "source": "semantic_scholar",
+          "relation": "mentions",
+          "weight": 0.8,
+          "mention": "SpecAugment"
+        },
+        {
+          "artifact_id": "repo:owner/audio-pipeline",
+          "artifact_type": "repository",
+          "source": "github",
+          "relation": "mentions",
+          "weight": 0.7,
+          "mention": "SpecAugment"
+        }
+      ],
+      "competition_slug": "birdclef-2026",
+      "normalized_by": "alias_seed",
+      "metadata": {
+        "mention_count": 2,
+        "alias_count": 0,
+        "linked_evidence": [
+          "paper:specaugment",
+          "repo:owner/audio-pipeline"
+        ]
+      }
+    },
+    {
+      "id": "tech_ema",
+      "entity_type": "technique",
+      "name": "EMA",
+      "aliases": [],
+      "category": "",
+      "domain": "",
+      "summary": "",
+      "known_issues": "",
+      "confidence": 0.4,
+      "evidence": [
+        {
+          "artifact_id": "paper:ema-birdclef",
+          "artifact_type": "paper",
+          "source": "semantic_scholar",
+          "relation": "mentions",
+          "weight": 0.7,
+          "mention": "EMA"
+        }
+      ],
+      "competition_slug": "birdclef-2026",
+      "normalized_by": "alias_seed",
+      "metadata": {
+        "mention_count": 1,
+        "alias_count": 0,
+        "linked_evidence": [
+          "paper:ema-birdclef"
+        ]
+      }
+    }
+  ],
+  "retrieval": {
+    "papers": [
+      "paper:mixup-macro-f1",
+      "paper:specaugment",
+      "paper:focal-rare",
+      "paper:ema-birdclef"
+    ],
+    "experiments": [
+      "exp:12",
+      "exp:19",
+      "exp:14"
+    ],
+    "repositories": [
+      "repo:owner/audio-pipeline"
+    ],
+    "discussions": [],
+    "failures": [
+      "exp:19",
+      "exp:14"
+    ]
+  },
+  "hypothesis_recommendations": [
+    {
+      "rank": 1,
+      "hypothesis_id": "H-XXX",
+      "title": "Add SpecAugment to the current pipeline",
+      "observation": "Current pipeline is missing SpecAugment, which has supporting evidence.",
+      "reason": "Pipeline-diff: SpecAugment is present in domain knowledge but not in [\u2014].",
+      "prediction": "Inserting SpecAugment will raise validation score vs the current stack.",
+      "expected_impact": "high",
+      "confidence": 0.65,
+      "supporting_evidence": [
+        {
+          "kind": "paper",
+          "ref": "paper:specaugment",
+          "note": ""
+        }
+      ],
+      "implementation_effort": "20m",
+      "origins": [
+        "paper"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.597,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper",
+      "tags": [
+        "SpecAugment",
+        "pipeline_diff"
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis_id": "H-XXX",
+      "title": "Add EMA to the current pipeline",
+      "observation": "Current pipeline is missing EMA, which has supporting evidence.",
+      "reason": "Pipeline-diff: EMA is present in domain knowledge but not in [\u2014].",
+      "prediction": "Inserting EMA will raise validation score vs the current stack.",
+      "expected_impact": "medium",
+      "confidence": 0.45,
+      "supporting_evidence": [
+        {
+          "kind": "paper",
+          "ref": "paper:ema-birdclef",
+          "note": ""
+        }
+      ],
+      "implementation_effort": "20m",
+      "origins": [
+        "paper"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.405,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper",
+      "tags": [
+        "EMA",
+        "pipeline_diff"
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis_id": "H-XXX",
+      "title": "Try SpecAugment",
+      "observation": "SpecAugment appears in retrieved knowledge for this competition.",
+      "reason": "Retrieved technique card: confidence=0.60; papers=1; experiments=0; repos=0",
+      "prediction": "Adopting SpecAugment will improve the primary metric.",
+      "expected_impact": "medium",
+      "confidence": 0.6,
+      "supporting_evidence": [
+        {
+          "kind": "paper",
+          "ref": "paper:specaugment",
+          "note": ""
+        }
+      ],
+      "implementation_effort": "20m",
+      "origins": [
+        "paper"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.386,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper",
+      "tags": [
+        "SpecAugment",
+        "technique"
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis_id": "H-XXX",
+      "title": "Try EMA",
+      "observation": "EMA appears in retrieved knowledge for this competition.",
+      "reason": "Retrieved technique card: confidence=0.40; papers=1; experiments=0; repos=0",
+      "prediction": "Adopting EMA will improve the primary metric.",
+      "expected_impact": "low",
+      "confidence": 0.4,
+      "supporting_evidence": [
+        {
+          "kind": "paper",
+          "ref": "paper:ema-birdclef",
+          "note": ""
+        }
+      ],
+      "implementation_effort": "20m",
+      "origins": [
+        "paper"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.194,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper",
+      "tags": [
+        "EMA",
+        "technique"
+      ]
+    }
+  ],
+  "techniques": {
+    "external_recommendations": [
+      "EMA",
+      "SpecAugment"
+    ],
+    "locally_validated": [
+      "Mixup"
+    ],
+    "unverified": [
+      "Focal Loss"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "H-XXX",
+      "title": "Add SpecAugment to the current pipeline",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper"
+    },
+    {
+      "id": "H-XXX",
+      "title": "Add EMA to the current pipeline",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper"
+    },
+    {
+      "id": "H-XXX",
+      "title": "Try SpecAugment",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper"
+    },
+    {
+      "id": "H-XXX",
+      "title": "Try EMA",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper"
+    }
+  ],
+  "suggested_experiments": [
+    {
+      "rank": 1,
+      "hypothesis_id": "H-XXX",
+      "title": "Add SpecAugment to the current pipeline",
+      "observation": "Current pipeline is missing SpecAugment, which has supporting evidence.",
+      "reason": "Pipeline-diff: SpecAugment is present in domain knowledge but not in [\u2014].",
+      "prediction": "Inserting SpecAugment will raise validation score vs the current stack.",
+      "expected_impact": "high",
+      "confidence": 0.65,
+      "supporting_evidence": [
+        {
+          "kind": "paper",
+          "ref": "paper:specaugment",
+          "note": ""
+        }
+      ],
+      "implementation_effort": "20m",
+      "origins": [
+        "paper"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.597,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper",
+      "tags": [
+        "SpecAugment",
+        "pipeline_diff"
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis_id": "H-XXX",
+      "title": "Add EMA to the current pipeline",
+      "observation": "Current pipeline is missing EMA, which has supporting evidence.",
+      "reason": "Pipeline-diff: EMA is present in domain knowledge but not in [\u2014].",
+      "prediction": "Inserting EMA will raise validation score vs the current stack.",
+      "expected_impact": "medium",
+      "confidence": 0.45,
+      "supporting_evidence": [
+        {
+          "kind": "paper",
+          "ref": "paper:ema-birdclef",
+          "note": ""
+        }
+      ],
+      "implementation_effort": "20m",
+      "origins": [
+        "paper"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.405,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper",
+      "tags": [
+        "EMA",
+        "pipeline_diff"
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis_id": "H-XXX",
+      "title": "Try SpecAugment",
+      "observation": "SpecAugment appears in retrieved knowledge for this competition.",
+      "reason": "Retrieved technique card: confidence=0.60; papers=1; experiments=0; repos=0",
+      "prediction": "Adopting SpecAugment will improve the primary metric.",
+      "expected_impact": "medium",
+      "confidence": 0.6,
+      "supporting_evidence": [
+        {
+          "kind": "paper",
+          "ref": "paper:specaugment",
+          "note": ""
+        }
+      ],
+      "implementation_effort": "20m",
+      "origins": [
+        "paper"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.386,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper",
+      "tags": [
+        "SpecAugment",
+        "technique"
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis_id": "H-XXX",
+      "title": "Try EMA",
+      "observation": "EMA appears in retrieved knowledge for this competition.",
+      "reason": "Retrieved technique card: confidence=0.40; papers=1; experiments=0; repos=0",
+      "prediction": "Adopting EMA will improve the primary metric.",
+      "expected_impact": "low",
+      "confidence": 0.4,
+      "supporting_evidence": [
+        {
+          "kind": "paper",
+          "ref": "paper:ema-birdclef",
+          "note": ""
+        }
+      ],
+      "implementation_effort": "20m",
+      "origins": [
+        "paper"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.194,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "paper",
+      "tags": [
+        "EMA",
+        "technique"
+      ]
+    }
+  ],
+  "summary": {
+    "analyzer_count": 4,
+    "artifact_count": 10,
+    "paper_count": 4,
+    "repository_count": 1,
+    "transfer_count": 1,
+    "knowledge_unit_count": 4,
+    "hypothesis_count": 4
+  },
+  "notes": [
+    "[knowledge-hub] knowledge hub: 9 mention(s) merged into 4 unit(s) (alias_seed=4).",
+    "[knowledge-hub] knowledge hub: beliefs suggested=2, testing=2 (never validated/established).",
+    "[knowledge-hub] knowledge hub: marked 10 stored artifact(s) ingested.",
+    "[hypothesis] progressive: pass1_core=4 survivors=4.",
+    "[hypothesis] symbolic: core selection only (expansion deferred).",
+    "[hypothesis] discussions: stub empty until Plan F.",
+    "[hypothesis] symbolic: 4 technique(s), 0 paper(s), 0 experiment(s), 0 repo(s), 0 failure(s).",
+    "[hypothesis] discussions: stub empty until Plan F.",
+    "[hypothesis] symbolic: 4 technique(s), 4 paper(s), 3 experiment(s), 1 repo(s), 2 failure(s).",
+    "[hypothesis] context: brief=1389/14700 chars (dropped_sections=0).",
+    "[hypothesis] hypothesis: 4 candidate(s) \u2192 top 4 (generator=rule_engine drafts).",
+    "[hypothesis] hypothesis: persisted 4 Suggested hypothesis file(s) (status=proposed)."
+  ]
+}

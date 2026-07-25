@@ -37,11 +37,13 @@ Tabular competitions need only the core install. Image/deep baselines need
 research run / improve     →  writes runs/<run_id>/     (one experiment)
 knowledge/                 →  hypotheses + technique memory (per competition)
 experiments *              →  read/aggregate across runs (does not train)
+research analyze *         →  research partner over papers/repos/local memory
 ```
 
 - **One slug** = one competition graph (all runs with that `competition` field).
 - **`improve`** forks a *completed* parent; it does not re-download or re-profile.
 - **Rank / report / dashboard** tell you what to try next; they never auto-train.
+- **`analyze` / `retrieve` / `hypothesize`** synthesize evidence; they never auto-train.
 
 Artifacts to care about:
 
@@ -54,6 +56,7 @@ Artifacts to care about:
 | `knowledge/<slug>/hypotheses/` | Ideas under test |
 | `knowledge/<slug>/knowledge_base.json` | What techniques helped/hurt |
 | `knowledge/<slug>/dashboard.html` | Competition overview (generate on demand) |
+| `knowledge/<slug>/research/reports/analyze.json` | Research Intelligence contract (M3) |
 
 ---
 
@@ -128,6 +131,24 @@ uv run research experiments rank --competition <slug> --top 5
 
 This scores **proposed** ideas only; it does not start training.
 
+### Step 3b — Research partner (Milestone 3)
+
+When you want literature / repo / cross-comp context before picking the next run:
+
+```bash
+# Landscape + top-10 recommendations (writes analyze.json; terminal is a view)
+uv run research analyze <slug>
+
+# Ask a grounded question against knowledge.db (offline)
+uv run research retrieve <slug> -q "Show experiments where Focal Loss hurt"
+
+# Top-N untried ideas with evidence (also persists Suggested hypotheses)
+uv run research hypothesize <slug> --limit 5
+```
+
+Treat suggestions as a backlog — pick one, attach a hypothesis, then `improve`.
+External techniques stay **Suggested** until local runs promote them.
+
 ### Step 4 — Improve a completed parent
 
 ```bash
@@ -199,6 +220,9 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 | “Did child help?” | `experiments compare` or open `comparison.md` |
 | “What have we learned about recipe X?” | `experiments knowledge list --technique …` |
 | “Show me everything” | `experiments report` + `dashboard` |
+| Need papers/repos + next experiments | `research analyze <slug>` → read `analyze.json` / top-10 |
+| Grounded Q over the knowledge store | `research retrieve <slug> -q "…"` |
+| Literature-backed untried ideas | `research hypothesize <slug>` |
 | Need another operator on the team | Point them at this SOP + [CLI.md](CLI.md) |
 
 ---
@@ -206,11 +230,12 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 ## 7. Suggested weekly loop
 
 1. `experiments report` / `dashboard` — where are we?
-2. `experiments rank` — pick one proposed hypothesis (or add one).
-3. `improve --hypothesis H-xxx --strategy …` — one change at a time when possible.
-4. `experiments compare` — keep / discard.
-5. `knowledge list` — update your intuition from effects.
-6. Repeat; submit only when local CV (and sanity checks) look worth a leaderboard hit.
+2. Optional: `research analyze` — refresh landscape + top-10 suggestions.
+3. `experiments rank` or `research hypothesize` — pick one proposed hypothesis (or add one).
+4. `improve --hypothesis H-xxx --strategy …` — one change at a time when possible.
+5. `experiments compare` — keep / discard.
+6. `knowledge list` — update your intuition from effects.
+7. Repeat; submit only when local CV (and sanity checks) look worth a leaderboard hit.
 
 Avoid burning daily submission quota on undiagnosed regressions — the comparator
 and knowledge base exist so you don’t have to rediscover failures by hand.

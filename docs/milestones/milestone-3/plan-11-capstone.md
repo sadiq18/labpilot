@@ -2,7 +2,7 @@
 
 Back to [Milestone 3](README.md). Design: README mockup · §12.5 · §13.
 
-**Status:** Not started. **Depends on:** Plan 10. **Unlocks:** Milestone 3 Phase 1 complete.
+**Status:** Implemented. **Depends on:** Plan 10. **Unlocks:** Milestone 3 Phase 1 complete.
 
 ---
 

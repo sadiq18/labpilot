@@ -22,8 +22,9 @@ research <command> ...
 3. [Inspect a run](#3-inspect-a-run) — `status`, `report`, `list-runs`, `runs diff`
 4. [Experiments](#4-experiments) — graph, show, compare, knowledge, rank, search, report, dashboard
 5. [Hypotheses](#5-hypotheses) — add, list, show, update
-6. [Environment & project](#6-environment--project) — doctor, workspace, runtime, templates
-7. [Common option patterns](#7-common-option-patterns)
+6. [Research Intelligence](#6-research-intelligence) — `analyze`, `ingest`, `retrieve`, `hypothesize`
+7. [Environment & project](#7-environment--project) — doctor, workspace, runtime, templates
+8. [Common option patterns](#8-common-option-patterns)
 
 ---
 
@@ -350,7 +351,118 @@ research improve --run-id <parent> --hypothesis H-001 --strategy tune
 
 ---
 
-## 6. Environment & project
+## 6. Research Intelligence
+
+Milestone 3 research partner: synthesize papers / repos / local experiments into a
+validated `analyze.json` contract, then retrieve or hypothesize offline. **No HTML**
+in v1; terminal is a view over JSON. Never auto-trains.
+
+Canonical artifact:
+
+```text
+knowledge/<slug>/research/reports/analyze.json
+```
+
+### `research analyze`
+
+Run default-enabled analyzers (or a subset), ingest into the Knowledge Hub, rank
+top-N hypotheses, write `analyze.json`, and print a mockup-parity terminal summary.
+
+```bash
+# All default analyzers
+research analyze birdclef-2026
+
+# Single analyzer
+research analyze papers birdclef-2026
+research analyze repositories birdclef-2026
+research analyze experiments birdclef-2026
+research analyze competition birdclef-2026
+
+# Subset / skip
+research analyze birdclef-2026 --include papers,repositories
+research analyze birdclef-2026 --exclude dataset
+
+# Stdout format (file is always written)
+research analyze birdclef-2026 --format text
+research analyze birdclef-2026 --format json
+
+# Defer hub / hypothesis steps
+research analyze birdclef-2026 --skip-ingest
+research analyze birdclef-2026 --skip-hypothesize
+
+# Re-fetch cached raw sources
+research analyze birdclef-2026 --refresh
+```
+
+| Option | Description |
+|--------|-------------|
+| `--include` | Comma-separated analyzers to run |
+| `--exclude` | Comma-separated analyzers to skip |
+| `--format` | `text` (default) or `json` — stdout only; always writes `analyze.json` |
+| `--refresh` | Re-fetch sources into cache |
+| `--skip-ingest` | Store artifacts but defer Knowledge Hub ingestion |
+| `--skip-hypothesize` | Skip Hypothesis Assistant top-N |
+| `--config`, `--project-dir`, `--runs-dir`, `--knowledge-dir` | Same idea as pipeline |
+
+Technique buckets in the report: **External Recommendations** are Suggested only;
+external-only techniques are never labeled Established. Locally Validated fills only
+after local promotion (e.g. improve corroboration).
+
+### `research ingest`
+
+Run the Knowledge Hub over artifacts already in `knowledge.db` (after
+`--skip-ingest` or a partial analyze).
+
+```bash
+research ingest birdclef-2026
+research ingest birdclef-2026 --force
+```
+
+| Option | Description |
+|--------|-------------|
+| `--force` | Re-ingest all stored artifacts even when receipts are current |
+
+### `research retrieve`
+
+Multi-stage symbolic retrieval + compressed `ResearchContext` (no network; reads
+`knowledge.db` only). Not wired into `analyze` as a separate CLI step — Hypothesis
+Assistant uses the same API.
+
+```bash
+research retrieve birdclef-2026 -q "Find techniques that improve Macro F1 on Audio"
+research retrieve birdclef-2026 -q "Show experiments where Focal Loss hurt" \
+  --query-type structured_query --format json
+```
+
+| Option | Description |
+|--------|-------------|
+| `--question` / `-q` | Natural-language or structured question |
+| `--query-type` | Intent override (default `hypothesis_generation`) |
+| `--pipeline` | CSV of current pipeline techniques (auto-profiled when omitted) |
+| `--format` | `text` or `json` |
+
+### `research hypothesize`
+
+Hypothesis Assistant top-N recommendations only (persists Suggested M2 hypotheses +
+`research/reports/hypotheses.json`). Excludes techniques already tried in local
+experiments / hypothesis tags.
+
+```bash
+research hypothesize birdclef-2026
+research hypothesize birdclef-2026 -q "Suggest five literature-backed experiments" \
+  --limit 5 --format json
+```
+
+| Option | Description |
+|--------|-------------|
+| `--question` / `-q` | Ranking question (default: suggest next experiments) |
+| `--pipeline` | CSV current pipeline (auto when omitted) |
+| `--limit` | 1–10 recommendations (default 10) |
+| `--format` | `text` or `json` |
+
+---
+
+## 7. Environment & project
 
 ### `research doctor`
 
@@ -395,7 +507,7 @@ Lists registered baseline templates (tabular / text / image / deep variants).
 
 ---
 
-## 7. Common option patterns
+## 8. Common option patterns
 
 | Pattern | Typical flags |
 |---------|----------------|
@@ -430,5 +542,8 @@ confirm unless `--yes` (or non-TTY / CI).
 | What to try next | `research experiments rank -c <slug>` |
 | Competition summary | `research experiments report -c <slug>` |
 | Shareable HTML overview | `research experiments dashboard -c <slug>` |
+| Research landscape + top-10 ideas | `research analyze <slug>` |
+| Offline retrieve from knowledge.db | `research retrieve <slug> -q "…"` |
+| Rank untried literature-backed ideas | `research hypothesize <slug>` |
 
 Workflow narrative: [SOP.md](SOP.md).
