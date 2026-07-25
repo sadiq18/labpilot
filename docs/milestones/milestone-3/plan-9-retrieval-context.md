@@ -2,7 +2,7 @@
 
 Back to [Milestone 3](README.md). Design: README §9 · knowledge-system.md §5–5f.
 
-**Status:** Not started. **Depends on:** Plan 8. **Unlocks:** Plan 10.
+**Status:** Implemented (techniques+expansion+compress; no analyze wiring; no pipeline-diff). **Depends on:** Plan 8. **Unlocks:** Plan 10.
 
 ---
 

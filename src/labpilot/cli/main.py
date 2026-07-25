@@ -54,6 +54,10 @@ from labpilot.research_engine.intelligence.registry import (
 )
 from labpilot.research_engine.intelligence.renderers.json import to_json, write_report
 from labpilot.research_engine.intelligence.renderers.terminal import render_terminal
+from labpilot.research_engine.intelligence.retrieval import (
+    ContextBuilder,
+    QueryType,
+)
 from labpilot.runtimes.doctor import check_all_runtimes
 from labpilot.runtimes.registry import get_runtime, list_runtimes
 from labpilot.runtimes.templates import runtime_to_yaml_dict, scaffold_runtime
@@ -831,6 +835,136 @@ def ingest(
     )
     for note in result.notes:
         console.print(f"  [yellow]•[/yellow] {note}")
+
+
+@app.command("retrieve")
+def retrieve_cmd(
+    competition: str = typer.Argument(..., help="Competition slug"),
+    question: str = typer.Option(
+        "",
+        "--question",
+        "-q",
+        help="Free-text research question (rules+optional LLM classify)",
+    ),
+    query_type: str = typer.Option(
+        "hypothesis_generation",
+        "--query-type",
+        help="hypothesis_generation | structured_query | explain | compare",
+    ),
+    pipeline: str | None = typer.Option(
+        None,
+        "--pipeline",
+        help="Comma-separated current techniques (e.g. EMA,Mixup,ConvNeXt)",
+    ),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        help="What to print: text (brief) or json (full ResearchContext)",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    project_dir: Path | None = typer.Option(
+        None, "--project-dir", help="Project root containing project.yaml"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Build typed ResearchContext from the Knowledge Store (Plan 9).
+
+    Does not re-run analyzers. Reads ``knowledge.db`` only. Not wired into
+    ``research analyze`` — Plan 10 Hypothesis Assistant consumes this API.
+    """
+    if output_format not in {"text", "json"}:
+        raise typer.BadParameter("--format must be 'text' or 'json'.")
+    try:
+        QueryType(query_type)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            "--query-type must be one of: hypothesis_generation, "
+            "structured_query, explain, compare"
+        ) from exc
+
+    config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
+    pipeline_list = (
+        [item.strip() for item in pipeline.split(",") if item.strip()] if pipeline else []
+    )
+
+    # Optional local pipeline enrichment when CLI flag omitted.
+    if not pipeline_list and config.runs_dir is not None:
+        try:
+            from labpilot.research_engine.intelligence.context import build_context
+            from labpilot.research_engine.intelligence.repositories.local_profile import (
+                LocalCodeProfiler,
+            )
+
+            ctx = build_context(
+                competition,
+                runs_dir=config.runs_dir,
+                knowledge_dir=config.knowledge_dir,
+            )
+            profile = LocalCodeProfiler().profile(ctx)
+            if profile is not None:
+                pipeline_list = list(
+                    dict.fromkeys(
+                        [
+                            *profile.architecture,
+                            *profile.augmentation,
+                            *profile.training_tricks,
+                            *profile.loss,
+                        ]
+                    )
+                )
+        except Exception:
+            pipeline_list = []
+
+    with KnowledgeStore(config.knowledge_dir, competition) as store:
+        if not store.list_techniques(limit=1) and not store.list_artifacts():
+            console.print(
+                f"[yellow]No knowledge found for {competition}.[/yellow] "
+                "Run research analyze + research ingest first."
+            )
+            raise typer.Exit(code=1)
+
+        context = ContextBuilder(
+            store,
+            llm_client=resolve_llm_client(config.llm),
+        ).build(
+            question,
+            query_type=query_type,
+            pipeline=pipeline_list,
+            competition={"slug": competition},
+        )
+
+    if output_format == "json":
+        print(context.model_dump_json(indent=2))
+        return
+
+    console.print(f"\n[bold]Research retrieval[/bold] — [cyan]{competition}[/cyan]")
+    if context.intent is not None:
+        console.print(
+            f"[dim]Intent:[/dim] {context.intent.query_type} "
+            f"(via {context.intent.classified_by}) "
+            f"domain={context.intent.domain or '—'} "
+            f"metric={context.intent.metric or '—'}"
+        )
+    console.print(
+        f"[dim]Cards:[/dim] techniques={len(context.techniques)} "
+        f"papers={len(context.papers)} experiments={len(context.experiments)} "
+        f"repos={len(context.repositories)} failures={len(context.failures)}"
+    )
+    console.print(
+        f"[dim]Budget:[/dim] {context.budget.get('total_chars', 0)}/"
+        f"{context.budget.get('total_budget', 0)} chars"
+    )
+    console.print()
+    console.print(context.brief or "(empty brief)")
+    if context.notes:
+        console.print("\n[bold]Notes[/bold]")
+        for note in context.notes:
+            console.print(f"  [yellow]•[/yellow] {note}")
 
 
 @runs_app.command("diff")

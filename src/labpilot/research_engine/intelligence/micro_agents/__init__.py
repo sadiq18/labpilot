@@ -27,6 +27,9 @@ from labpilot.research_engine.intelligence.micro_agents.forum_analyzer import Fo
 from labpilot.research_engine.intelligence.micro_agents.hypothesis_generator import (
     HypothesisGeneratorAgent,
 )
+from labpilot.research_engine.intelligence.micro_agents.intent_classifier import (
+    IntentClassifierAgent,
+)
 from labpilot.research_engine.intelligence.micro_agents.paper_analyzer import PaperAnalyzerAgent
 from labpilot.research_engine.intelligence.micro_agents.repository_analyzer import (
     RepositoryAnalyzerAgent,
@@ -47,6 +50,7 @@ _AGENT_TYPES: tuple[type[BaseMicroAgent], ...] = (
     ConceptNormalizerAgent,
     ExperimentReviewerAgent,
     CompetitionPageAnalyzerAgent,
+    IntentClassifierAgent,
 )
 
 _AGENTS_BY_NAME: dict[str, type[BaseMicroAgent]] = {cls.name: cls for cls in _AGENT_TYPES}
@@ -88,6 +92,7 @@ __all__ = [
     "ExperimentReviewerAgent",
     "ForumAnalyzerAgent",
     "HypothesisGeneratorAgent",
+    "IntentClassifierAgent",
     "MicroAgent",
     "PaperAnalyzerAgent",
     "RepoQueryPlannerAgent",
