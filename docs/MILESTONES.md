@@ -38,7 +38,7 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | Track | Document | Summary |
 |-------|----------|---------|
 | **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P2 + P3 + P4 shipped |
-| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Research Planner design Phase A; Research Intelligence Phase 1 shipped |
+| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Research Planner Plans 1–6 ready; Research Intelligence Phase 1 shipped |
 | **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2 execution dispatch + post-1.0 items |
 | **Backlog** | [milestones/backlog.md](milestones/backlog.md) | Unscheduled extensions (async kernel watcher, webhooks) |
 
@@ -56,13 +56,13 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | **P4** | v1.0 | **Done** | Production quality (workspace, CI, dry-run, HTML reports) |
 | **Experiment Scientist** | v0.5 | **Shipped** | Research memory, comparison, hypotheses, knowledge base, ranking, dashboard |
 | **Research Intelligence** | v0.6 | **Phase 1 shipped** | Analyze landscape + hypotheses + brief; plans 1–11 + spike + F |
-| **Research Planner** | — | **Design Phase A** | Hypothesis → planning compiler → executable DAG (`research plan`) |
+| **Research Planner** | — | **Plans ready** | Hypothesis → planning compiler → executable DAG (`research plan`); Plans 1–6 |
 
 Details for each track live in the linked documents above:
 
 - Experiment Scientist: [milestones/experiment-scientist/README.md](milestones/experiment-scientist/README.md)
 - Research Intelligence: [milestones/research-intelligence/README.md](milestones/research-intelligence/README.md)
-- Research Planner (design only; plans after review): [milestones/research-planner/README.md](milestones/research-planner/README.md)
+- Research Planner (design + Phase B plans): [milestones/research-planner/README.md](milestones/research-planner/README.md)
 
 ---
 

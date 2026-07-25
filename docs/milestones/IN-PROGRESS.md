@@ -4,17 +4,29 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-## Research Planner — Design Phase A
+## Research Planner — Phase B plans ready
 
-**Status:** Design docs only — no implementation plans yet, no application code.
+**Status:** Design Phase A locked; **implementation plans 1–6 authored**. Application code
+not started.
 
 **Design:**
 
 - [research-planner/README.md](research-planner/README.md) — product shape, compiler metaphor, CLI, non-goals
 - [research-planner/schema.md](research-planner/schema.md) — `research_plans` / `research_tasks` / deps
-- [research-planner/package-layout.md](research-planner/package-layout.md) — `research_engine/planner/` sibling pillar
+- [research-planner/package-layout.md](research-planner/package-layout.md) — `planner/` + `accessor/`
 
-**Next:** review design → Phase B `plan-N-*.md` → then code (`research plan create|show|list`).
+### Implementation plans
+
+| # | Plan | Depends on |
+|---|------|------------|
+| 1 | [Accessor layer](research-planner/plan-1-accessor.md) | RI shipped |
+| 2 | [Schemas + PlanStore](research-planner/plan-2-schemas-store.md) | 1 |
+| 3 | [Deterministic compiler](research-planner/plan-3-compiler.md) | 2 |
+| 4 | [Planning Engine Micro Agent](research-planner/plan-4-planning-engine.md) | 3 |
+| 5 | [CLI `research plan`](research-planner/plan-5-cli.md) | 3–4 |
+| 6 | [Capstone + docs](research-planner/plan-6-capstone.md) | 5 |
+
+**Next:** implement Plan 1 (accessor refactor), then 2→6.
 
 ---
 

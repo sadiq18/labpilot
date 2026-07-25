@@ -2,23 +2,28 @@
 
 Back to [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** Design Phase A — **this directory only**. No implementation plans yet; no
-application code. **Depends on:** Experiment Scientist ([../experiment-scientist/](../experiment-scientist/))
-and Research Intelligence ([../research-intelligence/](../research-intelligence/)).
-**Unlocks (after Phase B + code):** `research plan` — Hypothesis → executable research DAG.
+**Status:** Design Phase A locked; **Phase B implementation plans authored** (Plans 1–6).
+No application code yet. **Depends on:** Experiment Scientist
+([../experiment-scientist/](../experiment-scientist/)) and Research Intelligence
+([../research-intelligence/](../research-intelligence/)).
+**Unlocks (after Phase B code):** `research plan` — Hypothesis → executable research DAG.
 
 This directory is the architecture/design workspace for the Research Planner. Phase A is:
 
-| Doc | Role |
-|-----|------|
-| **This README** | Product shape, compiler metaphor, OS fit, CLI, non-goals |
-| [schema.md](schema.md) | DB tables + Pydantic shapes + PlanStore API |
-| [package-layout.md](package-layout.md) | `research_engine/planner/` tree + import hygiene |
 
-**Phase B** (implementation plans `plan-N-*.md`) starts **only after** this design is
-reviewed and approved — same ship-and-review style as Research Intelligence.
+| Doc                                    | Role                                                     |
+| -------------------------------------- | -------------------------------------------------------- |
+| **This README**                        | Product shape, compiler metaphor, OS fit, CLI, non-goals |
+| [schema.md](schema.md)                 | DB tables + Pydantic shapes + PlanStore API              |
+| [package-layout.md](package-layout.md) | `research_engine/planner/` tree + import hygiene         |
+
+
+**Phase B** implementation plans are sequenced below (§14). Implement plan-by-plan after
+review — same ship-and-review style as Research Intelligence.
 
 ---
+
+
 
 ## 1. What this milestone is (and isn't)
 
@@ -77,6 +82,8 @@ Notice: **no code yet. Only planning.**
 
 ---
 
+
+
 ## 2. Research OS — where the planner sits
 
 ```
@@ -129,9 +136,11 @@ Belief Update
 ```
 
 Existing entities (`Artifact`, `Belief`, `Hypothesis`) stay excellent. The missing central
-object that ties them to execution is **`ResearchPlan`**.
+object that ties them to execution is `ResearchPlan`.
 
 ---
+
+
 
 ## 3. Architecture metaphor — planner as compiler
 
@@ -199,6 +208,8 @@ without changing any executor.
 
 ---
 
+
+
 ## 4. Roles ≠ agents; capabilities execute tasks
 
 Forbidden shape:
@@ -225,25 +236,29 @@ The future executor does **not** think; it dispatches by `task_type`. Those capa
 ### Micro-agents (only place for LLM helpers)
 
 - **Planning Engine** (required): one Micro Agent = the single Planner LLM stage. Typed draft
-  in/out; mandatory `rule_engine` fallback. Lives under `planner/micro_agents/planning_engine/`.
+in/out; mandatory `rule_engine` fallback. Lives under `planner/micro_agents/planning_engine/`.
 - **Helper micro-agents** (optional, later): e.g. Risk Checker, Dependency Checker, Evidence
-  Summary — **stateless**, no memory, no autonomy, no tools, no loops. LLM-powered helper
-  functions inside the compiler front-end; they return small typed artifacts into the Planning
-  Engine context.
+Summary — **stateless**, no memory, no autonomy, no tools, no loops. LLM-powered helper
+functions inside the compiler front-end; they return small typed artifacts into the Planning
+Engine context.
 
 Not a multi-agent system. Not ReAct. Not tool-calling loops.
 
 ---
 
+
+
 ## 5. Memory and context
 
 The planner has **no session memory** and **no chat history**.
 
-| Kind | Where |
-|------|--------|
+
+| Kind      | Where                                                                                |
+| --------- | ------------------------------------------------------------------------------------ |
 | Long-term | `knowledge.db` — artifacts, beliefs, hypotheses, **research_plans / research_tasks** |
-| Working | ephemeral `PlanningContext` / `StructuredContext` for one compile |
-| LLM | single system + user prompt from that envelope; parse JSON; done |
+| Working   | ephemeral `PlanningContext` / `StructuredContext` for one compile                    |
+| LLM       | single system + user prompt from that envelope; parse JSON; done                     |
+
 
 Context budget (deterministic assembly before any LLM):
 
@@ -254,6 +269,8 @@ Context budget (deterministic assembly before any LLM):
 Never dump the SoR or full `analyze.json` into the prompt.
 
 ---
+
+
 
 ## 6. Compiler control flow
 
@@ -286,6 +303,8 @@ task with verification — **described, not executed**.
 
 ---
 
+
+
 ## 7. CLI sketch
 
 ```bash
@@ -297,12 +316,14 @@ research plan list <competition> [--status draft|ready|...]
 - Load hypothesis; fail clearly if missing.
 - Persist to `knowledge.db`; write derived `plans/<plan_id>.json` + `.md`.
 - Print topological DAG summary.
-- **No `--execute` flag.**
+- **No** `--execute` **flag.**
 
 Details of schemas and on-disk layout: [schema.md](schema.md). Package tree:
 [package-layout.md](package-layout.md).
 
 ---
+
+
 
 ## 8. Package placement
 
@@ -317,8 +338,8 @@ research_engine/
 ```
 
 Infrastructure (SQLite client, LLM client, shared helpers) is factored into a shared
-**`accessor`** layer, so the planner reaches SQLite/LLM without importing `intelligence`.
-`schema.sql` lives under **`sqlite/`** (with the client + migrator); **`commons/`** holds
+`accessor` layer, so the planner reaches SQLite/LLM without importing `intelligence`.
+`schema.sql` lives under `sqlite/` (with the client + migrator); `commons/` holds
 non-client shared logic (ids, JSON helpers):
 
 ```
@@ -333,29 +354,36 @@ Rationale, import hygiene, and the (deferred) refactor to move today's schema/cl
 
 ---
 
+
+
 ## 9. Relationship to existing "plans"
 
-| Object | Layer | Role |
-|--------|-------|------|
-| `ImprovementPlan` | Execution (P3) | One child-run strategy about to execute |
-| `QueryPlan` | Intelligence retrieval | Fixed/stub retrieval plan — not experiment planning |
-| `ResearchPlan` | **Planner (new)** | Durable DAG from a hypothesis — plan-only |
+
+| Object            | Layer                  | Role                                                |
+| ----------------- | ---------------------- | --------------------------------------------------- |
+| `ImprovementPlan` | Execution (P3)         | One child-run strategy about to execute             |
+| `QueryPlan`       | Intelligence retrieval | Fixed/stub retrieval plan — not experiment planning |
+| `ResearchPlan`    | **Planner (new)**      | Durable DAG from a hypothesis — plan-only           |
+
 
 Do not overload `ImprovementPlan` or `QueryPlan`. The Research Plan sits **between** a durable
 `Hypothesis` and any future executor / `improve` path.
 
 ---
 
+
+
 ## 10. Success criteria
 
 ### Design Phase A (this directory)
 
-- [ ] README + schema + package-layout reviewed and approved
-- [ ] Hard decisions locked: compiler (not multi-agent); one Planning Engine LLM;
-      `research_*` tables (not Layer-3 `tasks`); sibling `planner/` package
-- [ ] Non-goals explicit (no code gen, no training, no `--execute`)
+- [x] README + schema + package-layout authored
+- [x] Hard decisions locked: compiler (not multi-agent); one Planning Engine LLM;
+      `research_*` tables (not Layer-3 `tasks`); sibling `planner/` package; accessor layer
+- [x] Non-goals explicit (no code gen, no training, no `--execute`)
+- [x] Phase B implementation plans authored (§14)
 
-### Future MVP (after Phase B plans + code) — preview only
+### MVP (after Phase B **code** — Plans 1–6)
 
 - [ ] `research plan create` writes `research_plans` + `research_tasks` + deps in `knowledge.db`
 - [ ] Derived JSON/MD under `plans/`; markdown regenerated from structure
@@ -376,19 +404,10 @@ Do not overload `ImprovementPlan` or `QueryPlan`. The Research Plan sits **betwe
 | Experiment budget allocator / cost optimizer | Schema hooks only in v1 |
 | Runtime dispatch (Kaggle/Docker/GPU pick) | Columns/hooks; P2 execution remains separate |
 | Belief-updater wiring / reflection loop | Downstream of executor |
-| Implementation `plan-N-*.md` in this Phase A | Wait for design approval |
 
 ---
 
-## 12. Phase B note
-
-After this design is approved, split work into sequenced implementation plans (foundation /
-schema migration / compiler stages / CLI / tests / docs), same style as
-[../research-intelligence/](../research-intelligence/). Until then: **design only**.
-
----
-
-## 13. Design decisions (locked from architecture discussion)
+## 12. Design decisions (locked)
 
 1. Planner as **compiler**, not multi-agent system.
 2. Exactly **one** Planning Engine LLM; deterministic retrieve / validate / schedule / persist.
@@ -399,5 +418,44 @@ schema migration / compiler stages / CLI / tests / docs), same style as
 7. Micro-helpers optional/stateless; capability executors are future and outside the planner.
 8. Shared **`accessor`** layer owns the SQLite client (with `schema.sql` + migrate under
    `sqlite/`), the LLM client, and (in `commons`) shared non-client helpers; pillars depend
-   on `accessor`, never on each other for infrastructure. Moving today's schema/clients into
-   `accessor` is a deferred refactor.
+   on `accessor`, never on each other for infrastructure. Plan 1 performs that refactor.
+
+---
+
+## 13. Milestone plan (Phase B)
+
+| # | Plan | Depends on | Doc |
+|---|------|------------|-----|
+| 1 | Accessor layer (SQLite + LLM + commons) | RI shipped | [plan-1-accessor.md](plan-1-accessor.md) |
+| 2 | Schemas, DDL, PlanStore | 1 | [plan-2-schemas-store.md](plan-2-schemas-store.md) |
+| 3 | Deterministic compiler (`rule_engine`) | 2 | [plan-3-compiler.md](plan-3-compiler.md) |
+| 4 | Planning Engine Micro Agent (ONE LLM) | 3 | [plan-4-planning-engine.md](plan-4-planning-engine.md) |
+| 5 | CLI `research plan` | 3–4 | [plan-5-cli.md](plan-5-cli.md) |
+| 6 | Capstone + docs polish | 5 | [plan-6-capstone.md](plan-6-capstone.md) |
+
+```mermaid
+flowchart LR
+  p1[Plan1_Accessor] --> p2[Plan2_SchemasStore]
+  p2 --> p3[Plan3_Compiler]
+  p3 --> p4[Plan4_PlanningEngine]
+  p3 --> p5[Plan5_CLI]
+  p4 --> p5
+  p5 --> p6[Plan6_Capstone]
+```
+
+**Implementation order:** Plan 1 first (blast radius), then 2 → 3 → 4 → 5 → 6. Plan 5 can
+start once Plan 3 works offline; Plan 4 can land in parallel with early CLI wiring if needed.
+
+**Future (not in Plans 1–6):** helper micro-agents, competing planners, cost/budget optimizer,
+capability executors.
+
+---
+
+## 14. Phase B — how to ship
+
+1. Implement [Plan 1](plan-1-accessor.md) as its own PR (infra only).
+2. Plans 2–3 deliver a working offline compiler + DB.
+3. Plan 4 upgrades quality when LLM is configured.
+4. Plan 5 exposes `research plan create|show|list`.
+5. Plan 6 is the acceptance gate — then mark MVP shipped in MILESTONES / IN-PROGRESS.
+

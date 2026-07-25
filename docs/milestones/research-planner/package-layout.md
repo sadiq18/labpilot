@@ -2,8 +2,8 @@
 
 Back to [README.md](README.md) · [schema.md](schema.md) · [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** Design Phase A. No `src/` package created until Phase B implementation plans are
-approved.
+**Status:** Design Phase A locked; Phase B plans authored. No `src/` package until
+[Plan 2](plan-2-schemas-store.md). Accessor refactor is [Plan 1](plan-1-accessor.md).
 
 ---
 
