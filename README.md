@@ -90,10 +90,12 @@ uv sync --extra deep && uv run pytest -m deep           # optional; may be empty
 
 **LLM (`llm` extra)** — set one API key in `.env`:
 
-- `OPENAI_API_KEY` — default (`llm.provider: openai` in `configs/default.yaml`)
-- `GEMINI_API_KEY` + `LABPILOT_LLM_PROVIDER=gemini` — Gemini instead
+- `GEMINI_API_KEY` — default (`llm.provider: gemini` in `configs/default.yaml`)
+- `OPENAI_API_KEY` + `LABPILOT_LLM_PROVIDER=openai` — OpenAI instead
+- Coding task uses local Ollama (`qwen2.5-coder:14b`) when `force_local` is set
 
-Without a key or package, Micro Agents / brief paths fall back to `rule_engine` templates.
+Without a key/package (and without reachable Ollama for local tasks), Micro Agents /
+brief paths fall back to `rule_engine` templates.
 
 **Deep transfer learning (opt-in)** — in a local competition contract
 (`configs/competitions/<slug>.yaml`):

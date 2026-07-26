@@ -1,0 +1,86 @@
+"""Ollama local-model provider (stdlib HTTP — no extra dependency)."""
+
+from __future__ import annotations
+
+import json
+import logging
+import urllib.error
+import urllib.request
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_TIMEOUT_SECONDS = 120.0
+
+
+class OllamaProvider:
+    name = "ollama"
+
+    def __init__(self, base_url: str = "http://localhost:11434") -> None:
+        self.base_url = base_url.rstrip("/")
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        model: str,
+        temperature: float,
+    ) -> str:
+        messages: list[dict[str, str]] = []
+        if system.strip():
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user})
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": temperature},
+        }
+        request = urllib.request.Request(
+            f"{self.base_url}/api/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=_DEFAULT_TIMEOUT_SECONDS) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Ollama HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Ollama unreachable at {self.base_url}: {exc}") from exc
+
+        message = body.get("message") or {}
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise RuntimeError("Ollama response missing message.content")
+        return content
+
+    def is_reachable(self, timeout_seconds: float = 0.25) -> bool:
+        """Cheap liveness probe used by auto mode."""
+        request = urllib.request.Request(f"{self.base_url}/api/tags", method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_seconds):
+                return True
+        except Exception as exc:  # noqa: BLE001 — soft probe
+            logger.debug("Ollama not reachable at %s (%s)", self.base_url, exc)
+            return False
+
+
+class OllamaClient:
+    """Legacy LLMClient-shaped wrapper (model/temperature bound at construct)."""
+
+    def __init__(self, base_url: str, model: str, temperature: float) -> None:
+        self._provider = OllamaProvider(base_url)
+        self.model = model
+        self.temperature = temperature
+        self.base_url = base_url
+
+    def complete(self, system: str, user: str) -> str:
+        return self._provider.complete(
+            system,
+            user,
+            model=self.model,
+            temperature=self.temperature,
+        )

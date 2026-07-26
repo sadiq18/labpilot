@@ -503,12 +503,12 @@ labpilot/
 │
 ├── src/labpilot/
 │   ├── cli/                   # Typer CLI entry point
-│   ├── accessor/              # Shared SQLite + LLM + Kaggle client + common helpers
+│   ├── accessor/              # Shared SQLite + Kaggle + data/profiler + common helpers
 │   │   ├── kaggle/            # Kaggle API client + CompetitionMetadata DTO
 │   │   ├── data/              # Download + directory layout
 │   │   ├── profiler/          # Tabular EDA + profile.json helpers
 │   │   └── common/            # ids, JSON-in-TEXT, Micro Agent contract
-│   ├── llm/                   # Provider-agnostic LLM client (OpenAI, Gemini)
+│   ├── llm/                   # Task-routed LLM (OpenAI, Gemini, Ollama) + cache/router
 │   ├── kernel/                # Kernel export for kernel-only competitions
 │   ├── improvement/           # Legacy improve path (slim/replace with plan → Engineer)
 │   ├── experiments/           # Graph, hypotheses, comparator + logger/store/index
@@ -554,7 +554,7 @@ labpilot/
 
 Configuration merges two sources:
 
-1. **YAML file** (`configs/default.yaml`) — pipeline stages, CV folds, profiler limits, LLM model
+1. **YAML file** (`configs/default.yaml`) — training/profiler limits, LLM mode/tasks/models
 2. **Environment variables** (`.env`) — API credentials and optional overrides
 
 | Variable | Purpose |
@@ -562,16 +562,19 @@ Configuration merges two sources:
 | `KAGGLE_API_TOKEN` | Preferred Kaggle API token |
 | `KAGGLE_USERNAME` | Legacy Kaggle API username |
 | `KAGGLE_KEY` | Legacy Kaggle API key |
-| `OPENAI_API_KEY` | LLM key when `llm.provider` is `openai` (default) |
-| `GEMINI_API_KEY` | LLM key when `llm.provider` is `gemini` |
+| `OPENAI_API_KEY` | LLM key when cloud provider is `openai` |
+| `GEMINI_API_KEY` | LLM key when cloud provider is `gemini` |
+| `OLLAMA_HOST` | Override `llm.ollama_base_url` (default `http://localhost:11434`) |
 | `LABPILOT_RUNS_DIR` | Override runs directory |
-| `LABPILOT_LLM_PROVIDER` | Override `llm.provider` (`openai` \| `gemini`) |
+| `LABPILOT_LLM_MODE` | Override `llm.mode` (`auto` \| `local` \| `cloud`) |
+| `LABPILOT_LLM_PROVIDER` | Override `llm.provider` (`openai` \| `gemini` \| `ollama`) |
 | `LABPILOT_LLM_MODEL` | Override LLM model name |
 
-Neither `OPENAI_API_KEY` nor `GEMINI_API_KEY` is required — `create_llm_client()` (see
-`llm/client.py`) returns `None` when no key is set for the configured provider, or when the
-matching optional package (`openai` / `google-genai`, both in the `llm` extra) isn't installed,
-and `BriefGenerator`/`ReflectionGenerator` fall back to template-only text instead of failing.
+Neither cloud keys nor Ollama are required — `resolve_llm_client()` / `LLM.generate()` soft-fail
+when no provider is available (missing key/package, or Ollama down). Micro Agents and narrative
+generators fall back to `rule_engine` / template text. Per-task models live under `llm.tasks`
+(e.g. `planning` / `coding` / `summary`); `force_local: true` always uses Ollama for that task.
+Prompt responses are cached in `.cache/llm.sqlite` when `llm.cache.enabled` is true.
 
 `Settings` reads `.env`; `load_config()` merges environment credentials and overrides
 into the YAML-backed application config. Secrets are excluded from serialized config output.
@@ -610,7 +613,7 @@ Templates are executed as a subprocess with `cwd=pipeline/`. Paths to `data/raw/
 | Schemas | Pydantic v2 | Module contracts |
 | Templates | Jinja2 | Baseline codegen |
 | ML | LightGBM + scikit-learn | Fast tabular baselines |
-| LLM | OpenAI or Gemini API | Brief + reflection only; optional, falls back to templates |
+| LLM | OpenAI, Gemini, or local Ollama | Optional; task-routed via `labpilot.llm`; soft-fails to templates |
 | Kaggle | `kaggle` Python API | Download + submit |
 | Tracking | Local JSON (P0) | No MLflow dependency |
 | Testing | pytest | Per-module + integration |

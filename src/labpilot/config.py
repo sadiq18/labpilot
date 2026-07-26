@@ -7,7 +7,6 @@ import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 # Shared with `labpilot.llm.client.create_llm_client()`: if a user switches
 # `llm.provider` without also overriding `llm.model`, this is what resolves
 # to a real model name for that provider instead of silently sending an
@@ -15,14 +14,34 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEFAULT_MODEL_BY_PROVIDER: dict[str, str] = {
     "openai": "gpt-4o-mini",
     "gemini": "gemini-3.5-flash",
+    "ollama": "qwen2.5-coder:14b",
 }
 
 
+class LLMCacheConfig(BaseModel):
+    enabled: bool = True
+    path: Path = Path(".cache/llm.sqlite")
+
+
+class TaskProfile(BaseModel):
+    """Per-task model routing overrides (planning, coding, summary, …)."""
+
+    model: str | None = None
+    provider: str | None = None
+    force_local: bool = False
+    temperature: float | None = None
+
+
 class LLMConfig(BaseModel):
-    provider: str = "openai"
-    model: str = "gpt-4o-mini"
+    mode: str = "auto"  # auto | local | cloud
+    provider: str = "gemini"
+    model: str = "gemini-3.5-flash"
     temperature: float = 0.3
     api_key: str = Field(default="", exclude=True, repr=False)
+    ollama_base_url: str = "http://localhost:11434"
+    fallback_model: str = "qwen2.5-coder:14b"
+    cache: LLMCacheConfig = Field(default_factory=LLMCacheConfig)
+    tasks: dict[str, TaskProfile] = Field(default_factory=dict)
 
 
 class TrainingConfig(BaseModel):
@@ -146,6 +165,8 @@ class Settings(BaseSettings):
     labpilot_knowledge_dir: str = "knowledge"
     labpilot_llm_provider: str = ""
     labpilot_llm_model: str = ""
+    labpilot_llm_mode: str = ""
+    ollama_host: str = ""
     labpilot_runtimes_dir: str = ""
     labpilot_default_runtime: str = ""
 
@@ -182,6 +203,11 @@ def _normalize_paths(raw: dict[str, Any]) -> dict[str, Any]:
     kaggle = raw.get("kaggle")
     if isinstance(kaggle, dict) and "cache_dir" in kaggle:
         kaggle["cache_dir"] = Path(kaggle["cache_dir"])
+    llm = raw.get("llm")
+    if isinstance(llm, dict):
+        cache = llm.get("cache")
+        if isinstance(cache, dict) and "path" in cache:
+            cache["path"] = Path(cache["path"])
     return raw
 
 
@@ -199,6 +225,11 @@ def _apply_settings(config: AppConfig, settings: Settings, raw: dict[str, Any]) 
         config.runtime.runtimes_dir = Path(settings.labpilot_runtimes_dir)
     if settings.labpilot_default_runtime:
         config.runtime.default_runtime = settings.labpilot_default_runtime
+
+    if settings.labpilot_llm_mode:
+        config.llm.mode = settings.labpilot_llm_mode.strip().lower()
+    if settings.ollama_host:
+        config.llm.ollama_base_url = settings.ollama_host.strip()
 
     if settings.labpilot_llm_provider:
         config.llm.provider = settings.labpilot_llm_provider

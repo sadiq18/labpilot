@@ -32,20 +32,32 @@ experiments:
       risk: 1.0
       novelty: 0.5
 
-# Used to generate brief.md/reflection.md — entirely optional. If no API key
-# is configured for the chosen provider (or the optional package isn't
-# installed), LabPilot falls back to template-only text instead of failing.
-# `model` defaults per-provider when left unset here (gpt-4o-mini for
-# openai, gemini-3.5-flash for gemini); override LABPILOT_LLM_PROVIDER in
-# .env to switch providers without editing this file.
+# Optional LLM layer (`labpilot.llm`). Soft-fails to templates / rule_engine
+# when no cloud key and Ollama is unreachable. Override with LABPILOT_LLM_MODE
+# (auto|local|cloud), LABPILOT_LLM_PROVIDER, LABPILOT_LLM_MODEL, OLLAMA_HOST.
 llm:
-  provider: openai
-  # model: gpt-4o-mini
+  mode: auto          # auto | local | cloud
+  provider: gemini    # default cloud provider (matches LABPILOT_LLM_PROVIDER in .env)
+  # model: gemini-3.5-flash
   temperature: 0.3
-  # To use Gemini instead:
-  #   provider: gemini
-  #   model: gemini-3.5-flash
-  # ...and set GEMINI_API_KEY (instead of OPENAI_API_KEY) in .env.
+  ollama_base_url: http://localhost:11434
+  fallback_model: qwen2.5-coder:14b
+  cache:
+    enabled: true
+    path: .cache/llm.sqlite
+  tasks:
+    planning: {}      # inherits gemini
+    coding:
+      model: qwen2.5-coder:14b
+      provider: ollama
+      force_local: true
+    summary: {}       # inherits gemini
+    default: {}
+  # Local-only alternative for non-coding tasks:
+  #   planning: { model: qwen2.5-coder:14b, provider: ollama, force_local: true }
+  # OpenAI cloud:
+  #   provider: openai
+  #   model: gpt-4o-mini
 
 training:
   cv_folds: 5

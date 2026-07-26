@@ -559,8 +559,16 @@ Lists registered baseline templates (tabular / text / image / deep variants).
 follow-on under Execution Submission/Runtime (legacy `kernel/` helpers remain
 quarantined).
 
-**LLM optional:** without `OPENAI_API_KEY` / `GEMINI_API_KEY` (or the `llm` extra),
-analyze / code / narrative Micro Agents fall back to `rule_engine` templates.
+**LLM optional:** without `OPENAI_API_KEY` / `GEMINI_API_KEY` (or the `llm` extra), and
+without a reachable Ollama daemon, analyze / code / narrative Micro Agents fall back to
+`rule_engine` templates.
+
+**Local models (Ollama):** set `llm.mode: local` (or `LABPILOT_LLM_MODE=local`), start
+Ollama, and pull task models from `configs/default.yaml` (`llm.tasks`), e.g.
+`ollama pull qwen2.5-coder:14b` for coding (see `llm.tasks.coding`). Per-task
+`force_local: true` always routes that skill to Ollama even in `auto`/`cloud` mode.
+Other tasks inherit `llm.provider` (default Gemini). Callers use
+`labpilot.llm.LLM.generate(task=...)` — never Ollama HTTP directly.
 
 ---
 
