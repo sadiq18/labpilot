@@ -3,14 +3,20 @@
 Turns a Hypothesis into a validated, database-backed executable DAG
 (``ResearchPlan`` of ``ResearchTask`` nodes). Deterministic Python owns the
 pipeline (retrieval, context, templates, validation, scheduling, persistence);
-the LLM is one optional stage (Plan 4). The planner never writes code or runs
-training — it only emits plan nodes.
+the LLM is one optional Planning Engine stage. The planner never writes code or
+runs training — it only emits plan nodes.
 """
 
-from labpilot.research_engine.planner.planner import compile_research_plan
+from labpilot.research_engine.planner.planner import (
+    blueprint_to_draft,
+    compile_research_plan,
+    lower_draft,
+)
 from labpilot.research_engine.planner.schemas import (
+    DraftTask,
     PlanStatus,
     ResearchPlan,
+    ResearchPlanDraft,
     ResearchTask,
     RetryPolicy,
     RuntimeTarget,
@@ -26,7 +32,11 @@ from labpilot.research_engine.planner.validator import (
 )
 
 __all__ = [
+    "blueprint_to_draft",
     "compile_research_plan",
+    "lower_draft",
+    "DraftTask",
+    "ResearchPlanDraft",
     "PlanStore",
     "PlanValidationError",
     "PlanStatus",

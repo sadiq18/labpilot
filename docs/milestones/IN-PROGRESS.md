@@ -22,11 +22,11 @@ not started.
 | 1 | [Accessor layer](research-planner/plan-1-accessor.md) | RI shipped | Done |
 | 2 | [Schemas + PlanStore](research-planner/plan-2-schemas-store.md) | 1 | Done |
 | 3 | [Deterministic compiler](research-planner/plan-3-compiler.md) | 2 | Done |
-| 4 | [Planning Engine Micro Agent](research-planner/plan-4-planning-engine.md) | 3 | Not started |
+| 4 | [Planning Engine Micro Agent](research-planner/plan-4-planning-engine.md) | 3 | Done |
 | 5 | [CLI `research plan`](research-planner/plan-5-cli.md) | 3–4 | Not started |
 | 6 | [Capstone + docs](research-planner/plan-6-capstone.md) | 5 | Not started |
 
-**Next:** implement Plan 4 (Planning Engine Micro Agent), then 5→6.
+**Next:** implement Plan 5 (CLI `research plan`), then Plan 6.
 
 ---
 

@@ -1,5 +1,6 @@
 """Planner schemas: typed plan/task models and the instruction set."""
 
+from labpilot.research_engine.planner.schemas.draft import DraftTask, ResearchPlanDraft
 from labpilot.research_engine.planner.schemas.models import (
     ResearchPlan,
     ResearchTask,
@@ -14,6 +15,8 @@ from labpilot.research_engine.planner.schemas.task_types import (
 )
 
 __all__ = [
+    "DraftTask",
+    "ResearchPlanDraft",
     "ResearchPlan",
     "ResearchTask",
     "RetryPolicy",
