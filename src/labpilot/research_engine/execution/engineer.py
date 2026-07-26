@@ -67,6 +67,12 @@ class ResearchEngineer:
         execution = self._exec_store.create_execution(plan_id)
         self._plan_store.update_plan_status(plan_id, PlanStatus.IN_PROGRESS)
         self._exec_store.update_status(execution.id, "running")
+        if plan.hypothesis_id:
+            from labpilot.research_engine.reflection.hypotheses import HypothesisEvaluator
+
+            HypothesisEvaluator(self.knowledge_dir, self.competition).mark_testing(
+                plan.hypothesis_id
+            )
         return self._run_execution(execution.id)
 
     def resume(self, execution_id: str) -> ResearchExecution:

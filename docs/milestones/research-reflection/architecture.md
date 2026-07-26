@@ -68,22 +68,30 @@ Existing Reporting TaskTypes in
 **After Plan 5:** call into `research_engine.reflection` library; auto-run on
 execution success/fail when those tasks are in the plan DAG.
 
-`ReflectionGeneratorAgent` (under `execution/micro_agents/`) is promoted into
-`reflection/critic/` and wired from Reporting (unused today).
+LLM reflection slices live co-located with their domain packages
+(`critic/`, `contradiction/`, `confidence/`, `synthesis/`, `lessons/`,
+`hypotheses/`, `recommendation/`) — each has `micro_agent.py` + `skill.md`.
+`RootCauseAgent` aliases the legacy `ReflectionGeneratorAgent` name; execution
+still re-exports that name for compatibility. Facades compose the agents;
+Reporting can call `run_reflection`.
 
 ---
 
 ## 5. LLM boundary (locked)
 
-| Use LLM | Keep deterministic |
-|---------|-------------------|
-| Root cause / critic reasoning | Metric deltas, ranking, storage |
-| Contradiction narrative | Statistical/confidence math (rules) |
-| Lesson generation | Evidence extraction |
-| Hypothesis revision text | Belief confidence arithmetic |
-| Next-experiment recommendation prose | History queries / journal assembly |
+| Use LLM (Micro Agent) | Keep deterministic |
+|----------------------|-------------------|
+| RootCauseAgent | Metric deltas, ranking, storage, EvidenceExtractor |
+| ContradictionDetectorAgent | Belief confidence arithmetic (BeliefUpdater) |
+| EvidenceSynthesisAgent | Journal assembly / history queries |
+| ConfidenceEstimatorAgent (qualitative) | Hypothesis **status** enum writes |
+| LessonGeneratorAgent | Claim promotion thresholds |
+| HypothesisRevisionAgent (why / revised text) | |
+| RecommendationAgent | |
 
-Offline: every LLM stage has a `rule_engine` path (same posture as other Micro Agents).
+Offline: every Micro Agent has a `rule_engine` path (same posture as Intelligence).
+
+Each agent is imported from its domain package (e.g. `reflection.critic.RootCauseAgent`).
 
 ---
 

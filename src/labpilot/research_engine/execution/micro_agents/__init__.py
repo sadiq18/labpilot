@@ -10,17 +10,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from labpilot.accessor.common.micro_agents import BaseMicroAgent, MicroAgent, StructuredContext
-from labpilot.research_engine.execution.micro_agents.reflection_generator import (
+from labpilot.research_engine.reflection.critic.micro_agent import (
     ReflectionDraft,
     ReflectionGeneratorAgent,
+    RootCauseAgent,
 )
 
 if TYPE_CHECKING:
     from labpilot.llm.client import LLMClient
 
-_AGENT_TYPES: tuple[type[BaseMicroAgent], ...] = (ReflectionGeneratorAgent,)
+_AGENT_TYPES: tuple[type[BaseMicroAgent], ...] = (RootCauseAgent,)
 
-_AGENTS_BY_NAME: dict[str, type[BaseMicroAgent]] = {cls.name: cls for cls in _AGENT_TYPES}
+_AGENTS_BY_NAME: dict[str, type[BaseMicroAgent]] = {
+    RootCauseAgent.name: RootCauseAgent,
+    "ReflectionGeneratorAgent": RootCauseAgent,
+}
 
 
 class UnknownMicroAgentError(KeyError):
@@ -46,6 +50,7 @@ __all__ = [
     "MicroAgent",
     "ReflectionDraft",
     "ReflectionGeneratorAgent",
+    "RootCauseAgent",
     "StructuredContext",
     "UnknownMicroAgentError",
     "available_agents",

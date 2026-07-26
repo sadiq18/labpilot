@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md).
 
-**Status:** Ready. **Depends on:** Plans 4–5. **Unlocks:** Plans 7–8.
+**Status:** Done. **Depends on:** Plans 4–5. **Unlocks:** Plans 7–8.
 
 ---
 
@@ -25,6 +25,6 @@ Planner inputs.
 
 ## Acceptance criteria
 
-- [ ] Lesson rows persist after reflect
-- [ ] Synthesis output is stable under rule_engine
-- [ ] Cross-competition lessons can have null competition_slug
+- [x] Lesson rows persist after reflect
+- [x] Synthesis output is stable under rule_engine
+- [x] Cross-competition lessons can have null competition_slug

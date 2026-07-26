@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md). Design: [package-layout.md](package-layout.md).
 
-**Status:** Ready. **Depends on:** Plans 3–5, 8 (migration complete).
+**Status:** Done. **Depends on:** Plans 3–5, 8 (migration complete).
 
 ---
 
@@ -120,10 +120,10 @@ legacy `runs/` support is dropped separately.
 
 ## Acceptance criteria
 
-- [ ] No imports of `labpilot.reflection` remain
-- [ ] `labpilot.report` package deleted; no `ReportGenerator` / `research report`
-- [ ] Dashboard template relocated; `research experiments dashboard` still green
-- [ ] `labpilot.improvement` deleted; codegen imports defaults locally; graph imports run-override DTOs from `experiments`
-- [ ] Follow-on TODO recorded (offline codegen defaults cleanup)
-- [ ] CI green; no Pipeline reflect/report/improve resurrection
-- [ ] Docs point narrative surface at `research journal` / `research_engine.reflection`
+- [x] No imports of `labpilot.reflection` remain
+- [x] `labpilot.report` package deleted; no `ReportGenerator` / `research report`
+- [x] Dashboard template relocated; `research experiments dashboard` still green
+- [x] `labpilot.improvement` deleted; codegen imports defaults locally; graph imports run-override DTOs from `experiments`
+- [x] Follow-on TODO recorded (offline codegen defaults cleanup)
+- [x] CI green; no Pipeline reflect/report/improve resurrection
+- [x] Docs point narrative surface at `research journal` / `research_engine.reflection`

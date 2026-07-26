@@ -12,6 +12,7 @@ from typer.core import TyperGroup
 
 from labpilot.research_engine.execution.baseline.registry import list_templates
 from labpilot.cli.plan import plan_app
+from labpilot.cli.reflect import claims_app, reflect_app
 from labpilot.config import (
     AppConfig,
     load_config,
@@ -45,7 +46,6 @@ from labpilot.experiments.search import (
 from labpilot.accessor.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
 from labpilot.experiments.manifest import StageStatus, find_manifest, load_manifest
-from labpilot.report.generator import ReportGenerator
 from labpilot.research_engine.intelligence.context import build_context
 from labpilot.research_engine.intelligence.fetch import KaggleFetchService
 from labpilot.research_engine.intelligence.hypothesis import HypothesisAssistant
@@ -103,6 +103,8 @@ hypothesize_app = typer.Typer(
 )
 app.add_typer(hypothesize_app, name="hypothesize")
 app.add_typer(plan_app, name="plan")
+app.add_typer(reflect_app, name="reflect")
+app.add_typer(claims_app, name="claims")
 console = Console()
 
 
@@ -376,25 +378,34 @@ def status(
     console.print(table)
 
 
+@app.command("journal")
+def journal(
+    competition: str = typer.Option(..., "--competition", "-c"),
+    output_json: bool = typer.Option(False, "--json"),
+    config_path: Path = typer.Option(Path("configs/default.yaml"), "--config"),
+    knowledge_dir: Path | None = typer.Option(None, "--knowledge-dir"),
+) -> None:
+    """Print the research journal (evidence tiers, beliefs, claims, next step)."""
+    from labpilot.cli.reflect import journal_cmd
+
+    journal_cmd(
+        competition=competition,
+        output_json=output_json,
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+    )
+
+
 @app.command()
 def report(
-    run_id: str = typer.Option(..., "--run-id", "-r", help="Run ID to render"),
-    config_path: Path = typer.Option(
-        Path("configs/default.yaml"), "--config", help="Path to config file"
-    ),
-    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Legacy run id (removed)"),
 ) -> None:
-    """Generate or refresh the standalone HTML report for a research run."""
-    config = load_config(config_path)
-    if runs_dir:
-        config.runs_dir = runs_dir
-    run_dir = config.runs_dir / run_id
-    if not (run_dir / "manifest.json").is_file():
-        raise typer.BadParameter(f"Run not found: {run_id}")
-
-    manifest = find_manifest(config, run_id)
-    path = ReportGenerator().generate(run_dir, manifest)
-    console.print(f"[green]Report written:[/green] {path}")
+    """Removed — use ``research journal --competition <slug>`` instead."""
+    console.print(
+        "[red]research report was removed[/red] (Pipeline-era HTML). "
+        "Use: [cyan]research journal --competition <slug>[/cyan]"
+    )
+    raise typer.Exit(code=1)
 
 
 def _parse_analyzer_csv(value: str | None) -> set[str] | None:

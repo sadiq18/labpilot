@@ -151,7 +151,7 @@ def render_dashboard_html(
     runs_dir: Path,
 ) -> str:
     """Build dashboard HTML string (same context shape as per-run reports)."""
-    template_dir = Path(__file__).resolve().parent.parent / "report" / "templates"
+    template_dir = Path(__file__).resolve().parent / "templates"
     env = Environment(
         loader=FileSystemLoader(template_dir),
         autoescape=select_autoescape(["html", "xml"]),

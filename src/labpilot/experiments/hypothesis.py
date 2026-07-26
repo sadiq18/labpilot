@@ -136,6 +136,7 @@ class HypothesisStore:
         status: HypothesisStatus,
         *,
         evidence_run_id: str | None = None,
+        why: str | None = None,
     ) -> Hypothesis:
         hypothesis = self.get(hypothesis_id)
         if hypothesis is None:
@@ -154,11 +155,17 @@ class HypothesisStore:
                 if evidence_run_id not in evidence_against:
                     evidence_against.append(evidence_run_id)
 
+        reason = hypothesis.reason
+        if why:
+            note = f"[reflection] {why.strip()}"
+            reason = f"{reason}\n\n{note}".strip() if reason else note
+
         updated = hypothesis.model_copy(
             update={
                 "status": status,
                 "evidence_for": evidence_for,
                 "evidence_against": evidence_against,
+                "reason": reason,
                 "updated_at": _now(),
             }
         )

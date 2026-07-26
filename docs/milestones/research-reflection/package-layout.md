@@ -9,40 +9,22 @@ Back to [README](README.md).
 ```text
 src/labpilot/research_engine/reflection/
   __init__.py
-  evidence/
-    __init__.py
-    extractor.py          # EvidenceExtractor (deterministic)
-  critic/
-    __init__.py
-    critic.py             # ExperimentCritic facade
-    micro_agent.py        # promoted ReflectionGeneratorAgent
-    prompts.py
-  beliefs/
-    __init__.py
-    updater.py            # BeliefUpdater + confidence rules
-  hypotheses/
-    __init__.py
-    evaluator.py          # HypothesisEvaluator (status + why)
-  claims/
-    __init__.py
-    promoter.py           # Belief → Claim promotion
-    models.py
-  synthesis/
-    __init__.py
-    synthesizer.py        # Current Understanding rollup
-  lessons/
-    __init__.py
-    generator.py
-  recommendation/
-    __init__.py
-    next_experiment.py
-  journal/
-    __init__.py
-    projector.py          # Research Journal projection
-  schemas/                # pydantic / typed dicts
-  store.py                # ReflectionStore (SQLite CRUD)
-  pipeline.py             # orchestrate extract→critic→update (library, not agent)
+  evidence/                 # deterministic EvidenceExtractor (no LLM)
+  critic/                   # RootCauseAgent (skill.md + micro_agent.py) + ExperimentCritic facade
+  contradiction/            # ContradictionDetectorAgent
+  confidence/               # ConfidenceEstimatorAgent (qualitative)
+  synthesis/                # EvidenceSynthesisAgent + KnowledgeSynthesizer
+  lessons/                  # LessonGeneratorAgent + LessonGenerator
+  hypotheses/               # HypothesisRevisionAgent + HypothesisEvaluator
+  recommendation/           # RecommendationAgent + recommend_next_experiment
+  beliefs/                  # BeliefUpdater — deterministic confidence math
+  claims/                   # ClaimPromoter (rules)
+  journal/                  # JournalProjector (assembly only)
+  store.py pipeline.py
 ```
+
+Each LLM slice keeps `skill.md` + `micro_agent.py` in its domain folder (same
+pattern as `critic/`). There is no central `reflection/micro_agents/` package.
 
 ---
 
@@ -81,7 +63,7 @@ Until then, Reflection reads/writes via `labpilot.experiments`.
 | Legacy | Disposition |
 |--------|-------------|
 | `src/labpilot/reflection/` | **Migrate** prompts/models into `reflection/critic` (+ schemas); **delete** top-level (Plan 9) |
-| `execution/micro_agents/reflection_generator/` | **Promote** into `reflection/critic/`; leave thin re-export or delete after cutover |
+| `execution/micro_agents/reflection_generator/` | Thin re-export → `reflection.critic` |
 | `execution/capabilities/reporting/` | **Call** reflection library (Plan 5); stop JSON-only stubs |
 | `src/labpilot/experiments/` | **Keep** for M6 implementation; **move** → `research_engine/shared/experiments/` (follow-on) |
 | `src/labpilot/report/` | **Delete** in Plan 9 (Pipeline-era per-run HTML); relocate dashboard Jinja first; Journal is narrative SoR |

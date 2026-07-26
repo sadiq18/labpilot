@@ -1,4 +1,4 @@
-"""Reporting & Memory — report, reflect, belief, hypothesis writes."""
+"""Reporting & Memory — report + reflection library cutover."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
 from labpilot.research_engine.planner.schemas.task_types import TaskType
+from labpilot.research_engine.reflection.pipeline import run_reflection
 
 
 class ReportingCapability(BaseCapability):
@@ -42,6 +43,21 @@ class ReportingCapability(BaseCapability):
             return json.loads(metrics_path.read_text(encoding="utf-8"))
         return {}
 
+    def _run_reflection_pipeline(self, context: TaskContext) -> dict:
+        llm = None
+        if not context.constraints.get("offline"):
+            llm = context.constraints.get("llm_client")
+        return run_reflection(
+            context.paths.base_dir,
+            context.competition,
+            execution_id=context.execution.id,
+            workspace_path=context.workspace_root,
+            plan_id=context.plan.id,
+            hypothesis_id=context.plan.hypothesis_id or None,
+            llm_client=llm,
+            persist=True,
+        )
+
     def _report(self, context: TaskContext) -> TaskEvidence:
         root = context.workspace_root
         metrics = self._load_metrics(root)
@@ -66,7 +82,6 @@ class ReportingCapability(BaseCapability):
             "",
         ]
         report_path.write_text("\n".join(lines), encoding="utf-8")
-        # Also copy under workspace artifacts.
         local = root / "artifacts" / "report.md"
         local.parent.mkdir(parents=True, exist_ok=True)
         local.write_text(report_path.read_text(encoding="utf-8"), encoding="utf-8")
@@ -81,48 +96,40 @@ class ReportingCapability(BaseCapability):
         )
 
     def _reflect(self, context: TaskContext) -> TaskEvidence:
+        result = self._run_reflection_pipeline(context)
         root = context.workspace_root
-        metrics = self._load_metrics(root)
-        reflection = {
+        path = root / "artifacts" / "reflection.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        projection = {
             "plan_id": context.plan.id,
             "execution_id": context.execution.id,
             "competition": context.competition,
-            "metrics": metrics,
-            "notes": [
-                "Deterministic reflection (no LLM inventing metrics).",
-                "Next: create hypothesis plans against this baseline if plan_kind=baseline.",
-            ],
+            "evidence_id": (result.get("evidence") or {}).get("id"),
+            "assessment": result.get("assessment"),
+            "belief": result.get("belief"),
+            "hypothesis": result.get("hypothesis"),
             "created_at": datetime.now(UTC).isoformat(),
         }
-        path = root / "artifacts" / "reflection.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(reflection, indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(projection, indent=2) + "\n", encoding="utf-8")
         return evidence(
             context,
             capability=self.name,
             passed=True,
-            summary="reflection captured",
+            summary="reflection pipeline completed",
             checks=["reflect"],
             paths=[str(path)],
-            metadata=reflection,
+            metadata=projection,
         )
 
     def _belief(self, context: TaskContext) -> TaskEvidence:
+        # Belief mutation is owned by REFLECT pipeline; this task re-runs updater
+        # path via full pipeline for idempotent DAG plans that list both tasks.
+        result = self._run_reflection_pipeline(context)
         root = context.workspace_root
-        metrics = self._load_metrics(root)
-        belief = {
-            "technique": "baseline",
-            "competition": context.competition,
-            "plan_id": context.plan.id,
-            "execution_id": context.execution.id,
-            "metrics": metrics,
-            "updated_at": datetime.now(UTC).isoformat(),
-        }
         path = root / "artifacts" / "belief_update.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(belief, indent=2) + "\n", encoding="utf-8")
-        # Best-effort DB belief row is out of scope if schema requires more fields;
-        # durable JSON is enough for MVP memory hook.
+        payload = result.get("belief") or {}
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         return evidence(
             context,
             capability=self.name,
@@ -130,16 +137,20 @@ class ReportingCapability(BaseCapability):
             summary="belief update recorded",
             checks=["update_belief"],
             paths=[str(path)],
-            metadata=belief,
+            metadata=payload,
         )
 
     def _hypothesis(self, context: TaskContext) -> TaskEvidence:
+        result = self._run_reflection_pipeline(context)
         path = context.workspace_root / "artifacts" / "next_hypothesis.json"
         path.parent.mkdir(parents=True, exist_ok=True)
+        assessment = result.get("assessment") or {}
         payload = {
-            "suggestion": "Propose an improvement hypothesis against P-001 metrics.",
+            "suggestion": assessment.get("recommendation")
+            or "Propose an improvement hypothesis against baseline metrics.",
             "plan_id": context.plan.id,
             "execution_id": context.execution.id,
+            "hypothesis_evaluation": result.get("hypothesis"),
             "created_at": datetime.now(UTC).isoformat(),
         }
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

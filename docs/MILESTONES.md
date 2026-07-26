@@ -53,7 +53,7 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | **Research Intelligence** | v0.6 | **Phase 1 shipped** | Analyze landscape + hypotheses + brief; plans 1–11 + spike + F |
 | **Research Planner** | — | **MVP shipped** | Hypothesis → planning compiler → executable DAG (`research plan`); Plans 1–6 |
 | **Research Engineer** | — | **Phase B complete (dry-run SoR)** | Approved plan → implemented, verified experiment (`research run --plan`) |
-| **Research Reflection** | — | **Phase B (Plan 1 done)** | Outcomes → durable knowledge (`research reflect` / `journal`) |
+| **Research Reflection** | — | **Phase B complete** | Outcomes → durable knowledge (`research reflect` / `journal`) |
 
 Details for each track live in the linked documents above:
 

@@ -22,7 +22,7 @@ from labpilot.experiments.search import (
     parse_duration,
     search,
 )
-from labpilot.improvement.models import TrainingOverrides, save_training_overrides
+from labpilot.experiments.legacy_run_overrides import TrainingOverrides, save_training_overrides
 from labpilot.experiments.manifest import RunManifest, StageStatus, save_manifest
 
 

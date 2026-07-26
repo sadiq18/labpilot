@@ -7,7 +7,7 @@ from typing import Any
 from labpilot.research_engine.execution.baseline.selector import BaselineChoice
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.experiments.models import Experiment, StructuredReflection
-from labpilot.improvement.models import (
+from labpilot.experiments.legacy_run_overrides import (
     ImprovementPlan,
     load_improvement_plan,
     load_training_overrides,

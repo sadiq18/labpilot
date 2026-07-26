@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md). Design: [beliefs-and-claims.md](beliefs-and-claims.md).
 
-**Status:** Ready. **Depends on:** Plans 1–3. **Unlocks:** Plan 5.
+**Status:** Done. **Depends on:** Plans 1–3. **Unlocks:** Plan 5.
 
 ---
 
@@ -27,6 +27,6 @@ status+why.
 
 ## Acceptance criteria
 
-- [ ] Critic “supports” increases belief confidence and writes audit row
-- [ ] Linked hypothesis gets status + why without manual CLI
-- [ ] Unit tests for arithmetic rules and status transitions
+- [x] Critic “supports” increases belief confidence and writes audit row
+- [x] Linked hypothesis gets status + why without manual CLI
+- [x] Unit tests for arithmetic rules and status transitions

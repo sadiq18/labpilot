@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md). Design: [beliefs-and-claims.md](beliefs-and-claims.md).
 
-**Status:** Ready. **Depends on:** Plans 1, 4, 6. **Unlocks:** Plan 8 journal claims section.
+**Status:** Done. **Depends on:** Plans 1, 4, 6. **Unlocks:** Plan 8 journal claims section.
 
 ---
 
@@ -25,6 +25,6 @@ beliefs; contradictions tracked.
 
 ## Acceptance criteria
 
-- [ ] Claims queryable distinct from beliefs
-- [ ] Promotion creates claim_evidence edges
-- [ ] Contested path when contradicting evidence appears
+- [x] Claims queryable distinct from beliefs
+- [x] Promotion creates claim_evidence edges
+- [x] Contested path when contradicting evidence appears

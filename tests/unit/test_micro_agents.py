@@ -25,6 +25,13 @@ from labpilot.research_engine.execution.micro_agents.reflection_generator import
     ReflectionGeneratorAgent,
 )
 from labpilot.research_engine.intelligence import micro_agents as intel_agents
+from labpilot.research_engine.reflection.confidence import ConfidenceEstimatorAgent
+from labpilot.research_engine.reflection.contradiction import ContradictionDetectorAgent
+from labpilot.research_engine.reflection.critic import RootCauseAgent
+from labpilot.research_engine.reflection.hypotheses import HypothesisRevisionAgent
+from labpilot.research_engine.reflection.lessons import LessonGeneratorAgent
+from labpilot.research_engine.reflection.recommendation import RecommendationAgent
+from labpilot.research_engine.reflection.synthesis import EvidenceSynthesisAgent
 from labpilot.research_engine.intelligence.literature.models import PaperKnowledge
 from labpilot.research_engine.intelligence.micro_agents.artifacts import (
     ConceptNormalization,
@@ -71,7 +78,9 @@ INTEL_NAMES = [
 
 def test_available_agents_registered() -> None:
     assert intel_agents.available_agents() == sorted(INTEL_NAMES)
-    assert exec_agents.available_agents() == ["ReflectionGeneratorAgent"]
+    assert exec_agents.available_agents() == sorted(
+        ["ReflectionGeneratorAgent", "RootCauseAgent"]
+    )
 
 
 @pytest.mark.parametrize("name", INTEL_NAMES)
@@ -230,7 +239,13 @@ AGENT_CLASSES: list[type[BaseMicroAgent]] = [
     intel_agents.ConceptNormalizerAgent,
     intel_agents.ExperimentReviewerAgent,
     intel_agents.CompetitionPageAnalyzerAgent,
-    ReflectionGeneratorAgent,
+    RootCauseAgent,
+    ContradictionDetectorAgent,
+    EvidenceSynthesisAgent,
+    ConfidenceEstimatorAgent,
+    LessonGeneratorAgent,
+    HypothesisRevisionAgent,
+    RecommendationAgent,
 ]
 
 
