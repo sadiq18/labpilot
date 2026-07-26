@@ -13,12 +13,15 @@ from enum import StrEnum
 class TaskType(StrEnum):
     """Instruction set for research task DAG nodes."""
 
+    PREPARE_WORKSPACE = "prepare_workspace"
     READ_CODE = "read_code"
     WRITE_CODE = "write_code"
     MODIFY_CONFIG = "modify_config"
+    RESEARCH_REVIEW = "research_review"
     INSTALL_PACKAGE = "install_package"
     RUN_UNIT_TEST = "run_unit_test"
     RUN_SMOKE_TEST = "run_smoke_test"
+    SELECT_RUNTIME = "select_runtime"
     RUN_TRAINING = "run_training"
     RUN_INFERENCE = "run_inference"
     BUILD_SUBMISSION = "build_submission"

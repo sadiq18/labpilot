@@ -3,7 +3,7 @@
 Back to [Research Engineer](README.md). Design: [architecture.md](architecture.md) ·
 [package-layout.md](package-layout.md).
 
-**Status:** Not started. **Depends on:** Plan 1. **Unlocks:** Plans 4–10 (capabilities plug in).
+**Status:** Done. **Depends on:** Plan 1. **Unlocks:** Plans 4–10 (capabilities plug in).
 
 ---
 

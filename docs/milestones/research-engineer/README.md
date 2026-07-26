@@ -2,11 +2,12 @@
 
 Back to [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** Design Phase A complete; **Phase B plans authored** (not started).
+**Status:** Phase B Plans 1–4 implemented; Plans 5–11 remaining.
 **Depends on:** Research Planner MVP ([../research-planner/](../research-planner/)),
 Research Intelligence Phase 1, Experiment Scientist.
 **Branch:** `research-execution` (product name is Research Engineer).
 **CLI target (after Phase B):** `research run --plan P-001` / `research resume --execution E-xxx`.
+**CLI now:** `research plan create <competition> --baseline` → P-001.
 
 This directory is the architecture/design workspace for the **Autonomous Research
 Engineer** — Milestone 5.

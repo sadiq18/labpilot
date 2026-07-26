@@ -16,6 +16,10 @@ from labpilot.research_engine.planner.schemas.models import (
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 _DEFAULT_VERIFICATION: dict[TaskType, TaskVerification] = {
+    TaskType.PREPARE_WORKSPACE: TaskVerification(
+        check="Workspace directories exist and are writable.",
+        failure_recovery="Recreate missing directories.",
+    ),
     TaskType.READ_CODE: TaskVerification(check="Relevant code located."),
     TaskType.WRITE_CODE: TaskVerification(
         check="Change implemented.",
@@ -24,6 +28,10 @@ _DEFAULT_VERIFICATION: dict[TaskType, TaskVerification] = {
     TaskType.MODIFY_CONFIG: TaskVerification(
         check="Config loads successfully.",
         failure_recovery="Restore previous config version.",
+    ),
+    TaskType.RESEARCH_REVIEW: TaskVerification(
+        check="No critical research-correctness findings.",
+        failure_recovery="Revise code via WRITE_CODE, or abort.",
     ),
     TaskType.INSTALL_PACKAGE: TaskVerification(
         check="Package installs and imports.",
@@ -36,6 +44,10 @@ _DEFAULT_VERIFICATION: dict[TaskType, TaskVerification] = {
     TaskType.RUN_SMOKE_TEST: TaskVerification(
         check="Runs end-to-end on a tiny sample without error.",
         failure_recovery="Fix via WRITE_CODE/MODIFY_CONFIG, or abort.",
+    ),
+    TaskType.SELECT_RUNTIME: TaskVerification(
+        check="Runtime target selected and recorded.",
+        failure_recovery="Fall back to local runtime, or abort.",
     ),
     TaskType.RUN_TRAINING: TaskVerification(
         check="Loss decreases (or metrics are finite).",

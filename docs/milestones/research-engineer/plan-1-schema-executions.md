@@ -3,7 +3,7 @@
 Back to [Research Engineer](README.md). Design: [schema.md](schema.md) ·
 [architecture.md](architecture.md) §6–8.
 
-**Status:** Not started. **Depends on:** Design Phase A approved; Research Planner MVP.
+**Status:** Done. **Depends on:** Design Phase A approved; Research Planner MVP.
 **Unlocks:** Plans 2–11.
 
 ---

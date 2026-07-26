@@ -56,6 +56,11 @@ class ResearchPaths:
         return self.root / "plans"
 
     @property
+    def executions_dir(self) -> Path:
+        """Research Engineer execution workspaces (``E-xxx/``)."""
+        return self.root / "executions"
+
+    @property
     def reports_dir(self) -> Path:
         return self.root / "reports"
 
@@ -84,6 +89,7 @@ class ResearchPaths:
             self.knowledge_dir,
             self.experiments_dir,
             self.plans_dir,
+            self.executions_dir,
             self.reports_dir,
             self.embeddings_dir,
         ]

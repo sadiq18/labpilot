@@ -17,8 +17,9 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 #: Bumped when the unified schema gains tables/columns. Recorded in
 #: ``schema_meta``. v3 introduces ``research_plans`` / ``research_tasks`` /
-#: ``research_task_deps`` (Research Planner).
-SCHEMA_VERSION = "3"
+#: ``research_task_deps`` (Research Planner). v4 adds ``research_executions``
+#: (Research Engineer).
+SCHEMA_VERSION = "4"
 
 
 def run_migration(conn: sqlite3.Connection) -> None:

@@ -24,6 +24,7 @@ from typing import Any, Literal
 from labpilot.accessor.commons.ids import task_id as make_task_id
 from labpilot.common.micro_agents import StructuredContext
 from labpilot.experiments.models import Hypothesis
+from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.planner import optimizer, scheduler, serializer
 from labpilot.research_engine.planner.context_builder import PlanningContext, build_context
 from labpilot.research_engine.planner.micro_agents.planning_engine import ResearchPlannerAgent
@@ -37,10 +38,17 @@ from labpilot.research_engine.planner.schemas.models import (
 )
 from labpilot.research_engine.planner.schemas.task_types import PlanStatus, TaskStatus
 from labpilot.research_engine.planner.store import PlanStore
-from labpilot.research_engine.planner.templates import PlanBlueprint, select_template
+from labpilot.research_engine.planner.templates import (
+    PlanBlueprint,
+    _baseline_template,
+    select_template,
+)
 from labpilot.research_engine.planner.validator import PlanValidationError, validate_plan
 
 logger = logging.getLogger(__name__)
+
+class BaselinePlanError(ValueError):
+    """Baseline compile refused (missing Analyze, plan already exists, …)."""
 
 
 def compile_research_plan(
@@ -108,6 +116,145 @@ def compile_research_plan(
             store.close()
 
 
+def compile_baseline_plan(
+    competition: str,
+    *,
+    knowledge_dir: Path,
+    llm_client: Any | None = None,
+    plan_store: PlanStore | None = None,
+    write_projections: bool = True,
+    priority: int = 0,
+) -> ResearchPlan:
+    """Compile P-001 baseline plan from Analyze context (no hypothesis)."""
+    paths = ResearchPaths(knowledge_dir, competition)
+    if not paths.report_path.is_file():
+        raise BaselinePlanError(
+            f"Analyze context missing: expected {paths.report_path}. "
+            f"Run `research analyze {competition}` first."
+        )
+
+    store = plan_store or PlanStore(knowledge_dir, competition)
+    owns_store = plan_store is None
+    try:
+        existing = store.list_plans()
+        if existing:
+            raise BaselinePlanError(
+                f"Competition {competition} already has {len(existing)} plan(s); "
+                "baseline must be the first plan (P-001)."
+            )
+
+        brief = ""
+        if paths.brief_path.is_file():
+            brief = paths.brief_path.read_text(encoding="utf-8")[:2000]
+
+        blueprint = _baseline_template(competition, brief_excerpt=brief)
+        plan_id = store.new_plan_id()
+        if plan_id != "P-001":
+            raise BaselinePlanError(
+                f"Expected first plan id P-001, got {plan_id}."
+            )
+
+        baseline_draft = blueprint_to_draft(blueprint)
+        plan = _finalize_plan(
+            lower_draft(
+                baseline_draft,
+                plan_id=plan_id,
+                competition=competition,
+                hypothesis_id="",
+                generated_by="rule_engine",
+                metadata={
+                    "template": blueprint.template_name,
+                    "plan_kind": "baseline",
+                },
+                priority=priority,
+            )
+        )
+
+        # Optional LLM revision: soft-fail keeps rule_engine baseline.
+        if llm_client is not None:
+            plan = _try_baseline_llm_revision(
+                baseline=plan,
+                baseline_draft=baseline_draft,
+                competition=competition,
+                plan_id=plan_id,
+                brief=brief,
+                llm_client=llm_client,
+                priority=priority,
+            )
+            # Preserve plan_kind even if LLM revised metadata incompletely.
+            plan.metadata = {
+                **dict(plan.metadata),
+                "plan_kind": "baseline",
+                "template": blueprint.template_name,
+            }
+
+        store.upsert_plan(plan)
+        if write_projections:
+            serializer.write_projections(
+                plan, knowledge_dir=knowledge_dir, competition=competition
+            )
+        return plan
+    finally:
+        if owns_store:
+            store.close()
+
+
+def _try_baseline_llm_revision(
+    *,
+    baseline: ResearchPlan,
+    baseline_draft: ResearchPlanDraft,
+    competition: str,
+    plan_id: str,
+    brief: str,
+    llm_client: Any,
+    priority: int = 0,
+) -> ResearchPlan:
+    agent = ResearchPlannerAgent(llm_client=llm_client)
+    structured = StructuredContext(
+        competition=competition,
+        question=baseline.goal,
+        text=brief,
+        data={
+            "baseline_draft": baseline_draft.model_dump(mode="json"),
+            "plan_kind": "baseline",
+            "hypothesis_id": "",
+            "goal": baseline.goal,
+            "current_state": baseline.current_state,
+            "expected_outcome": baseline.expected_outcome,
+            "brief_excerpt": brief[:1000],
+        },
+    )
+    draft = agent.run(structured)
+    if not agent.last_used_llm:
+        return baseline
+    try:
+        return _finalize_plan(
+            lower_draft(
+                draft,
+                plan_id=plan_id,
+                competition=competition,
+                hypothesis_id="",
+                generated_by="llm",
+                metadata={
+                    "template": "baseline",
+                    "plan_kind": "baseline",
+                    "revised_by": "llm",
+                },
+                priority=priority,
+            )
+        )
+    except (PlanValidationError, ValueError, TypeError) as exc:
+        logger.warning(
+            "Baseline LLM revision for %s failed (%s); keeping rule_engine.",
+            plan_id,
+            exc,
+        )
+        baseline.notes = list(baseline.notes) + [
+            f"LLM revision rejected; kept rule_engine baseline ({exc})."
+        ]
+        return baseline
+
+
 def blueprint_to_draft(blueprint: PlanBlueprint) -> ResearchPlanDraft:
     """Convert a template blueprint into the slim draft shape."""
     return ResearchPlanDraft(
@@ -136,8 +283,10 @@ def lower_draft(
     draft: ResearchPlanDraft,
     *,
     plan_id: str,
-    hypothesis: Hypothesis,
     competition: str,
+    hypothesis: Hypothesis | None = None,
+    hypothesis_id: str = "",
+    estimated_gain: float = 0.0,
     generated_by: Literal["llm", "rule_engine"] = "rule_engine",
     metadata: dict[str, Any] | None = None,
     priority: int = 0,
@@ -159,6 +308,9 @@ def lower_draft(
     if missing:
         raise PlanValidationError(f"draft depends_on unknown keys: {sorted(set(missing))}")
 
+    hyp_id = hypothesis.id if hypothesis is not None else hypothesis_id
+    gain = hypothesis.expected_impact if hypothesis is not None else estimated_gain
+
     tasks: list[ResearchTask] = []
     for index, task in enumerate(draft.tasks):
         tasks.append(
@@ -179,13 +331,13 @@ def lower_draft(
     return ResearchPlan(
         id=plan_id,
         competition=competition,
-        hypothesis_id=hypothesis.id,
+        hypothesis_id=hyp_id,
         goal=draft.goal,
         current_state=draft.current_state,
         expected_outcome=draft.expected_outcome,
         status=PlanStatus.READY,
         priority=priority,
-        estimated_gain=hypothesis.expected_impact,
+        estimated_gain=gain,
         risk=draft.risk,
         success_criteria=list(draft.success_criteria),
         artifacts=list(draft.artifacts),
