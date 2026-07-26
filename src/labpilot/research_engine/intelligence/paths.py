@@ -51,6 +51,11 @@ class ResearchPaths:
         return self.root / "experiments"
 
     @property
+    def plans_dir(self) -> Path:
+        """Research Planner projections (``<plan_id>.json`` / ``.md``)."""
+        return self.root / "plans"
+
+    @property
     def reports_dir(self) -> Path:
         return self.root / "reports"
 
@@ -78,6 +83,7 @@ class ResearchPaths:
             self.extracted_dir,
             self.knowledge_dir,
             self.experiments_dir,
+            self.plans_dir,
             self.reports_dir,
             self.embeddings_dir,
         ]

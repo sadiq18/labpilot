@@ -17,14 +17,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from labpilot.accessor.sqlite import SCHEMA_PATH, SCHEMA_VERSION, SqliteClient
 from labpilot.research_engine.intelligence.models import (
     ResearchArtifact,
     ResearchArtifactType,
 )
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 
-SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-SCHEMA_VERSION = "2"
+__all__ = ["KnowledgeStore", "SCHEMA_PATH", "SCHEMA_VERSION"]
 
 # Which extracted/ subfolder a per-source card is written to.
 _EXTRACTED_BUCKET = {
@@ -81,23 +81,13 @@ class KnowledgeStore:
     def __init__(self, knowledge_dir: Path, competition: str) -> None:
         self.paths = ResearchPaths(knowledge_dir, competition).ensure()
         self.competition = competition
-        self._conn = sqlite3.connect(self.paths.db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        self._migrate()
+        self._client = SqliteClient(self.paths.db_path)
+        self._conn = self._client.conn
 
     # -- lifecycle ---------------------------------------------------------
 
-    def _migrate(self) -> None:
-        self._conn.executescript(SCHEMA_PATH.read_text())
-        self._conn.execute(
-            "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', ?)",
-            (SCHEMA_VERSION,),
-        )
-        self._conn.commit()
-
     def close(self) -> None:
-        self._conn.close()
+        self._client.close()
 
     def __enter__(self) -> KnowledgeStore:
         return self
