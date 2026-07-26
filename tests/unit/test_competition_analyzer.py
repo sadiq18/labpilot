@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from labpilot.competition.models import CompetitionMetadata, CompetitionSpec, MetricSpec
+from labpilot.research_engine.intelligence.competition.models import CompetitionMetadata, CompetitionSpec, MetricSpec
 from labpilot.research_engine.intelligence.analyzers.competition import CompetitionAnalyzer
 from labpilot.research_engine.intelligence.models import (
     AnalyzeContext,
@@ -171,7 +171,7 @@ def test_related_provider_finds_previous_editions_and_similar():
 
 def test_competition_analyzer_builds_profile_from_cache(tmp_path: Path, monkeypatch):
     # Avoid accidental network from CompetitionParser rules scrape on miss.
-    monkeypatch.setattr("labpilot.competition.parser.fetch_rules_excerpt", lambda *a, **k: "")
+    monkeypatch.setattr("labpilot.research_engine.intelligence.competition.parser.fetch_rules_excerpt", lambda *a, **k: "")
     ctx = _context(tmp_path)
     _seed_competition_json(
         ctx.runs_dir,
@@ -186,7 +186,7 @@ def test_competition_analyzer_builds_profile_from_cache(tmp_path: Path, monkeypa
     )
 
     def fake_pages(slug: str, **kwargs):
-        from labpilot.competition.page_fetch import CompetitionPages
+        from labpilot.research_engine.intelligence.competition.page_fetch import CompetitionPages
 
         text = (
             "## Overview\nBird soundscape classification.\n\n"
@@ -237,12 +237,12 @@ def test_competition_analyzer_builds_profile_from_cache(tmp_path: Path, monkeypa
 
 
 def test_competition_analyzer_soft_profile_without_cache(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("labpilot.competition.parser.fetch_rules_excerpt", lambda *a, **k: "")
+    monkeypatch.setattr("labpilot.research_engine.intelligence.competition.parser.fetch_rules_excerpt", lambda *a, **k: "")
     ctx = _context(tmp_path, competition="spaceship-titanic")
     ctx.runs_dir.mkdir(parents=True)
 
     def empty_pages(slug: str, **kwargs):
-        from labpilot.competition.page_fetch import CompetitionPages
+        from labpilot.research_engine.intelligence.competition.page_fetch import CompetitionPages
 
         return CompetitionPages(
             slug=slug,
@@ -266,7 +266,7 @@ def test_competition_analyzer_soft_profile_without_cache(tmp_path: Path, monkeyp
 
 
 def test_orchestrator_merges_competition_sections(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("labpilot.competition.parser.fetch_rules_excerpt", lambda *a, **k: "")
+    monkeypatch.setattr("labpilot.research_engine.intelligence.competition.parser.fetch_rules_excerpt", lambda *a, **k: "")
     ctx = _context(tmp_path)
     _seed_competition_json(ctx.runs_dir)
     fetcher = _FakeFetcher(
@@ -278,7 +278,7 @@ def test_orchestrator_merges_competition_sections(tmp_path: Path, monkeypatch):
     )
 
     def empty_pages(slug: str, **kwargs):
-        from labpilot.competition.page_fetch import CompetitionPages
+        from labpilot.research_engine.intelligence.competition.page_fetch import CompetitionPages
 
         return CompetitionPages(
             slug=slug,
@@ -320,13 +320,13 @@ def test_no_html_scrape_branch_in_winning_provider():
 
 
 def test_competition_analyzer_skips_kaggle_without_credentials(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("labpilot.competition.parser.fetch_rules_excerpt", lambda *a, **k: "")
+    monkeypatch.setattr("labpilot.research_engine.intelligence.competition.parser.fetch_rules_excerpt", lambda *a, **k: "")
     monkeypatch.setattr("labpilot.diagnostics.kaggle_credentials_present", lambda: False)
     ctx = _context(tmp_path, competition="biohub-cell-tracking-during-development")
     ctx.runs_dir.mkdir(parents=True)
 
     def empty_pages(slug: str, **kwargs):
-        from labpilot.competition.page_fetch import CompetitionPages
+        from labpilot.research_engine.intelligence.competition.page_fetch import CompetitionPages
 
         return CompetitionPages(
             slug=slug,

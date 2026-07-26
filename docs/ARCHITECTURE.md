@@ -39,18 +39,18 @@ flowchart LR
 
 | # | Stage | Module | Output |
 |---|-------|--------|--------|
-| 1 | `parse_competition` | `competition/parser.py` | `competition.json` |
+| 1 | `parse_competition` | `research_engine/intelligence/competition/parser.py` | `competition.json` |
 | 2 | `download_data` | `data/downloader.py` | `data/raw/` |
 | 3 | `profile_dataset` | `profiler/tabular.py` | `profile.json`, `profile.md` |
 | 4 | `generate_brief` | `brief/generator.py` | `brief.md` |
-| 5 | `select_baseline` | `baseline/selector.py` | `baseline_choice.json` |
-| 6 | `generate_code` | `codegen/renderer.py` | `pipeline/` |
-| 7 | `train_model` | `training/runner.py` | `models/`, `oof.csv` |
-| 8 | `evaluate_cv` | `evaluation/metrics.py` | `metrics.json` |
-| 9 | `generate_submission` | `submission/formatter.py` | `submission.csv` |
+| 5 | `select_baseline` | `research_engine/execution/baseline/selector.py` | `baseline_choice.json` |
+| 6 | `generate_code` | `research_engine/execution/codegen/renderer.py` | `pipeline/` |
+| 7 | `train_model` | `research_engine/execution/training/runner.py` | `models/`, `oof.csv` |
+| 8 | `evaluate_cv` | `research_engine/execution/metrics.py` | `metrics.json` |
+| 9 | `generate_submission` | `research_engine/execution/submission/formatter.py` | `submission.csv` |
 | 10 | `export_kernel` | `kernel/exporter.py` | `kernel/` (kernel-only comps) |
-| 11 | `upload_submission` | `kaggle/client.py` | `submission_result.json` |
-| 12 | `log_experiment` | `tracking/logger.py` | `experiment/record.json` |
+| 11 | `upload_submission` | `accessor/kaggle/client.py` | `submission_result.json` |
+| 12 | `log_experiment` | `experiments/logger.py` | `experiment/record.json` |
 | 13 | `write_reflection` | `reflection/generator.py` | `reflection.json`, `reflection.md` |
 | 14 | `write_report` | `report/generator.py` | `report.html` |
 
@@ -162,7 +162,7 @@ Commands:
 
 | | |
 |---|---|
-| **Path** | `competition/parser.py`, `competition/models.py` |
+| **Path** | `research_engine/intelligence/competition/parser.py`, `…/models.py` |
 | **Responsibility** | Fetch and structure competition metadata |
 | **Input** | Competition slug |
 | **Output** | `competition.json` (`CompetitionSpec`) |
@@ -211,7 +211,7 @@ locally authored file.
 
 | | |
 |---|---|
-| **Path** | `baseline/selector.py`, `baseline/registry.py` |
+| **Path** | `research_engine/execution/baseline/selector.py`, `…/baseline/registry.py` |
 | **Responsibility** | Map problem type to template |
 | **Input** | `CompetitionSpec` + `DatasetProfile` |
 | **Output** | `baseline_choice.json` |
@@ -223,7 +223,7 @@ Selection rules use competition `problem_type` when known, otherwise infer from 
 
 | | |
 |---|---|
-| **Path** | `codegen/renderer.py`, `codegen/validators.py` |
+| **Path** | `research_engine/execution/codegen/renderer.py`, `…/codegen/validators.py` |
 | **Responsibility** | Render training pipeline from Jinja2 templates |
 | **Input** | `BaselineChoice`, training config, optional `TrainingOverrides` |
 | **Output** | `pipeline/train.py`, `pipeline/config.yaml` |
@@ -235,7 +235,7 @@ Templates live in `templates/` (not inside the Python package). The renderer pas
 
 | | |
 |---|---|
-| **Path** | `training/runner.py`, `training/artifacts.py` |
+| **Path** | `research_engine/execution/training/runner.py`, `…/training/artifacts.py` |
 | **Responsibility** | Execute generated pipeline as subprocess |
 | **Input** | `pipeline/train.py` |
 | **Output** | `models/`, `oof.csv`, `metrics.json`, `training.log` |
@@ -245,7 +245,7 @@ Templates live in `templates/` (not inside the Python package). The renderer pas
 
 | | |
 |---|---|
-| **Path** | `evaluation/metrics.py`, `evaluation/cv.py` |
+| **Path** | `research_engine/execution/metrics.py` |
 | **Responsibility** | CV metrics aligned to competition metric |
 | **Input** | OOF predictions, metric spec |
 | **Output** | `metrics.json` |
@@ -257,7 +257,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 
 | | |
 |---|---|
-| **Path** | `submission/formatter.py`, `submission/validator.py` |
+| **Path** | `research_engine/execution/submission/formatter.py`, `…/validator.py` |
 | **Responsibility** | Format and validate submission file |
 | **Input** | Predictions, id/target columns |
 | **Output** | `submission.csv` |
@@ -267,7 +267,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 
 | | |
 |---|---|
-| **Path** | `kaggle/client.py` |
+| **Path** | `accessor/kaggle/client.py` |
 | **Responsibility** | Upload submission, fetch score |
 | **Input** | `submission.csv`, competition slug |
 | **Output** | `submission_result.json` |
@@ -277,13 +277,13 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 
 | | |
 |---|---|
-| **Path** | `tracking/logger.py`, `tracking/store.py`, `tracking/index.py` |
+| **Path** | `experiments/logger.py`, `experiments/store.py`, `experiments/index.py` |
 | **Responsibility** | Log params, metrics, artifact paths; compare runs across the runs directory |
 | **Input** | Run context |
 | **Output** | `experiment/record.json`; diff reports via CLI |
 | **Status** | Implemented — local JSON store + cross-run index (P3) |
 
-`ExperimentLogger` writes per-run records. `tracking/index.py` scans `runs/*/experiment/record.json` and manifest metadata to build a lightweight index and compute metric/param deltas for `research runs diff`.
+`ExperimentLogger` writes per-run records. `experiments/index.py` scans `runs/*/experiment/record.json` and manifest metadata to build a lightweight index and compute metric/param deltas for `research runs diff`.
 
 ### 13. Reflection Generator
 
@@ -340,7 +340,7 @@ See [milestones/experiment-scientist/plan-4-reflection-engine.md](milestones/exp
 
 Not a new writer — every field is either already written elsewhere (`manifest.json`,
 `config.json`, `baseline_choice.json`, ...) or computed at read time (`progress`, `description`,
-`artifacts`, `runtime_seconds`). `tracking/index.py:scan_runs()` reuses `assemble_experiment()`
+`artifacts`, `runtime_seconds`). `experiments/index.py:scan_runs()` reuses `assemble_experiment()`
 instead of its own directory walk. See
 [milestones/experiment-scientist/plan-1-experiment-graph.md](milestones/experiment-scientist/plan-1-experiment-graph.md)
 for the full design.
@@ -514,36 +514,28 @@ labpilot/
 │
 ├── src/labpilot/
 │   ├── cli/                   # Typer CLI entry point
-│   ├── accessor/              # Shared SQLite + LLM + commons (pillars depend here)
-│   ├── orchestrator/          # Legacy linear Pipeline (to be replaced by Engineer)
-│   ├── competition/           # Parser + CompetitionSpec models
+│   ├── accessor/              # Shared SQLite + LLM + Kaggle client + commons
+│   │   └── kaggle/            # Kaggle API client + CompetitionMetadata DTO
+│   ├── project/               # Multi-competition project.yaml root (≠ WorkspaceCapability)
+│   ├── orchestrator/          # Legacy linear Pipeline (quarantined; init/build/improve)
 │   ├── data/                  # Download + directory layout
 │   ├── profiler/              # Tabular EDA + profile reports
 │   ├── brief/                 # Research brief generation + prompts
 │   ├── llm/                   # Provider-agnostic LLM client (OpenAI, Gemini)
-│   ├── baseline/              # Template registry + selector
-│   ├── codegen/               # Jinja2 renderer (migrates into Code Engineering capability)
-│   ├── training/              # Subprocess runner (→ Training capability)
-│   ├── evaluation/            # CV metrics (→ Evaluation capability)
-│   ├── submission/            # Formatter + validator (→ Submission capability)
-│   ├── kaggle/                # Kaggle API client
 │   ├── kernel/                # Kernel export for kernel-only competitions
 │   ├── improvement/           # Legacy improve path (slim/replace with plan → Engineer)
-│   ├── tracking/              # Experiment logger, store, cross-run index
-│   ├── experiments/           # Experiment graph, hypotheses, comparator (Milestone 2)
+│   ├── experiments/           # Graph, hypotheses, comparator + logger/store/index
 │   ├── research_engine/       # Intelligence + Planner + Engineer
 │   │   ├── intelligence/      # analyze → knowledge → hypothesize
+│   │   │   └── competition/   # Parser + CompetitionSpec (fetch/normalize)
 │   │   ├── planner/           # Hypothesis / baseline → ResearchPlan DAG
-│   │   └── execution/         # Research Engineer + capability executors (Design A)
+│   │   └── execution/         # Research Engineer SoR (capabilities, templates,
+│   │                          #   codegen, training, metrics, runtimes, submission)
 │   ├── reflection/            # Reflection generation + prompts
 │   └── config.py              # AppConfig + Settings
 │
-├── templates/                 # Baseline code templates (Jinja2)
-│   ├── tabular_classification/
-│   ├── tabular_regression/
-│   ├── text_classification/
-│   ├── image_classification/
-│   └── *_deep/                # Opt-in transfer-learning variants
+│   # (removed top-level kaggle/competition/runtimes/submission/tracking/workspace
+│   #  and baseline/codegen/training/evaluation — see package-layout.md)
 │
 ├── configs/
 │   ├── default.yaml           # Default pipeline + training config
