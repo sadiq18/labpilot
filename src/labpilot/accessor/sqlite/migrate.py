@@ -1,7 +1,7 @@
 """Idempotent migrator for the unified SQLite schema.
 
 There is exactly **one** ``schema.sql`` and one migrator for ``knowledge.db``.
-Every pillar (intelligence / planner / execution) reaches SQLite through
+Every pillar (intelligence / planner / execution / reflection) reaches SQLite through
 :class:`~labpilot.accessor.sqlite.client.SqliteClient`, which runs this migration
 on open. Migration is ``CREATE TABLE IF NOT EXISTS`` throughout, so re-running on
 an existing DB adds any new tables without touching existing data.
@@ -18,8 +18,9 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 #: Bumped when the unified schema gains tables/columns. Recorded in
 #: ``schema_meta``. v3 introduces ``research_plans`` / ``research_tasks`` /
 #: ``research_task_deps`` (Research Planner). v4 adds ``research_executions``
-#: (Research Engineer).
-SCHEMA_VERSION = "4"
+#: (Research Engineer). v5 adds reflection tables (``experiment_evidence``,
+#: ``belief_updates``, ``lessons``, ``research_claims``, ``claim_evidence``).
+SCHEMA_VERSION = "5"
 
 
 def run_migration(conn: sqlite3.Connection) -> None:

@@ -17,7 +17,17 @@ def test_sqlite_client_migrates_and_enables_foreign_keys(tmp_path: Path):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        assert {"research_plans", "research_tasks", "research_task_deps", "research_executions"} <= tables
+        assert {
+            "research_plans",
+            "research_tasks",
+            "research_task_deps",
+            "research_executions",
+            "experiment_evidence",
+            "belief_updates",
+            "lessons",
+            "research_claims",
+            "claim_evidence",
+        } <= tables
         # Layer-3 knowledge ontology table is untouched.
         assert "tasks" in tables
     finally:

@@ -37,6 +37,12 @@ Aim for **~8–12 capabilities**, not 15+ agents and not hundreds of agents as t
 - LLM: implementation strategy, patch proposal, bug-fix proposal, test generation  
 - Deterministic: apply patch, syntax check, rollback snapshot  
 - Controlled ops only (allowed targets + intent + validation)  
+- Today also owns template **offline codegen** (`offline_codegen/`) including tabular
+  default model params (moved out of deleted `improvement/` in Reflection Plan 9)
+
+> **TODO (follow-on):** When template-based offline codegen is removed, delete the
+> offline Jinja renderer defaults (`DEFAULT_TABULAR_MODEL_PARAMS` and related wiring).
+> See [research-reflection/plan-9-legacy-cleanup.md](../research-reflection/plan-9-legacy-cleanup.md).
 
 ### 3. Research Review
 
@@ -84,6 +90,8 @@ Aim for **~8–12 capabilities**, not 15+ agents and not hundreds of agents as t
 
 - Serves `BUILD_SUBMISSION`  
 - Format validate; package kernel/source if required; **Kaggle upload**; status pull  
+- Kernel packaging helper (unused by SoR today): `accessor/kaggle/exporter.py` —
+  wire here when kernel-mode submission lands  
 - Evidence of upload result  
 
 ### 10. Reporting & Memory

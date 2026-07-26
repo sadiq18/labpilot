@@ -504,13 +504,12 @@ labpilot/
 ├── src/labpilot/
 │   ├── cli/                   # Typer CLI entry point
 │   ├── accessor/              # Shared SQLite + Kaggle + data/profiler + common helpers
-│   │   ├── kaggle/            # Kaggle API client + CompetitionMetadata DTO
+│   │   ├── kaggle/            # Kaggle API client + CompetitionMetadata + kernel exporter
 │   │   ├── data/              # Download + directory layout
 │   │   ├── profiler/          # Tabular EDA + profile.json helpers
 │   │   └── common/            # ids, JSON-in-TEXT, Micro Agent contract
 │   ├── llm/                   # Task-routed LLM (OpenAI, Gemini, Ollama) + cache/router
-│   ├── kernel/                # Kernel export for kernel-only competitions
-│   ├── improvement/           # Legacy improve path (slim/replace with plan → Engineer)
+│   ├── improvement/           # Legacy improve path (slim/delete in Reflection Plan 9)
 │   ├── experiments/           # Graph, hypotheses, comparator + logger/store/index
 │   ├── research_engine/       # Intelligence + Planner + Engineer
 │   │   ├── intelligence/      # analyze → knowledge → hypothesize

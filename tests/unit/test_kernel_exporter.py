@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
-from labpilot.kernel.exporter import _adapt_train_script, export_kernel
+from labpilot.accessor.kaggle.exporter import _adapt_train_script, export_kernel
 
 
 def test_kernel_exporter_writes_metadata(tmp_path: Path):

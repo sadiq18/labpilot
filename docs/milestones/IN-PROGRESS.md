@@ -4,6 +4,35 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
+## Research Reflection — Phase B in progress
+
+**Status:** Design Phase A **complete**; Plan **1 Done** (schema +
+`ReflectionStore`, `SCHEMA_VERSION` 5). Plans 2–10 ready.
+**Milestone 6** — close the loop: evidence → critic → beliefs/hypotheses →
+journal.
+
+**Design:** [research-reflection/README.md](research-reflection/README.md) (+
+architecture, schema, package-layout, beliefs-and-claims, cli).
+
+### Implementation plans
+
+| # | Plan | Depends on | Status |
+|---|------|------------|--------|
+| 1 | [Schema + stores](research-reflection/plan-1-schema-stores.md) | Design A | Done |
+| 2 | [EvidenceExtractor](research-reflection/plan-2-evidence-extractor.md) | 1 | Ready |
+| 3 | [ExperimentCritic](research-reflection/plan-3-experiment-critic.md) | 2 | Ready |
+| 4 | [Belief + Hypothesis](research-reflection/plan-4-belief-hypothesis.md) | 1–3 | Ready |
+| 5 | [Engineer cutover](research-reflection/plan-5-engineer-cutover.md) | 2–4 | Ready |
+| 6 | [Lessons + synthesis](research-reflection/plan-6-lessons-synthesis.md) | 4–5 | Ready |
+| 7 | [Research Claims](research-reflection/plan-7-research-claims.md) | 1, 4, 6 | Ready |
+| 8 | [Journal CLI](research-reflection/plan-8-journal-cli.md) | 2–7 | Ready |
+| 9 | [Legacy cleanup](research-reflection/plan-9-legacy-cleanup.md) | 3–5, 8 | Ready |
+| 10 | [Capstone](research-reflection/plan-10-capstone.md) | 1–9 | Ready |
+
+**CLI (target):** `research reflect` / `research journal` (+ Engineer Reporting hook).
+
+---
+
 ## Research Engineer — Phase B complete (dry-run SoR)
 
 **Status:** Plans **1–11 Done** on branch `research-execution`. Plan-driven
@@ -34,8 +63,8 @@ schema, package-layout, baseline-plan, capabilities, runtime-and-recovery).
 | 10 | [CLI cutover](research-engineer/plan-10-run-cli-cutover.md) | 2–9 | Done |
 | 11 | [Capstone](research-engineer/plan-11-capstone.md) | 1–10 | Done |
 
-**Next:** Live unattended train+upload on a real competition (see capstone gaps);
-kernel-mode export under Execution Submission/Runtime (follow-on).
+**Next:** Research Reflection (above) owns post-run knowledge updates. Live
+unattended train+upload and kernel-mode export remain Engineer follow-ons.
 
 ---
 

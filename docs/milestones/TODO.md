@@ -55,8 +55,19 @@ See [COMPLETED.md](COMPLETED.md).
 
 **Research Intelligence** design + Phase 1 plans: [research-intelligence/README.md](research-intelligence/README.md).
 
-**Research Planner** is the next design track — Phase A (design only) lives at
-[research-planner/README.md](research-planner/README.md). That is a **plan-only compiler**
-(Hypothesis → DAG), not autonomous execution. Items above that overlap (multi-agent systems,
-autonomous execution) stay deferred as *products*; the planner design explicitly rejects a
-multi-agent planner and defers capability executors.
+**Research Planner** — MVP shipped: [research-planner/README.md](research-planner/README.md).
+
+**Research Engineer** — Phase B complete (dry-run SoR):
+[research-engineer/README.md](research-engineer/README.md).
+
+**Research Reflection** — next implementation track (Milestone 6): Design A +
+Plans 1–10 at [research-reflection/README.md](research-reflection/README.md).
+Closes the loop (evidence → critic → beliefs/claims → journal). Items above that
+overlap (multi-agent systems, autonomous execution from reflection) stay deferred
+as *products*; Reflection is capability-based, not a control-flow agent.
+
+```bash
+# Target after Research Reflection Phase B:
+research reflect --execution E-001 --competition <slug>
+research journal --competition <slug>
+```

@@ -556,8 +556,8 @@ Lists registered baseline templates (tabular / text / image / deep variants).
 | Upload to Kaggle | `--submit` on `run` / `resume` |
 
 **Kernel-only competitions:** CSV packaging is SoR today. Kernel export/push is a
-follow-on under Execution Submission/Runtime (legacy `kernel/` helpers remain
-quarantined).
+follow-on under Execution Submission/Runtime (helpers live at
+`accessor/kaggle/exporter.py`; not wired into the CLI SoR yet).
 
 **LLM optional:** without `OPENAI_API_KEY` / `GEMINI_API_KEY` (or the `llm` extra), and
 without a reachable Ollama daemon, analyze / code / narrative Micro Agents fall back to

@@ -1,18 +1,24 @@
-"""Kernel notebook export for kernel-only competitions (quarantined).
+"""Kernel notebook export for kernel-only competitions.
 
-Legacy Pipeline owned ``export_kernel``. Research Engineer CSV submission is
-SoR today; kernel push/export will move under Execution Submission/Runtime
-as a follow-on. Do not wire new product paths through this module yet.
+Lives under ``accessor.kaggle`` as shared Kaggle I/O. Research Engineer CSV
+submission is SoR today; wire this from Execution Submission/Runtime when
+kernel-mode push is needed. Accepts any object with a ``slug`` attribute (or
+pass ``competition_slug``) so accessor does not import Intelligence models.
 """
+
+from __future__ import annotations
 
 import json
 import logging
 import re
 from pathlib import Path
-
-from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
+
+
+class _HasSlug(Protocol):
+    slug: str
 
 _LABPILOT_METRIC_IMPORT = "from labpilot.research_engine.execution.metrics import compute_metric"
 
@@ -75,15 +81,22 @@ def slugify_kernel_id(title: str, *, max_length: int = 30) -> str:
     return slug or "labpilot-baseline"
 
 
+def _competition_slug(competition: _HasSlug | str) -> str:
+    if isinstance(competition, str):
+        return competition
+    return competition.slug
+
+
 def build_kernel_metadata(
-    competition: CompetitionSpec,
+    competition: _HasSlug | str,
     *,
     username: str | None = None,
     run_suffix: str | None = None,
 ) -> tuple[str, dict]:
     """Return (kernel_id, metadata dict) with a valid Kaggle slug."""
     _ = run_suffix  # Stable slug per competition; run id must not change kernel identity.
-    slug = slugify_kernel_id(f"{competition.slug[:20]}-labpilot", max_length=50)
+    competition_slug = _competition_slug(competition)
+    slug = slugify_kernel_id(f"{competition_slug[:20]}-labpilot", max_length=50)
     # Kaggle validates that the title slugifies to the kernel slug in metadata id.
     kernel_title = slug.replace("-", " ").title()
 
@@ -102,7 +115,7 @@ def build_kernel_metadata(
         "enable_gpu": False,
         "enable_internet": True,
         "dataset_sources": [],
-        "competition_sources": [competition.slug],
+        "competition_sources": [competition_slug],
         "kernel_sources": [],
     }
     return kernel_id, metadata
@@ -110,7 +123,7 @@ def build_kernel_metadata(
 
 def export_kernel(
     run_dir: Path,
-    competition: CompetitionSpec,
+    competition: _HasSlug | str,
     *,
     username: str | None = None,
 ) -> Path:
@@ -119,17 +132,18 @@ def export_kernel(
     if not train_path.is_file():
         raise FileNotFoundError(f"Generated training script not found: {train_path}")
 
+    competition_slug = _competition_slug(competition)
     kernel_dir = run_dir / "kernel"
     kernel_dir.mkdir(parents=True, exist_ok=True)
 
-    kaggle_input = f"/kaggle/input/competitions/{competition.slug}"
+    kaggle_input = f"/kaggle/input/competitions/{competition_slug}"
     kaggle_working = "/kaggle/working"
     run_py = _adapt_train_script(train_path.read_text(), kaggle_input, kaggle_working)
     (kernel_dir / "run.py").write_text(run_py)
 
     run_suffix = run_dir.name.split("-")[-1] if run_dir.name else None
     kernel_id, metadata = build_kernel_metadata(
-        competition,
+        competition_slug,
         username=username,
         run_suffix=run_suffix,
     )
