@@ -21,7 +21,8 @@ Planner:
 
 
 Phase B plans 1–6 are complete (§14). Future work (helper micro-agents, competing
-planners, budget allocator, capability executors) stays backlog-only.
+planners, budget allocator) stays backlog-only. **Capability implementation** is the
+**Research Engineer** milestone: [../research-engineer/README.md](../research-engineer/README.md).
 
 ---
 

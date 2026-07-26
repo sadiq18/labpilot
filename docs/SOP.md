@@ -252,6 +252,8 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 | Grounded Q over the knowledge store | `research retrieve <slug> -q "…"` |
 | Literature-backed untried ideas | `research hypothesize <slug>` |
 | Hypothesis → executable DAG (no train) | `research plan create <slug> -H H-xxx` |
+| Baseline plan (first experiment DAG) | `research plan create <slug> --baseline` → **P-001** (Design A; Phase B) |
+| Implement approved plan | `research run --plan P-001` (Research Engineer — Design A) |
 | Need another operator on the team | Point them at this SOP + [CLI.md](CLI.md) |
 
 ---
@@ -260,12 +262,15 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 
 1. `experiments report` / `dashboard` — where are we?
 2. Optional: `research analyze` — refresh landscape + Research Brief (+ `--fetch-kaggle` when needed).
-3. `experiments rank` or `research hypothesize` — pick one proposed hypothesis (or add one).
-4. `research plan create <slug> -H H-xxx` — compile an inspectable DAG (no execution).
-5. `improve --hypothesis H-xxx --strategy …` — one change at a time when possible.
-6. `experiments compare` — keep / discard.
-7. `knowledge list` — update your intuition from effects.
-8. Repeat; submit only when local CV (and sanity checks) look worth a leaderboard hit.
+3. First time on a competition: `research plan create <slug> --baseline` → `research run --plan P-001`
+   (Research Engineer Design A / Phase B — replaces leaving a linear `run --competition` as SoR).
+4. `experiments rank` or `research hypothesize` — pick one proposed hypothesis.
+5. `research plan create <slug> -H H-xxx` — compile an inspectable DAG.
+6. `research run --plan P-xxx` — implement via Research Engineer (target); until shipped,
+   `improve --hypothesis H-xxx` remains the interim path.
+7. `experiments compare` — keep / discard.
+8. `knowledge list` — update your intuition from effects.
+9. Repeat; submit only when local CV (and sanity checks) look worth a leaderboard hit.
 
 Avoid burning daily submission quota on undiagnosed regressions — the comparator
 and knowledge base exist so you don’t have to rediscover failures by hand.
@@ -287,4 +292,5 @@ and knowledge base exist so you don’t have to rediscover failures by hand.
 More architecture detail: [ARCHITECTURE.md](ARCHITECTURE.md).  
 Experiment Scientist design: [milestones/experiment-scientist/README.md](milestones/experiment-scientist/README.md).  
 Research Intelligence design: [milestones/research-intelligence/README.md](milestones/research-intelligence/README.md).  
-Research Planner: [milestones/research-planner/README.md](milestones/research-planner/README.md).
+Research Planner: [milestones/research-planner/README.md](milestones/research-planner/README.md).  
+Research Engineer (Design A): [milestones/research-engineer/README.md](milestones/research-engineer/README.md).

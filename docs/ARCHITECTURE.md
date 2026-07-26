@@ -487,6 +487,22 @@ Planning Engine LLM revision → validate/schedule → `PlanStore` + derived `pl
 Never writes code, mutates configs, or creates `runs/`. Design:
 [milestones/research-planner/README.md](milestones/research-planner/README.md).
 
+### Research Engineer
+
+| | |
+|---|---|
+| **Path** | `research_engine/execution/` (+ shared `labpilot.accessor`) |
+| **Responsibility** | Approved ResearchPlan → implemented, verified experiment (own the work) |
+| **CLI (target)** | `research run --plan P-001` / `research resume --execution E-xxx` |
+| **Status** | Design Phase A |
+
+Not a thin DAG walker — an **Autonomous Research Engineer**: workspace, controlled code
+engineering + research review, verification (unit + smoke gate), runtime dispatch,
+train/eval/submit, evidence, recovery, reflection. One deterministic orchestrator;
+stable **capabilities** (not per-task agents). Baseline path: Analyze →
+`plan create --baseline` (**P-001**) → `run --plan P-001`. Design:
+[milestones/research-engineer/README.md](milestones/research-engineer/README.md).
+
 ## Repository Structure
 
 ```
@@ -499,26 +515,26 @@ labpilot/
 ├── src/labpilot/
 │   ├── cli/                   # Typer CLI entry point
 │   ├── accessor/              # Shared SQLite + LLM + commons (pillars depend here)
-│   ├── orchestrator/          # Pipeline DAG + manifest
+│   ├── orchestrator/          # Legacy linear Pipeline (to be replaced by Engineer)
 │   ├── competition/           # Parser + CompetitionSpec models
 │   ├── data/                  # Download + directory layout
 │   ├── profiler/              # Tabular EDA + profile reports
 │   ├── brief/                 # Research brief generation + prompts
 │   ├── llm/                   # Provider-agnostic LLM client (OpenAI, Gemini)
 │   ├── baseline/              # Template registry + selector
-│   ├── codegen/               # Jinja2 renderer + syntax validation
-│   ├── training/              # Subprocess runner + artifact collection
-│   ├── evaluation/            # CV metrics
-│   ├── submission/            # Formatter + validator
+│   ├── codegen/               # Jinja2 renderer (migrates into Code Engineering capability)
+│   ├── training/              # Subprocess runner (→ Training capability)
+│   ├── evaluation/            # CV metrics (→ Evaluation capability)
+│   ├── submission/            # Formatter + validator (→ Submission capability)
 │   ├── kaggle/                # Kaggle API client
 │   ├── kernel/                # Kernel export for kernel-only competitions
-│   ├── improvement/           # Run fork, planner, tuner, feature recipes (P3)
+│   ├── improvement/           # Legacy improve path (slim/replace with plan → Engineer)
 │   ├── tracking/              # Experiment logger, store, cross-run index
 │   ├── experiments/           # Experiment graph, hypotheses, comparator (Milestone 2)
-│   ├── research_engine/       # Intelligence + Planner + execution helpers
+│   ├── research_engine/       # Intelligence + Planner + Engineer
 │   │   ├── intelligence/      # analyze → knowledge → hypothesize
-│   │   ├── planner/           # Hypothesis → ResearchPlan DAG
-│   │   └── execution/         # Reflection / future capability executors
+│   │   ├── planner/           # Hypothesis / baseline → ResearchPlan DAG
+│   │   └── execution/         # Research Engineer + capability executors (Design A)
 │   ├── reflection/            # Reflection generation + prompts
 │   └── config.py              # AppConfig + Settings
 │
@@ -544,12 +560,13 @@ labpilot/
     ├── MILESTONES.md          # Roadmap index
     └── milestones/
         ├── COMPLETED.md       # Shipped milestones (P0–P4) + per-milestone architecture changes
-        ├── IN-PROGRESS.md     # Active work
-        ├── TODO.md            # P2 execution (deferred) + post-1.0 planned
+        ├── IN-PROGRESS.md     # Active work (Research Engineer Design A)
+        ├── TODO.md            # Post-1.0 planned
         ├── backlog.md         # Unscheduled future work
-        ├── experiment-scientist/   # Experiment Scientist (README + 8 plans) — shipped
-        ├── research-intelligence/  # Research Intelligence (README + plans 1–11) — Phase 1 shipped
-        └── research-planner/       # Research Planner — MVP shipped (Plans 1–6)
+        ├── experiment-scientist/   # Experiment Scientist — shipped
+        ├── research-intelligence/  # Research Intelligence — Phase 1 shipped
+        ├── research-planner/       # Research Planner — MVP shipped (Plans 1–6)
+        └── research-engineer/      # Research Engineer — Design Phase A
 ```
 
 ---
