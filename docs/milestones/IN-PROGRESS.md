@@ -4,11 +4,44 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
+## Research Engineer — Phase B plans ready
+
+**Status:** Design Phase A complete; **Phase B plans 1–11 authored** on branch
+`research-execution`. **No application code yet** — implement after plan review,
+one plan at a time.
+
+**Product:** Autonomous Research Engineer — turn an approved Research Plan into a
+verified experiment (implement, review, verify, train, evaluate, submit, evidence).
+Not a thin “executor.”
+
+**Design:** [research-engineer/README.md](research-engineer/README.md) (+ architecture,
+schema, package-layout, baseline-plan, capabilities, runtime-and-recovery).
+
+### Implementation plans
+
+| # | Plan | Depends on | Status |
+|---|------|------------|--------|
+| 1 | [Schema / executions](research-engineer/plan-1-schema-executions.md) | Design A | Not started |
+| 2 | [Engineer controller](research-engineer/plan-2-engineer-controller.md) | 1 | Not started |
+| 3 | [Baseline P-001](research-engineer/plan-3-baseline-plan.md) | Planner MVP; ∥ after 1 | Not started |
+| 4 | [Workspace + Deps](research-engineer/plan-4-workspace-deps.md) | 2 | Not started |
+| 5 | [Code + Review](research-engineer/plan-5-code-review.md) | 4 | Not started |
+| 6 | [Verification / smoke](research-engineer/plan-6-verification.md) | 5 | Not started |
+| 7 | [Runtime](research-engineer/plan-7-runtime.md) | 6 | Not started |
+| 8 | [Train / Eval](research-engineer/plan-8-train-eval.md) | 6–7 | Not started |
+| 9 | [Submit / Report](research-engineer/plan-9-submit-report.md) | 8 | Not started |
+| 10 | [CLI cutover](research-engineer/plan-10-run-cli-cutover.md) | 2–9 | Not started |
+| 11 | [Capstone](research-engineer/plan-11-capstone.md) | 1–10 | Not started |
+
+**Next:** Review Phase B plans → implement Plan 1.
+
+---
+
 ## Research Planner — plan-only MVP shipped
 
 **Status:** Phase B Plans 1–6 **implemented**. Plan-only MVP complete
-(`research plan create` / `show` / `list`). Capability executors / `--execute` remain
-out of scope.
+(`research plan create` / `show` / `list`). Capability implementation moves to
+**Research Engineer** (above).
 
 **Design + code:**
 
@@ -27,9 +60,6 @@ out of scope.
 | 5 | [CLI `research plan`](research-planner/plan-5-cli.md) | 3–4 | Done |
 | 6 | [Capstone + docs](research-planner/plan-6-capstone.md) | 5 | Done |
 
-**Next:** Future backlog only (helper micro-agents, competing planners, budget,
-capability executors). Research Intelligence Plan F (Forum Intelligence) remains open.
-
 ---
 
 ## Research Intelligence — Phase 1 shipped
@@ -45,7 +75,8 @@ Plan F (Forum Intelligence analyzer wiring) remains future.
 with Micro Agents in `intelligence/micro_agents/` and `execution/micro_agents/` (`*Agent` +
 `skill.md`). On disk: `knowledge/<slug>/research/{raw,extracted,knowledge,experiments,reports}/`
 + `knowledge.db` — **local / gitignored**. Planner is a sibling
-`research_engine/planner/` pillar (see Research Planner above) plus shared `labpilot.accessor`.
+`research_engine/planner/` pillar; Research Engineer fills `research_engine/execution/`.
+Shared infra: `labpilot.accessor`.
 
 ### Milestone 3 implementation plans
 
@@ -74,5 +105,6 @@ with Micro Agents in `intelligence/micro_agents/` and `execution/micro_agents/` 
 
 **P4 — v1.0 (Production Quality)** shipped — see [COMPLETED.md](COMPLETED.md).
 
-Also queued, unrelated to Research Planner: **P2 execution** and **Packaging & PyPI** — see
-[TODO.md](TODO.md) and [backlog.md](backlog.md).
+Also queued: **Packaging & PyPI** — see [TODO.md](TODO.md) and [backlog.md](backlog.md).
+Remote training dispatch is absorbed into Research Engineer Runtime capability design
+(see [research-engineer/runtime-and-recovery.md](research-engineer/runtime-and-recovery.md)).

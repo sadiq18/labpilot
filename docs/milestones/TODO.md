@@ -4,20 +4,23 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-## P2 execution — Remote training dispatch — **Deferred**
+## P2 execution — Remote training dispatch — **Absorbed into Research Engineer**
 
 > **P2 configuration shipped in v0.3 / P4 v1.0** — see [COMPLETED.md](COMPLETED.md).
 
-**Goal:** Offload `train_model` to user-registered remote runtimes with quota-aware scheduling.
+Remote dispatch / poll / artifact pull is now part of the **Research Engineer** Runtime
+capability design (not a forever-separate track):
+[research-engineer/runtime-and-recovery.md](research-engineer/runtime-and-recovery.md).
 
-- `RuntimeProfiler` tracks free/paid usage limits locally
-- `RuntimeScheduler` picks a runtime within quotas (`--remote-train`, `--runtime <id>`)
-- Poll remote job status until artifacts sync back; `research resume` re-enters poll loop
-- Init and post-train stages stay local in v1
+Legacy sketch (historical):
+
+- `RuntimeProfiler` / `RuntimeScheduler` / `--remote-train`
+- Poll until artifacts sync; resume re-enters poll loop
 
 ```bash
-research build --run-id <id> --remote-train
-research run --competition <slug> --runtime kaggle-gpu-free
+# Target after Research Engineer Phase B:
+research run --plan P-001
+research resume --execution E-001
 ```
 
 ---
