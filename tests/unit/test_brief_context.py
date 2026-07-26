@@ -1,5 +1,5 @@
-from labpilot.brief.context import render_competition_context
-from labpilot.competition.models import CompetitionSpec, MetricSpec
+from labpilot.research_engine.intelligence.brief.context import render_competition_context
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, MetricSpec
 
 
 def test_render_competition_context_includes_rules_fields():

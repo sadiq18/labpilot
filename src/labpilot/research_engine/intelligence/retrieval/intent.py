@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from labpilot.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.research_engine.intelligence.retrieval.models import QueryType, RetrievalIntent
 
 _QUERY_TYPE_KEYWORDS: list[tuple[QueryType, tuple[str, ...]]] = [

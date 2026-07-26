@@ -1,6 +1,6 @@
 """Deterministic submission link footer for reflection.md."""
 
-from labpilot.kaggle.client import SubmissionResult
+from labpilot.accessor.kaggle.client import SubmissionResult
 
 
 def render_submission_links(submission: SubmissionResult) -> str:

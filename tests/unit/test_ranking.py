@@ -13,7 +13,7 @@ from labpilot.experiments.models import (
     KnowledgeEntry,
 )
 from labpilot.experiments.ranking import RankingWeights, rank_candidates
-from labpilot.orchestrator.manifest import RunManifest, StageStatus, save_manifest
+from labpilot.experiments.manifest import RunManifest, StageStatus, save_manifest
 
 
 def _seed_empty_run(runs_dir: Path, run_id: str, competition: str = "titanic") -> None:

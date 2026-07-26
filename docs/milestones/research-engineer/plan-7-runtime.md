@@ -3,7 +3,7 @@
 Back to [Research Engineer](README.md). Design: [runtime-and-recovery.md](runtime-and-recovery.md) ·
 [capabilities.md](capabilities.md).
 
-**Status:** Not started. **Depends on:** Plan 6 (prefer smoke before remote). **Unlocks:** Plan 8.
+**Status:** Done. **Depends on:** Plan 6 (prefer smoke before remote). **Unlocks:** Plan 8.
 
 ---
 

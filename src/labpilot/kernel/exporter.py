@@ -1,13 +1,20 @@
+"""Kernel notebook export for kernel-only competitions (quarantined).
+
+Legacy Pipeline owned ``export_kernel``. Research Engineer CSV submission is
+SoR today; kernel push/export will move under Execution Submission/Runtime
+as a follow-on. Do not wire new product paths through this module yet.
+"""
+
 import json
 import logging
 import re
 from pathlib import Path
 
-from labpilot.competition.models import CompetitionSpec
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 
 logger = logging.getLogger(__name__)
 
-_LABPILOT_METRIC_IMPORT = "from labpilot.evaluation.metrics import compute_metric"
+_LABPILOT_METRIC_IMPORT = "from labpilot.research_engine.execution.metrics import compute_metric"
 
 _COMPUTE_METRIC_STUB = '''
 import numpy as np

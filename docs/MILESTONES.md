@@ -38,7 +38,7 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | Track | Document | Summary |
 |-------|----------|---------|
 | **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P2 + P3 + P4 shipped |
-| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Research Engineer Plans 1–4 done; Planner MVP shipped; RI Phase 1 shipped |
+| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Research Engineer Plans 1–11 done (dry-run SoR); Planner MVP; RI Phase 1 |
 | **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2 execution dispatch + post-1.0 items |
 | **Backlog** | [milestones/backlog.md](milestones/backlog.md) | Unscheduled extensions (async kernel watcher, webhooks) |
 
@@ -57,7 +57,7 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | **Experiment Scientist** | v0.5 | **Shipped** | Research memory, comparison, hypotheses, knowledge base, ranking, dashboard |
 | **Research Intelligence** | v0.6 | **Phase 1 shipped** | Analyze landscape + hypotheses + brief; plans 1–11 + spike + F |
 | **Research Planner** | — | **MVP shipped** | Hypothesis → planning compiler → executable DAG (`research plan`); Plans 1–6 |
-| **Research Engineer** | — | **Phase B (Plans 1–4 done)** | Approved plan → implemented, verified experiment (`research run --plan`); autonomous implement/verify/train/submit |
+| **Research Engineer** | — | **Phase B complete (dry-run SoR)** | Approved plan → implemented, verified experiment (`research run --plan`); autonomous implement/verify/train/submit |
 
 Details for each track live in the linked documents above:
 

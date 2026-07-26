@@ -7,8 +7,6 @@ import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from labpilot.workspace.discover import load_project
-
 # Shared with `labpilot.llm.client.create_llm_client()`: if a user switches
 # `llm.provider` without also overriding `llm.model`, this is what resolves
 # to a real model name for that provider instead of silently sending an
@@ -16,14 +14,34 @@ from labpilot.workspace.discover import load_project
 DEFAULT_MODEL_BY_PROVIDER: dict[str, str] = {
     "openai": "gpt-4o-mini",
     "gemini": "gemini-3.5-flash",
+    "ollama": "qwen2.5-coder:14b",
 }
 
 
+class LLMCacheConfig(BaseModel):
+    enabled: bool = True
+    path: Path = Path(".cache/llm.sqlite")
+
+
+class TaskProfile(BaseModel):
+    """Per-task model routing overrides (planning, coding, summary, …)."""
+
+    model: str | None = None
+    provider: str | None = None
+    force_local: bool = False
+    temperature: float | None = None
+
+
 class LLMConfig(BaseModel):
-    provider: str = "openai"
-    model: str = "gpt-4o-mini"
+    mode: str = "auto"  # auto | local | cloud
+    provider: str = "gemini"
+    model: str = "gemini-3.5-flash"
     temperature: float = 0.3
     api_key: str = Field(default="", exclude=True, repr=False)
+    ollama_base_url: str = "http://localhost:11434"
+    fallback_model: str = "qwen2.5-coder:14b"
+    cache: LLMCacheConfig = Field(default_factory=LLMCacheConfig)
+    tasks: dict[str, TaskProfile] = Field(default_factory=dict)
 
 
 class TrainingConfig(BaseModel):
@@ -147,6 +165,8 @@ class Settings(BaseSettings):
     labpilot_knowledge_dir: str = "knowledge"
     labpilot_llm_provider: str = ""
     labpilot_llm_model: str = ""
+    labpilot_llm_mode: str = ""
+    ollama_host: str = ""
     labpilot_runtimes_dir: str = ""
     labpilot_default_runtime: str = ""
 
@@ -183,19 +203,13 @@ def _normalize_paths(raw: dict[str, Any]) -> dict[str, Any]:
     kaggle = raw.get("kaggle")
     if isinstance(kaggle, dict) and "cache_dir" in kaggle:
         kaggle["cache_dir"] = Path(kaggle["cache_dir"])
+    llm = raw.get("llm")
+    if isinstance(llm, dict):
+        cache = llm.get("cache")
+        if isinstance(cache, dict) and "path" in cache:
+            cache["path"] = Path(cache["path"])
     return raw
 
-
-def _apply_project_overrides(raw: dict[str, Any], project) -> dict[str, Any]:
-    project_raw = _load_yaml_dict(project.config_path)
-    merged = _deep_merge(raw, project_raw)
-    merged["runs_dir"] = project.runs_dir
-    runtime = merged.setdefault("runtime", {})
-    runtime["runtimes_dir"] = project.runtimes_dir
-    runtime["default_runtime"] = project.default_runtime
-    kaggle = merged.setdefault("kaggle", {})
-    kaggle["cache_dir"] = project.cache_dir
-    return merged
 
 
 def _apply_settings(config: AppConfig, settings: Settings, raw: dict[str, Any]) -> AppConfig:
@@ -211,6 +225,11 @@ def _apply_settings(config: AppConfig, settings: Settings, raw: dict[str, Any]) 
         config.runtime.runtimes_dir = Path(settings.labpilot_runtimes_dir)
     if settings.labpilot_default_runtime:
         config.runtime.default_runtime = settings.labpilot_default_runtime
+
+    if settings.labpilot_llm_mode:
+        config.llm.mode = settings.labpilot_llm_mode.strip().lower()
+    if settings.ollama_host:
+        config.llm.ollama_base_url = settings.ollama_host.strip()
 
     if settings.labpilot_llm_provider:
         config.llm.provider = settings.labpilot_llm_provider
@@ -231,18 +250,12 @@ def _apply_settings(config: AppConfig, settings: Settings, raw: dict[str, Any]) 
     return config
 
 
-def load_config(
-    path: Path | None = None,
-    *,
-    project_dir: Path | None = None,
-    start_dir: Path | None = None,
-) -> AppConfig:
+def load_config(path: Path | None = None) -> AppConfig:
     """Load config with layered precedence:
 
     1. Package default (`configs/default.yaml`)
-    2. Project config (when `project.yaml` is detected or `--project-dir` is set)
-    3. Explicit CLI `--config` file
-    4. Environment variables (`LABPILOT_*`, credentials)
+    2. Explicit CLI `--config` file (if different from package default)
+    3. Environment variables (`LABPILOT_*`, credentials)
     """
     layers: list[dict[str, Any]] = []
 
@@ -250,35 +263,10 @@ def load_config(
     if package_default.is_file():
         layers.append(_load_yaml_dict(package_default))
 
-    project = load_project(start=start_dir, project_dir=project_dir)
-    if project is not None:
-        project_layer = _load_yaml_dict(project.config_path)
-        project_layer["runs_dir"] = str(project.runs_dir)
-        project_layer.setdefault("runtime", {})
-        project_layer["runtime"]["runtimes_dir"] = str(project.runtimes_dir)
-        project_layer["runtime"]["default_runtime"] = project.default_runtime
-        project_layer.setdefault("kaggle", {})
-        project_layer["kaggle"]["cache_dir"] = str(project.cache_dir)
-        layers.append(project_layer)
-
-    explicit_path = path or _package_default_config_path()
-    skip_explicit = (
-        project is not None
-        and explicit_path.resolve() == _package_default_config_path().resolve()
-        and explicit_path.resolve() != project.config_path.resolve()
-    )
-    if explicit_path.is_file() and not skip_explicit:
+    explicit_path = path or package_default
+    if explicit_path.is_file():
         resolved_explicit = explicit_path.resolve()
-        already_loaded = {_package_default_config_path().resolve()}
-        if project is not None:
-            already_loaded.add(project.config_path.resolve())
-        if resolved_explicit not in already_loaded:
-            layers.append(_load_yaml_dict(explicit_path))
-        elif project is None and resolved_explicit == _package_default_config_path().resolve():
-            pass  # already loaded as package default
-        elif project is not None and resolved_explicit == project.config_path.resolve():
-            pass  # already loaded via project layer
-        else:
+        if resolved_explicit != package_default.resolve():
             layers.append(_load_yaml_dict(explicit_path))
 
     merged: dict[str, Any] = {}
@@ -294,25 +282,11 @@ def load_config(
 def resolve_competitions_dir(
     config: AppConfig,
     competitions_dir: Path | None = None,
-    *,
-    project_dir: Path | None = None,
-    start_dir: Path | None = None,
 ) -> Path:
     if competitions_dir is not None:
         return competitions_dir
-    project = load_project(start=start_dir, project_dir=project_dir)
-    if project is not None:
-        return project.competitions_dir
     return Path(__file__).resolve().parents[3] / "configs" / "competitions"
 
 
-def resolve_runtimes_dir(
-    config: AppConfig,
-    *,
-    project_dir: Path | None = None,
-    start_dir: Path | None = None,
-) -> Path:
-    project = load_project(start=start_dir, project_dir=project_dir)
-    if project is not None:
-        return project.runtimes_dir
+def resolve_runtimes_dir(config: AppConfig) -> Path:
     return config.runtime.runtimes_dir

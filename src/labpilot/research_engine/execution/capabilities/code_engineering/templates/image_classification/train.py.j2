@@ -1,0 +1,158 @@
+"""Generated P1 image classification baseline: frozen ResNet18 + LightGBM."""
+
+import json
+from pathlib import Path
+
+import joblib
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+from PIL import Image
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import LabelEncoder
+
+from labpilot.research_engine.execution.metrics import compute_metric
+
+DATA_DIR = Path({{ data_dir | tojson }})
+OUTPUT_DIR = Path({{ output_dir | tojson }})
+TRAIN_FILE = {{ choice.train_file | tojson }}
+TEST_FILE = {{ choice.test_file | tojson }}
+SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
+TARGET_COLUMN = {{ choice.target_column | tojson }}
+ID_COLUMN = {{ choice.id_column | tojson }}
+IMAGE_DIR = {{ choice.image_dir | tojson }}
+IMAGE_COLUMN = {{ choice.image_column | tojson }}
+METRIC_NAME = {{ choice.metric_name | tojson }}
+CV_FOLDS = {{ cv_folds }}
+RANDOM_SEED = {{ random_seed }}
+MAX_IMAGES = {{ max_images_sample }}
+
+
+def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    return (
+        pd.read_csv(DATA_DIR / TRAIN_FILE),
+        pd.read_csv(DATA_DIR / TEST_FILE),
+        pd.read_csv(DATA_DIR / SAMPLE_SUBMISSION_FILE),
+    )
+
+
+def resolve_image_path(value: str) -> Path | None:
+    base = DATA_DIR / IMAGE_DIR
+    candidates = [base / value, base / f"{value}.jpg", base / f"{value}.jpeg", base / f"{value}.png"]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def extract_features(df: pd.DataFrame, image_column: str, batch_size: int = 64) -> np.ndarray:
+    import torch
+    import torchvision.models as models
+    import torchvision.transforms as T
+
+    model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+    model.fc = torch.nn.Identity()
+    model.eval()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+
+    transform = T.Compose(
+        [
+            T.Resize(256),
+            T.CenterCrop(224),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+
+    rows = df[image_column].astype(str).tolist()
+    feature_dim = 512
+    features = np.zeros((len(rows), feature_dim), dtype=np.float32)
+    for start in range(0, len(rows), batch_size):
+        batch_values = rows[start : start + batch_size]
+        tensors: list[torch.Tensor] = []
+        batch_indices: list[int] = []
+        for offset, value in enumerate(batch_values):
+            path = resolve_image_path(value)
+            if path is None:
+                continue
+            with Image.open(path).convert("RGB") as img:
+                tensors.append(transform(img))
+            batch_indices.append(offset)
+        if not tensors:
+            continue
+        batch_tensor = torch.stack(tensors).to(device)
+        with torch.no_grad():
+            batch_features = model(batch_tensor).cpu().numpy()
+        for offset, feat in zip(batch_indices, batch_features, strict=True):
+            features[start + offset] = feat.astype(np.float32)
+    return features
+
+
+def _as_feature_frame(matrix: np.ndarray) -> pd.DataFrame:
+    return pd.DataFrame(matrix, columns=[f"f{i}" for i in range(matrix.shape[1])])
+
+
+def main() -> None:
+    train, test, sample_submission = load_data()
+    if len(train) > MAX_IMAGES:
+        train = train.sample(MAX_IMAGES, random_state=RANDOM_SEED)
+
+    encoder = LabelEncoder()
+    y = encoder.fit_transform(train[TARGET_COLUMN])
+    num_classes = len(encoder.classes_)
+
+    X = extract_features(train, IMAGE_COLUMN)
+    X_test = extract_features(test, IMAGE_COLUMN)
+    X_frame = _as_feature_frame(X)
+    X_test_frame = _as_feature_frame(X_test)
+
+    folds = min(CV_FOLDS, int(np.bincount(y).min()))
+    oof_proba = np.zeros((len(train), num_classes), dtype=float)
+    test_proba = np.zeros((len(test), num_classes), dtype=float)
+    models = []
+    splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=RANDOM_SEED)
+
+    for train_idx, val_idx in splitter.split(X, y):
+        clf = lgb.LGBMClassifier(
+            n_estimators=200, learning_rate=0.05, random_state=RANDOM_SEED, verbose=-1
+        )
+        clf.fit(X_frame.iloc[train_idx], y[train_idx])
+        oof_proba[np.ix_(val_idx, clf.classes_)] = clf.predict_proba(X_frame.iloc[val_idx])
+        test_proba[:, clf.classes_] += clf.predict_proba(X_test_frame)
+        models.append(clf)
+
+    oof_codes = oof_proba.argmax(axis=1)
+    proba_for_metric = oof_proba[:, 1] if num_classes == 2 and METRIC_NAME in ("auc", "logloss") else None
+    cv_score = compute_metric(
+        y, oof_codes, METRIC_NAME, y_proba=proba_for_metric, num_classes=num_classes
+    )
+    predicted_codes = (test_proba / folds).argmax(axis=1)
+    predicted_labels = encoder.inverse_transform(predicted_codes)
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            ID_COLUMN: train[ID_COLUMN],
+            "actual": train[TARGET_COLUMN],
+            "prediction": encoder.inverse_transform(oof_codes),
+        }
+    ).to_csv(OUTPUT_DIR / "oof.csv", index=False)
+
+    metrics = {f"cv_{METRIC_NAME}": float(cv_score), "cv_folds": folds}
+    (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2))
+
+    models_dir = OUTPUT_DIR / "models"
+    models_dir.mkdir(exist_ok=True)
+    for index, model in enumerate(models):
+        joblib.dump(model, models_dir / f"fold_{index}.joblib")
+
+    submission = sample_submission.copy()
+    submission[ID_COLUMN] = test[ID_COLUMN].to_numpy()
+    submission[TARGET_COLUMN] = predicted_labels
+    submission.to_csv(OUTPUT_DIR / "submission.csv", index=False)
+    print(f"CV {METRIC_NAME}: {cv_score:.4f}")
+
+
+if __name__ == "__main__":
+    main()

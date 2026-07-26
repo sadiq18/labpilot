@@ -190,7 +190,7 @@ def test_agent_rule_engine_returns_baseline():
         ],
     )
     agent = ResearchPlannerAgent(llm_client=None)
-    from labpilot.common.micro_agents import StructuredContext
+    from labpilot.accessor.common.micro_agents import StructuredContext
 
     result = agent.run(
         StructuredContext(

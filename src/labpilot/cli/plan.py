@@ -42,10 +42,9 @@ _FORMATS = ("text", "json", "markdown")
 
 def _load_config(
     config_path: Path,
-    project_dir: Path | None,
     knowledge_dir: Path | None,
 ):
-    config = load_config(config_path, project_dir=project_dir)
+    config = load_config(config_path)
     if knowledge_dir:
         config.knowledge_dir = knowledge_dir
     return config
@@ -133,9 +132,6 @@ def plan_create(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
@@ -157,7 +153,7 @@ def plan_create(
         )
         raise typer.Exit(code=1)
 
-    config = _load_config(config_path, project_dir, knowledge_dir)
+    config = _load_config(config_path, knowledge_dir)
     llm = resolve_llm_client(config.llm)
 
     try:
@@ -215,16 +211,13 @@ def plan_show(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
 ) -> None:
     """Show one research plan and its task DAG."""
     output_format = _validate_format(output_format)
-    config = _load_config(config_path, project_dir, knowledge_dir)
+    config = _load_config(config_path, knowledge_dir)
     store = PlanStore(config.knowledge_dir, competition)
     try:
         plan = store.get_plan(plan_id)
@@ -251,16 +244,13 @@ def plan_list(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
 ) -> None:
     """List research plans for a competition."""
     status_filter = _parse_status(status)
-    config = _load_config(config_path, project_dir, knowledge_dir)
+    config = _load_config(config_path, knowledge_dir)
     store = PlanStore(config.knowledge_dir, competition)
     try:
         plans = store.list_plans(status=status_filter)

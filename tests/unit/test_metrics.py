@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
 
-from labpilot.competition.metrics import (
+from labpilot.research_engine.intelligence.competition.metrics import (
     enrich_metric_spec,
     normalize_metric,
     resolve_metric_key_with_llm,
 )
-from labpilot.competition.models import MetricSpec
-from labpilot.evaluation.metrics import compute_metric
+from labpilot.research_engine.intelligence.competition.models import MetricSpec
+from labpilot.research_engine.execution.metrics import compute_metric
 
 
 def test_normalize_metric_sets_canonical_key():

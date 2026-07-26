@@ -110,10 +110,10 @@ elif target is numeric:
 |------|---------------|---------|
 | `competition/metrics.py` | `MetricSpec.key`, LLM tie-breaker | Map Kaggle metric strings to canonical eval keys |
 | `evaluation/metrics.py` | Extended `compute_metric` | AUC, log loss, F1, MAE, RMSLE; sklearn RMSE fix |
-| `brief/context.py` | Competition context block | Deterministic rules/metric section prepended to `brief.md` |
+| `research_engine/intelligence/brief/context.py` | Competition context block | Deterministic rules/metric section prepended to `brief.md` |
 | `profiler/modality.py` | Modality detector | Tabular / text / image signals + LLM tie-breaker |
 | `templates/text_classification/` | TF-IDF + LogisticRegression | NLP baseline |
-| `templates/image_classification/` | ResNet18 features + LightGBM | Image baseline (optional `image` extra) |
+| `src/labpilot/research_engine/execution/capabilities/code_engineering/templates/image_classification/` | ResNet18 features + LightGBM | Image baseline (optional `image` extra) |
 | `templates/*_deep/` | Fine-tuned DistilBERT / ResNet18 | Opt-in transfer learning (optional `deep` extra) |
 
 Remote runtime **configuration** shipped in P2 v0.3 / P4 v1.0 — see `runtimes/` and

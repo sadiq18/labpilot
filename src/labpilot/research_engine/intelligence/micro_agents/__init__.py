@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from labpilot.common.micro_agents import BaseMicroAgent, MicroAgent, StructuredContext
+from labpilot.accessor.common.micro_agents import BaseMicroAgent, MicroAgent, StructuredContext
 from labpilot.research_engine.intelligence.micro_agents.competition_page_analyzer import (
     CompetitionPageAnalyzerAgent,
 )

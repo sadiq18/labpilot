@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from labpilot.common.micro_agents import BaseMicroAgent, StructuredContext
+from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext
 from labpilot.research_engine.intelligence.repositories.models import (
     RepoSearchPlan,
     RepoSearchQuery,

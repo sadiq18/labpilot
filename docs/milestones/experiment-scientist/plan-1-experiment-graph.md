@@ -24,7 +24,7 @@ asks for (`Baseline → {Mixup, Focal Loss} → ... → Ensemble`) a first-class
 
 ## Current state
 
-- `orchestrator/manifest.py` — `RunManifest.metadata` is a free-form `dict[str, Any]`. Only
+- `experiments/manifest.py` — `RunManifest.metadata` is a free-form `dict[str, Any]`. Only
   `improvement/fork.py` ever writes `parent_run_id`, `iteration`, `improvement_strategy` into
   it. No `git_commit` field exists anywhere in the codebase today (confirmed: no
   `git rev-parse` / `git_commit` usage in `src/labpilot/`).

@@ -7,7 +7,7 @@ No autonomous planning or execution.
 
 from __future__ import annotations
 
-from labpilot.common.micro_agents import BaseMicroAgent, StructuredContext
+from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext
 from labpilot.research_engine.intelligence.micro_agents.artifacts import HypothesisDraft
 
 

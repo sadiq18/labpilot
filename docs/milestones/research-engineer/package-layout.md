@@ -3,7 +3,7 @@
 Back to [README.md](README.md) · Planner layout:
 [../research-planner/package-layout.md](../research-planner/package-layout.md).
 
-**Status:** Design Phase A. No `src/` moves until Phase B.
+**Status:** Phase B — execution SoR consolidated under `research_engine/execution/`.
 
 ---
 
@@ -13,91 +13,80 @@ Back to [README.md](README.md) · Planner layout:
 research_engine/
   intelligence/   # analyze → knowledge → hypothesize   (shipped)
   planner/        # Hypothesis / baseline → ResearchPlan (shipped)
-  execution/      # Research Engineer + capability executors  ← this milestone
+  execution/      # Research Engineer + all implement/run code  ← SoR
 ```
 
-`execution/` already exists (near-empty; reflection micro-agent only). It becomes the home
-for the **Research Engineer** controller and all **capability** packages. Product name is
-Research Engineer; directory name stays `execution/` for OS metaphor
-(analyze → plan → **execute/implement**).
+Top-level `baseline/`, `codegen/`, `training/`, `evaluation/`, `kaggle/`,
+`competition/`, `runtimes/`, `submission/`, `tracking/`, `workspace/`/`project/`, and
+repo-root `templates/` were **removed** — logic lives under accessor /
+intelligence / execution / experiments / project as below.
 
-Shared infra remains `labpilot.accessor` (SQLite, LLM client, commons).
+Shared infra: `labpilot.accessor` (SQLite, LLM, **Kaggle client**, `accessor.common`).
 
 ---
 
-## 2. Target tree (sketch)
+## 2. Tree
 
 ```
-src/labpilot/research_engine/execution/
-  __init__.py
-  engineer.py              # Research Engineer controller (queue, dispatch, resume)
-  context.py               # TaskContext assembly (bounded)
-  registry.py              # CapabilityRegistry
-  verification.py          # Verification Engine
-  recovery.py              # Recovery Controller
-  evidence.py              # Evidence writers
-  artifacts.py             # Experiment Artifact Generator
-  store.py                 # ExecutionStore (research_executions + task status updates)
-  schemas/                 # ExecutionAttempt, TaskEvidence, … Pydantic
-  capabilities/
-    workspace/
-    code_engineering/      # + micro_agents for patch proposal
-    research_review/       # + micro_agent for research correctness
-    dependency/
-    verification/          # unit / smoke / integration runners
-    runtime/               # select, dispatch, poll, pull
-    training/
-    evaluation/            # infer / evaluate / compare
-    submission/
-    reporting/             # report / belief / hypothesis / reflect
-  micro_agents/            # only specialists used by capabilities (existing reflection stays)
+src/labpilot/
+  accessor/kaggle/           # KaggleClient + CompetitionMetadata (no pillar imports)
+  accessor/data/             # dataset download + DataLayout
+  accessor/profiler/         # TabularProfiler + DatasetProfile
+  accessor/common/           # ids, JSON helpers, Micro Agent contract (sole common/)
+  experiments/               # graph + logger/store/index (was tracking/)
+  research_engine/
+    intelligence/competition/  # Parser + CompetitionSpec (fetch/normalize)
+    execution/
+      engineer.py / context.py / registry.py / store.py / evidence.py / …
+      baseline/ training/ metrics.py
+      capabilities/code_engineering/  # apply + offline_codegen + templates/
+      runtimes/                # RuntimeConfig registry (config-only; ≠ Runtime capability)
+      submission/              # Formatter + validator library
+      capabilities/
+        workspace/ code_engineering/ research_review/ dependency/
+        verification/ runtime/ training/ evaluation/ submission/ reporting/
+      micro_agents/
 ```
-
-Exact file names may tighten in Phase B; capability folders are the stable unit.
 
 ---
 
-## 3. Migration map (into `execution/` or thin adapters)
+## 3. Migration map (done)
 
-| Today | Becomes |
-|-------|---------|
-| `orchestrator/pipeline.py` stage DAG | **Deleted** as SoR after capstone; logic absorbed into Engineer + capabilities |
-| `orchestrator/manifest.py` | Informs execution/workspace records; may slim or merge |
-| `codegen/` (Jinja SoR) | Superseded as SoR by **Code Engineering** capability (LLM-bounded patches + deterministic apply). Jinja may remain as `rule_engine` fallback for baseline scaffolds |
-| `training/` | Training capability adapter |
-| `evaluation/` | Evaluation capability |
-| `submission/` + `kaggle/` upload bits | Submission capability |
-| `baseline/` selector | Used by baseline **planner** template + Workspace/Code prep |
-| `runtimes/` | Runtime capability (dispatch/poll added here or under `capabilities/runtime/`) |
-| `reflection/` + `execution/micro_agents/reflection_generator` | Reporting & Memory capability |
-| `improvement/` fork/plan | Replaced or reduced to “hypothesis plan → Engineer”; no parallel improve SoR |
-| `tracking/` | Evidence / experiment logging hooks |
+| Former top-level | Now |
+|------------------|-----|
+| `kaggle/` | `accessor/kaggle/` |
+| `data/` | `accessor/data/` |
+| `profiler/` | `accessor/profiler/` |
+| `brief/` | `intelligence/brief/` (merged; ResearchBrief + legacy BriefGenerator) |
+| `competition/` | `intelligence/competition/` |
+| `common/` + `accessor/commons/` | `accessor/common/` |
+| `runtimes/` | `execution/runtimes/` |
+| `submission/` | `execution/submission/` |
+| `tracking/` | `experiments/` (logger/store/index) |
+| `workspace/` (project.yaml overlay) | **removed** — WorkspaceCapability under `execution/capabilities/workspace/` |
+| `project/` | **removed** (same overlay; superseded by Engineer workspace) |
+| `baseline/` | `execution/baseline/` |
+| `codegen/` | `execution/capabilities/code_engineering/offline_codegen/` |
+| repo-root `templates/` | `execution/capabilities/code_engineering/templates/` |
+| `training/` | `execution/training/` |
+| `evaluation/metrics.py` | `execution/metrics.py` |
+| `evaluation/cv.py` | **deleted** (unused) |
+| `orchestrator/pipeline.py` | **deleted** — manifests remain in `experiments/manifest.py` |
 
 Import hygiene:
 
-- `execution` → `accessor`, `common`, planner **schemas/store APIs** (read plans; update statuses)
-- `execution` ✖ `intelligence` internals (consume Analyze artifacts via paths/DB, not deep imports)
-- `intelligence` / `planner` ✖ `execution` (planner never calls Engineer)
+- `accessor` ✖ pillars; raw `CompetitionMetadata` may live in accessor
+- `execution` → `accessor`, `common`, planner store/schema APIs
+- `execution` ✖ deep `intelligence` internals (except shared competition types via public imports)
+- `intelligence` / `planner` ✖ `execution`
 
 ---
 
-## 4. Code Engineering (important)
+## 4. Code Engineering
 
-Do **not** allow arbitrary edits.
-
-Controlled operations only, e.g.:
-
-```text
-task: WRITE_CODE | MODIFY_CONFIG | fix
-target: allowed path set
-change: typed intent
-validation: unit / compile / review
-rollback: snapshot restore
-```
-
-LLM proposes a patch; deterministic code applies, Research Review gates, Verification
-re-runs. This replaces “Jinja-only codegen” as the primary implementation path while
-keeping offline fallbacks.
+LLM proposes a typed `CodeProposal`; deterministic apply under allow-list.
+Jinja templates under `execution/capabilities/code_engineering/templates/` are the offline `rule_engine` full
+scaffold — not a separate product surface.
 
 ---
 
@@ -107,15 +96,5 @@ keeping offline fallbacks.
 |---------|--------|
 | `research run --plan` | CLI → `execution.engineer.run_plan` |
 | `research resume --execution` | CLI → `execution.engineer.resume` |
-| `research plan create --baseline` | Planner (Phase B extension) |
-
-Thin CLI — no orchestration logic in `cli/`.
-
----
-
-## 6. Non-goals for layout
-
-- New top-level package outside `research_engine/` for the Engineer
-- Copy-paste of Pipeline into execution without deleting the old SoR
-- Capability packages importing `cli`
-- Intelligence importing execution
+| `research plan create --baseline` | Planner |
+| `research templates` | `execution.baseline.list_templates` |

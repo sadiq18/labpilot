@@ -166,9 +166,9 @@ CLI `research plan create` loads the hypothesis, calls `compile_research_plan`, 
 `upsert_plan` + serializer projections. Soft-fail: invalid LLM draft → `rule_engine`
 template path (same posture as `ResearchBriefAgent`).
 
-Micro Agents use the shared contract in `labpilot.common.micro_agents`
+Micro Agents use the shared contract in `labpilot.accessor.common.micro_agents`
 (`StructuredContext` in → typed Pydantic out; no memory, no loops, no side effects). The
-Planning Engine's LLM client comes from `accessor/llm`.
+Planning Engine's LLM client comes from `labpilot.llm`.
 
 ---
 
@@ -176,7 +176,8 @@ Planning Engine's LLM client comes from `accessor/llm`.
 
 | Concern | Where |
 |---------|--------|
-| SQLite client · unified `schema.sql` · migrate · LLM client · shared helpers | `accessor/` (`sqlite/`, `llm/`, `commons/`) |
+| SQLite client · unified `schema.sql` · migrate · shared helpers | `accessor/` (`sqlite/`, `common/`) |
+| Provider-agnostic LLM (OpenAI / Gemini / Ollama + router/cache) | `labpilot.llm` |
 | Analyzers, Knowledge Hub, Brief, Hypothesis Assistant | `intelligence/` |
 | `PlanStore` table-specific read/write (built on `accessor` SqliteClient) | `planner/` (this package) |
 | Capability executors (`WRITE_CODE` runner, train, …) | `execution/` (future) |
@@ -184,7 +185,8 @@ Planning Engine's LLM client comes from `accessor/llm`.
 | Pipeline stages / runs | `orchestrator/`, `runs/` |
 
 The planner package must not import `improvement`, must not start pipeline runs, and must not
-import `intelligence` for infrastructure — it reaches SQLite/LLM through `accessor`.
+import `intelligence` for infrastructure — it reaches SQLite through `accessor` and LLM
+through `labpilot.llm`.
 
 ---
 

@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
-from labpilot.research_engine.intelligence.brief.models import ResearchBrief
+from labpilot.research_engine.intelligence.brief.context import render_competition_context
+from labpilot.research_engine.intelligence.brief.models import (
+    ResearchBrief,
+    ResearchBriefNarrative,
+)
 
-__all__ = ["ResearchBrief", "build_research_brief"]
+__all__ = [
+    "ResearchBrief",
+    "ResearchBriefNarrative",
+    "build_research_brief",
+    "render_competition_context",
+]
 
 
 def build_research_brief(*args, **kwargs):

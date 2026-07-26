@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from labpilot.competition.models import CompetitionSpec
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.experiments.models import (
     ChangeCategory,
     ConfigChange,

@@ -4,22 +4,20 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from labpilot.baseline.selector import BaselineChoice
-from labpilot.competition.models import CompetitionSpec
+from labpilot.research_engine.execution.baseline.selector import BaselineChoice
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.experiments.models import Experiment, StructuredReflection
 from labpilot.improvement.models import (
     ImprovementPlan,
     load_improvement_plan,
     load_training_overrides,
 )
-from labpilot.orchestrator.manifest import RunManifest, StageStatus, load_manifest
-from labpilot.tracking.store import ExperimentStore
+from labpilot.experiments.manifest import RunManifest, StageStatus, load_manifest
+from labpilot.experiments.store import ExperimentStore
 
 logger = logging.getLogger(__name__)
 
-# Mirrors `Pipeline.handlers`' keys in orchestrator/pipeline.py — duplicated
-# here (rather than imported) to avoid a circular import: pipeline.py needs
-# this module for `capture_git_commit()`. Used as the "total" side of
+# Historical linear-pipeline stage names — used as the "total" side of
 # `Experiment.progress` when a run's own config didn't override
 # `pipeline.stages`.
 _ALL_PIPELINE_STAGES: tuple[str, ...] = (

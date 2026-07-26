@@ -2,72 +2,61 @@
 
 ## Overview
 
-LabPilot is a linear-pipeline research engine. A single CLI command drives a fixed sequence of stages. Each stage is an independent module with a narrow input/output contract. Stages write artifacts to disk under `runs/<run_id>/`, making every step inspectable and resumable.
+LabPilot is a **plan-driven research OS**. System of record for execution:
 
-After a completed baseline run, **`research improve`** forks a child run from the parent's init artifacts and re-executes downstream stages (codegen through reflection) with a structured improvement plan — hyperparameter tuning or predefined feature recipes — without re-running init.
+```bash
+research analyze <slug>
+research plan create <slug> --baseline   # or --hypothesis H-xxx
+research run --plan P-001 --competition <slug>
+research resume --execution E-001 --competition <slug>
+```
 
-No multi-agent orchestration, vector stores, or autonomous planning — just a deterministic DAG plus an explicit iteration layer on top.
+The Research Engineer walks an approved ResearchPlan via stable capabilities
+(workspace, code, review, verify, runtime, train, eval, submit, report) under
+`research_engine/execution/`. Artifacts land in `competitions/<slug>/` and
+`knowledge/<slug>/research/`.
 
-This document only covers the **current-state design** — module layout, artifact contracts, pipeline flow. Per-milestone history (what P0–P4 each added, validation runs, deferred/backlog items) and in-progress/future design (Milestone 2 — Experiment Scientist) live under [milestones/](milestones/); start at [MILESTONES.md](MILESTONES.md).
+The historical linear Pipeline (`research init` / `build` / `improve`) has been
+**removed**. See [milestones/research-engineer/pipeline-deprecation.md](milestones/research-engineer/pipeline-deprecation.md).
 
-**Operator docs:** [CLI.md](CLI.md) (every `research` command + examples), [SOP.md](SOP.md) (how to use LabPilot end-to-end).
+This document covers **current-state** design. History lives under
+[milestones/](milestones/); start at [MILESTONES.md](MILESTONES.md).
+
+**Operator docs:** [CLI.md](CLI.md), [SOP.md](SOP.md).
 
 ---
 
-## Pipeline Flow
+## Execution Flow (Research Engineer)
 
 ```mermaid
 flowchart LR
-    CLI[CLI / Orchestrator]
-    CP[Competition Parser]
-    DM[Data Manager]
-    DP[Dataset Profiler]
-    RB[Research Brief]
-    BS[Baseline Selector]
-    CG[Code Generator]
-    TR[Trainer]
-    EV[Evaluator]
-    SG[Submission Generator]
-    KC[Kaggle Client]
-    ET[Experiment Tracker]
-    RF[Reflection]
+    Analyze[research analyze]
+    Plan[plan create]
+    Eng[Research Engineer]
+    WS[Workspace]
+    Code[Code Engineering]
+    Ver[Verification]
+    Train[Training]
+    Eval[Evaluation]
+    Sub[Submission]
+    Rep[Reporting]
 
-    CLI --> CP --> DM --> DP --> RB --> BS --> CG --> TR --> EV --> SG --> KC --> ET --> RF
+    Analyze --> Plan --> Eng
+    Eng --> WS --> Code --> Ver --> Train --> Eval --> Sub --> Rep
 ```
 
-### Stage Sequence
+| Capability | Typical TaskTypes | Outputs |
+|------------|-------------------|---------|
+| Workspace | `prepare_workspace` | `competitions/<slug>/` dirs, data, `profile.json`, `competition.json` |
+| Code Engineering | `write_code` / `modify_config` | `pipeline/`, `baseline_choice.json` |
+| Verification | `run_unit_test` / `run_smoke_test` | smoke gate |
+| Training | `run_training` | metrics / models |
+| Evaluation | `evaluate` / `compare` | `metrics.json`, experiments row |
+| Submission | `build_submission` | `artifacts/submission.csv` (+ upload if `--submit`) |
+| Reporting | `reflect` / `generate_report` | knowledge reports |
 
-| # | Stage | Module | Output |
-|---|-------|--------|--------|
-| 1 | `parse_competition` | `competition/parser.py` | `competition.json` |
-| 2 | `download_data` | `data/downloader.py` | `data/raw/` |
-| 3 | `profile_dataset` | `profiler/tabular.py` | `profile.json`, `profile.md` |
-| 4 | `generate_brief` | `brief/generator.py` | `brief.md` |
-| 5 | `select_baseline` | `baseline/selector.py` | `baseline_choice.json` |
-| 6 | `generate_code` | `codegen/renderer.py` | `pipeline/` |
-| 7 | `train_model` | `training/runner.py` | `models/`, `oof.csv` |
-| 8 | `evaluate_cv` | `evaluation/metrics.py` | `metrics.json` |
-| 9 | `generate_submission` | `submission/formatter.py` | `submission.csv` |
-| 10 | `export_kernel` | `kernel/exporter.py` | `kernel/` (kernel-only comps) |
-| 11 | `upload_submission` | `kaggle/client.py` | `submission_result.json` |
-| 12 | `log_experiment` | `tracking/logger.py` | `experiment/record.json` |
-| 13 | `write_reflection` | `reflection/generator.py` | `reflection.json`, `reflection.md` |
-| 14 | `write_report` | `report/generator.py` | `report.html` |
-
-The orchestrator lives in `orchestrator/pipeline.py`. Stage order is configurable via `configs/default.yaml` under `pipeline.stages`.
-
-### Init / build split
-
-| Command | Stages run |
-|---------|------------|
-| `research init` | `parse_competition` → `generate_brief` |
-| `research build` | `select_baseline` → `write_reflection` |
-| `research run` | All stages |
-| `research resume` | From first failed/incomplete stage |
-| `research improve` | Fork parent init artifacts, then `generate_code` → `write_reflection` |
-
-See [milestones/COMPLETED.md](milestones/COMPLETED.md#architecture-changes-p3) for how the
-`research improve` iteration flow was introduced.
+Historical `runs/<run_id>/` manifests remain readable via `research status` /
+`research report` for older artifacts (`experiments/manifest.py`).
 
 ---
 
@@ -133,7 +122,7 @@ for how `config.json`/`git_commit` and the parent/child graph are assembled into
 
 | | |
 |---|---|
-| **Path** | `cli/main.py`, `orchestrator/pipeline.py`, `orchestrator/manifest.py` |
+| **Path** | `cli/main.py`, `experiments/manifest.py` |
 | **Responsibility** | Entry point, stage sequencing, run state |
 | **Input** | `--competition`, config file |
 | **Output** | `manifest.json`, stage logs |
@@ -162,7 +151,7 @@ Commands:
 
 | | |
 |---|---|
-| **Path** | `competition/parser.py`, `competition/models.py` |
+| **Path** | `research_engine/intelligence/competition/parser.py`, `…/models.py` |
 | **Responsibility** | Fetch and structure competition metadata |
 | **Input** | Competition slug |
 | **Output** | `competition.json` (`CompetitionSpec`) |
@@ -178,7 +167,7 @@ locally authored file.
 
 | | |
 |---|---|
-| **Path** | `data/downloader.py`, `data/layout.py` |
+| **Path** | `accessor/data/downloader.py`, `accessor/data/layout.py` |
 | **Responsibility** | Download and organize competition datasets |
 | **Input** | Competition slug, Kaggle credentials |
 | **Output** | `data/raw/`, `data/processed/` |
@@ -188,7 +177,7 @@ locally authored file.
 
 | | |
 |---|---|
-| **Path** | `profiler/tabular.py`, `profiler/report.py` |
+| **Path** | `accessor/profiler/tabular.py`, `accessor/profiler/report.py` |
 | **Responsibility** | Schema, stats, distributions, target/id detection |
 | **Input** | `data/raw/` paths |
 | **Output** | `profile.json`, `profile.md` |
@@ -201,7 +190,7 @@ locally authored file.
 
 | | |
 |---|---|
-| **Path** | `brief/generator.py`, `brief/prompts/` |
+| **Path** | `research_engine/intelligence/brief/generator.py`, `research_engine/intelligence/brief/prompts/` |
 | **Responsibility** | AI problem framing, risks, strategy |
 | **Input** | `CompetitionSpec` + `DatasetProfile` |
 | **Output** | `brief.md` |
@@ -211,7 +200,7 @@ locally authored file.
 
 | | |
 |---|---|
-| **Path** | `baseline/selector.py`, `baseline/registry.py` |
+| **Path** | `research_engine/execution/baseline/selector.py`, `…/baseline/registry.py` |
 | **Responsibility** | Map problem type to template |
 | **Input** | `CompetitionSpec` + `DatasetProfile` |
 | **Output** | `baseline_choice.json` |
@@ -223,19 +212,19 @@ Selection rules use competition `problem_type` when known, otherwise infer from 
 
 | | |
 |---|---|
-| **Path** | `codegen/renderer.py`, `codegen/validators.py` |
+| **Path** | `research_engine/execution/capabilities/code_engineering/offline_codegen/renderer.py`, `…/validators.py` |
 | **Responsibility** | Render training pipeline from Jinja2 templates |
 | **Input** | `BaselineChoice`, training config, optional `TrainingOverrides` |
 | **Output** | `pipeline/train.py`, `pipeline/config.yaml` |
 | **Status** | Implemented |
 
-Templates live in `templates/` (not inside the Python package). The renderer passes `data_dir`, `output_dir`, `cv_folds`, `random_seed`, `model_params`, and `feature_recipes` as template context. Tabular templates read `MODEL_PARAMS` for LightGBM and optionally inject target-encoding / log1p recipe blocks.
+Templates live in `capabilities/code_engineering/templates/` (Jinja offline scaffolds). The renderer passes `data_dir`, `output_dir`, `cv_folds`, `random_seed`, `model_params`, and `feature_recipes` as template context. Tabular templates read `MODEL_PARAMS` for LightGBM and optionally inject target-encoding / log1p recipe blocks.
 
 ### 8. Trainer
 
 | | |
 |---|---|
-| **Path** | `training/runner.py`, `training/artifacts.py` |
+| **Path** | `research_engine/execution/training/runner.py`, `…/training/artifacts.py` |
 | **Responsibility** | Execute generated pipeline as subprocess |
 | **Input** | `pipeline/train.py` |
 | **Output** | `models/`, `oof.csv`, `metrics.json`, `training.log` |
@@ -245,7 +234,7 @@ Templates live in `templates/` (not inside the Python package). The renderer pas
 
 | | |
 |---|---|
-| **Path** | `evaluation/metrics.py`, `evaluation/cv.py` |
+| **Path** | `research_engine/execution/metrics.py` |
 | **Responsibility** | CV metrics aligned to competition metric |
 | **Input** | OOF predictions, metric spec |
 | **Output** | `metrics.json` |
@@ -257,7 +246,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 
 | | |
 |---|---|
-| **Path** | `submission/formatter.py`, `submission/validator.py` |
+| **Path** | `research_engine/execution/submission/formatter.py`, `…/validator.py` |
 | **Responsibility** | Format and validate submission file |
 | **Input** | Predictions, id/target columns |
 | **Output** | `submission.csv` |
@@ -267,7 +256,7 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 
 | | |
 |---|---|
-| **Path** | `kaggle/client.py` |
+| **Path** | `accessor/kaggle/client.py` |
 | **Responsibility** | Upload submission, fetch score |
 | **Input** | `submission.csv`, competition slug |
 | **Output** | `submission_result.json` |
@@ -277,13 +266,13 @@ Supported metrics: AUC, log loss, accuracy, RMSE.
 
 | | |
 |---|---|
-| **Path** | `tracking/logger.py`, `tracking/store.py`, `tracking/index.py` |
+| **Path** | `experiments/logger.py`, `experiments/store.py`, `experiments/index.py` |
 | **Responsibility** | Log params, metrics, artifact paths; compare runs across the runs directory |
 | **Input** | Run context |
 | **Output** | `experiment/record.json`; diff reports via CLI |
 | **Status** | Implemented — local JSON store + cross-run index (P3) |
 
-`ExperimentLogger` writes per-run records. `tracking/index.py` scans `runs/*/experiment/record.json` and manifest metadata to build a lightweight index and compute metric/param deltas for `research runs diff`.
+`ExperimentLogger` writes per-run records. `experiments/index.py` scans `runs/*/experiment/record.json` and manifest metadata to build a lightweight index and compute metric/param deltas for `research runs diff`.
 
 ### 13. Reflection Generator
 
@@ -340,7 +329,7 @@ See [milestones/experiment-scientist/plan-4-reflection-engine.md](milestones/exp
 
 Not a new writer — every field is either already written elsewhere (`manifest.json`,
 `config.json`, `baseline_choice.json`, ...) or computed at read time (`progress`, `description`,
-`artifacts`, `runtime_seconds`). `tracking/index.py:scan_runs()` reuses `assemble_experiment()`
+`artifacts`, `runtime_seconds`). `experiments/index.py:scan_runs()` reuses `assemble_experiment()`
 instead of its own directory walk. See
 [milestones/experiment-scientist/plan-1-experiment-graph.md](milestones/experiment-scientist/plan-1-experiment-graph.md)
 for the full design.
@@ -514,36 +503,26 @@ labpilot/
 │
 ├── src/labpilot/
 │   ├── cli/                   # Typer CLI entry point
-│   ├── accessor/              # Shared SQLite + LLM + commons (pillars depend here)
-│   ├── orchestrator/          # Legacy linear Pipeline (to be replaced by Engineer)
-│   ├── competition/           # Parser + CompetitionSpec models
-│   ├── data/                  # Download + directory layout
-│   ├── profiler/              # Tabular EDA + profile reports
-│   ├── brief/                 # Research brief generation + prompts
-│   ├── llm/                   # Provider-agnostic LLM client (OpenAI, Gemini)
-│   ├── baseline/              # Template registry + selector
-│   ├── codegen/               # Jinja2 renderer (migrates into Code Engineering capability)
-│   ├── training/              # Subprocess runner (→ Training capability)
-│   ├── evaluation/            # CV metrics (→ Evaluation capability)
-│   ├── submission/            # Formatter + validator (→ Submission capability)
-│   ├── kaggle/                # Kaggle API client
+│   ├── accessor/              # Shared SQLite + Kaggle + data/profiler + common helpers
+│   │   ├── kaggle/            # Kaggle API client + CompetitionMetadata DTO
+│   │   ├── data/              # Download + directory layout
+│   │   ├── profiler/          # Tabular EDA + profile.json helpers
+│   │   └── common/            # ids, JSON-in-TEXT, Micro Agent contract
+│   ├── llm/                   # Task-routed LLM (OpenAI, Gemini, Ollama) + cache/router
 │   ├── kernel/                # Kernel export for kernel-only competitions
 │   ├── improvement/           # Legacy improve path (slim/replace with plan → Engineer)
-│   ├── tracking/              # Experiment logger, store, cross-run index
-│   ├── experiments/           # Experiment graph, hypotheses, comparator (Milestone 2)
+│   ├── experiments/           # Graph, hypotheses, comparator + logger/store/index
 │   ├── research_engine/       # Intelligence + Planner + Engineer
 │   │   ├── intelligence/      # analyze → knowledge → hypothesize
+│   │   │   ├── competition/   # Parser + CompetitionSpec (fetch/normalize)
+│   │   │   └── brief/         # ResearchBrief + legacy per-run BriefGenerator
 │   │   ├── planner/           # Hypothesis / baseline → ResearchPlan DAG
-│   │   └── execution/         # Research Engineer + capability executors (Design A)
+│   │   └── execution/         # Research Engineer SoR (capabilities, templates,
+│   │                          #   code_engineering, training, metrics, runtimes, submission)
 │   ├── reflection/            # Reflection generation + prompts
 │   └── config.py              # AppConfig + Settings
 │
-├── templates/                 # Baseline code templates (Jinja2)
-│   ├── tabular_classification/
-│   ├── tabular_regression/
-│   ├── text_classification/
-│   ├── image_classification/
-│   └── *_deep/                # Opt-in transfer-learning variants
+│   # (removed Pipeline + top-level kaggle/competition/brief/… — see package-layout.md)
 │
 ├── configs/
 │   ├── default.yaml           # Default pipeline + training config
@@ -575,7 +554,7 @@ labpilot/
 
 Configuration merges two sources:
 
-1. **YAML file** (`configs/default.yaml`) — pipeline stages, CV folds, profiler limits, LLM model
+1. **YAML file** (`configs/default.yaml`) — training/profiler limits, LLM mode/tasks/models
 2. **Environment variables** (`.env`) — API credentials and optional overrides
 
 | Variable | Purpose |
@@ -583,16 +562,19 @@ Configuration merges two sources:
 | `KAGGLE_API_TOKEN` | Preferred Kaggle API token |
 | `KAGGLE_USERNAME` | Legacy Kaggle API username |
 | `KAGGLE_KEY` | Legacy Kaggle API key |
-| `OPENAI_API_KEY` | LLM key when `llm.provider` is `openai` (default) |
-| `GEMINI_API_KEY` | LLM key when `llm.provider` is `gemini` |
+| `OPENAI_API_KEY` | LLM key when cloud provider is `openai` |
+| `GEMINI_API_KEY` | LLM key when cloud provider is `gemini` |
+| `OLLAMA_HOST` | Override `llm.ollama_base_url` (default `http://localhost:11434`) |
 | `LABPILOT_RUNS_DIR` | Override runs directory |
-| `LABPILOT_LLM_PROVIDER` | Override `llm.provider` (`openai` \| `gemini`) |
+| `LABPILOT_LLM_MODE` | Override `llm.mode` (`auto` \| `local` \| `cloud`) |
+| `LABPILOT_LLM_PROVIDER` | Override `llm.provider` (`openai` \| `gemini` \| `ollama`) |
 | `LABPILOT_LLM_MODEL` | Override LLM model name |
 
-Neither `OPENAI_API_KEY` nor `GEMINI_API_KEY` is required — `create_llm_client()` (see
-`llm/client.py`) returns `None` when no key is set for the configured provider, or when the
-matching optional package (`openai` / `google-genai`, both in the `llm` extra) isn't installed,
-and `BriefGenerator`/`ReflectionGenerator` fall back to template-only text instead of failing.
+Neither cloud keys nor Ollama are required — `resolve_llm_client()` / `LLM.generate()` soft-fail
+when no provider is available (missing key/package, or Ollama down). Micro Agents and narrative
+generators fall back to `rule_engine` / template text. Per-task models live under `llm.tasks`
+(e.g. `planning` / `coding` / `summary`); `force_local: true` always uses Ollama for that task.
+Prompt responses are cached in `.cache/llm.sqlite` when `llm.cache.enabled` is true.
 
 `Settings` reads `.env`; `load_config()` merges environment credentials and overrides
 into the YAML-backed application config. Secrets are excluded from serialized config output.
@@ -601,7 +583,7 @@ into the YAML-backed application config. Secrets are excluded from serialized co
 
 ## Baseline Templates
 
-Templates are Jinja2 files in `templates/`, rendered into `runs/<id>/pipeline/`.
+Templates are Jinja2 files in `capabilities/code_engineering/templates/`, rendered into the competition workspace `pipeline/`.
 
 | Template | Model | CV | Metric |
 |----------|-------|-----|--------|
@@ -631,7 +613,7 @@ Templates are executed as a subprocess with `cwd=pipeline/`. Paths to `data/raw/
 | Schemas | Pydantic v2 | Module contracts |
 | Templates | Jinja2 | Baseline codegen |
 | ML | LightGBM + scikit-learn | Fast tabular baselines |
-| LLM | OpenAI or Gemini API | Brief + reflection only; optional, falls back to templates |
+| LLM | OpenAI, Gemini, or local Ollama | Optional; task-routed via `labpilot.llm`; soft-fails to templates |
 | Kaggle | `kaggle` Python API | Download + submit |
 | Tracking | Local JSON (P0) | No MLflow dependency |
 | Testing | pytest | Per-module + integration |

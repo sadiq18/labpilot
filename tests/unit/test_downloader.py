@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from labpilot.config import KaggleConfig
-from labpilot.data.downloader import DataDownloader
+from labpilot.accessor.data.downloader import DataDownloader
 
 
 class CountingGateway:

@@ -1,7 +1,7 @@
 import zipfile
 from pathlib import Path
 
-from labpilot.kaggle.client import KaggleClient
+from labpilot.accessor.kaggle.client import KaggleClient
 
 
 def test_extract_all_zip_archives_handles_nested_archives(tmp_path: Path):

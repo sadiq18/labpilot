@@ -33,7 +33,7 @@ planner/prompts/
 - Merge type-default verification after LLM draft
 - Re-validate DAG; on failure → rule_engine template (log note)
 - `generated_by`: `llm` | `rule_engine`
-- LLM client from `accessor.llm` (Plan 1)
+- LLM client from `labpilot.llm` (task-routed; soft-fail when unavailable)
 
 ## Out of scope
 

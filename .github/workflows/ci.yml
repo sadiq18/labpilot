@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev --extra llm
       - name: Run LLM unit tests
-        run: uv run pytest -m llm tests/unit/test_llm_client.py tests/unit/test_brief_generator.py
+        run: uv run pytest -m llm tests/unit/test_llm_client.py
 
   image:
     name: image

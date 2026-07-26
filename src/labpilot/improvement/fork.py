@@ -4,7 +4,7 @@ from typing import Any
 
 from labpilot.config import AppConfig
 from labpilot.experiments.graph import capture_git_commit
-from labpilot.orchestrator.manifest import (
+from labpilot.experiments.manifest import (
     RunManifest,
     StageStatus,
     generate_run_id,

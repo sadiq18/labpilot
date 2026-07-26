@@ -4,10 +4,12 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-## Research Engineer — Phase B in progress
+## Research Engineer — Phase B complete (dry-run SoR)
 
-**Status:** Plans **1–4 Done** on branch `research-execution`. Plans 5–11 remaining.
-**No plan-driven `research run` yet** (Plan 10).
+**Status:** Plans **1–11 Done** on branch `research-execution`. Plan-driven
+`research run --plan` is the SoR; legacy Pipeline removed. Deprecation tracker:
+[research-engineer/pipeline-deprecation.md](research-engineer/pipeline-deprecation.md).
+Capstone: [research-engineer/capstone-notes.md](research-engineer/capstone-notes.md).
 
 **Product:** Autonomous Research Engineer — turn an approved Research Plan into a
 verified experiment (implement, review, verify, train, evaluate, submit, evidence).
@@ -24,15 +26,16 @@ schema, package-layout, baseline-plan, capabilities, runtime-and-recovery).
 | 2 | [Engineer controller](research-engineer/plan-2-engineer-controller.md) | 1 | Done |
 | 3 | [Baseline P-001](research-engineer/plan-3-baseline-plan.md) | Planner MVP; ∥ after 1 | Done |
 | 4 | [Workspace + Deps](research-engineer/plan-4-workspace-deps.md) | 2 | Done |
-| 5 | [Code + Review](research-engineer/plan-5-code-review.md) | 4 | Not started |
-| 6 | [Verification / smoke](research-engineer/plan-6-verification.md) | 5 | Not started |
-| 7 | [Runtime](research-engineer/plan-7-runtime.md) | 6 | Not started |
-| 8 | [Train / Eval](research-engineer/plan-8-train-eval.md) | 6–7 | Not started |
-| 9 | [Submit / Report](research-engineer/plan-9-submit-report.md) | 8 | Not started |
-| 10 | [CLI cutover](research-engineer/plan-10-run-cli-cutover.md) | 2–9 | Not started |
-| 11 | [Capstone](research-engineer/plan-11-capstone.md) | 1–10 | Not started |
+| 5 | [Code + Review](research-engineer/plan-5-code-review.md) | 4 | Done |
+| 6 | [Verification / smoke](research-engineer/plan-6-verification.md) | 5 | Done |
+| 7 | [Runtime](research-engineer/plan-7-runtime.md) | 6 | Done |
+| 8 | [Train / Eval](research-engineer/plan-8-train-eval.md) | 6–7 | Done |
+| 9 | [Submit / Report](research-engineer/plan-9-submit-report.md) | 8 | Done |
+| 10 | [CLI cutover](research-engineer/plan-10-run-cli-cutover.md) | 2–9 | Done |
+| 11 | [Capstone](research-engineer/plan-11-capstone.md) | 1–10 | Done |
 
-**Next:** Implement Plan 5 (Code Engineering + Research Review).
+**Next:** Live unattended train+upload on a real competition (see capstone gaps);
+kernel-mode export under Execution Submission/Runtime (follow-on).
 
 ---
 

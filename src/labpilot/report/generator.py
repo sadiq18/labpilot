@@ -11,12 +11,12 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from labpilot.baseline.selector import BaselineChoice
-from labpilot.competition.models import CompetitionSpec
-from labpilot.kaggle.client import SubmissionResult
-from labpilot.orchestrator.manifest import RunManifest, load_manifest
-from labpilot.profiler.report import load_profile
-from labpilot.runtimes.models import RuntimeRecord
+from labpilot.research_engine.execution.baseline.selector import BaselineChoice
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
+from labpilot.accessor.kaggle.client import SubmissionResult
+from labpilot.experiments.manifest import RunManifest, load_manifest
+from labpilot.accessor.profiler.report import load_profile
+from labpilot.research_engine.execution.runtimes.models import RuntimeRecord
 
 logger = logging.getLogger(__name__)
 

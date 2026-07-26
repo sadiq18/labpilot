@@ -17,10 +17,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from labpilot.common.micro_agents import StructuredContext
-from labpilot.competition.models import CompetitionSpec
-from labpilot.competition.page_fetch import CompetitionPages, fetch_competition_pages
-from labpilot.competition.parser import CompetitionMetadataFetcher, CompetitionParser
+from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
+from labpilot.research_engine.intelligence.competition.page_fetch import CompetitionPages, fetch_competition_pages
+from labpilot.research_engine.intelligence.competition.parser import CompetitionMetadataFetcher, CompetitionParser
 from labpilot.llm.client import LLMClient
 from labpilot.research_engine.intelligence.analyzers.base import BaseAnalyzer
 from labpilot.research_engine.intelligence.knowledge import KnowledgeStore
@@ -151,7 +151,7 @@ class CompetitionAnalyzer(BaseAnalyzer):
             return
         try:
             from labpilot.config import KaggleConfig, Settings
-            from labpilot.kaggle.client import KaggleClient
+            from labpilot.accessor.kaggle.client import KaggleClient
 
             settings = Settings()
             config = KaggleConfig(

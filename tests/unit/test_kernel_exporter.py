@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from labpilot.competition.models import CompetitionSpec
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.kernel.exporter import _adapt_train_script, export_kernel
 
 
@@ -11,7 +11,7 @@ def test_kernel_exporter_writes_metadata(tmp_path: Path):
     pipeline_dir.mkdir(parents=True)
     (pipeline_dir / "train.py").write_text(
         'from pathlib import Path\n'
-        'from labpilot.evaluation.metrics import compute_metric\n'
+        'from labpilot.research_engine.execution.metrics import compute_metric\n'
         'DATA_DIR = Path("/local/data/raw")\n'
         'OUTPUT_DIR = Path("/local/run")\n'
         'def main():\n'
@@ -37,13 +37,14 @@ def test_kernel_exporter_writes_metadata(tmp_path: Path):
 
     run_py = (kernel_dir / "run.py").read_text()
     assert "labpilot.evaluation.metrics" not in run_py
+    assert "labpilot.research_engine.execution.metrics" not in run_py
     assert "/kaggle/input/competitions/aerial-cactus-identification" in run_py
     assert "/kaggle/working" in run_py
     assert "def compute_metric" in run_py
 
 
 def test_kernel_exporter_injects_kaggle_bootstrap_for_image_template(tmp_path: Path):
-    source = (Path(__file__).resolve().parents[2] / "templates/image_classification/train.py.j2").read_text()
+    source = (Path(__file__).resolve().parents[2] / "src/labpilot/research_engine/execution/capabilities/code_engineering/templates/image_classification/train.py.j2").read_text()
     adapted = _adapt_train_script(
         source,
         "/kaggle/input/competitions/aerial-cactus-identification",

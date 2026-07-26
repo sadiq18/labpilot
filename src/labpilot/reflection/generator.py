@@ -9,7 +9,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from labpilot.baseline.selector import BaselineChoice
+from labpilot.research_engine.execution.baseline.selector import BaselineChoice
 from labpilot.config import LLMConfig
 from labpilot.experiments.models import (
     Experiment,
@@ -17,10 +17,10 @@ from labpilot.experiments.models import (
     Hypothesis,
     StructuredReflection,
 )
-from labpilot.kaggle.client import SubmissionResult
+from labpilot.accessor.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, complete_with_fallback, resolve_llm_client
 from labpilot.llm.json_utils import parse_json_object
-from labpilot.profiler.tabular import DatasetProfile
+from labpilot.accessor.profiler.tabular import DatasetProfile
 from labpilot.reflection.links import render_submission_links
 
 logger = logging.getLogger(__name__)

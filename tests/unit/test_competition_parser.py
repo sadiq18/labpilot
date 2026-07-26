@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from labpilot.competition.models import CompetitionMetadata
-from labpilot.competition.parser import CompetitionParser
+from labpilot.research_engine.intelligence.competition.models import CompetitionMetadata
+from labpilot.research_engine.intelligence.competition.parser import CompetitionParser
 
 
 class FakeFetcher:

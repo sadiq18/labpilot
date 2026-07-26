@@ -75,7 +75,7 @@ def test_create_llm_client_respects_explicit_model_override():
 
 
 def test_default_model_by_provider_matches_client_registry():
-    assert set(llm_client_module.DEFAULT_MODEL_BY_PROVIDER) == {"openai", "gemini"}
+    assert set(llm_client_module.DEFAULT_MODEL_BY_PROVIDER) == {"openai", "gemini", "ollama"}
 
 
 def test_resolve_llm_client_falls_back_to_gemini_when_openai_unavailable(monkeypatch):
@@ -124,6 +124,10 @@ def test_complete_with_fallback_retries_same_client_before_falling_back(monkeypa
     # 503/429 errors that clear up within seconds; `max_attempts > 1` should
     # retry the *same* client rather than immediately moving on.
     monkeypatch.setattr(llm_client_module.time, "sleep", lambda *_args: None)
+    monkeypatch.setattr(
+        "labpilot.llm.ollama.OllamaProvider.is_reachable",
+        lambda self, timeout_seconds=0.25: False,
+    )
 
     class FlakyThenWorking:
         model = "gemini-3.1-flash-lite"
@@ -152,6 +156,10 @@ def test_complete_with_fallback_retries_same_client_before_falling_back(monkeypa
 
 def test_complete_with_fallback_gives_up_after_max_attempts(monkeypatch):
     monkeypatch.setattr(llm_client_module.time, "sleep", lambda *_args: None)
+    monkeypatch.setattr(
+        "labpilot.llm.ollama.OllamaProvider.is_reachable",
+        lambda self, timeout_seconds=0.25: False,
+    )
 
     class AlwaysFails:
         model = "gemini-3.1-flash-lite"
@@ -178,6 +186,10 @@ def test_complete_with_fallback_gives_up_after_max_attempts(monkeypatch):
 
 def test_complete_with_fallback_tries_alternate_provider_on_api_error(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+    monkeypatch.setattr(
+        "labpilot.llm.ollama.OllamaProvider.is_reachable",
+        lambda self, timeout_seconds=0.25: False,
+    )
 
     class FailingOpenAI:
         model = "gpt-4o-mini"

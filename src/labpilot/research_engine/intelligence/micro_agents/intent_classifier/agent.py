@@ -6,7 +6,7 @@ competition profile / pipeline hints when no LLM is available.
 
 from __future__ import annotations
 
-from labpilot.common.micro_agents import BaseMicroAgent, StructuredContext
+from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext
 from labpilot.research_engine.intelligence.retrieval.models import RetrievalIntent
 
 

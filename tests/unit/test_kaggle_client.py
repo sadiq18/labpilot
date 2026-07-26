@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from labpilot.config import KaggleConfig
-from labpilot.kaggle.client import KaggleClient
+from labpilot.accessor.kaggle.client import KaggleClient
 
 
 class FakeStatus(Enum):

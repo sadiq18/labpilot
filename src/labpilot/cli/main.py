@@ -10,13 +10,11 @@ from rich.prompt import Confirm
 from rich.table import Table
 from typer.core import TyperGroup
 
-from labpilot.baseline.registry import list_templates
+from labpilot.research_engine.execution.baseline.registry import list_templates
 from labpilot.cli.plan import plan_app
-from labpilot.competition.models import CompetitionSpec
 from labpilot.config import (
     AppConfig,
     load_config,
-    resolve_competitions_dir,
     resolve_runtimes_dir,
 )
 from labpilot.diagnostics import (
@@ -44,10 +42,9 @@ from labpilot.experiments.search import (
     parse_metric_threshold,
     search,
 )
-from labpilot.kaggle.client import SubmissionResult
+from labpilot.accessor.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
-from labpilot.orchestrator.manifest import StageStatus, load_manifest
-from labpilot.orchestrator.pipeline import Pipeline, find_manifest
+from labpilot.experiments.manifest import StageStatus, find_manifest, load_manifest
 from labpilot.report.generator import ReportGenerator
 from labpilot.research_engine.intelligence.context import build_context
 from labpilot.research_engine.intelligence.fetch import KaggleFetchService
@@ -64,11 +61,10 @@ from labpilot.research_engine.intelligence.retrieval import (
     ContextBuilder,
     QueryType,
 )
-from labpilot.runtimes.doctor import check_all_runtimes
-from labpilot.runtimes.registry import get_runtime, list_runtimes
-from labpilot.runtimes.templates import runtime_to_yaml_dict, scaffold_runtime
-from labpilot.tracking.index import diff_runs
-from labpilot.workspace.discover import init_project, load_project
+from labpilot.research_engine.execution.runtimes.doctor import check_all_runtimes
+from labpilot.research_engine.execution.runtimes.registry import get_runtime, list_runtimes
+from labpilot.research_engine.execution.runtimes.templates import runtime_to_yaml_dict, scaffold_runtime
+from labpilot.experiments.index import diff_runs
 
 logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -79,8 +75,6 @@ app = typer.Typer(
 )
 runs_app = typer.Typer(help="Inspect and compare research runs.")
 app.add_typer(runs_app, name="runs")
-workspace_app = typer.Typer(help="Manage multi-competition project workspaces.")
-app.add_typer(workspace_app, name="workspace")
 runtime_app = typer.Typer(help="Register and validate training runtimes.")
 app.add_typer(runtime_app, name="runtime")
 experiments_app = typer.Typer(help="Explore the experiment graph.")
@@ -139,59 +133,15 @@ def _validate_dry_run_flags(dry_run: bool, submit: bool) -> None:
 def _load_app_config(
     config_path: Path,
     runs_dir: Path | None,
-    project_dir: Path | None,
     knowledge_dir: Path | None = None,
 ) -> AppConfig:
 
-    config = load_config(config_path, project_dir=project_dir)
+    config = load_config(config_path)
     if runs_dir:
         config.runs_dir = runs_dir
     if knowledge_dir:
         config.knowledge_dir = knowledge_dir
     return config
-
-
-def _build_pipeline(
-    config,
-    *,
-    submit: bool = False,
-    force_submit: bool = False,
-    competitions_dir: Path | None = None,
-    llm_client: LLMClient | None = None,
-    dry_run: bool = False,
-    project_dir: Path | None = None,
-) -> Pipeline:
-    return Pipeline(
-        config,
-        submit=submit,
-        force_submit=force_submit,
-        configs_dir=resolve_competitions_dir(
-            config,
-            competitions_dir,
-            project_dir=project_dir,
-        ),
-        llm_client=llm_client,
-        dry_run=dry_run,
-        project_dir=project_dir,
-    )
-
-
-def _print_kernel_init_banner(run_dir: Path) -> None:
-    competition_path = run_dir / "competition.json"
-    if not competition_path.is_file():
-        return
-    competition = CompetitionSpec.model_validate_json(competition_path.read_text())
-    if competition.submission_mode != "kernel":
-        return
-    console.print(
-        "\n[yellow]Kernel-only competition:[/yellow] LabPilot will train locally and "
-        "submit via the Kaggle notebook API when you pass --submit."
-    )
-    if competition.submissions_url:
-        console.print(f"[bold]Submissions:[/bold] {competition.submissions_url}")
-    console.print(
-        "Pass [cyan]--submit[/cyan] on `research build` or `research resume` to push the kernel."
-    )
 
 
 def _print_submission_links_if_present(run_dir: Path, submit: bool) -> None:
@@ -209,291 +159,131 @@ def _print_submission_links_if_present(run_dir: Path, submit: bool) -> None:
 
 @app.command()
 def run(
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    plan_id: str | None = typer.Option(
+        None,
+        "--plan",
+        "-p",
+        help="Research plan id to execute (e.g. P-001). Required.",
+    ),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (required with --plan)",
+    ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
-    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
-    competitions_dir: Path | None = typer.Option(
-        None,
-        "--competitions-dir",
-        help=(
-            "Directory containing local per-competition contracts "
-            "(<slug>.yaml). Defaults to configs/competitions. See "
-            "configs/competitions/README.md."
-        ),
-    ),
-    hypothesis_id: str | None = typer.Option(
-        None,
-        "--hypothesis",
-        help="Hypothesis ID to test with this root run (e.g. H-001)",
-    ),
     submit: bool = typer.Option(
         False,
         "--submit",
-        help="Upload the validated submission to Kaggle (disabled by default)",
-    ),
-    force_submit: bool = typer.Option(
-        False,
-        "--force-submit",
-        help="With --submit: upload even when the competition deadline has passed",
+        help="Allow Kaggle upload from submission capability (default: package only)",
     ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
-        help="Validate through code generation without training or submission",
+        help="Syntax/smoke stub path without full training or upload",
     ),
-    assume_yes: bool = typer.Option(
-        False,
-        "--yes",
-        "-y",
-        help="Skip confirmation prompts, e.g. proceed without LLM if unavailable",
+    install_packages: bool = typer.Option(
+        True,
+        "--install-packages/--no-install-packages",
+        help="Whether Dependency capability may run pip install",
     ),
+    # Legacy flags retained only so old scripts get a clear migration error.
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", hidden=True),
+    competitions_dir: Path | None = typer.Option(None, "--competitions-dir", hidden=True),
+    hypothesis_id: str | None = typer.Option(None, "--hypothesis", hidden=True),
+    force_submit: bool = typer.Option(False, "--force-submit", hidden=True),
+    assume_yes: bool = typer.Option(False, "--yes", "-y", hidden=True),
 ) -> None:
-    """Run the full research pipeline for a Kaggle competition.
+    """Run an approved ResearchPlan via the Research Engineer.
 
-    For a two-step workflow that pauses after the brief to review the
-    resolved competition/baseline choice before training, use `research
-    init` followed by `research build` instead.
+    Requires ``--plan P-xxx`` and ``--competition <slug>``. Create a plan first::
+
+        research plan create <slug> --baseline
+        research run --plan P-001 --competition <slug>
     """
-    _fail_fast_on_bad_environment(skip_lightgbm=dry_run)
-    _validate_submit_flags(submit, force_submit)
-    _validate_dry_run_flags(dry_run, submit)
+    if plan_id is None or competition is None:
+        console.print(
+            "[red]Plan-driven run required.[/red] Create a plan first, then:\n"
+            "  research plan create <competition> --baseline\n"
+            "  research run --plan P-001 --competition <competition>\n\n"
+            "The linear Pipeline path (`research run -c <slug>` without `--plan`) "
+            "is retired as system of record."
+        )
+        raise typer.Exit(code=1)
 
-    config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
-    llm_client = _check_llm_or_confirm(config.llm, assume_yes)
+    from labpilot.cli.run_engineer import run_plan_command
 
-    console.print(f"[bold]LabPilot[/bold] — starting run for [cyan]{competition}[/cyan]\n")
-    if dry_run:
-        console.print("[yellow]Dry-run mode:[/yellow] stopping after code generation.\n")
-
-    pipeline = _build_pipeline(
-        config,
-        submit=submit,
-        force_submit=force_submit,
-        competitions_dir=competitions_dir,
-        llm_client=llm_client,
+    run_plan_command(
+        plan_id=plan_id,
+        competition=competition,
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
         dry_run=dry_run,
-        project_dir=project_dir,
+        submit=submit or force_submit,
+        install_packages=install_packages,
     )
-    try:
-        manifest = pipeline.run(competition, hypothesis_id=hypothesis_id)
-    except FileNotFoundError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1) from exc
-
-    run_dir = config.runs_dir / manifest.run_id
-    console.print(f"\n[green]Run complete:[/green] {run_dir}")
-    console.print(
-        f"[green]Reflection:[/green] {run_dir / 'reflection.md'}"
-    )
-    _print_submission_links_if_present(run_dir, submit)
-
-
-@app.command()
-def init(
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
-    config_path: Path = typer.Option(
-        Path("configs/default.yaml"), "--config", help="Path to config file"
-    ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
-    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
-    competitions_dir: Path | None = typer.Option(
-        None,
-        "--competitions-dir",
-        help=(
-            "Directory containing local per-competition contracts "
-            "(<slug>.yaml). Defaults to configs/competitions. See "
-            "configs/competitions/README.md."
-        ),
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="No effect on init-only workflow; reserved for symmetry with run/build",
-    ),
-    assume_yes: bool = typer.Option(
-        False,
-        "--yes",
-        "-y",
-        help="Skip confirmation prompts, e.g. proceed without LLM if unavailable",
-    ),
-) -> None:
-    """Run just the init half: parse competition → download data → profile → brief.
-
-    Stops before any baseline is chosen or trained, so you can inspect
-    competition.json/profile.json/brief.md and then run `research build
-    --run-id <id>` to continue.
-    """
-    _fail_fast_on_bad_environment(skip_lightgbm=True)
-
-    config = _load_app_config(config_path, runs_dir, project_dir)
-    llm_client = _check_llm_or_confirm(config.llm, assume_yes)
-
-    console.print(f"[bold]LabPilot[/bold] — initializing run for [cyan]{competition}[/cyan]\n")
-
-    pipeline = _build_pipeline(
-        config,
-        competitions_dir=competitions_dir,
-        llm_client=llm_client,
-        dry_run=dry_run,
-        project_dir=project_dir,
-    )
-    manifest = pipeline.init(competition)
-
-    run_dir = config.runs_dir / manifest.run_id
-    console.print(f"\n[green]Init complete:[/green] {run_dir}")
-    console.print(f"[green]Brief:[/green] {run_dir / 'brief.md'}")
-    _print_kernel_init_banner(run_dir)
-    console.print(f"\nNext: [cyan]research build --run-id {manifest.run_id}[/cyan]")
-
-
-@app.command()
-def build(
-    run_id: str = typer.Option(
-        ..., "--run-id", "-r", help="Run ID to build (from `research init`)"
-    ),
-    config_path: Path = typer.Option(
-        Path("configs/default.yaml"), "--config", help="Path to config file"
-    ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
-    runs_dir: Path | None = typer.Option(
-        None, "--runs-dir", help="Override runs directory (must match the `init` call's)"
-    ),
-    submit: bool = typer.Option(
-        False,
-        "--submit",
-        help="Upload the validated submission to Kaggle (disabled by default)",
-    ),
-    force_submit: bool = typer.Option(
-        False,
-        "--force-submit",
-        help="With --submit: upload even when the competition deadline has passed",
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Validate through code generation without training or submission",
-    ),
-    assume_yes: bool = typer.Option(
-        False,
-        "--yes",
-        "-y",
-        help="Skip confirmation prompts, e.g. proceed without LLM if unavailable",
-    ),
-) -> None:
-    """Run the build half of an already-`init`'d run: baseline through reflection."""
-    _fail_fast_on_bad_environment(skip_lightgbm=dry_run)
-    _validate_submit_flags(submit, force_submit)
-    _validate_dry_run_flags(dry_run, submit)
-
-    config = _load_app_config(config_path, runs_dir, project_dir)
-    llm_client = _check_llm_or_confirm(config.llm, assume_yes)
-    console.print(f"[bold]LabPilot[/bold] — building run [cyan]{run_id}[/cyan]\n")
-    if dry_run:
-        console.print("[yellow]Dry-run mode:[/yellow] stopping after code generation.\n")
-
-    pipeline = _build_pipeline(
-        config,
-        submit=submit,
-        force_submit=force_submit,
-        llm_client=llm_client,
-        dry_run=dry_run,
-        project_dir=project_dir,
-    )
-    manifest = _continue_or_exit(pipeline.build, run_id)
-
-    run_dir = config.runs_dir / manifest.run_id
-    console.print(f"\n[green]Build complete:[/green] {run_dir}")
-    console.print(f"[green]Reflection:[/green] {run_dir / 'reflection.md'}")
-    if (run_dir / "report.html").is_file():
-        console.print(f"[green]Report:[/green] {run_dir / 'report.html'}")
-    _print_submission_links_if_present(run_dir, submit)
 
 
 @app.command()
 def resume(
-    run_id: str = typer.Option(..., "--run-id", "-r", help="Run ID to resume"),
+    execution_id: str | None = typer.Option(
+        None,
+        "--execution",
+        "-e",
+        help="Execution id to resume (e.g. E-001)",
+    ),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug for the execution's knowledge DB",
+    ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    runs_dir: Path | None = typer.Option(
-        None, "--runs-dir", help="Override runs directory (must match the original run's)"
-    ),
-    competitions_dir: Path | None = typer.Option(
-        None,
-        "--competitions-dir",
-        help="Directory containing local per-competition contracts. See run --help.",
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
     ),
     submit: bool = typer.Option(
         False,
         "--submit",
-        help="Upload the validated submission to Kaggle (disabled by default)",
+        help="Allow Kaggle upload from submission capability",
     ),
-    force_submit: bool = typer.Option(
+    dry_run: bool = typer.Option(
         False,
-        "--force-submit",
-        help="With --submit: upload even when the competition deadline has passed",
+        "--dry-run",
+        help="Resume with dry-run capability constraints",
     ),
-    assume_yes: bool = typer.Option(
-        False,
-        "--yes",
-        "-y",
-        help="Skip confirmation prompts, e.g. proceed without LLM if unavailable",
+    install_packages: bool = typer.Option(
+        True,
+        "--install-packages/--no-install-packages",
+        help="Whether Dependency capability may run pip install",
     ),
 ) -> None:
-    """Resume a run from its first failed or incomplete stage.
+    """Resume a Research Engineer execution (``E-xxx``)."""
+    if execution_id is None or competition is None:
+        console.print(
+            "[red]Provide --execution E-xxx and --competition <slug>.[/red]"
+        )
+        raise typer.Exit(code=1)
 
-    Stages already marked completed or skipped are left untouched; everything
-    else (failed, still "running" from a killed process, or never reached) is
-    re-executed in pipeline order.
-    """
-    _fail_fast_on_bad_environment()
-    _validate_submit_flags(submit, force_submit)
+    from labpilot.cli.run_engineer import resume_execution_command
 
-    config = load_config(config_path)
-    if runs_dir:
-        config.runs_dir = runs_dir
-    llm_client = _check_llm_or_confirm(config.llm, assume_yes)
-    console.print(f"[bold]LabPilot[/bold] — resuming run [cyan]{run_id}[/cyan]\n")
-
-    pipeline = Pipeline(
-        config,
+    resume_execution_command(
+        execution_id=execution_id,
+        competition=competition,
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        dry_run=dry_run,
         submit=submit,
-        force_submit=force_submit,
-        configs_dir=competitions_dir,
-        llm_client=llm_client,
+        install_packages=install_packages,
     )
-    manifest = _continue_or_exit(pipeline.resume, run_id)
 
-    run_dir = config.runs_dir / manifest.run_id
-    console.print(f"\n[green]Run complete:[/green] {run_dir}")
-    _print_submission_links_if_present(run_dir, submit)
-
-
-def _continue_or_exit(action, run_id: str):
-    """Shared error handling for `build`/`resume`: turn a missing run or an
-    unmet precondition (e.g. `build` before `init` finished) into a clean
-    one-line error instead of a raw traceback.
-    """
-    try:
-        return action(run_id)
-    except FileNotFoundError:
-        console.print(f"[red]Run not found:[/red] {run_id} (check --runs-dir).")
-        raise typer.Exit(code=1) from None
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1) from None
 
 
 def _check_llm_or_confirm(config, assume_yes: bool) -> LLMClient | None:
@@ -607,100 +397,6 @@ def report(
     console.print(f"[green]Report written:[/green] {path}")
 
 
-@app.command()
-def improve(
-    run_id: str = typer.Option(..., "--run-id", "-r", help="Parent run ID to improve"),
-    strategy: str = typer.Option(
-        "auto",
-        "--strategy",
-        help="Improvement strategy: auto (LLM plan), tune (LightGBM grid), or features",
-    ),
-    config_path: Path = typer.Option(
-        Path("configs/default.yaml"), "--config", help="Path to config file"
-    ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
-    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
-    knowledge_dir: Path | None = typer.Option(
-        None, "--knowledge-dir", help="Override knowledge directory"
-    ),
-    hypothesis_id: str | None = typer.Option(
-        None,
-        "--hypothesis",
-        help="Hypothesis ID to test with this child run (e.g. H-001)",
-    ),
-    submit: bool = typer.Option(
-        False,
-        "--submit",
-        help="Upload the validated submission to Kaggle (disabled by default)",
-    ),
-    force_submit: bool = typer.Option(
-        False,
-        "--force-submit",
-        help="With --submit: upload even when the competition deadline has passed",
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Fork, plan, and generate code without training or submission",
-    ),
-    assume_yes: bool = typer.Option(
-        False,
-        "--yes",
-        "-y",
-        help="Skip confirmation prompts, e.g. proceed without LLM if unavailable",
-    ),
-) -> None:
-    """Fork a completed run, apply an improvement plan, and retrain."""
-    _fail_fast_on_bad_environment(skip_lightgbm=dry_run)
-    _validate_submit_flags(submit, force_submit)
-    _validate_dry_run_flags(dry_run, submit)
-
-    config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
-    llm_client = _check_llm_or_confirm(config.llm, assume_yes)
-
-    console.print(
-        f"[bold]LabPilot[/bold] — improving run [cyan]{run_id}[/cyan] "
-        f"(strategy={strategy})\n"
-    )
-    if dry_run:
-        console.print("[yellow]Dry-run mode:[/yellow] stopping after code generation.\n")
-
-    pipeline = _build_pipeline(
-        config,
-        submit=submit,
-        force_submit=force_submit,
-        llm_client=llm_client,
-        dry_run=dry_run,
-        project_dir=project_dir,
-    )
-
-    def _do_improve(_: str):
-        return pipeline.improve(run_id, strategy=strategy, hypothesis_id=hypothesis_id)
-
-    try:
-        manifest = pipeline.improve(run_id, strategy=strategy, hypothesis_id=hypothesis_id)
-    except FileNotFoundError as exc:
-        message = str(exc)
-        if "Hypothesis" in message:
-            console.print(f"[red]{message}[/red]")
-        else:
-            console.print(f"[red]Run not found:[/red] {run_id} (check --runs-dir).")
-        raise typer.Exit(code=1) from None
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1) from None
-
-    run_dir = config.runs_dir / manifest.run_id
-    console.print(f"\n[green]Improvement complete:[/green] {run_dir}")
-    console.print(f"[green]Reflection:[/green] {run_dir / 'reflection.md'}")
-    console.print(
-        f"\nCompare: [cyan]research runs diff --base {run_id} --compare {manifest.run_id}[/cyan]"
-    )
-    _print_submission_links_if_present(run_dir, submit)
-
-
 def _parse_analyzer_csv(value: str | None) -> set[str] | None:
     if not value:
         return None
@@ -758,9 +454,6 @@ def analyze(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
     runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
@@ -790,7 +483,7 @@ def analyze(
             "A single analyzer argument cannot be combined with --include/--exclude."
         )
 
-    config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
+    config = _load_app_config(config_path, runs_dir, knowledge_dir)
     context = build_context(
         slug_or_url,
         runs_dir=config.runs_dir,
@@ -854,9 +547,6 @@ def ingest(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
@@ -868,7 +558,7 @@ def ingest(
     merged so existing cross-source evidence is retained. New hypotheses are
     generated afterwards unless ``--skip-hypothesize`` is passed.
     """
-    config = _load_app_config(config_path, None, project_dir, knowledge_dir)
+    config = _load_app_config(config_path, None, knowledge_dir)
     with KnowledgeStore(config.knowledge_dir, competition) as store:
         artifacts = store.list_artifacts()
         if not artifacts:
@@ -936,9 +626,6 @@ def retrieve_cmd(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
     runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
@@ -959,7 +646,7 @@ def retrieve_cmd(
             "structured_query, explain, compare"
         ) from exc
 
-    config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
+    config = _load_app_config(config_path, runs_dir, knowledge_dir)
     pipeline_list = (
         [item.strip() for item in pipeline.split(",") if item.strip()] if pipeline else []
     )
@@ -1118,9 +805,6 @@ def hypothesize_new(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
     runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
@@ -1137,7 +821,7 @@ def hypothesize_new(
     if limit < 1 or limit > 10:
         raise typer.BadParameter("--limit must be between 1 and 10.")
 
-    config = _load_app_config(config_path, runs_dir, project_dir, knowledge_dir)
+    config = _load_app_config(config_path, runs_dir, knowledge_dir)
     pipeline_list = (
         [item.strip() for item in pipeline.split(",") if item.strip()] if pipeline else None
     )
@@ -1203,9 +887,6 @@ def fetch_cmd(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
@@ -1237,8 +918,8 @@ def fetch_cmd(
     # Discussions: UI votes ↔ API top (score sort does not apply).
     discussion_sort = "top"
 
-    config = _load_app_config(config_path, None, project_dir, knowledge_dir)
-    from labpilot.kaggle.client import KaggleClient
+    config = _load_app_config(config_path, None, knowledge_dir)
+    from labpilot.accessor.kaggle.client import KaggleClient
 
     service = KaggleFetchService(
         llm_client=resolve_llm_client(config.llm),
@@ -1540,7 +1221,7 @@ def experiments_rank(
     ),
 ) -> None:
     """Rank proposed hypotheses (recommendation backlog — does not auto-run)."""
-    config = _load_app_config(config_path, runs_dir, None, knowledge_dir)
+    config = _load_app_config(config_path, runs_dir, knowledge_dir)
     ranking_cfg = config.experiments.ranking
     weights = RankingWeights(
         expected_gain=ranking_cfg.weights.expected_gain,
@@ -1662,7 +1343,7 @@ def experiments_search(
     filters.status = status
     filters.template = template
 
-    config = _load_app_config(config_path, runs_dir, None, None)
+    config = _load_app_config(config_path, runs_dir)
     graph = build_graph(config.runs_dir, competition, knowledge_dir=config.knowledge_dir)
     if not graph.nodes:
         console.print(f"No experiments found for [cyan]{competition}[/cyan].")
@@ -1712,7 +1393,7 @@ def experiments_report(
     """Competition rollup: discoveries, failures, best path, recommended next."""
     if output_format not in {"text", "json"}:
         raise typer.BadParameter("--format must be text or json")
-    config = _load_app_config(config_path, runs_dir, None, knowledge_dir)
+    config = _load_app_config(config_path, runs_dir, knowledge_dir)
     ranking_cfg = config.experiments.ranking
     try:
         report = build_report(
@@ -1751,7 +1432,7 @@ def experiments_dashboard(
     ),
 ) -> None:
     """Write a static HTML competition dashboard under knowledge/<slug>/."""
-    config = _load_app_config(config_path, runs_dir, None, knowledge_dir)
+    config = _load_app_config(config_path, runs_dir, knowledge_dir)
     ranking_cfg = config.experiments.ranking
     try:
         report = build_report(
@@ -1814,7 +1495,7 @@ def experiments_knowledge_list(
                 "--effect must be one of: improves, hurts, neutral, unknown"
             ) from exc
 
-    config = _load_app_config(config_path, None, None, knowledge_dir)
+    config = _load_app_config(config_path, None, knowledge_dir)
     kb = KnowledgeBase(config.knowledge_dir, competition)
     entries = kb.list_entries(technique=technique, effect=effect_filter)
     if not entries:
@@ -1859,7 +1540,7 @@ def hypothesis_list(
     ),
 ) -> None:
     """List hypotheses for a competition."""
-    config = _load_app_config(config_path, None, None, knowledge_dir)
+    config = _load_app_config(config_path, None, knowledge_dir)
     store = HypothesisStore(config.knowledge_dir, competition)
     status_filter: HypothesisStatus | None = None
     if status is not None:
@@ -1902,7 +1583,7 @@ def hypothesis_show(
     runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
 ) -> None:
     """Show one hypothesis and the experiments linked to it."""
-    config = _load_app_config(config_path, runs_dir, None, knowledge_dir)
+    config = _load_app_config(config_path, runs_dir, knowledge_dir)
     store = HypothesisStore(config.knowledge_dir, competition)
     hypothesis = store.get(hypothesis_id)
     if hypothesis is None:
@@ -1965,7 +1646,7 @@ def hypothesis_update(
         allowed = ", ".join(s.value for s in HypothesisStatus)
         raise typer.BadParameter(f"--status must be one of: {allowed}") from exc
 
-    config = _load_app_config(config_path, None, None, knowledge_dir)
+    config = _load_app_config(config_path, None, knowledge_dir)
     store = HypothesisStore(config.knowledge_dir, competition)
     try:
         updated = store.update_status(
@@ -2024,64 +1705,17 @@ def list_runs(
     console.print(table)
 
 
-@workspace_app.command("init")
-def workspace_init(
-    name: str = typer.Option(..., "--name", help="Project name"),
-    directory: Path = typer.Option(
-        Path("."), "--directory", "-d", help="Directory to initialize as a project"
-    ),
-) -> None:
-    """Create project.yaml and standard project directories."""
-    project = init_project(directory, name)
-    console.print(f"[green]Project initialized:[/green] {project.root}")
-    console.print(f"  Config:       {project.config_path}")
-    console.print(f"  Runs:         {project.runs_dir}")
-    console.print(f"  Competitions: {project.competitions_dir}")
-    console.print(f"  Runtimes:     {project.runtimes_dir}")
-
-
-@workspace_app.command("status")
-def workspace_status(
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
-) -> None:
-    """Show resolved project paths and run counts."""
-    project = load_project(project_dir=project_dir)
-    if project is None:
-        console.print("[yellow]No project.yaml found[/yellow] in cwd or parents.")
-        raise typer.Exit(code=1)
-
-    runs_count = 0
-    if project.runs_dir.is_dir():
-        runs_count = sum(1 for path in project.runs_dir.iterdir() if path.is_dir())
-
-    table = Table(title=f"Project: {project.name}")
-    table.add_column("Setting", style="cyan")
-    table.add_column("Path")
-    table.add_row("Root", str(project.root))
-    table.add_row("Config", str(project.config_path))
-    table.add_row("Runs dir", str(project.runs_dir))
-    table.add_row("Competitions dir", str(project.competitions_dir))
-    table.add_row("Runtimes dir", str(project.runtimes_dir))
-    table.add_row("Default runtime", project.default_runtime)
-    table.add_row("Runs", str(runs_count))
-    console.print(table)
-
 
 @runtime_app.command("list")
 def runtime_list(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
     enabled_only: bool = typer.Option(False, "--enabled-only", help="Show only enabled runtimes"),
 ) -> None:
     """List registered training runtimes."""
-    config = load_config(config_path, project_dir=project_dir)
-    runtimes_dir = resolve_runtimes_dir(config, project_dir=project_dir)
+    config = load_config(config_path)
+    runtimes_dir = resolve_runtimes_dir(config)
     runtimes = list_runtimes(runtimes_dir, enabled_only=enabled_only)
 
     table = Table(title="Runtimes")
@@ -2107,13 +1741,10 @@ def runtime_show(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
 ) -> None:
     """Show a runtime configuration (secrets redacted)."""
-    config = load_config(config_path, project_dir=project_dir)
-    runtimes_dir = resolve_runtimes_dir(config, project_dir=project_dir)
+    config = load_config(config_path)
+    runtimes_dir = resolve_runtimes_dir(config)
     runtime = get_runtime(runtime_id, runtimes_dir)
     if runtime is None:
         console.print(f"[red]Runtime not found:[/red] {runtime_id}")
@@ -2132,17 +1763,14 @@ def runtime_register(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
 ) -> None:
     """Register a runtime by writing a scaffold YAML file."""
     valid_providers = {"local", "kaggle_kernel", "google_colab", "other"}
     if provider not in valid_providers:
         raise typer.BadParameter(f"provider must be one of: {', '.join(sorted(valid_providers))}")
 
-    config = load_config(config_path, project_dir=project_dir)
-    runtimes_dir = resolve_runtimes_dir(config, project_dir=project_dir)
+    config = load_config(config_path)
+    runtimes_dir = resolve_runtimes_dir(config)
     runtimes_dir.mkdir(parents=True, exist_ok=True)
 
     resolved_id = runtime_id or provider.replace("_", "-")
@@ -2164,13 +1792,10 @@ def runtime_doctor(
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
-    project_dir: Path | None = typer.Option(
-        None, "--project-dir", help="Project root containing project.yaml"
-    ),
 ) -> None:
     """Validate runtime credentials and configuration."""
-    config = load_config(config_path, project_dir=project_dir)
-    runtimes_dir = resolve_runtimes_dir(config, project_dir=project_dir)
+    config = load_config(config_path)
+    runtimes_dir = resolve_runtimes_dir(config)
     try:
         results = check_all_runtimes(
             runtimes_dir,

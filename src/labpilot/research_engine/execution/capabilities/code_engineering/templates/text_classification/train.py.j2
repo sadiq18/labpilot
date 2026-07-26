@@ -1,0 +1,109 @@
+"""Generated P1 text classification baseline using TF-IDF + Logistic Regression."""
+
+import json
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import LabelEncoder
+
+from labpilot.research_engine.execution.metrics import compute_metric
+
+DATA_DIR = Path({{ data_dir | tojson }})
+OUTPUT_DIR = Path({{ output_dir | tojson }})
+TRAIN_FILE = {{ choice.train_file | tojson }}
+TEST_FILE = {{ choice.test_file | tojson }}
+SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
+TARGET_COLUMN = {{ choice.target_column | tojson }}
+ID_COLUMN = {{ choice.id_column | tojson }}
+TEXT_COLUMN = {{ choice.text_column | tojson }}
+METRIC_NAME = {{ choice.metric_name | tojson }}
+CV_FOLDS = {{ cv_folds }}
+RANDOM_SEED = {{ random_seed }}
+
+
+def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    return (
+        pd.read_csv(DATA_DIR / TRAIN_FILE),
+        pd.read_csv(DATA_DIR / TEST_FILE),
+        pd.read_csv(DATA_DIR / SAMPLE_SUBMISSION_FILE),
+    )
+
+
+def build_model() -> Pipeline:
+    return Pipeline(
+        steps=[
+            ("tfidf", TfidfVectorizer(max_features=50_000, ngram_range=(1, 2))),
+            (
+                "clf",
+                LogisticRegression(max_iter=1000, random_state=RANDOM_SEED),
+            ),
+        ]
+    )
+
+
+def main() -> None:
+    train, test, sample_submission = load_data()
+    if not TEXT_COLUMN or TEXT_COLUMN not in train.columns:
+        raise ValueError(f"Text column is invalid: {TEXT_COLUMN!r}")
+
+    encoder = LabelEncoder()
+    y = encoder.fit_transform(train[TARGET_COLUMN])
+    num_classes = len(encoder.classes_)
+    X = train[TEXT_COLUMN].astype(str)
+    X_test = test[TEXT_COLUMN].astype(str)
+
+    folds = min(CV_FOLDS, int(np.bincount(y).min()))
+    oof_proba = np.zeros((len(train), num_classes), dtype=float)
+    test_proba = np.zeros((len(test), num_classes), dtype=float)
+    models = []
+    splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=RANDOM_SEED)
+
+    for train_idx, val_idx in splitter.split(X, y):
+        model = build_model()
+        model.fit(X.iloc[train_idx], y[train_idx])
+        oof_proba[np.ix_(val_idx, model.named_steps["clf"].classes_)] = model.predict_proba(
+            X.iloc[val_idx]
+        )
+        test_proba[:, model.named_steps["clf"].classes_] += model.predict_proba(X_test)
+        models.append(model)
+
+    oof_codes = oof_proba.argmax(axis=1)
+    proba_for_metric = oof_proba[:, 1] if num_classes == 2 and METRIC_NAME in ("auc", "logloss") else None
+    cv_score = compute_metric(
+        y, oof_codes, METRIC_NAME, y_proba=proba_for_metric, num_classes=num_classes
+    )
+    predicted_codes = (test_proba / folds).argmax(axis=1)
+    predicted_labels = encoder.inverse_transform(predicted_codes)
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            ID_COLUMN: train[ID_COLUMN],
+            "actual": train[TARGET_COLUMN],
+            "prediction": encoder.inverse_transform(oof_codes),
+        }
+    ).to_csv(OUTPUT_DIR / "oof.csv", index=False)
+
+    metrics = {f"cv_{METRIC_NAME}": float(cv_score), "cv_folds": folds}
+    (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2))
+
+    models_dir = OUTPUT_DIR / "models"
+    models_dir.mkdir(exist_ok=True)
+    for index, model in enumerate(models):
+        joblib.dump(model, models_dir / f"fold_{index}.joblib")
+
+    submission = sample_submission.copy()
+    submission[ID_COLUMN] = test[ID_COLUMN].to_numpy()
+    submission[TARGET_COLUMN] = predicted_labels
+    submission.to_csv(OUTPUT_DIR / "submission.csv", index=False)
+    print(f"CV {METRIC_NAME}: {cv_score:.4f}")
+
+
+if __name__ == "__main__":
+    main()

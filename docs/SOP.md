@@ -1,7 +1,7 @@
 # LabPilot SOP — How to Use `research`
 
 Standard operating procedure for running LabPilot on a real Kaggle competition:
-setup once, baseline once, then iterate like a research engineer.
+setup once, then iterate like a research engineer via **Analyze → Plan → Run**.
 
 Command flags and every subcommand live in [CLI.md](CLI.md). This doc is the
 **when / why / in what order**.
@@ -13,7 +13,7 @@ Command flags and every subcommand live in [CLI.md](CLI.md). This doc is the
 1. **Python 3.11+** and install from source:
    ```bash
    uv sync --extra dev
-   # Optional AI briefs/reflections:
+   # Optional LLM-assisted analyze / code / narrative:
    uv sync --extra llm
    ```
 2. **Credentials** — copy `.env.example` → `.env`:
@@ -34,85 +34,105 @@ Tabular competitions need only the core install. Image/deep baselines need
 ## 2. Mental model
 
 ```
-research run / improve     →  writes runs/<run_id>/     (one experiment)
-knowledge/                 →  hypotheses + technique memory (per competition)
-experiments *              →  read/aggregate across runs (does not train)
-research analyze *         →  research partner over papers/repos/local memory
+research analyze *         →  knowledge/<slug>/research/   (landscape + brief + hypotheses)
+research plan create *     →  ResearchPlan DAG (P-xxx)     (plan-only; never trains)
+research run --plan *      →  competitions/<slug>/ + E-xxx (Research Engineer)
+research experiments *     →  inspect / rank / compare     (does not train)
 ```
 
-- **One slug** = one competition graph (all runs with that `competition` field).
-- **`improve`** forks a *completed* parent; it does not re-download or re-profile.
-- **Rank / report / dashboard** tell you what to try next; they never auto-train.
-- **`analyze` / `retrieve` / `hypothesize`** synthesize evidence; they never auto-train.
-- **`plan`** compiles a hypothesis into a DAG; it never executes tasks or starts training.
+- **One slug** = one competition graph in `knowledge/` and one workspace under
+  `competitions/<slug>/`.
+- **`plan`** compiles intent into typed tasks; it never executes them.
+- **`run --plan`** is the system of record for implementation (Workspace → code →
+  verify → train → eval → submit → report).
+- **`experiments` / `hypothesize`** help you decide what to try next; they never
+  auto-train.
+- Legacy linear Pipeline (`init` / `build` / `improve`) is **removed**. Historical
+  `runs/<id>/` artifacts remain readable via `status` / `report` / `list-runs`.
 
 Artifacts to care about:
 
 | Path | Why open it |
 |------|-------------|
-| `runs/<id>/metrics.json` | CV score |
-| `runs/<id>/reflection.md` | Narrative + next ideas |
-| `runs/<id>/report.html` | Full per-run HTML |
-| `runs/<id>/comparison.md` | Child vs parent (after improve) |
+| `knowledge/<slug>/research/reports/research_brief.md` | Pre-experiment briefing |
+| `knowledge/<slug>/research/reports/analyze.json` | Full Analyze contract |
+| `knowledge/<slug>/research/plans/P-*.json|.md` | Plan projections |
+| `knowledge/<slug>/research/executions/E-xxx/` | Execution + task evidence |
+| `competitions/<slug>/profile.json` | Dataset profile from Workspace |
+| `competitions/<slug>/pipeline/` | Generated training code |
+| `competitions/<slug>/metrics.json` | CV / eval metrics |
+| `competitions/<slug>/artifacts/submission.csv` | Packaged submission |
 | `knowledge/<slug>/hypotheses/` | Ideas under test |
-| `knowledge/<slug>/knowledge_base.json` | What techniques helped/hurt |
-| `knowledge/<slug>/dashboard.html` | Competition overview (generate on demand) |
-| `knowledge/<slug>/research/reports/analyze.json` | Research Intelligence contract (M3) |
-| `knowledge/<slug>/research/plans/P-*.json|.md` | Research Planner projections (plan-only) |
+| `knowledge/<slug>/dashboard.html` | Competition overview (on demand) |
+
+Deprecation notes:
+[milestones/research-engineer/pipeline-deprecation.md](milestones/research-engineer/pipeline-deprecation.md).
 
 ---
 
 ## 3. Day-1 procedure — first baseline
 
-### A. One-shot (usual path)
+### A. Happy path (SoR)
 
 ```bash
-uv run research run --competition house-prices-advanced-regression-techniques
-# or: --competition titanic
+uv run research analyze <slug>
+# Read: knowledge/<slug>/research/reports/research_brief.md
+
+uv run research plan create <slug> --baseline
+# → P-001
+
+uv run research run --plan P-001 --competition <slug>
+# Workspace downloads + profiles data, scaffolds code, verifies, trains (unless --dry-run)
 ```
 
-Leave **without** `--submit` until you have inspected `submission.csv`.
+Leave **without** `--submit` until you have inspected metrics and `submission.csv`.
 
-### B. Two-step (review brief before training)
+Dry-run (syntax/smoke stubs; no full train / no upload):
 
 ```bash
-uv run research init --competition <slug>
-# Read: competition.json, profile.md, brief.md under runs/<id>/
-uv run research build --run-id <id>
+uv run research run --plan P-001 --competition <slug> --dry-run --no-install-packages
 ```
 
-### C. After the run finishes
+### B. After the execution finishes
 
 ```bash
-uv run research status --run-id <id>
+# Execution status is printed by `run`; evidence lives under:
+#   knowledge/<slug>/research/executions/E-xxx/evidence/
+
+ls competitions/<slug>/artifacts/
+cat competitions/<slug>/metrics.json
+```
+
+If the process died mid-flight:
+
+```bash
+uv run research resume --execution E-001 --competition <slug>
+```
+
+### C. Optional: inspect historical `runs/`
+
+Older Pipeline artifacts (if any) remain under `runs/<id>/`:
+
+```bash
 uv run research list-runs
-open runs/<id>/report.html          # or refresh: research report --run-id <id>
-```
-
-Note the **run id** and primary metric key (e.g. `cv_accuracy`, `cv_rmsle`) from
-`metrics.json` — you will use them for graph/search.
-
-If a stage failed or the process died:
-
-```bash
-uv run research resume --run-id <id>
+uv run research status --run-id <id>
+uv run research report --run-id <id>
 ```
 
 ---
 
 ## 4. Day-2+ procedure — iterate
 
-### Step 1 — See the experiment graph
+### Step 1 — Refresh landscape (as needed)
 
 ```bash
-uv run research experiments graph --competition <slug> --metric <primary_metric>
-uv run research experiments show <run_id>
+uv run research analyze <slug>
+# Optional Kaggle code/forum pull:
+uv run research analyze <slug> --fetch-kaggle
+uv run research fetch <slug> --source all --limit 20
 ```
 
 ### Step 2 — Review hypotheses
-
-`research analyze` / `research ingest` / reflection generate hypotheses under
-`knowledge/<slug>/hypotheses/` (also mirrored into `knowledge.db`).
 
 ```bash
 uv run research hypothesize list --competition <slug>
@@ -128,85 +148,36 @@ uv run research hypothesize <slug>
 uv run research experiments rank --competition <slug> --top 5
 ```
 
-This scores **proposed** ideas only; it does not start training.
+Scores **proposed** ideas only; does not start training.
 
-### Step 3b — Research partner (Milestone 3)
-
-When you want literature / repo / cross-comp context before picking the next run:
+Grounded questions against the store (offline):
 
 ```bash
-# Understand the problem — artifacts, beliefs, hypotheses, Research Brief
-uv run research analyze <slug>
-# Read the briefing first:
-#   knowledge/<slug>/research/reports/research_brief.md
-# Full contract:
-#   knowledge/<slug>/research/reports/analyze.json
-
-# Also pull popular kernels (votes×5 + score×5) and discussions (×5)
-uv run research analyze <slug> --fetch-kaggle
-
-# Deeper Kaggle code/forum pull into knowledge/
-uv run research fetch <slug> --source all --limit 20
-
-# Ask a grounded question against knowledge.db (offline)
 uv run research retrieve <slug> -q "Show experiments where Focal Loss hurt"
-
-# Top-N untried ideas with evidence (also persists Suggested hypotheses)
-uv run research hypothesize <slug> --limit 5
 ```
 
-Treat suggestions as a backlog — pick one, compile a plan, then decide whether to
-`improve`. External techniques stay **Suggested** until local runs promote them.
-`research fetch` stores kernels as repository artifacts (`source=kaggle`) and
-discussions as discussion artifacts; Forum Intelligence extraction still lands in
-Plan F analyzers. Analyze defaults leave kernels/discussions to `fetch` unless
-you pass `--fetch-kaggle`.
-
-### Step 3c — Compile a research plan (plan-only)
-
-Once you have a hypothesis id, turn it into an inspectable DAG **without** running
-training or writing code:
+### Step 4 — Compile a plan and execute
 
 ```bash
 uv run research plan create <slug> --hypothesis H-00N
-uv run research plan show <slug> P-001
-uv run research plan list <slug> --status ready
+uv run research plan show <slug> P-002
+uv run research run --plan P-002 --competition <slug>
 ```
 
-Derived projections land under `knowledge/<slug>/research/plans/`. There is no
-`--execute` flag — a human still picks `improve` / `run`.
+There is no `research improve`. Iteration is always **plan → run**.
 
-### Step 4 — Improve a completed parent
-
-```bash
-# Strategy: auto | tune | features
-uv run research improve --run-id <parent> --strategy features --hypothesis H-00N
-```
-
-When it completes:
-
-```bash
-uv run research experiments compare <parent> <child>
-# or read runs/<child>/comparison.md
-```
-
-Linked hypothesis status may update automatically (e.g. rejected after a clear
-regression). Knowledge base updates from the comparison (and reflection tags).
-
-### Step 5 — Remember and decide
+### Step 5 — Compare, remember, decide
 
 ```bash
 uv run research experiments knowledge list --competition <slug>
 uv run research experiments knowledge list -c <slug> --effect hurts
 
-uv run research experiments search -c <slug> --metric-lt cv_rmsle:0.15
 uv run research experiments search -c <slug> --verdict worth_keeping
-
 uv run research experiments report --competition <slug>
 uv run research experiments dashboard --competition <slug>
 ```
 
-Then either rank again and improve, or submit (next section).
+Then either rank again and plan another hypothesis, or submit (next section).
 
 ---
 
@@ -216,22 +187,17 @@ Default policy: **train and validate locally first**.
 
 ```bash
 # Inspect first
-ls runs/<id>/submission.csv
-cat runs/<id>/metrics.json
+ls competitions/<slug>/artifacts/submission.csv
+cat competitions/<slug>/metrics.json
 
-# Upload this run (without re-training), if upload was skipped earlier:
-uv run research resume --run-id <id> --submit
-
-# Or bake upload into a new run / improve:
-uv run research run --competition <slug> --submit
-uv run research improve --run-id <parent> --submit
+# Allow upload on a new or resumed execution:
+uv run research run --plan P-001 --competition <slug> --submit
+uv run research resume --execution E-001 --competition <slug> --submit
 ```
 
-Use `--force-submit` only if the deadline has passed but Kaggle may still accept
-uploads.
-
-Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
-`--submit` drives the notebook submission path. See [CLI.md](CLI.md).
+Kernel-only competitions: CSV packaging is SoR today; kernel export/push remains a
+follow-on under Execution Submission/Runtime. See [CLI.md](CLI.md) and Engineer
+capstone notes.
 
 ---
 
@@ -239,21 +205,17 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 
 | Situation | Do this |
 |-----------|---------|
-| Fresh competition | `research run -c <slug>` |
-| Want to read brief before CPU time | `init` → review → `build` |
-| Crash / failed stage | `resume -r <id>` |
-| Parent looks good; try a tweak | `improve -r <parent> [--strategy …]` |
-| Idea captured, not run yet | `hypothesize <slug>` → `plan create -H …` → `rank` → `improve --hypothesis` |
-| “Did child help?” | `experiments compare` or open `comparison.md` |
+| Fresh competition | `analyze` → `plan create --baseline` → `run --plan P-001` |
+| Crash / interrupted execution | `resume --execution E-xxx -c <slug>` |
+| Idea captured, not run yet | `hypothesize` → `plan create -H …` → `run --plan` |
 | “What have we learned about recipe X?” | `experiments knowledge list --technique …` |
 | “Show me everything” | `experiments report` + `dashboard` |
-| Need landscape + briefing | `research analyze <slug>` → read `research_brief.md`, then `analyze.json` / hypotheses |
+| Need landscape + briefing | `research analyze <slug>` → read `research_brief.md` |
 | Pull Kaggle code/forum into the store | `research fetch <slug>` (or `analyze --fetch-kaggle`) |
 | Grounded Q over the knowledge store | `research retrieve <slug> -q "…"` |
-| Literature-backed untried ideas | `research hypothesize <slug>` |
-| Hypothesis → executable DAG (no train) | `research plan create <slug> -H H-xxx` |
-| Baseline plan (first experiment DAG) | `research plan create <slug> --baseline` → **P-001** (Design A; Phase B) |
-| Implement approved plan | `research run --plan P-001` (Research Engineer — Design A) |
+| Hypothesis → DAG (no train) | `research plan create <slug> -H H-xxx` |
+| Baseline plan | `research plan create <slug> --baseline` → **P-001** |
+| Implement approved plan | `research run --plan P-xxx -c <slug>` |
 | Need another operator on the team | Point them at this SOP + [CLI.md](CLI.md) |
 
 ---
@@ -261,19 +223,16 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 ## 7. Suggested weekly loop
 
 1. `experiments report` / `dashboard` — where are we?
-2. Optional: `research analyze` — refresh landscape + Research Brief (+ `--fetch-kaggle` when needed).
-3. First time on a competition: `research plan create <slug> --baseline` → `research run --plan P-001`
-   (Research Engineer Design A / Phase B — replaces leaving a linear `run --competition` as SoR).
+2. Optional: `research analyze` — refresh landscape + Research Brief.
+3. First time on a competition: `plan create --baseline` → `run --plan P-001`.
 4. `experiments rank` or `research hypothesize` — pick one proposed hypothesis.
-5. `research plan create <slug> -H H-xxx` — compile an inspectable DAG.
-6. `research run --plan P-xxx` — implement via Research Engineer (target); until shipped,
-   `improve --hypothesis H-xxx` remains the interim path.
-7. `experiments compare` — keep / discard.
-8. `knowledge list` — update your intuition from effects.
-9. Repeat; submit only when local CV (and sanity checks) look worth a leaderboard hit.
+5. `plan create -H H-xxx` — compile an inspectable DAG.
+6. `run --plan P-xxx` — implement via Research Engineer.
+7. Review metrics / evidence / knowledge effects.
+8. Repeat; submit only when local CV looks worth a leaderboard hit.
 
-Avoid burning daily submission quota on undiagnosed regressions — the comparator
-and knowledge base exist so you don’t have to rediscover failures by hand.
+Avoid burning daily submission quota on undiagnosed regressions — the knowledge
+base and experiment tools exist so you don’t rediscover failures by hand.
 
 ---
 
@@ -283,14 +242,15 @@ and knowledge base exist so you don’t have to rediscover failures by hand.
 |---------|--------|
 | Download / API errors | Joined competition? `research doctor`? Valid `KAGGLE_*` in `.env`? |
 | LightGBM import fails | macOS: `brew install libomp`; reinstall env |
-| Brief/reflection look templated | No LLM key / `llm` extra — expected; set key or pass `--yes` |
+| Analyze / code look templated | No LLM key / `llm` extra — expected; set key or rely on rule_engine |
 | Image/deep train fails | Install `--extra image` or `--extra deep` |
-| `improve` refuses parent | Parent must be `completed` (`research status`) |
-| Empty graph / report | Wrong `--competition` slug, or `--runs-dir` pointed elsewhere |
+| `run` without `--plan` errors | Required — create a plan first (`--baseline` or `-H`) |
+| Empty experiments graph / report | Wrong `--competition` slug, or still looking only at empty `runs/` |
 | Dashboard / hyps missing later | `knowledge/` is gitignored — local only unless you sync it yourself |
 
-More architecture detail: [ARCHITECTURE.md](ARCHITECTURE.md).  
-Experiment Scientist design: [milestones/experiment-scientist/README.md](milestones/experiment-scientist/README.md).  
-Research Intelligence design: [milestones/research-intelligence/README.md](milestones/research-intelligence/README.md).  
+More architecture: [ARCHITECTURE.md](ARCHITECTURE.md).  
+Research Engineer: [milestones/research-engineer/README.md](milestones/research-engineer/README.md).  
+Pipeline removal: [milestones/research-engineer/pipeline-deprecation.md](milestones/research-engineer/pipeline-deprecation.md).  
+Research Intelligence: [milestones/research-intelligence/README.md](milestones/research-intelligence/README.md).  
 Research Planner: [milestones/research-planner/README.md](milestones/research-planner/README.md).  
-Research Engineer (Design A): [milestones/research-engineer/README.md](milestones/research-engineer/README.md).
+Experiment Scientist: [milestones/experiment-scientist/README.md](milestones/experiment-scientist/README.md).

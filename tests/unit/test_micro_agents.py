@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from labpilot.common.micro_agents import (
+from labpilot.accessor.common.micro_agents import (
     BaseMicroAgent,
     MicroAgent,
     StructuredContext,

@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from labpilot.accessor.commons.ids import allocate_sequential_id, task_id
-from labpilot.accessor.commons.json_utils import dumps, loads
+from labpilot.accessor.common.ids import allocate_sequential_id, task_id
+from labpilot.accessor.common.json_utils import dumps, loads
 from labpilot.accessor.sqlite import SCHEMA_VERSION, SqliteClient
 
 

@@ -13,7 +13,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
-from labpilot.competition.models import CompetitionMetadata, CompetitionSpec
+from labpilot.research_engine.intelligence.competition.models import CompetitionMetadata, CompetitionSpec
 from labpilot.research_engine.intelligence.models import AnalyzeContext
 from labpilot.research_engine.intelligence.providers.capability import (
     CapabilityResult,

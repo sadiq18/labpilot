@@ -4,17 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from labpilot.baseline.selector import BaselineChoice
+from labpilot.research_engine.execution.baseline.selector import BaselineChoice
 from labpilot.config import LLMConfig
 from labpilot.experiments.graph import assemble_experiment
 from labpilot.experiments.models import (
     Experiment,
     StructuredReflection,
 )
-from labpilot.kaggle.client import SubmissionResult
-from labpilot.profiler.tabular import DatasetProfile
+from labpilot.accessor.kaggle.client import SubmissionResult
+from labpilot.accessor.profiler.tabular import DatasetProfile
 from labpilot.reflection.generator import ReflectionGenerator, render_markdown
-from labpilot.tracking.store import ExperimentRecord, ExperimentStore
+from labpilot.experiments.store import ExperimentRecord, ExperimentStore
 
 
 class FakeLLMClient:

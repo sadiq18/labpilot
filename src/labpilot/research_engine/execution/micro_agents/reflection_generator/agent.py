@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from labpilot.common.micro_agents import BaseMicroAgent, StructuredContext, coerce_str_list
+from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext, coerce_str_list
 
 
 class ReflectionDraft(BaseModel):

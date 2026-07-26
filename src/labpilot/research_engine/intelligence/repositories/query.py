@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from labpilot.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.llm.client import LLMClient
 from labpilot.research_engine.intelligence.micro_agents.repo_query_planner import (
     RepoQueryPlannerAgent,

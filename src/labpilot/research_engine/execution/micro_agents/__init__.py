@@ -1,7 +1,7 @@
 """Execution Platform Micro Agents (design §2.4).
 
 Optional reasoning slice for the run/reflect side (M2). Shares the
-``MicroAgent`` contract via :mod:`labpilot.common.micro_agents`; agents fall
+``MicroAgent`` contract via :mod:`labpilot.accessor.common.micro_agents`; agents fall
 back to a deterministic ``rule_engine`` with no API key.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from labpilot.common.micro_agents import BaseMicroAgent, MicroAgent, StructuredContext
+from labpilot.accessor.common.micro_agents import BaseMicroAgent, MicroAgent, StructuredContext
 from labpilot.research_engine.execution.micro_agents.reflection_generator import (
     ReflectionDraft,
     ReflectionGeneratorAgent,

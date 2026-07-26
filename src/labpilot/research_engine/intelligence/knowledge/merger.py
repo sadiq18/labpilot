@@ -14,7 +14,7 @@ from collections import Counter
 
 from pydantic import BaseModel, Field
 
-from labpilot.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.research_engine.intelligence.knowledge.extractor import ConceptCandidate
 from labpilot.research_engine.intelligence.knowledge.models import EntityType, EvidenceRef
 from labpilot.research_engine.intelligence.micro_agents.concept_normalizer import (

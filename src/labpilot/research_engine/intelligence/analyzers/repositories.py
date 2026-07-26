@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from labpilot.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.llm.client import LLMClient
 from labpilot.research_engine.intelligence.analyzers.base import BaseAnalyzer
 from labpilot.research_engine.intelligence.knowledge import KnowledgeStore

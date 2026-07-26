@@ -120,7 +120,7 @@ def test_intent_rules_structured_query_keywords() -> None:
 
 
 def test_intent_classifier_agent_rule_engine() -> None:
-    from labpilot.common.micro_agents import StructuredContext
+    from labpilot.accessor.common.micro_agents import StructuredContext
     from labpilot.research_engine.intelligence.micro_agents.intent_classifier import (
         IntentClassifierAgent,
     )

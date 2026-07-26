@@ -1,7 +1,7 @@
 import logging
 
-from labpilot.profiler.report import load_profile
-from labpilot.profiler.tabular import ColumnProfile, DatasetProfile
+from labpilot.accessor.profiler.report import load_profile
+from labpilot.accessor.profiler.tabular import ColumnProfile, DatasetProfile
 
 logger = logging.getLogger(__name__)
 

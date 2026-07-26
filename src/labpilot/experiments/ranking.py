@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from labpilot.competition.models import CompetitionSpec
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.experiments.graph import ExperimentGraph, build_graph
 from labpilot.experiments.hypothesis import HypothesisStore
 from labpilot.experiments.knowledge import KnowledgeBase, normalize_technique

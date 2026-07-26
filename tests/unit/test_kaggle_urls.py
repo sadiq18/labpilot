@@ -1,6 +1,6 @@
 import pytest
 
-from labpilot.kaggle.urls import parse_kernel_ref
+from labpilot.accessor.kaggle.urls import parse_kernel_ref
 
 
 def test_parse_kernel_ref_accepts_code_prefix():
