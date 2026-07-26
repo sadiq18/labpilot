@@ -44,6 +44,7 @@ research analyze *         →  research partner over papers/repos/local memory
 - **`improve`** forks a *completed* parent; it does not re-download or re-profile.
 - **Rank / report / dashboard** tell you what to try next; they never auto-train.
 - **`analyze` / `retrieve` / `hypothesize`** synthesize evidence; they never auto-train.
+- **`plan`** compiles a hypothesis into a DAG; it never executes tasks or starts training.
 
 Artifacts to care about:
 
@@ -57,6 +58,7 @@ Artifacts to care about:
 | `knowledge/<slug>/knowledge_base.json` | What techniques helped/hurt |
 | `knowledge/<slug>/dashboard.html` | Competition overview (generate on demand) |
 | `knowledge/<slug>/research/reports/analyze.json` | Research Intelligence contract (M3) |
+| `knowledge/<slug>/research/plans/P-*.json|.md` | Research Planner projections (plan-only) |
 
 ---
 
@@ -153,12 +155,26 @@ uv run research retrieve <slug> -q "Show experiments where Focal Loss hurt"
 uv run research hypothesize <slug> --limit 5
 ```
 
-Treat suggestions as a backlog — pick one, attach a hypothesis, then `improve`.
-External techniques stay **Suggested** until local runs promote them.
+Treat suggestions as a backlog — pick one, compile a plan, then decide whether to
+`improve`. External techniques stay **Suggested** until local runs promote them.
 `research fetch` stores kernels as repository artifacts (`source=kaggle`) and
 discussions as discussion artifacts; Forum Intelligence extraction still lands in
 Plan F analyzers. Analyze defaults leave kernels/discussions to `fetch` unless
 you pass `--fetch-kaggle`.
+
+### Step 3c — Compile a research plan (plan-only)
+
+Once you have a hypothesis id, turn it into an inspectable DAG **without** running
+training or writing code:
+
+```bash
+uv run research plan create <slug> --hypothesis H-00N
+uv run research plan show <slug> P-001
+uv run research plan list <slug> --status ready
+```
+
+Derived projections land under `knowledge/<slug>/research/plans/`. There is no
+`--execute` flag — a human still picks `improve` / `run`.
 
 ### Step 4 — Improve a completed parent
 
@@ -227,7 +243,7 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 | Want to read brief before CPU time | `init` → review → `build` |
 | Crash / failed stage | `resume -r <id>` |
 | Parent looks good; try a tweak | `improve -r <parent> [--strategy …]` |
-| Idea captured, not run yet | `hypothesize <slug>` → `rank` → `improve --hypothesis` |
+| Idea captured, not run yet | `hypothesize <slug>` → `plan create -H …` → `rank` → `improve --hypothesis` |
 | “Did child help?” | `experiments compare` or open `comparison.md` |
 | “What have we learned about recipe X?” | `experiments knowledge list --technique …` |
 | “Show me everything” | `experiments report` + `dashboard` |
@@ -235,6 +251,7 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 | Pull Kaggle code/forum into the store | `research fetch <slug>` (or `analyze --fetch-kaggle`) |
 | Grounded Q over the knowledge store | `research retrieve <slug> -q "…"` |
 | Literature-backed untried ideas | `research hypothesize <slug>` |
+| Hypothesis → executable DAG (no train) | `research plan create <slug> -H H-xxx` |
 | Need another operator on the team | Point them at this SOP + [CLI.md](CLI.md) |
 
 ---
@@ -244,10 +261,11 @@ Kernel-only competitions: LabPilot still trains locally, exports `kernel/`, and
 1. `experiments report` / `dashboard` — where are we?
 2. Optional: `research analyze` — refresh landscape + Research Brief (+ `--fetch-kaggle` when needed).
 3. `experiments rank` or `research hypothesize` — pick one proposed hypothesis (or add one).
-4. `improve --hypothesis H-xxx --strategy …` — one change at a time when possible.
-5. `experiments compare` — keep / discard.
-6. `knowledge list` — update your intuition from effects.
-7. Repeat; submit only when local CV (and sanity checks) look worth a leaderboard hit.
+4. `research plan create <slug> -H H-xxx` — compile an inspectable DAG (no execution).
+5. `improve --hypothesis H-xxx --strategy …` — one change at a time when possible.
+6. `experiments compare` — keep / discard.
+7. `knowledge list` — update your intuition from effects.
+8. Repeat; submit only when local CV (and sanity checks) look worth a leaderboard hit.
 
 Avoid burning daily submission quota on undiagnosed regressions — the comparator
 and knowledge base exist so you don’t have to rediscover failures by hand.
@@ -269,4 +287,4 @@ and knowledge base exist so you don’t have to rediscover failures by hand.
 More architecture detail: [ARCHITECTURE.md](ARCHITECTURE.md).  
 Experiment Scientist design: [milestones/experiment-scientist/README.md](milestones/experiment-scientist/README.md).  
 Research Intelligence design: [milestones/research-intelligence/README.md](milestones/research-intelligence/README.md).  
-Research Planner design (Phase A): [milestones/research-planner/README.md](milestones/research-planner/README.md).
+Research Planner: [milestones/research-planner/README.md](milestones/research-planner/README.md).

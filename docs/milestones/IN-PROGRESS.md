@@ -4,12 +4,13 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-## Research Planner — Phase B plans ready
+## Research Planner — plan-only MVP shipped
 
-**Status:** Design Phase A locked; **implementation plans 1–6 authored**. Application code
-not started.
+**Status:** Phase B Plans 1–6 **implemented**. Plan-only MVP complete
+(`research plan create` / `show` / `list`). Capability executors / `--execute` remain
+out of scope.
 
-**Design:**
+**Design + code:**
 
 - [research-planner/README.md](research-planner/README.md) — product shape, compiler metaphor, CLI, non-goals
 - [research-planner/schema.md](research-planner/schema.md) — `research_plans` / `research_tasks` / deps
@@ -23,10 +24,11 @@ not started.
 | 2 | [Schemas + PlanStore](research-planner/plan-2-schemas-store.md) | 1 | Done |
 | 3 | [Deterministic compiler](research-planner/plan-3-compiler.md) | 2 | Done |
 | 4 | [Planning Engine Micro Agent](research-planner/plan-4-planning-engine.md) | 3 | Done |
-| 5 | [CLI `research plan`](research-planner/plan-5-cli.md) | 3–4 | Not started |
-| 6 | [Capstone + docs](research-planner/plan-6-capstone.md) | 5 | Not started |
+| 5 | [CLI `research plan`](research-planner/plan-5-cli.md) | 3–4 | Done |
+| 6 | [Capstone + docs](research-planner/plan-6-capstone.md) | 5 | Done |
 
-**Next:** implement Plan 5 (CLI `research plan`), then Plan 6.
+**Next:** Future backlog only (helper micro-agents, competing planners, budget,
+capability executors). Research Intelligence Plan F (Forum Intelligence) remains open.
 
 ---
 
@@ -42,8 +44,8 @@ Plan F (Forum Intelligence analyzer wiring) remains future.
 **Package layout (design):** `cli/` · `common/` · `research_engine/{execution,intelligence}/`
 with Micro Agents in `intelligence/micro_agents/` and `execution/micro_agents/` (`*Agent` +
 `skill.md`). On disk: `knowledge/<slug>/research/{raw,extracted,knowledge,experiments,reports}/`
-+ `knowledge.db` — **local / gitignored**. Planner will add a sibling
-`research_engine/planner/` pillar (see Research Planner design above).
++ `knowledge.db` — **local / gitignored**. Planner is a sibling
+`research_engine/planner/` pillar (see Research Planner above) plus shared `labpilot.accessor`.
 
 ### Milestone 3 implementation plans
 

@@ -2,8 +2,8 @@
 
 Back to [README.md](README.md) · [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** Design Phase A. No `schema.sql` changes until Phase B implementation plans are
-approved.
+**Status:** Implemented in Phase B — DDL lives in `accessor/sqlite/schema.sql`
+(`SCHEMA_VERSION` 3+). This doc remains the design reference.
 
 This doc specifies the durable plan/task model: SQLite tables in `knowledge.db`, Pydantic
 shapes, PlanStore API, and derived file projections.

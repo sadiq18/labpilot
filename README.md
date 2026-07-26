@@ -128,6 +128,7 @@ How to run LabPilot day-to-day (baseline → improve → rank → submit):
 | Environment check | `research doctor` |
 | Lineage / compare / KB / rank / search | `research experiments …` — see [CLI.md](docs/CLI.md#4-experiments) |
 | Hypotheses | `research hypothesize <slug>` to generate; `list` / `show` / `update` to manage — see [CLI.md](docs/CLI.md#5-hypotheses) |
+| Research plan (DAG) | `research plan create <slug> -H H-xxx` — plan-only; see [CLI.md](docs/CLI.md#7-research-planner) |
 | Per-run HTML | `research report --run-id <id>` |
 | Competition HTML | `research experiments dashboard --competition <slug>` |
 
@@ -137,7 +138,7 @@ Default policy: **do not pass `--submit`** until you have inspected local metric
 `submission.csv`. Use `--dry-run` on `run` / `build` / `improve` to validate through
 codegen without training.
 
-Workspace / runtime / templates details: [CLI.md §6](docs/CLI.md#6-environment--project),
+Workspace / runtime / templates details: [CLI.md §8](docs/CLI.md#8-environment--project),
 [configs/runtimes/README.md](configs/runtimes/README.md),
 [configs/competitions/README.md](configs/competitions/README.md).
 

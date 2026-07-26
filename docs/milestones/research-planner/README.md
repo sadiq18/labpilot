@@ -2,13 +2,15 @@
 
 Back to [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** Design Phase A locked; **Phase B implementation plans authored** (Plans 1–6).
-No application code yet. **Depends on:** Experiment Scientist
+**Status:** Phase B **implemented** — plan-only MVP shipped (Plans 1–6).
+**Depends on:** Experiment Scientist
 ([../experiment-scientist/](../experiment-scientist/)) and Research Intelligence
 ([../research-intelligence/](../research-intelligence/)).
-**Unlocks (after Phase B code):** `research plan` — Hypothesis → executable research DAG.
+**CLI:** `research plan create` / `show` / `list` — Hypothesis → durable research DAG
+(no `--execute`).
 
-This directory is the architecture/design workspace for the Research Planner. Phase A is:
+This directory holds the architecture/design workspace and Phase B plans for the Research
+Planner:
 
 
 | Doc                                    | Role                                                     |
@@ -18,8 +20,8 @@ This directory is the architecture/design workspace for the Research Planner. Ph
 | [package-layout.md](package-layout.md) | `research_engine/planner/` tree + import hygiene         |
 
 
-**Phase B** implementation plans are sequenced below (§14). Implement plan-by-plan after
-review — same ship-and-review style as Research Intelligence.
+Phase B plans 1–6 are complete (§14). Future work (helper micro-agents, competing
+planners, budget allocator, capability executors) stays backlog-only.
 
 ---
 
@@ -385,11 +387,13 @@ Do not overload `ImprovementPlan` or `QueryPlan`. The Research Plan sits **betwe
 
 ### MVP (after Phase B **code** — Plans 1–6)
 
-- [ ] `research plan create` writes `research_plans` + `research_tasks` + deps in `knowledge.db`
-- [ ] Derived JSON/MD under `plans/`; markdown regenerated from structure
-- [ ] Works with LLM disabled (`rule_engine` templates)
-- [ ] DAG validation rejects cycles / missing deps
-- [ ] No `runs/` created; no source/config mutated by the planner
+- [x] `research plan create` writes `research_plans` + `research_tasks` + deps in `knowledge.db`
+- [x] Derived JSON/MD under `plans/`; markdown regenerated from structure
+- [x] Works with LLM disabled (`rule_engine` templates)
+- [x] DAG validation rejects cycles / missing deps
+- [x] No `runs/` created; no source/config mutated by the planner
+
+**Status:** Phase B implemented — plan-only MVP shipped.
 
 ---
 

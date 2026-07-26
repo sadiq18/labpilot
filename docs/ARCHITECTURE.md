@@ -473,10 +473,19 @@ analyze only pulls them when `--fetch-kaggle` is set.
 
 Design detail: [milestones/research-intelligence/README.md](milestones/research-intelligence/README.md).
 
-**Research Planner** (next design track — Phase A only): Hypothesis → planning compiler →
-executable DAG. Package will be a sibling `research_engine/planner/` pillar. Design:
-[milestones/research-planner/README.md](milestones/research-planner/README.md). No planner
-code in the tree yet.
+### Research Planner
+
+| | |
+|---|---|
+| **Path** | `research_engine/planner/` (+ shared `labpilot.accessor`) |
+| **Responsibility** | Hypothesis → planning compiler → durable task DAG (plan-only) |
+| **CLI** | `research plan create` / `show` / `list` |
+| **Status** | MVP shipped (Plans 1–6) |
+
+Compiler (not multi-agent): deterministic retrieve/context/template → optional one-shot
+Planning Engine LLM revision → validate/schedule → `PlanStore` + derived `plans/*.json|md`.
+Never writes code, mutates configs, or creates `runs/`. Design:
+[milestones/research-planner/README.md](milestones/research-planner/README.md).
 
 ## Repository Structure
 
@@ -489,6 +498,7 @@ labpilot/
 │
 ├── src/labpilot/
 │   ├── cli/                   # Typer CLI entry point
+│   ├── accessor/              # Shared SQLite + LLM + commons (pillars depend here)
 │   ├── orchestrator/          # Pipeline DAG + manifest
 │   ├── competition/           # Parser + CompetitionSpec models
 │   ├── data/                  # Download + directory layout
@@ -505,7 +515,10 @@ labpilot/
 │   ├── improvement/           # Run fork, planner, tuner, feature recipes (P3)
 │   ├── tracking/              # Experiment logger, store, cross-run index
 │   ├── experiments/           # Experiment graph, hypotheses, comparator (Milestone 2)
-│   ├── research_engine/       # M3 Research Intelligence + execution helpers
+│   ├── research_engine/       # Intelligence + Planner + execution helpers
+│   │   ├── intelligence/      # analyze → knowledge → hypothesize
+│   │   ├── planner/           # Hypothesis → ResearchPlan DAG
+│   │   └── execution/         # Reflection / future capability executors
 │   ├── reflection/            # Reflection generation + prompts
 │   └── config.py              # AppConfig + Settings
 │
@@ -531,12 +544,12 @@ labpilot/
     ├── MILESTONES.md          # Roadmap index
     └── milestones/
         ├── COMPLETED.md       # Shipped milestones (P0–P4) + per-milestone architecture changes
-        ├── IN-PROGRESS.md     # Active work (Research Planner design Phase A)
+        ├── IN-PROGRESS.md     # Active work
         ├── TODO.md            # P2 execution (deferred) + post-1.0 planned
         ├── backlog.md         # Unscheduled future work
         ├── experiment-scientist/   # Experiment Scientist (README + 8 plans) — shipped
         ├── research-intelligence/  # Research Intelligence (README + plans 1–11) — Phase 1 shipped
-        └── research-planner/       # Research Planner — design Phase A only (no code yet)
+        └── research-planner/       # Research Planner — MVP shipped (Plans 1–6)
 ```
 
 ---
