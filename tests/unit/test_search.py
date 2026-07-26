@@ -8,22 +8,22 @@ import pytest
 from typer.testing import CliRunner
 
 from labpilot.cli.main import app
-from labpilot.experiments.comparator import write_comparison
-from labpilot.experiments.graph import build_graph
-from labpilot.experiments.models import (
+from labpilot.research_engine.shared.experiments.comparator import write_comparison
+from labpilot.research_engine.shared.experiments.graph import build_graph
+from labpilot.research_engine.shared.experiments.models import (
     ChangeCategory,
     ConfigChange,
     ExperimentComparison,
     Verdict,
 )
-from labpilot.experiments.search import (
+from labpilot.research_engine.shared.experiments.search import (
     SearchFilters,
     load_comparisons,
     parse_duration,
     search,
 )
-from labpilot.experiments.legacy_run_overrides import TrainingOverrides, save_training_overrides
-from labpilot.experiments.manifest import RunManifest, StageStatus, save_manifest
+from labpilot.research_engine.shared.experiments.legacy_run_overrides import TrainingOverrides, save_training_overrides
+from labpilot.research_engine.shared.experiments.manifest import RunManifest, StageStatus, save_manifest
 
 
 def _seed_run(
@@ -45,7 +45,7 @@ def _seed_run(
         metadata["iteration"] = 1
     stages = []
     if runtime_seconds is not None:
-        from labpilot.experiments.manifest import StageRecord
+        from labpilot.research_engine.shared.experiments.manifest import StageRecord
         from datetime import timedelta
 
         start = datetime(2026, 1, 1, 12, 0, 0)
@@ -85,7 +85,7 @@ def _seed_run(
         ),
     )
     (run_dir / "metrics.json").write_text(json.dumps(metrics))
-    from labpilot.experiments.store import ExperimentRecord, ExperimentStore
+    from labpilot.research_engine.shared.experiments.store import ExperimentRecord, ExperimentStore
 
     ExperimentStore(run_dir).save(
         ExperimentRecord(

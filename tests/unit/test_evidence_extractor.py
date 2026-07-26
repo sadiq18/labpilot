@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from labpilot.experiments.models import ExperimentComparison, Verdict
+from labpilot.research_engine.shared.experiments.models import ExperimentComparison, Verdict
 from labpilot.research_engine.execution.evidence import ensure_execution_layout, write_evidence
 from labpilot.research_engine.execution.schemas import TaskEvidence
 from labpilot.research_engine.execution.store import ExecutionStore

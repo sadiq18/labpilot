@@ -7,11 +7,11 @@ import pytest
 from typer.testing import CliRunner
 
 from labpilot.cli.main import app
-from labpilot.experiments.knowledge import (
+from labpilot.research_engine.shared.experiments.knowledge import (
     KnowledgeBase,
     technique_tags_from_changes,
 )
-from labpilot.experiments.models import (
+from labpilot.research_engine.shared.experiments.models import (
     ChangeCategory,
     ConfigChange,
     ExperimentComparison,

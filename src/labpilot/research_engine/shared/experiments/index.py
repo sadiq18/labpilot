@@ -4,10 +4,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from labpilot.experiments.comparator import compare
-from labpilot.experiments.graph import assemble_experiment
-from labpilot.experiments.manifest import load_manifest
-from labpilot.experiments.store import ExperimentRecord, ExperimentStore
+from labpilot.research_engine.shared.experiments.comparator import compare
+from labpilot.research_engine.shared.experiments.graph import assemble_experiment
+from labpilot.research_engine.shared.experiments.manifest import load_manifest
+from labpilot.research_engine.shared.experiments.store import ExperimentRecord, ExperimentStore
 
 
 class RunIndexEntry(BaseModel):

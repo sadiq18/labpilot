@@ -7,8 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from labpilot.experiments.graph import ExperimentGraph
-from labpilot.experiments.models import (
+from labpilot.research_engine.shared.experiments.graph import ExperimentGraph
+from labpilot.research_engine.shared.experiments.models import (
     Experiment,
     Hypothesis,
     HypothesisCreatedBy,

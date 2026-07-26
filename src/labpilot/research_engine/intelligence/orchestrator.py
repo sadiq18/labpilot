@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from labpilot.experiments.models import HypothesisCreatedBy
+from labpilot.research_engine.shared.experiments.models import HypothesisCreatedBy
 from labpilot.research_engine.intelligence.analyzers.base import Analyzer
 from labpilot.research_engine.intelligence.analyzers.competition import (
     profile_dict_for_report,

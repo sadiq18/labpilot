@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 from labpilot.accessor.common.ids import task_id as make_task_id
 from labpilot.accessor.common.micro_agents import StructuredContext
-from labpilot.experiments.models import Hypothesis
+from labpilot.research_engine.shared.experiments.models import Hypothesis
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.planner import optimizer, scheduler, serializer
 from labpilot.research_engine.planner.context_builder import PlanningContext, build_context

@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from labpilot.experiments.comparator import load_comparison
-from labpilot.experiments.graph import ExperimentGraph
-from labpilot.experiments.models import Experiment, ExperimentComparison, Verdict
+from labpilot.research_engine.shared.experiments.comparator import load_comparison
+from labpilot.research_engine.shared.experiments.graph import ExperimentGraph
+from labpilot.research_engine.shared.experiments.models import Experiment, ExperimentComparison, Verdict
 
 _DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([hms]?)\s*$", re.IGNORECASE)
 

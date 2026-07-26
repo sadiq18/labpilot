@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
-from labpilot.experiments.models import (
+from labpilot.research_engine.shared.experiments.models import (
     ChangeCategory,
     ConfigChange,
     Experiment,

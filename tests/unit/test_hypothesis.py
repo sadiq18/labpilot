@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from labpilot.experiments.graph import ExperimentGraph, assemble_experiment, build_graph
-from labpilot.experiments.hypothesis import HypothesisStore, linked_experiments
-from labpilot.experiments.models import Experiment, HypothesisStatus
+from labpilot.research_engine.shared.experiments.graph import ExperimentGraph, assemble_experiment, build_graph
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore, linked_experiments
+from labpilot.research_engine.shared.experiments.models import Experiment, HypothesisStatus
 
 
 def test_create_allocates_incrementing_ids(tmp_path: Path):

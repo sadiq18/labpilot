@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from labpilot.experiments.models import Hypothesis
+from labpilot.research_engine.shared.experiments.models import Hypothesis
 from labpilot.research_engine.planner.retrieval import RetrievedContext
 
 

@@ -13,7 +13,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from labpilot.experiments.models import (
+from labpilot.research_engine.shared.experiments.models import (
     ConfigChange,
     ExperimentComparison,
     KnowledgeEffect,

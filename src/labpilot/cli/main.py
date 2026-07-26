@@ -23,19 +23,19 @@ from labpilot.diagnostics import (
     print_diagnostics_report,
     required_environment_checks,
 )
-from labpilot.experiments.comparator import compare, load_comparison, render_markdown
-from labpilot.experiments.graph import assemble_experiment, build_graph
-from labpilot.experiments.hypothesis import HypothesisStore, linked_experiments
-from labpilot.experiments.knowledge import KnowledgeBase
-from labpilot.experiments.models import HypothesisCreatedBy, HypothesisStatus, Verdict
-from labpilot.experiments.ranking import RankingWeights, rank_candidates
-from labpilot.experiments.report import (
+from labpilot.research_engine.shared.experiments.comparator import compare, load_comparison, render_markdown
+from labpilot.research_engine.shared.experiments.graph import assemble_experiment, build_graph
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore, linked_experiments
+from labpilot.research_engine.shared.experiments.knowledge import KnowledgeBase
+from labpilot.research_engine.shared.experiments.models import HypothesisCreatedBy, HypothesisStatus, Verdict
+from labpilot.research_engine.shared.experiments.ranking import RankingWeights, rank_candidates
+from labpilot.research_engine.shared.experiments.report import (
     NoExperimentsError,
     build_report,
     render_report_text,
     write_dashboard,
 )
-from labpilot.experiments.search import (
+from labpilot.research_engine.shared.experiments.search import (
     SearchFilters,
     load_comparisons,
     parse_duration,
@@ -45,7 +45,7 @@ from labpilot.experiments.search import (
 )
 from labpilot.accessor.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
-from labpilot.experiments.manifest import StageStatus, find_manifest, load_manifest
+from labpilot.research_engine.shared.experiments.manifest import StageStatus, find_manifest, load_manifest
 from labpilot.research_engine.intelligence.context import build_context
 from labpilot.research_engine.intelligence.fetch import KaggleFetchService
 from labpilot.research_engine.intelligence.hypothesis import HypothesisAssistant
@@ -64,7 +64,7 @@ from labpilot.research_engine.intelligence.retrieval import (
 from labpilot.research_engine.execution.runtimes.doctor import check_all_runtimes
 from labpilot.research_engine.execution.runtimes.registry import get_runtime, list_runtimes
 from labpilot.research_engine.execution.runtimes.templates import runtime_to_yaml_dict, scaffold_runtime
-from labpilot.experiments.index import diff_runs
+from labpilot.research_engine.shared.experiments.index import diff_runs
 
 logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -1495,7 +1495,7 @@ def experiments_knowledge_list(
     ),
 ) -> None:
     """List accumulated technique knowledge for a competition (Plan 5)."""
-    from labpilot.experiments.models import KnowledgeEffect
+    from labpilot.research_engine.shared.experiments.models import KnowledgeEffect
 
     effect_filter = None
     if effect is not None:

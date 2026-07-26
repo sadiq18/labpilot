@@ -23,7 +23,7 @@ lives under `accessor/kaggle/` (top-level `kernel/` removed).
 | **`src/labpilot/report/`** | **Delete** Pipeline-era HTML reporter (see below) |
 | **`src/labpilot/improvement/`** | **Delete** after relocating live bits (see below) |
 | `src/labpilot/kernel/` | **Done** — `exporter` → `accessor/kaggle/exporter.py`; package removed |
-| `src/labpilot/experiments/` (→ planned `shared/experiments/`) | Keep as shared SoR; reflection owns post-run writes; package move is follow-on |
+| `src/labpilot/research_engine/shared/experiments/` | **Done** — moved from `src/labpilot/experiments/`; shared SoR; reflection owns post-run writes |
 | Reporting stubs | Already replaced in Plan 5 |
 
 ---
@@ -93,7 +93,7 @@ Graph / dashboard may still *detect* `has_report` / link to them — they must n
 
 - Delete `src/labpilot/improvement/` entirely.
 - No imports of `labpilot.improvement` remain.
-- Graph / search tests import overrides helpers from `labpilot.experiments…`.
+- Graph / search tests import overrides helpers from `labpilot.research_engine.shared.experiments…`.
 
 ### Follow-on TODO (not Plan 9 exit criteria)
 

@@ -15,8 +15,8 @@ Planner inputs.
 
 - `lessons/generator.py` → `lessons` table (LLM + rule_engine)
 - `synthesis/synthesizer.py` — rollup of beliefs, recent evidence, open hyps
-- Dual-write / migrate writers from `experiments/knowledge.py` as needed
-  (path today: `labpilot.experiments`; target: `shared.experiments`)
+- Dual-write / migrate writers from `shared.experiments.knowledge` as needed
+  (`labpilot.research_engine.shared.experiments`)
 
 ## Out of scope
 

@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from labpilot.accessor.common.micro_agents import StructuredContext
-from labpilot.experiments.hypothesis import HypothesisStore
-from labpilot.experiments.models import Hypothesis, HypothesisStatus
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+from labpilot.research_engine.shared.experiments.models import Hypothesis, HypothesisStatus
 from labpilot.research_engine.reflection.critic.critic import CriticAssessment
 from labpilot.research_engine.reflection.hypotheses.micro_agent import (
     HypothesisRevisionAgent,

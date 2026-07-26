@@ -10,10 +10,10 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from rich.console import Console
 from rich.table import Table
 
-from labpilot.experiments.graph import ExperimentGraph, build_graph
-from labpilot.experiments.knowledge import KnowledgeBase
-from labpilot.experiments.models import Experiment, ExperimentReport, RankedCandidate
-from labpilot.experiments.ranking import (
+from labpilot.research_engine.shared.experiments.graph import ExperimentGraph, build_graph
+from labpilot.research_engine.shared.experiments.knowledge import KnowledgeBase
+from labpilot.research_engine.shared.experiments.models import Experiment, ExperimentReport, RankedCandidate
+from labpilot.research_engine.shared.experiments.ranking import (
     RankingWeights,
     rank_candidates,
     resolve_primary_metric_key,

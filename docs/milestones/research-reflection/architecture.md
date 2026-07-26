@@ -14,7 +14,7 @@ New pillar under `src/labpilot/research_engine/reflection/`, peer of
 | Trigger | After Engineer execution (Reporting TaskTypes) + CLI `research reflect` / `journal` |
 | Capabilities | Deterministic extractors + belief/hypothesis writers; LLM only in Critic / synthesis / lessons / recommendations |
 | No | Standalone “reflection agent” that owns control flow |
-| Import hygiene | `reflection` → `accessor`, `experiments` helpers (today `labpilot.experiments`; target `research_engine.shared.experiments`), planner/execution **read** APIs; execution may call reflection library; intelligence may **read** claims/beliefs — reflection does not deep-import intelligence analyzers |
+| Import hygiene | `reflection` → `accessor`, `labpilot.research_engine.shared.experiments`, planner/execution **read** APIs; execution may call reflection library; intelligence may **read** claims/beliefs — reflection does not deep-import intelligence analyzers |
 
 ---
 
@@ -105,8 +105,8 @@ Each agent is imported from its domain package (e.g. `reflection.critic.RootCaus
 | SQLite `beliefs` / `experiments` / `evidence_links` | Extend; add reflection tables |
 | M2 `StructuredReflection` + top-level `reflection/` | Schema/prompts migrate; delete top-level after Plan 9 |
 
-Today these live at `labpilot.experiments`. Design target (separate move):
-`labpilot.research_engine.shared.experiments` — see [package-layout.md](package-layout.md) §2.
+These live at `labpilot.research_engine.shared.experiments` — see
+[package-layout.md](package-layout.md) §2.
 
 
 ---

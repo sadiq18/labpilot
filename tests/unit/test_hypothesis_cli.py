@@ -9,8 +9,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from labpilot.cli.main import app
-from labpilot.experiments.hypothesis import HypothesisStore
-from labpilot.experiments.models import HypothesisStatus
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+from labpilot.research_engine.shared.experiments.models import HypothesisStatus
 from labpilot.research_engine.intelligence.knowledge import KnowledgeHub, KnowledgeStore
 from labpilot.research_engine.intelligence.models import (
     ResearchArtifact,

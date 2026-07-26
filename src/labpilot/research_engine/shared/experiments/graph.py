@@ -6,14 +6,14 @@ from typing import Any
 
 from labpilot.research_engine.execution.baseline.selector import BaselineChoice
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
-from labpilot.experiments.models import Experiment, StructuredReflection
-from labpilot.experiments.legacy_run_overrides import (
+from labpilot.research_engine.shared.experiments.models import Experiment, StructuredReflection
+from labpilot.research_engine.shared.experiments.legacy_run_overrides import (
     ImprovementPlan,
     load_improvement_plan,
     load_training_overrides,
 )
-from labpilot.experiments.manifest import RunManifest, StageStatus, load_manifest
-from labpilot.experiments.store import ExperimentStore
+from labpilot.research_engine.shared.experiments.manifest import RunManifest, StageStatus, load_manifest
+from labpilot.research_engine.shared.experiments.store import ExperimentStore
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ def _load_hypothesis_prediction(
     if not hypothesis_id:
         return None
     # Local import avoids a circular dependency with hypothesis.py importing graph.
-    from labpilot.experiments.hypothesis import HypothesisStore
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 
     hypothesis = HypothesisStore(knowledge_dir, competition).get(hypothesis_id)
     if hypothesis is None:

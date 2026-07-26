@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from labpilot.experiments.models import Hypothesis
+from labpilot.research_engine.shared.experiments.models import Hypothesis
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 
 #: Retrieval budgets (README L1–L3): keep context small and stable.
