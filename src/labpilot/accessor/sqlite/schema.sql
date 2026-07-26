@@ -1,7 +1,9 @@
--- Knowledge Store schema (knowledge-system.md §4).
--- Ontology + a graph stored relationally: uniform research_artifacts, merged
--- knowledge objects (techniques/datasets/architectures/tasks), and link tables
--- (artifact_techniques + evidence_links) that model the reference edges.
+-- Unified SQLite schema — single source of record for `knowledge.db`.
+--
+-- Owns the intelligence ontology (research_artifacts, merged knowledge objects,
+-- link tables), experiment/hypothesis/belief mirrors, AND the Research Planner
+-- entities (research_plans / research_tasks / research_task_deps). One schema,
+-- one migrator (accessor/sqlite/migrate.py); pillars reach it via SqliteClient.
 --
 -- Type-specific detail lives in `metadata` JSON; the query engine filters the
 -- common interface first (SQL indexes), then walks joins for evidence.
@@ -79,6 +81,9 @@ CREATE TABLE IF NOT EXISTS architectures (
     updated_at TEXT NOT NULL
 );
 
+-- Layer-3 knowledge ontology: named ML task/problem types (e.g. "Audio
+-- Classification"). NOTE: this is NOT a planner execution node — planner DAG
+-- nodes live in `research_tasks`. Do not overload this table.
 CREATE TABLE IF NOT EXISTS tasks (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL UNIQUE,
@@ -206,3 +211,66 @@ CREATE VIEW IF NOT EXISTS repository_techniques AS
     FROM artifact_techniques at
     JOIN research_artifacts a ON a.id = at.artifact_id
     WHERE a.type = 'repository';
+
+-- ==========================================================================
+-- Research Planner — compiled plans and their task DAGs.
+-- research_plans: one compiled plan (usually from one hypothesis).
+-- research_tasks: DAG nodes (WRITE_CODE, RUN_TRAINING, …); the planner never
+--   performs the side effect — a future executor dispatches on task_type.
+-- research_task_deps: DAG edges (task_id depends on depends_on).
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS research_plans (
+    id                 TEXT PRIMARY KEY,
+    competition_slug   TEXT,
+    hypothesis_id      TEXT,
+    goal               TEXT NOT NULL DEFAULT '',
+    current_state      TEXT NOT NULL DEFAULT '',
+    expected_outcome   TEXT NOT NULL DEFAULT '',
+    status             TEXT NOT NULL DEFAULT 'draft',   -- draft|ready|in_progress|done|abandoned
+    priority           INTEGER NOT NULL DEFAULT 0,
+    estimated_gain     REAL NOT NULL DEFAULT 0.0,
+    risk               TEXT NOT NULL DEFAULT '',
+    estimated_cost     REAL,                            -- hook; null in early MVP
+    estimated_duration TEXT,                            -- hook
+    runtime_target     TEXT,                            -- hook: local|docker|kaggle|cpu|p100|a100
+    success_criteria   TEXT NOT NULL DEFAULT '[]',      -- JSON list
+    rollback           TEXT NOT NULL DEFAULT '',
+    artifacts          TEXT NOT NULL DEFAULT '[]',      -- JSON list
+    generated_by       TEXT NOT NULL DEFAULT 'rule_engine',  -- llm|rule_engine
+    metadata           TEXT NOT NULL DEFAULT '{}',
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plans_comp ON research_plans(competition_slug);
+CREATE INDEX IF NOT EXISTS idx_plans_hyp  ON research_plans(hypothesis_id);
+CREATE INDEX IF NOT EXISTS idx_plans_status ON research_plans(status);
+
+CREATE TABLE IF NOT EXISTS research_tasks (
+    id             TEXT PRIMARY KEY,
+    plan_id        TEXT NOT NULL REFERENCES research_plans(id) ON DELETE CASCADE,
+    parent_task_id TEXT REFERENCES research_tasks(id) ON DELETE SET NULL,
+    task_type      TEXT NOT NULL,                       -- TaskType enum value
+    description    TEXT NOT NULL DEFAULT '',
+    inputs         TEXT NOT NULL DEFAULT '[]',          -- JSON list
+    outputs        TEXT NOT NULL DEFAULT '[]',          -- JSON list
+    status         TEXT NOT NULL DEFAULT 'pending',     -- pending|running|done|failed|skipped
+    verification   TEXT NOT NULL DEFAULT '{}',          -- JSON TaskVerification
+    retry_policy   TEXT NOT NULL DEFAULT '{}',          -- JSON RetryPolicy
+    order_index    INTEGER NOT NULL DEFAULT 0,
+    estimated_cost REAL,
+    estimated_time TEXT,
+    metadata       TEXT NOT NULL DEFAULT '{}',
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_research_tasks_plan ON research_tasks(plan_id);
+CREATE INDEX IF NOT EXISTS idx_research_tasks_status ON research_tasks(status);
+
+-- DAG edges: task_id depends on depends_on (must complete first).
+CREATE TABLE IF NOT EXISTS research_task_deps (
+    task_id    TEXT NOT NULL REFERENCES research_tasks(id) ON DELETE CASCADE,
+    depends_on TEXT NOT NULL REFERENCES research_tasks(id) ON DELETE CASCADE,
+    PRIMARY KEY (task_id, depends_on),
+    CHECK (task_id != depends_on)
+);
+CREATE INDEX IF NOT EXISTS idx_research_task_deps_on ON research_task_deps(depends_on);
