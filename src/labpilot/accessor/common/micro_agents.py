@@ -14,7 +14,7 @@ deterministic ``rule_engine`` path (same posture as the brief / reflection
 templates). Passing ``llm_client=None`` disables the LLM and is the default in
 tests and CI.
 
-This module lives under ``common`` so both ``research_engine.intelligence`` and
+This module lives under ``accessor.common`` so both ``research_engine.intelligence`` and
 ``research_engine.execution`` can share one contract without ``execution``
 importing ``intelligence`` (import-hygiene rule).
 """
@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from labpilot.llm.client import LLMClient
 
-logger = logging.getLogger("labpilot.common.micro_agents")
+logger = logging.getLogger("labpilot.accessor.common.micro_agents")
 
 
 def coerce_str_list(value: object) -> list[str]:

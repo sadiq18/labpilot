@@ -22,7 +22,7 @@ from labpilot.experiments.report import (
     build_report,
     write_dashboard,
 )
-from labpilot.orchestrator.manifest import RunManifest, StageStatus, save_manifest
+from labpilot.experiments.manifest import RunManifest, StageStatus, save_manifest
 
 
 def _write_run(

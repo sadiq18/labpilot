@@ -10,7 +10,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from labpilot.competition.models import MetricSpec
+from labpilot.research_engine.intelligence.competition.models import MetricSpec
 
 if TYPE_CHECKING:
     from labpilot.llm.client import LLMClient

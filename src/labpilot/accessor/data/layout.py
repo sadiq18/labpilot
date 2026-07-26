@@ -1,3 +1,3 @@
-from labpilot.data.downloader import DataLayout
+from labpilot.accessor.data.downloader import DataLayout
 
 __all__ = ["DataLayout"]

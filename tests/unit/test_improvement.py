@@ -14,7 +14,7 @@ from labpilot.improvement.models import (
 from labpilot.config import AppConfig, LLMConfig
 from labpilot.improvement.planner import ImprovementPlanner
 from labpilot.improvement.tuner import grid_combinations, pick_tune_params
-from labpilot.orchestrator.manifest import RunManifest, StageStatus, save_manifest
+from labpilot.experiments.manifest import RunManifest, StageStatus, save_manifest
 
 
 def _completed_parent(tmp_path: Path, run_id: str = "20260101-120000-titanic") -> Path:

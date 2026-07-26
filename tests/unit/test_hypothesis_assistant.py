@@ -224,14 +224,18 @@ def test_assistant_emits_at_most_10_and_persists_suggested(tmp_path: Path) -> No
 
 
 def test_assistant_does_not_execute_training(tmp_path: Path, monkeypatch) -> None:
-    """Guard: assistant must never call improve/run entry points."""
+    """Guard: assistant must never call Engineer / run entry points."""
     calls: list[str] = []
 
     def boom(*_a, **_k):
-        calls.append("pipeline")
+        calls.append("engineer")
         raise AssertionError("must not execute")
 
-    monkeypatch.setattr("labpilot.orchestrator.pipeline.Pipeline.improve", boom, raising=False)
+    monkeypatch.setattr(
+        "labpilot.research_engine.execution.engineer.ResearchEngineer.run_plan",
+        boom,
+        raising=False,
+    )
     knowledge_dir = tmp_path / "knowledge"
     with KnowledgeStore(knowledge_dir, "birdclef-2026") as store:
         _seed(store)

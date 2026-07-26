@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from labpilot.profiler.tabular import ColumnProfile, DatasetProfile
+from labpilot.accessor.profiler.tabular import ColumnProfile, DatasetProfile
 
 if TYPE_CHECKING:
     from labpilot.llm.client import LLMClient

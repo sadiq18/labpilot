@@ -69,19 +69,3 @@ kaggle:
   kernel_poll_timeout: 3600
   kernel_poll_interval: 15
 
-pipeline:
-  stages:
-    - parse_competition
-    - download_data
-    - profile_dataset
-    - generate_brief
-    - select_baseline
-    - generate_code
-    - train_model
-    - evaluate_cv
-    - generate_submission
-    - export_kernel
-    - upload_submission
-    - log_experiment
-    - write_reflection
-    - write_report

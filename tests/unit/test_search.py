@@ -23,7 +23,7 @@ from labpilot.experiments.search import (
     search,
 )
 from labpilot.improvement.models import TrainingOverrides, save_training_overrides
-from labpilot.orchestrator.manifest import RunManifest, StageStatus, save_manifest
+from labpilot.experiments.manifest import RunManifest, StageStatus, save_manifest
 
 
 def _seed_run(
@@ -45,7 +45,7 @@ def _seed_run(
         metadata["iteration"] = 1
     stages = []
     if runtime_seconds is not None:
-        from labpilot.orchestrator.manifest import StageRecord
+        from labpilot.experiments.manifest import StageRecord
         from datetime import timedelta
 
         start = datetime(2026, 1, 1, 12, 0, 0)
@@ -85,7 +85,7 @@ def _seed_run(
         ),
     )
     (run_dir / "metrics.json").write_text(json.dumps(metrics))
-    from labpilot.tracking.store import ExperimentRecord, ExperimentStore
+    from labpilot.experiments.store import ExperimentRecord, ExperimentStore
 
     ExperimentStore(run_dir).save(
         ExperimentRecord(

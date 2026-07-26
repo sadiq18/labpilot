@@ -10,13 +10,13 @@ from typer.testing import CliRunner
 
 from labpilot.cli import main as cli_main
 from labpilot.config import KaggleConfig
-from labpilot.kaggle.client import KaggleClient
+from labpilot.accessor.kaggle.client import KaggleClient
 from labpilot.research_engine.intelligence.fetch import KaggleFetchService
 from labpilot.research_engine.intelligence.knowledge import KnowledgeStore
 from labpilot.research_engine.intelligence.micro_agents.forum_analyzer import (
     ForumAnalyzerAgent,
 )
-from labpilot.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext
 
 runner = CliRunner()
 

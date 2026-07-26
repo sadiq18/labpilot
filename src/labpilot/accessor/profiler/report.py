@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from labpilot.profiler.tabular import DatasetProfile
+from labpilot.accessor.profiler.tabular import DatasetProfile
 
 
 def write_profile(run_dir: Path, profile: DatasetProfile) -> tuple[Path, Path]:

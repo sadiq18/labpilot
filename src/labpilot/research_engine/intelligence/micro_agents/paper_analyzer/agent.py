@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from labpilot.common.micro_agents import BaseMicroAgent, StructuredContext, coerce_str_list
+from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext, coerce_str_list
 from labpilot.research_engine.intelligence.literature.models import PaperKnowledge
 
 _METHODISH = (

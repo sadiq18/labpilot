@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from labpilot.runtimes.models import (
+from labpilot.research_engine.execution.runtimes.models import (
     GoogleColabRuntime,
     KaggleKernelRuntime,
     LocalRuntime,

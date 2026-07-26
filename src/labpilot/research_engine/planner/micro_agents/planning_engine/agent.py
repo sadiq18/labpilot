@@ -12,7 +12,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from labpilot.common.micro_agents import BaseMicroAgent, StructuredContext
+from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext
 from labpilot.research_engine.planner.schemas.draft import ResearchPlanDraft
 
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"

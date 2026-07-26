@@ -43,10 +43,12 @@ class ResearchEngineer:
         registry: CapabilityRegistry,
         plan_store: PlanStore | None = None,
         execution_store: ExecutionStore | None = None,
+        constraints: dict | None = None,
     ) -> None:
         self.knowledge_dir = knowledge_dir
         self.competition = competition
         self.registry = registry
+        self.constraints = dict(constraints or {})
         self.paths = ResearchPaths(knowledge_dir, competition).ensure()
         self._plan_store = plan_store or PlanStore(knowledge_dir, competition)
         self._owns_plan_store = plan_store is None
@@ -154,6 +156,7 @@ class ResearchEngineer:
                 prior_evidence=prior,
                 runtime_target=execution.runtime_target,
                 attempt=attempt,
+                constraints=dict(self.constraints),
             )
             capability.prepare(context)
             evidence = capability.execute(context)
@@ -225,26 +228,56 @@ def default_stub_registry() -> CapabilityRegistry:
     return registry
 
 
-def default_capability_registry(*, install_packages: bool = True) -> CapabilityRegistry:
-    """Production-leaning registry: workspace + dependency, stub for the rest."""
+def default_capability_registry(
+    *,
+    install_packages: bool = True,
+    llm_client=None,
+    dry_run: bool = False,
+) -> CapabilityRegistry:
+    """Full capability registry for the Research Engineer.
+
+    Registers real capabilities for every TaskType. ``dry_run`` is not applied
+    here — pass it via :class:`ResearchEngineer` ``constraints``.
+    """
+    from labpilot.research_engine.execution.capabilities.code_engineering import (
+        CodeEngineeringCapability,
+    )
     from labpilot.research_engine.execution.capabilities.dependency import (
         DependencyCapability,
     )
-    from labpilot.research_engine.execution.capabilities.stub import StubCapability
+    from labpilot.research_engine.execution.capabilities.evaluation import (
+        EvaluationCapability,
+    )
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        ReportingCapability,
+    )
+    from labpilot.research_engine.execution.capabilities.research_review import (
+        ResearchReviewCapability,
+    )
+    from labpilot.research_engine.execution.capabilities.runtime import RuntimeCapability
+    from labpilot.research_engine.execution.capabilities.submission import (
+        SubmissionCapability,
+    )
+    from labpilot.research_engine.execution.capabilities.training import (
+        TrainingCapability,
+    )
+    from labpilot.research_engine.execution.capabilities.verification import (
+        VerificationCapability,
+    )
     from labpilot.research_engine.execution.capabilities.workspace import (
         WorkspaceCapability,
     )
-    from labpilot.research_engine.planner.schemas.task_types import TaskType
 
+    _ = dry_run  # documented for callers; applied on Engineer.constraints
     registry = CapabilityRegistry()
-    # Stub first; real capabilities override overlapping types.
-    covered = frozenset(
-        {
-            TaskType.PREPARE_WORKSPACE,
-            TaskType.INSTALL_PACKAGE,
-        }
-    )
-    registry.register(StubCapability(frozenset(TaskType) - covered))
     registry.register(WorkspaceCapability())
+    registry.register(CodeEngineeringCapability(llm_client=llm_client))
+    registry.register(ResearchReviewCapability(llm_client=llm_client))
     registry.register(DependencyCapability(install=install_packages))
+    registry.register(VerificationCapability())
+    registry.register(RuntimeCapability())
+    registry.register(TrainingCapability())
+    registry.register(EvaluationCapability())
+    registry.register(SubmissionCapability())
+    registry.register(ReportingCapability())
     return registry

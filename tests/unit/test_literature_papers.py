@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from labpilot.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.research_engine.intelligence.analyzers.papers import PaperAnalyzer
 from labpilot.research_engine.intelligence.literature.cache import PaperCatalogStore
 from labpilot.research_engine.intelligence.literature.clients import (

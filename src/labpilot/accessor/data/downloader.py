@@ -4,7 +4,7 @@ import zipfile
 from pathlib import Path
 
 from labpilot.config import KaggleConfig
-from labpilot.kaggle.client import KaggleClient, KaggleGateway
+from labpilot.accessor.kaggle.client import KaggleClient, KaggleGateway
 
 logger = logging.getLogger(__name__)
 

@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
-logger = logging.getLogger("labpilot.competition.page_fetch")
+logger = logging.getLogger("labpilot.research_engine.intelligence.competition.page_fetch")
 
 # Below this length (after cleanup) we treat the page as a JS shell / empty.
 _MIN_USEFUL_CHARS = 200
@@ -254,7 +254,7 @@ def _try_api_pages(
 
 def _default_list_pages(slug: str) -> Sequence[Any]:
     from labpilot.config import KaggleConfig, Settings
-    from labpilot.kaggle.client import KaggleClient
+    from labpilot.accessor.kaggle.client import KaggleClient
 
     settings = Settings()
     config = KaggleConfig(

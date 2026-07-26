@@ -5,11 +5,11 @@ from typing import Protocol
 
 import yaml
 
-from labpilot.competition.metrics import enrich_metric_spec, normalize_metric
-from labpilot.competition.models import CompetitionMetadata, CompetitionSpec
-from labpilot.competition.rules import fetch_rules_excerpt
-from labpilot.competition.submission_mode import apply_submission_mode
-from labpilot.kaggle.urls import competition_submissions_url
+from labpilot.research_engine.intelligence.competition.metrics import enrich_metric_spec, normalize_metric
+from labpilot.research_engine.intelligence.competition.models import CompetitionMetadata, CompetitionSpec
+from labpilot.research_engine.intelligence.competition.rules import fetch_rules_excerpt
+from labpilot.research_engine.intelligence.competition.submission_mode import apply_submission_mode
+from labpilot.accessor.kaggle.urls import competition_submissions_url
 from labpilot.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)

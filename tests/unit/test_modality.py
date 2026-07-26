@@ -1,5 +1,5 @@
-from labpilot.profiler.modality import ModalityDetector
-from labpilot.profiler.tabular import ColumnProfile, DatasetProfile
+from labpilot.accessor.profiler.modality import ModalityDetector
+from labpilot.accessor.profiler.tabular import ColumnProfile, DatasetProfile
 
 
 def _tabular_profile(**kwargs) -> DatasetProfile:

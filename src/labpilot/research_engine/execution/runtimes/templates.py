@@ -1,6 +1,6 @@
 """Scaffold YAML files for `research runtime register`."""
 
-from labpilot.runtimes.models import (
+from labpilot.research_engine.execution.runtimes.models import (
     GoogleColabRuntime,
     KaggleKernelRuntime,
     LocalRuntime,
@@ -30,7 +30,7 @@ def scaffold_runtime(provider: str, runtime_id: str) -> RuntimeConfig:
     if provider == "other":
         return OtherRuntime(
             id=runtime_id,
-            adapter="labpilot.runtimes.adapters.ssh:SSHAdapter",
+            adapter="labpilot.research_engine.execution.runtimes.adapters.ssh:SSHAdapter",
             host="gpu.example.com",
             user="lab",
             key_env="SSH_PRIVATE_KEY_PATH",

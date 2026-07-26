@@ -60,7 +60,7 @@ src/labpilot/accessor/
 | `src/labpilot/accessor/` | Package skeleton |
 | `accessor/sqlite/{client,migrate,schema}.sql` | Client + moved DDL |
 | `accessor/llm/` | Move/wrap LLM client |
-| `accessor/commons/` | Shared helpers |
+| `accessor/common/` | Shared helpers |
 | `intelligence/knowledge/store.py` | Use `SqliteClient` + accessor migrate |
 | `labpilot/llm/` | Shim or delete after import sweep |
 | Tests | Migrate on temp DB; store still opens; LLM create_client unchanged |

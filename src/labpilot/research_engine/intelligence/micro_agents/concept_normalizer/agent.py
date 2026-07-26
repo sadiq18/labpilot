@@ -7,7 +7,7 @@ Flagship "Yes" pattern (design §2.4 / §7): rules alone cannot reliably unify
 
 from __future__ import annotations
 
-from labpilot.common.micro_agents import BaseMicroAgent, StructuredContext
+from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext
 from labpilot.research_engine.intelligence.micro_agents.artifacts import ConceptNormalization
 
 

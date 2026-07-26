@@ -1,6 +1,6 @@
 """Render deterministic competition context for brief.md and LLM prompts."""
 
-from labpilot.competition.models import CompetitionSpec
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 
 _RULES_EXCERPT_MAX_CHARS = 2000
 

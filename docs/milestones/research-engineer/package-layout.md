@@ -17,11 +17,11 @@ research_engine/
 ```
 
 Top-level `baseline/`, `codegen/`, `training/`, `evaluation/`, `kaggle/`,
-`competition/`, `runtimes/`, `submission/`, `tracking/`, `workspace/`, and
+`competition/`, `runtimes/`, `submission/`, `tracking/`, `workspace/`/`project/`, and
 repo-root `templates/` were **removed** — logic lives under accessor /
 intelligence / execution / experiments / project as below.
 
-Shared infra: `labpilot.accessor` (SQLite, LLM, **Kaggle client**, commons).
+Shared infra: `labpilot.accessor` (SQLite, LLM, **Kaggle client**, `accessor.common`).
 
 ---
 
@@ -30,13 +30,16 @@ Shared infra: `labpilot.accessor` (SQLite, LLM, **Kaggle client**, commons).
 ```
 src/labpilot/
   accessor/kaggle/           # KaggleClient + CompetitionMetadata (no pillar imports)
-  project/                   # project.yaml multi-comp root (≠ WorkspaceCapability)
+  accessor/data/             # dataset download + DataLayout
+  accessor/profiler/         # TabularProfiler + DatasetProfile
+  accessor/common/           # ids, JSON helpers, Micro Agent contract (sole common/)
   experiments/               # graph + logger/store/index (was tracking/)
   research_engine/
     intelligence/competition/  # Parser + CompetitionSpec (fetch/normalize)
     execution/
       engineer.py / context.py / registry.py / store.py / evidence.py / …
-      baseline/ codegen/ templates/ training/ metrics.py
+      baseline/ training/ metrics.py
+      capabilities/code_engineering/  # apply + offline_codegen + templates/
       runtimes/                # RuntimeConfig registry (config-only; ≠ Runtime capability)
       submission/              # Formatter + validator library
       capabilities/
@@ -52,18 +55,23 @@ src/labpilot/
 | Former top-level | Now |
 |------------------|-----|
 | `kaggle/` | `accessor/kaggle/` |
+| `data/` | `accessor/data/` |
+| `profiler/` | `accessor/profiler/` |
+| `brief/` | `intelligence/brief/` (merged; ResearchBrief + legacy BriefGenerator) |
 | `competition/` | `intelligence/competition/` |
+| `common/` + `accessor/commons/` | `accessor/common/` |
 | `runtimes/` | `execution/runtimes/` |
 | `submission/` | `execution/submission/` |
 | `tracking/` | `experiments/` (logger/store/index) |
-| `workspace/` | `project/` (avoids WorkspaceCapability name clash) |
+| `workspace/` (project.yaml overlay) | **removed** — WorkspaceCapability under `execution/capabilities/workspace/` |
+| `project/` | **removed** (same overlay; superseded by Engineer workspace) |
 | `baseline/` | `execution/baseline/` |
-| `codegen/` | `execution/codegen/` |
-| repo-root `templates/` | `execution/templates/` |
+| `codegen/` | `execution/capabilities/code_engineering/offline_codegen/` |
+| repo-root `templates/` | `execution/capabilities/code_engineering/templates/` |
 | `training/` | `execution/training/` |
 | `evaluation/metrics.py` | `execution/metrics.py` |
 | `evaluation/cv.py` | **deleted** (unused) |
-| `orchestrator/pipeline.py` | quarantined legacy (init/build/improve only) |
+| `orchestrator/pipeline.py` | **deleted** — manifests remain in `experiments/manifest.py` |
 
 Import hygiene:
 
@@ -77,7 +85,7 @@ Import hygiene:
 ## 4. Code Engineering
 
 LLM proposes a typed `CodeProposal`; deterministic apply under allow-list.
-Jinja templates under `execution/templates/` are the offline `rule_engine` full
+Jinja templates under `execution/capabilities/code_engineering/templates/` are the offline `rule_engine` full
 scaffold — not a separate product surface.
 
 ---

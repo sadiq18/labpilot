@@ -1,8 +1,8 @@
 import shutil
 from pathlib import Path
 
-from labpilot.competition.models import CompetitionMetadata
-from labpilot.kaggle.client import SubmissionResult
+from labpilot.research_engine.intelligence.competition.models import CompetitionMetadata
+from labpilot.accessor.kaggle.client import SubmissionResult
 
 
 class FakeKaggleGateway:

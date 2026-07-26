@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from labpilot.competition.page_fetch import (
+from labpilot.research_engine.intelligence.competition.page_fetch import (
     fetch_competition_pages,
     looks_like_empty_shell,
     page_content_to_text,

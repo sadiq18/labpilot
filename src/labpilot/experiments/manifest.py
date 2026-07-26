@@ -1,3 +1,10 @@
+"""Legacy ``runs/<run_id>/manifest.json`` helpers (inspect / experiment graph).
+
+Not the Research Engineer orchestrator — that lives under
+``research_engine.execution``. Kept here because experiment assembly and
+CLI status/report still read historical run manifests.
+"""
+
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -14,8 +21,7 @@ class StageStatus(StrEnum):
     SKIPPED = "skipped"
     # RunManifest-level only (never set on an individual StageRecord): all
     # requested stages finished without error, but they didn't reach the end
-    # of the full pipeline — e.g. `research init` stops after generate_brief,
-    # leaving the run ready for `research build` to continue.
+    # of a historical linear pipeline run (legacy runs/ artifacts).
     PARTIAL = "partial"
 
 
@@ -99,3 +105,20 @@ def load_manifest(run_dir: Path) -> RunManifest:
 def save_manifest(run_dir: Path, manifest: RunManifest) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest_path(run_dir).write_text(manifest.model_dump_json(indent=2))
+
+
+def get_run_dir(runs_dir: Path, run_id: str) -> Path:
+    return runs_dir / run_id
+
+
+def find_manifest(runs_dir: Path | object, run_id: str) -> RunManifest:
+    """Load a run manifest.
+
+    ``runs_dir`` may be a ``Path`` or an object with a ``runs_dir`` attribute
+    (e.g. ``AppConfig``) for backward compatibility with inspect CLI helpers.
+    """
+    base = runs_dir if isinstance(runs_dir, Path) else Path(getattr(runs_dir, "runs_dir"))
+    run_dir = get_run_dir(base, run_id)
+    if not (run_dir / "manifest.json").exists():
+        raise FileNotFoundError(f"Run not found: {run_id}")
+    return load_manifest(run_dir)

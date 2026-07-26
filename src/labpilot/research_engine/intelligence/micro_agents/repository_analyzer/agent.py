@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from labpilot.common.micro_agents import BaseMicroAgent, StructuredContext, coerce_str_list
+from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext, coerce_str_list
 from labpilot.research_engine.intelligence.repositories.models import RepoKnowledge
 
 _ARCHITECTURE = (

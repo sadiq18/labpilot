@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from labpilot.config import KaggleConfig, Settings
-from labpilot.kaggle.client import KaggleClient
-from labpilot.kaggle.urls import kernel_notebook_url, parse_kernel_ref
+from labpilot.accessor.kaggle.client import KaggleClient
+from labpilot.accessor.kaggle.urls import kernel_notebook_url, parse_kernel_ref
 from labpilot.research_engine.intelligence.fetch.enrich import (
     collect_kernel_source_text,
     enrich_discussion_artifact,

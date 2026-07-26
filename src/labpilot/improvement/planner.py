@@ -4,8 +4,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from labpilot.baseline.selector import BaselineChoice
-from labpilot.competition.models import ProblemType
+from labpilot.research_engine.execution.baseline.selector import BaselineChoice
+from labpilot.research_engine.intelligence.competition.models import ProblemType
 from labpilot.config import LLMConfig
 from labpilot.improvement.models import (
     DEFAULT_IMPROVE_STAGES,
@@ -17,7 +17,7 @@ from labpilot.improvement.recipes import apply_recipes_from_profile
 from labpilot.improvement.tuner import default_tabular_params, pick_tune_params
 from labpilot.llm.client import LLMClient, create_llm_client
 from labpilot.llm.json_utils import parse_json_object
-from labpilot.profiler.report import load_profile
+from labpilot.accessor.profiler.report import load_profile
 
 logger = logging.getLogger(__name__)
 

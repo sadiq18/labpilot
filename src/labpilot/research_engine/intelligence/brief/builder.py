@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from labpilot.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.research_engine.intelligence.brief.models import ResearchBrief
 from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
 from labpilot.research_engine.intelligence.micro_agents.research_brief.agent import (

@@ -3,7 +3,7 @@
 import logging
 import re
 
-from labpilot.competition.models import CompetitionSpec
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ def detect_kernel_only_from_rules(text: str) -> bool:
 
 def apply_submission_mode(spec: CompetitionSpec) -> CompetitionSpec:
     """Set submission_mode from API flag or rules excerpt; fill submissions_url."""
-    from labpilot.kaggle.urls import competition_submissions_url
+    from labpilot.accessor.kaggle.urls import competition_submissions_url
 
     kernels_only = spec.is_kernels_submissions_only
     if not kernels_only and spec.raw_html and detect_kernel_only_from_rules(spec.raw_html):

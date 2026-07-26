@@ -1,7 +1,7 @@
 # LabPilot CLI Reference
 
 Complete command reference for the `research` CLI. For a step-by-step workflow
-(first run → improve → decide what to try next), see [SOP.md](SOP.md).
+(first run → plan → Engineer → decide what to try next), see [SOP.md](SOP.md).
 
 Architecture and module contracts live in [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -18,13 +18,13 @@ research <command> ...
 ## Contents
 
 1. [Global flags](#1-global-flags)
-2. [Pipeline](#2-pipeline) — `run`, `init`, `build`, `resume`, `improve`
+2. [Execution](#2-execution) — `run`, `resume` (Research Engineer)
 3. [Inspect a run](#3-inspect-a-run) — `status`, `report`, `list-runs`, `runs diff`
 4. [Experiments](#4-experiments) — graph, show, compare, knowledge, rank, search, report, dashboard
 5. [Hypotheses](#5-hypotheses) — list, show, update (+ generate via Intelligence)
 6. [Research Intelligence](#6-research-intelligence) — `analyze`, `ingest`, `retrieve`, `hypothesize`, `fetch`
 7. [Research Planner](#7-research-planner) — `plan create` / `show` / `list`
-8. [Environment & project](#8-environment--project) — doctor, workspace, runtime, templates
+8. [Environment](#8-environment) — doctor, runtime, templates
 9. [Common option patterns](#9-common-option-patterns)
 
 ---
@@ -39,150 +39,71 @@ Place these **before** the subcommand:
 | `--quiet` / `-q` | Only warnings and errors |
 
 ```bash
-research -v run --competition titanic
+research -v run --plan P-001 --competition titanic
 research -q status --run-id 20260715-003000-house-prices-advanced-regression-techniques
 ```
 
 ---
 
-## 2. Pipeline
+## 2. Execution
 
 ### `research run`
 
-Full pipeline in one shot: parse → download → profile → brief → baseline → code →
-train → evaluate → submission → (optional upload) → log → reflection → HTML report.
+Plan-driven Research Engineer (SoR). Requires an approved plan:
 
 ```bash
-# Local artifacts only (default — does not upload to Kaggle)
-research run --competition house-prices-advanced-regression-techniques
+research plan create <slug> --baseline
+research run --plan P-001 --competition <slug>
 
-# Upload after you have inspected submission.csv
-research run --competition titanic --submit
+# Dry-run: syntax smoke + stub metrics; no upload
+research run --plan P-001 --competition <slug> --dry-run --no-install-packages
 
-# Attach a hypothesis from the start (marks it testing)
-research run --competition titanic --hypothesis H-001
-
-# Validate through codegen without training
-research run --competition titanic --dry-run --yes
+# Allow Kaggle upload from the submission capability
+research run --plan P-001 --competition <slug> --submit
 ```
 
 | Option | Description |
 |--------|-------------|
-| `--competition, -c` | Kaggle competition slug (**required**) |
+| `--plan, -p` | Research plan id (**required**, e.g. `P-001`) |
+| `--competition, -c` | Competition slug (**required** with `--plan`) |
 | `--config` | Config YAML (default: `configs/default.yaml`) |
-| `--project-dir` | Project root containing `project.yaml` |
-| `--runs-dir` | Override runs directory |
 | `--knowledge-dir` | Override knowledge directory |
-| `--competitions-dir` | Local per-competition contracts (`<slug>.yaml`) |
-| `--hypothesis` | Hypothesis ID to tag on this root run (e.g. `H-001`) |
-| `--submit` | Upload validated submission to Kaggle |
-| `--force-submit` | With `--submit`: allow upload past deadline |
-| `--dry-run` | Stop after code generation; no train/submit |
-| `--yes, -y` | Skip prompts (e.g. continue without LLM) |
+| `--submit` | Allow Kaggle upload (default: package only) |
+| `--dry-run` | Syntax/smoke stub path; no full train/upload |
+| `--install-packages / --no-install-packages` | Dependency capability pip install |
 
-You must join the competition and accept its rules on Kaggle before data download works.
-
----
-
-### `research init`
-
-Init half only: parse → download → profile → brief. Review artifacts, then continue
-with `build`.
-
-```bash
-research init --competition titanic
-# Inspect runs/<id>/competition.json, profile.md, brief.md
-research build --run-id <id>
-```
-
-| Option | Description |
-|--------|-------------|
-| `--competition, -c` | Required |
-| `--config`, `--project-dir`, `--runs-dir`, `--competitions-dir` | Same idea as `run` |
-| `--yes, -y` | Skip prompts |
-| `--dry-run` | Reserved for symmetry; no effect on init-only |
+Running without `--plan` errors with a migration message. Legacy `init` / `build` /
+`improve` Pipeline commands have been **removed** — see
+[pipeline-deprecation.md](milestones/research-engineer/pipeline-deprecation.md).
 
 ---
 
-### `research build`
 
-Build half of an already-`init`'d run: baseline → … → reflection (+ report).
-
-```bash
-research build --run-id 20260715-003000-house-prices-advanced-regression-techniques
-research build --run-id <id> --submit
-research build --run-id <id> --dry-run --yes
-```
-
-| Option | Description |
-|--------|-------------|
-| `--run-id, -r` | Required (from `init`) |
-| `--config`, `--project-dir`, `--runs-dir` | Standard |
-| `--submit` / `--force-submit` / `--dry-run` / `--yes` | Same as `run` |
-
----
 
 ### `research resume`
 
-Re-run from the first failed/incomplete stage. Completed and skipped stages stay put.
-
-**Upload later without re-training:** if the run finished with `upload_submission`
-skipped (no `--submit`), then:
+Resume a Research Engineer execution:
 
 ```bash
-research resume --run-id <id> --submit
-```
-
-re-runs only upload (add `--force-submit` past deadline).
-
-```bash
-research resume --run-id <id>
-research resume --run-id <id> --submit --force-submit
+research resume --execution E-001 --competition <slug>
+research resume --execution E-001 --competition <slug> --dry-run
 ```
 
 | Option | Description |
 |--------|-------------|
-| `--run-id, -r` | Required |
-| `--config`, `--runs-dir`, `--competitions-dir` | Must match the original run where relevant |
-| `--submit` / `--force-submit` / `--yes` | Same as `run` |
+| `--execution, -e` | Execution id (**required**, e.g. `E-001`) |
+| `--competition, -c` | Competition slug (**required**) |
+| `--submit` / `--dry-run` / `--install-packages` | Same idea as `run` |
+
 
 ---
 
-### `research improve`
-
-Fork a **completed** parent: reuse init artifacts, apply a plan, re-run from codegen
-through reflection. Writes `comparison.json` / `comparison.md` on the child and updates
-the knowledge base / linked hypothesis when applicable.
-
-```bash
-# Auto plan (LLM → tune fallback)
-research improve --run-id <parent>
-
-# Explicit strategies
-research improve --run-id <parent> --strategy tune
-research improve --run-id <parent> --strategy features
-
-# Test a hypothesis
-research improve --run-id <parent> --hypothesis H-004 --strategy features
-
-# Plan + codegen only
-research improve --run-id <parent> --dry-run --yes
-```
-
-| Option | Description |
-|--------|-------------|
-| `--run-id, -r` | Parent run ID (**required**; must be `completed`) |
-| `--strategy` | `auto` (default), `tune`, or `features` |
-| `--hypothesis` | Tag child with hypothesis ID |
-| `--config`, `--project-dir`, `--runs-dir`, `--knowledge-dir` | Standard |
-| `--submit` / `--force-submit` / `--dry-run` / `--yes` | Same as `run` |
-
-Child lineage is stored in `manifest.json` (`parent_run_id`, `iteration`) plus
-`improvement_plan.json` and `training_overrides.json`.
-
----
 
 ## 3. Inspect a run
+
+These commands read **legacy** `runs/<run_id>/` manifests (pre-Engineer artifacts).
+New executions live under `knowledge/<slug>/research/executions/` and
+`competitions/<slug>/`.
 
 ### `research status`
 
@@ -192,8 +113,7 @@ research status --run-id 20260715-003000-house-prices-advanced-regression-techni
 
 ### `research report`
 
-Refresh per-run HTML (`runs/<id>/report.html`). Pipeline already writes this at the end;
-re-run after generating a competition dashboard if you want the cross-link.
+Refresh per-run HTML (`runs/<id>/report.html`) for historical runs.
 
 ```bash
 research report --run-id <id>
@@ -245,7 +165,7 @@ research experiments show <run_id> --format json
 ### `research experiments compare`
 
 Categorized A/B + verdict (`worth_keeping` / `not_worth_keeping` / `regression` /
-`inconclusive`). Improve already persists this on the child as `comparison.json`/`.md`.
+`inconclusive`). Useful when comparing two historical `runs/` experiments.
 
 ```bash
 research experiments compare <base_id> <compare_id>
@@ -343,11 +263,11 @@ Statuses: `proposed`, `testing`, `confirmed`, `rejected`, `inconclusive`. A tech
 counts as *tried* only once a run attaches its hypothesis (`testing`) or you mark it
 explicitly — `proposed` alone never blocks new suggestions.
 
-Attach to execution:
+Attach via a plan:
 
 ```bash
-research run --competition titanic --hypothesis H-001
-research improve --run-id <parent> --hypothesis H-001 --strategy tune
+research plan create <slug> --hypothesis H-001
+research run --plan P-002 --competition <slug>
 ```
 
 ---
@@ -424,11 +344,11 @@ research analyze birdclef-2026 --refresh
 | `--skip-ingest` | Defer Knowledge Hub ingestion (also skips hypotheses and Research Brief) |
 | `--skip-hypothesize` | Skip generating new hypotheses after ingestion (also skips brief) |
 | `--skip-brief` | Skip writing `research_brief.md` |
-| `--config`, `--project-dir`, `--runs-dir`, `--knowledge-dir` | Same idea as pipeline |
+| `--config`, `--runs-dir`, `--knowledge-dir` | Standard path overrides |
 
 Technique buckets in the report: **External Recommendations** are Suggested only;
 external-only techniques are never labeled Established. Locally Validated fills only
-after local promotion (e.g. improve corroboration).
+after local promotion (confirmed runs / knowledge updates).
 
 Read `research_brief.md` first for the briefing; `analyze.json` is the full contract.
 ### `research ingest`
@@ -521,7 +441,7 @@ research fetch birdclef-2026 --refresh
 | `--sort` | `votes` (default) or `score` — applies to kernels; discussions always use vote/top order |
 | `--limit` | Unique **new** artifacts to store **per selected source** (pages until met) |
 | `--refresh` | Re-fetch and rewrite existing artifacts / raw versions |
-| `--config`, `--project-dir`, `--knowledge-dir` | Same idea as analyze |
+| `--config`, `--knowledge-dir` | Same idea as analyze |
 
 Storage:
 
@@ -538,7 +458,7 @@ Does **not** register `DiscussionAnalyzer` — run `research ingest` later if yo
 
 Turn a durable hypothesis into an **inspectable, non-executing** task DAG. The planner
 never writes code, mutates configs, or starts training — it only emits typed instruction
-nodes (`WRITE_CODE`, `RUN_TRAINING`, …) for a human (or a future executor) to act on.
+nodes (`WRITE_CODE`, `RUN_TRAINING`, …) for the Research Engineer (`research run --plan`).
 
 Plans live in `knowledge/<slug>/research/knowledge.db` (`research_plans` /
 `research_tasks` / `research_task_deps`) with derived projections under
@@ -559,7 +479,7 @@ research plan create birdclef-2026 --baseline --format markdown
 | `--baseline` | Create **P-001** from Analyze context (no hypothesis); must be first plan |
 | `--priority` | Integer priority stored on the plan (default `0`) |
 | `--format` | `text` (default), `json`, or `markdown` |
-| `--config`, `--project-dir`, `--knowledge-dir` | Same idea as analyze |
+| `--config`, `--knowledge-dir` | Same idea as analyze |
 
 Provide **either** `--baseline` **or** `--hypothesis`. Baseline requires
 `reports/analyze.json` and refuses if any plan already exists.
@@ -579,14 +499,17 @@ research plan list birdclef-2026 --status ready
 Statuses: `draft`, `ready`, `in_progress`, `done`, `abandoned`. Text output prints
 topological DAG levels.
 
-After planning, a human still decides whether to `improve` / `run` — the plan does not
-auto-execute. Plan-driven `research run --plan` lands in Research Engineer Plan 10.
+After planning, run with the Research Engineer::
+
+```bash
+research run --plan P-001 --competition <slug>
+```
 
 Design: [milestones/research-planner/README.md](milestones/research-planner/README.md).
 
 ---
 
-## 8. Environment & project
+## 8. Environment
 
 ### `research doctor`
 
@@ -597,15 +520,6 @@ Exits non-zero if a **core** check fails.
 research doctor
 ```
 
-### `research workspace init` / `status`
-
-Multi-competition project (`project.yaml`, `runs/`, `competitions/`, `configs/runtimes/`).
-
-```bash
-research workspace init --name kaggle-2026
-research workspace status
-research run --competition titanic --project-dir .
-```
 
 ### `research runtime list|show|register|doctor`
 
@@ -637,18 +551,16 @@ Lists registered baseline templates (tabular / text / image / deep variants).
 |---------|----------------|
 | Point at another runs tree | `--runs-dir /path/to/runs` |
 | Point at another knowledge tree | `--knowledge-dir /path/to/knowledge` |
-| Workspace project | `--project-dir .` |
 | Non-interactive / CI | `--yes` |
-| No training | `--dry-run` (on `run` / `build` / `improve`) |
-| Upload to Kaggle | `--submit` (optional `--force-submit`) |
+| No training | `--dry-run` (on `run` / `resume`) |
+| Upload to Kaggle | `--submit` on `run` / `resume` |
 
-**Kernel-only competitions:** LabPilot still trains locally, writes `kernel/`, and with
-`--submit` pushes/polls the Kaggle notebook path. Without `--submit`,
-`submission_result.json` is `kernel_ready`.
+**Kernel-only competitions:** CSV packaging is SoR today. Kernel export/push is a
+follow-on under Execution Submission/Runtime (legacy `kernel/` helpers remain
+quarantined).
 
 **LLM optional:** without `OPENAI_API_KEY` / `GEMINI_API_KEY` (or the `llm` extra),
-brief/reflection fall back to templates. Pipeline commands warn once and ask to
-confirm unless `--yes` (or non-TTY / CI).
+analyze / code / narrative Micro Agents fall back to `rule_engine` templates.
 
 ---
 
@@ -656,10 +568,10 @@ confirm unless `--yes` (or non-TTY / CI).
 
 | I want to… | Command |
 |------------|---------|
-| Start a competition | `research run -c <slug>` |
-| Pause after brief | `init` → review → `build` |
-| Fix a failed run | `research resume -r <id>` |
-| Try something better | `research improve -r <parent>` |
+| Landscape + briefing | `research analyze <slug>` |
+| Baseline then execute | `plan create --baseline` → `run --plan P-001 -c <slug>` |
+| Fix a failed execution | `research resume --execution E-001 -c <slug>` |
+| Try something better | `research plan create <slug> --hypothesis H-xxx` then `run --plan` |
 | See lineage | `research experiments graph -c <slug>` |
 | Decide A vs B | `research experiments compare <a> <b>` |
 | Remember what worked | `research experiments knowledge list -c <slug>` |

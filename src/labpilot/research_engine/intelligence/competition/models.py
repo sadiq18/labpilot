@@ -3,6 +3,15 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from labpilot.accessor.kaggle.models import CompetitionMetadata
+
+__all__ = [
+    "CompetitionMetadata",
+    "CompetitionSpec",
+    "MetricSpec",
+    "ProblemType",
+]
+
 
 class ProblemType(StrEnum):
     TABULAR_CLASSIFICATION = "tabular_classification"
@@ -20,26 +29,6 @@ class MetricSpec(BaseModel):
     # "accuracy", "auc", "rmse"). None when the raw Kaggle metric string
     # could not be mapped to a supported evaluator key.
     key: str | None = None
-
-
-class CompetitionMetadata(BaseModel):
-    """Raw metadata resolved from the Kaggle API for a competition slug.
-
-    This is intentionally smaller than `CompetitionSpec` — it's what
-    `CompetitionMetadataFetcher` implementations return, before it gets
-    turned into a `CompetitionSpec` by `CompetitionParser`.
-    """
-
-    slug: str
-    title: str = ""
-    description: str = ""
-    category: str = ""
-    evaluation_metric_raw: str = ""
-    deadline: str | None = None
-    max_daily_submissions: int | None = None
-    submissions_disabled: bool = False
-    is_kernels_submissions_only: bool = False
-    tags: list[str] = Field(default_factory=list)
 
 
 class CompetitionSpec(BaseModel):
@@ -65,8 +54,6 @@ class CompetitionSpec(BaseModel):
 
     # Optional overrides for competitions whose file names don't follow the
     # "train*/test*/*submission*" convention the profiler assumes by default.
-    # The Kaggle API's competition search doesn't expose file names, so this
-    # still requires a local override (see configs/competitions/README.md).
     train_file_pattern: str = "train"
     test_file_pattern: str = "test"
     submission_file_pattern: str = "submission"

@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from labpilot.baseline.selector import BaselineChoice
-from labpilot.competition.models import CompetitionSpec, MetricSpec
-from labpilot.kaggle.client import SubmissionResult
-from labpilot.orchestrator.manifest import RunManifest, StageStatus, save_manifest
-from labpilot.profiler.tabular import DatasetProfile
+from labpilot.research_engine.execution.baseline.selector import BaselineChoice
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, MetricSpec
+from labpilot.accessor.kaggle.client import SubmissionResult
+from labpilot.experiments.manifest import RunManifest, StageStatus, save_manifest
+from labpilot.accessor.profiler.tabular import DatasetProfile
 from labpilot.report.generator import ReportGenerator, markdown_to_html
 
 

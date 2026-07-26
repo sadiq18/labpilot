@@ -224,11 +224,11 @@ def test_orchestrator_merges_artifacts(tmp_path: Path):
 
 
 def test_micro_agent_retries_transient_llm_errors(monkeypatch) -> None:
-    from labpilot.common.micro_agents import BaseMicroAgent, StructuredContext
+    from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext
     from labpilot.research_engine.intelligence.literature.models import PaperKnowledge
 
     sleeps: list[float] = []
-    monkeypatch.setattr("labpilot.common.micro_agents.time.sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr("labpilot.accessor.common.micro_agents.time.sleep", lambda s: sleeps.append(s))
 
     class Flaky:
         def __init__(self) -> None:

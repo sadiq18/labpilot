@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from labpilot.competition.models import MetricSpec
+from labpilot.research_engine.intelligence.competition.models import MetricSpec
 from labpilot.research_engine.intelligence.models import ResearchArtifact
 
 

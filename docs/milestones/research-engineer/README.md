@@ -2,12 +2,10 @@
 
 Back to [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** Phase B Plans 1–4 implemented; Plans 5–11 remaining.
-**Depends on:** Research Planner MVP ([../research-planner/](../research-planner/)),
-Research Intelligence Phase 1, Experiment Scientist.
+**Status:** Phase B Plans **1–11 complete** (dry-run / offline SoR).
 **Branch:** `research-execution` (product name is Research Engineer).
-**CLI target (after Phase B):** `research run --plan P-001` / `research resume --execution E-xxx`.
-**CLI now:** `research plan create <competition> --baseline` → P-001.
+**CLI:** `research run --plan P-001 --competition <slug>` / `research resume --execution E-xxx`.
+**CLI also:** `research plan create <competition> --baseline` → P-001.
 
 This directory is the architecture/design workspace for the **Autonomous Research
 Engineer** — Milestone 5.
@@ -37,6 +35,9 @@ Engineer** — Milestone 5.
 | 9 | [plan-9-submit-report.md](plan-9-submit-report.md) | Submission + Reporting / Memory |
 | 10 | [plan-10-run-cli-cutover.md](plan-10-run-cli-cutover.md) | Plan-driven `run`/`resume`; retire Pipeline |
 | 11 | [plan-11-capstone.md](plan-11-capstone.md) | Unattended Analyze → P-001 → evidence |
+
+Capstone notes: [capstone-notes.md](capstone-notes.md).
+Pipeline deprecation: [pipeline-deprecation.md](pipeline-deprecation.md).
 
 Ship-and-review one plan at a time (same style as Research Planner).
 

@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from labpilot.tracking.store import ExperimentRecord, ExperimentStore
+from labpilot.experiments.store import ExperimentRecord, ExperimentStore
 
 logger = logging.getLogger(__name__)
 

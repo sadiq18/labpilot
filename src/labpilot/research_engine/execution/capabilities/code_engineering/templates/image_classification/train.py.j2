@@ -11,7 +11,7 @@ from PIL import Image
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import LabelEncoder
 
-from labpilot.evaluation.metrics import compute_metric
+from labpilot.research_engine.execution.metrics import compute_metric
 
 DATA_DIR = Path({{ data_dir | tojson }})
 OUTPUT_DIR = Path({{ output_dir | tojson }})

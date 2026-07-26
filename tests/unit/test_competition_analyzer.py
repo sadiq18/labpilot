@@ -349,7 +349,7 @@ def test_competition_analyzer_skips_kaggle_without_credentials(tmp_path: Path, m
 
 
 def test_page_agent_rule_engine_and_llm():
-    from labpilot.common.micro_agents import StructuredContext
+    from labpilot.accessor.common.micro_agents import StructuredContext
     from labpilot.research_engine.intelligence.micro_agents.artifacts import (
         CompetitionPageExtract,
     )

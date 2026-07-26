@@ -3,9 +3,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from labpilot.baseline.registry import get_template
-from labpilot.competition.models import CompetitionSpec, ProblemType
-from labpilot.profiler.tabular import DatasetProfile
+from labpilot.research_engine.execution.baseline.registry import get_template
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, ProblemType
+from labpilot.accessor.profiler.tabular import DatasetProfile
 
 logger = logging.getLogger(__name__)
 

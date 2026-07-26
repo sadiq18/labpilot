@@ -13,7 +13,7 @@ from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
-from labpilot.evaluation.metrics import compute_metric
+from labpilot.research_engine.execution.metrics import compute_metric
 
 DATA_DIR = Path({{ data_dir | tojson }})
 OUTPUT_DIR = Path({{ output_dir | tojson }})

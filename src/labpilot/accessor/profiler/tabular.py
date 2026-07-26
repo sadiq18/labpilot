@@ -174,7 +174,7 @@ class TabularProfiler:
         profile = self.profile_file(train_path)
         profile.warnings.extend(test_warnings)
         train_sample = pd.read_csv(train_path, nrows=self.config.max_rows_sample)
-        from labpilot.profiler.modality import ModalityDetector
+        from labpilot.accessor.profiler.modality import ModalityDetector
 
         detector = ModalityDetector()
         detector.enrich_column_stats(train_sample, profile.columns)

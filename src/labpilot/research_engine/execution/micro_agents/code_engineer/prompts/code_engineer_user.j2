@@ -1,0 +1,26 @@
+Competition: {{ competition }}
+Plan: {{ plan_id }} (kind={{ plan_kind }}) hypothesis={{ hypothesis_id or "—" }}
+Task: {{ task_id }} type={{ task_type }}
+Problem type hint: {{ problem_type }}
+
+Goal:
+{{ goal }}
+
+Task description:
+{{ task_description }}
+
+Research brief / Analyze excerpt:
+{{ brief_excerpt }}
+
+Allowed roots: {{ allowed_roots | join(", ") }}
+Existing files (inventory):
+{% for f in existing_files %}- {{ f }}
+{% else %}- (none yet)
+{% endfor %}
+
+Jinja baseline (rule_engine scaffold — refine or replace with full equivalent):
+```json
+{{ jinja_baseline_json }}
+```
+
+Return a CodeProposal JSON with full file contents for a working baseline pipeline.

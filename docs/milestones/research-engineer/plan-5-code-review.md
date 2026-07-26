@@ -3,7 +3,7 @@
 Back to [Research Engineer](README.md). Design: [capabilities.md](capabilities.md) ·
 [architecture.md](architecture.md) §5.
 
-**Status:** Not started. **Depends on:** Plan 4. **Unlocks:** Plan 6 (verify generated code).
+**Status:** Done. **Depends on:** Plan 4. **Unlocks:** Plan 6 (verify generated code).
 
 ---
 

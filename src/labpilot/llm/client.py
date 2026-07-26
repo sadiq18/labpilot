@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class LLMClient(Protocol):
     """Minimal system+user prompt -> text completion interface.
 
-    Keeping this to one method means `BriefGenerator`/`ReflectionGenerator`
+    Keeping this to one method means `ReflectionGenerator` / Intelligence brief agents
     never need to know which provider is actually active.
     """
 

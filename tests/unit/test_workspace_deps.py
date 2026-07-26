@@ -148,3 +148,56 @@ def test_engineer_workspace_deps_integration(tmp_path: Path) -> None:
         assert [t.status for t in plan.tasks] == [TaskStatus.DONE, TaskStatus.DONE]
     finally:
         engineer.close()
+
+
+def test_workspace_downloads_and_profiles_with_fake_client(tmp_path: Path) -> None:
+    """Phase 1: WorkspaceCapability downloads + profiles without research init."""
+    import pandas as pd
+
+    from labpilot.config import KaggleConfig, ProfilerConfig
+
+    knowledge = tmp_path / "knowledge"
+    plan_id = _seed_workspace_deps_plan(knowledge, competition="demo-dl")
+    paths = ResearchPaths(knowledge, "demo-dl").ensure()
+    root = tmp_path / "competitions" / "demo-dl"
+    store = PlanStore(knowledge, "demo-dl")
+    plan = store.get_plan(plan_id)
+    assert plan is not None
+    task = plan.tasks[0]
+    store.close()
+
+    class FakeClient:
+        def download_competition(self, slug: str, dest: Path) -> None:
+            dest.mkdir(parents=True, exist_ok=True)
+            train = dest / "train.csv"
+            test = dest / "test.csv"
+            pd.DataFrame({"id": [0, 1], "x": [1.0, 2.0], "y": [0, 1]}).to_csv(
+                train, index=False
+            )
+            pd.DataFrame({"id": [0, 1], "x": [1.5, 2.5]}).to_csv(test, index=False)
+            pd.DataFrame({"id": [0, 1], "y": [0, 0]}).to_csv(
+                dest / "sample_submission.csv", index=False
+            )
+
+    execution = ResearchExecution(id="E-dl", plan_id=plan_id, competition="demo-dl")
+    context = TaskContext(
+        plan=plan,
+        task=task,
+        execution=execution,
+        paths=paths,
+        workspace_root=root,
+        competition="demo-dl",
+        constraints={
+            "kaggle": KaggleConfig(cache_dir=tmp_path / "cache"),
+            "kaggle_client": FakeClient(),
+            "profiler": ProfilerConfig(),
+            "skip_download": False,
+            "dry_run": False,
+        },
+    )
+    evidence = WorkspaceCapability().execute(context)
+    assert evidence.passed, evidence.error
+    assert evidence.metadata.get("downloaded") or evidence.metadata.get("data_reused")
+    assert (root / "data" / "raw").is_dir()
+    assert any((root / "data" / "raw").rglob("*.csv"))
+    assert (root / "profile.json").is_file()

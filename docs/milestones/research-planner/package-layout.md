@@ -166,7 +166,7 @@ CLI `research plan create` loads the hypothesis, calls `compile_research_plan`, 
 `upsert_plan` + serializer projections. Soft-fail: invalid LLM draft → `rule_engine`
 template path (same posture as `ResearchBriefAgent`).
 
-Micro Agents use the shared contract in `labpilot.common.micro_agents`
+Micro Agents use the shared contract in `labpilot.accessor.common.micro_agents`
 (`StructuredContext` in → typed Pydantic out; no memory, no loops, no side effects). The
 Planning Engine's LLM client comes from `accessor/llm`.
 

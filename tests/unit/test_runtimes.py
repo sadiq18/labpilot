@@ -3,9 +3,9 @@ from pathlib import Path
 import yaml
 
 from labpilot.config import load_config
-from labpilot.runtimes.doctor import check_runtime
-from labpilot.runtimes.models import GoogleColabRuntime, KaggleKernelRuntime, LocalRuntime
-from labpilot.runtimes.registry import get_runtime, load_runtimes
+from labpilot.research_engine.execution.runtimes.doctor import check_runtime
+from labpilot.research_engine.execution.runtimes.models import GoogleColabRuntime, KaggleKernelRuntime, LocalRuntime
+from labpilot.research_engine.execution.runtimes.registry import get_runtime, load_runtimes
 
 
 def test_load_runtimes_includes_builtin_and_yaml(tmp_path: Path):

@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from labpilot.tracking.index import RunDiff, diff_runs, scan_runs
-from labpilot.tracking.store import ExperimentRecord, ExperimentStore
+from labpilot.experiments.index import RunDiff, diff_runs, scan_runs
+from labpilot.experiments.store import ExperimentRecord, ExperimentStore
 
 
 def _seed_run(

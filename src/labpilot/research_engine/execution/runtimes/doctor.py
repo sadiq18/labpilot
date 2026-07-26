@@ -10,14 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from labpilot.diagnostics import CheckResult, _check_kaggle_credentials
-from labpilot.runtimes.models import (
+from labpilot.research_engine.execution.runtimes.models import (
     GoogleColabRuntime,
     KaggleKernelRuntime,
     LocalRuntime,
     OtherRuntime,
     RuntimeConfig,
 )
-from labpilot.runtimes.registry import load_runtimes
+from labpilot.research_engine.execution.runtimes.registry import load_runtimes
 
 
 @dataclass

@@ -3,10 +3,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from labpilot.baseline.selector import BaselineSelector
-from labpilot.competition.models import CompetitionSpec, MetricSpec, ProblemType
+from labpilot.research_engine.execution.baseline.selector import BaselineSelector
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, MetricSpec, ProblemType
 from labpilot.config import ProfilerConfig
-from labpilot.profiler.tabular import DatasetProfile, TabularProfiler
+from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
 
 
 @pytest.fixture
@@ -103,7 +103,7 @@ def test_baseline_selector_infers_classification_for_string_multiclass_target():
     surfaced the pandas 3.0 "str" dtype vs "object" mismatch (see
     `test_column_profile_is_numeric_flag`).
     """
-    from labpilot.profiler.tabular import ColumnProfile
+    from labpilot.accessor.profiler.tabular import ColumnProfile
 
     competition = CompetitionSpec(slug="species-competition")
     profile = DatasetProfile(

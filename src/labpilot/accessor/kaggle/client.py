@@ -9,9 +9,9 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
-from labpilot.competition.models import CompetitionMetadata
+from labpilot.accessor.kaggle.models import CompetitionMetadata
 from labpilot.config import KaggleConfig
-from labpilot.kaggle.urls import competition_submissions_url, kernel_notebook_url, parse_kernel_ref
+from labpilot.accessor.kaggle.urls import competition_submissions_url, kernel_notebook_url, parse_kernel_ref
 
 logger = logging.getLogger(__name__)
 

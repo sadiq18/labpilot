@@ -3,7 +3,7 @@
 Back to [Research Engineer](README.md). Design: [README.md](README.md) §3–4 ·
 [baseline-plan.md](baseline-plan.md).
 
-**Status:** Not started. **Depends on:** Plans 1–10. **Unlocks:** Milestone 5 complete.
+**Status:** Done. **Depends on:** Plans 1–10. **Unlocks:** Milestone 5 complete.
 
 ---
 

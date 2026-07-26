@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from labpilot.competition.models import CompetitionMetadata, CompetitionSpec
-from labpilot.competition.parser import CompetitionParser
-from labpilot.competition.submission_mode import apply_submission_mode, detect_kernel_only_from_rules
+from labpilot.research_engine.intelligence.competition.models import CompetitionMetadata, CompetitionSpec
+from labpilot.research_engine.intelligence.competition.parser import CompetitionParser
+from labpilot.research_engine.intelligence.competition.submission_mode import apply_submission_mode, detect_kernel_only_from_rules
 
 
 class FakeFetcher:

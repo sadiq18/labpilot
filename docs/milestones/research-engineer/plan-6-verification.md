@@ -3,7 +3,7 @@
 Back to [Research Engineer](README.md). Design: [capabilities.md](capabilities.md) ·
 [runtime-and-recovery.md](runtime-and-recovery.md).
 
-**Status:** Not started. **Depends on:** Plan 5. **Unlocks:** Plans 7–8 (expensive work gated).
+**Status:** Done. **Depends on:** Plan 5. **Unlocks:** Plans 7–8 (expensive work gated).
 
 ---
 

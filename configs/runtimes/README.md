@@ -13,7 +13,7 @@ configs/runtimes/
   examples/              # documented samples (not auto-loaded)
 ```
 
-Project workspaces can override with `project/runtimes/*.yaml`. Later directories
+Additional runtime YAML files may be placed under `configs/runtimes/`. Later directories
 shadow earlier ones by `id`.
 
 ## Common fields

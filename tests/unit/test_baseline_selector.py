@@ -1,6 +1,6 @@
-from labpilot.baseline.selector import BaselineSelector
-from labpilot.competition.models import CompetitionSpec, MetricSpec, ProblemType
-from labpilot.profiler.tabular import ColumnProfile, DatasetProfile
+from labpilot.research_engine.execution.baseline.selector import BaselineSelector
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, MetricSpec, ProblemType
+from labpilot.accessor.profiler.tabular import ColumnProfile, DatasetProfile
 
 
 def _profile() -> DatasetProfile:
