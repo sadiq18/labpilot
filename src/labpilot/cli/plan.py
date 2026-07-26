@@ -2,6 +2,7 @@
 
 ```bash
 research plan create <competition> --hypothesis H-xxx
+research plan create <competition> --baseline
 research plan show <competition> <plan-id>
 research plan list <competition>
 ```
@@ -19,7 +20,11 @@ from labpilot.config import load_config
 from labpilot.experiments.hypothesis import HypothesisStore
 from labpilot.llm.client import resolve_llm_client
 from labpilot.research_engine.intelligence.paths import ResearchPaths
-from labpilot.research_engine.planner import compile_research_plan
+from labpilot.research_engine.planner import (
+    BaselinePlanError,
+    compile_baseline_plan,
+    compile_research_plan,
+)
 from labpilot.research_engine.planner.schemas.models import ResearchPlan
 from labpilot.research_engine.planner.schemas.task_types import PlanStatus
 from labpilot.research_engine.planner.serializer import render_markdown
@@ -71,7 +76,11 @@ def _print_plan(plan: ResearchPlan, output_format: str) -> None:
         print(render_markdown(plan), end="")
         return
 
+    kind = plan.metadata.get("plan_kind") or (
+        "hypothesis" if plan.hypothesis_id else "—"
+    )
     console.print(f"\n[bold]Research Plan[/bold] [cyan]{plan.id}[/cyan]")
+    console.print(f"  kind: {kind}")
     console.print(f"  hypothesis: {plan.hypothesis_id or '—'}")
     console.print(f"  status: {plan.status}  generated_by: {plan.generated_by}")
     console.print(f"  priority: {plan.priority}  gain: {plan.estimated_gain}")
@@ -107,8 +116,13 @@ def _print_plan(plan: ResearchPlan, output_format: str) -> None:
 @plan_app.command("create")
 def plan_create(
     competition: str = typer.Argument(..., help="Competition slug"),
-    hypothesis_id: str = typer.Option(
-        ..., "--hypothesis", "-H", help="Hypothesis ID (e.g. H-001)"
+    hypothesis_id: str | None = typer.Option(
+        None, "--hypothesis", "-H", help="Hypothesis ID (e.g. H-001)"
+    ),
+    baseline: bool = typer.Option(
+        False,
+        "--baseline",
+        help="Create P-001 baseline plan from Analyze (no hypothesis)",
     ),
     priority: int = typer.Option(0, "--priority", help="Plan priority (higher = sooner)"),
     output_format: str = typer.Option(
@@ -126,37 +140,61 @@ def plan_create(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
 ) -> None:
-    """Compile a ResearchPlan DAG from a hypothesis (plan-only; no execution).
+    """Compile a ResearchPlan DAG (plan-only; no execution).
 
-    Writes ``research_plans`` / ``research_tasks`` / deps into ``knowledge.db``
-    and derived ``plans/<plan_id>.json`` + ``.md``. Never creates ``runs/`` or
-    mutates source/config.
+    Use ``--hypothesis H-xxx`` for improvement plans, or ``--baseline`` for the
+    first P-001 Analyze-derived baseline. Mutually exclusive.
     """
     output_format = _validate_format(output_format)
-    config = _load_config(config_path, project_dir, knowledge_dir)
-
-    hyp_store = HypothesisStore(config.knowledge_dir, competition)
-    hypothesis = hyp_store.get(hypothesis_id)
-    if hypothesis is None:
+    if baseline and hypothesis_id:
         console.print(
-            f"[red]Hypothesis not found:[/red] {hypothesis_id} "
-            f"(competition={competition})."
+            "[red]Use either --baseline or --hypothesis, not both.[/red]"
+        )
+        raise typer.Exit(code=1)
+    if not baseline and not hypothesis_id:
+        console.print(
+            "[red]Provide --baseline or --hypothesis H-xxx.[/red]"
         )
         raise typer.Exit(code=1)
 
-    plan = compile_research_plan(
-        hypothesis,
-        knowledge_dir=config.knowledge_dir,
-        competition=competition,
-        llm_client=resolve_llm_client(config.llm),
-        priority=priority,
-    )
+    config = _load_config(config_path, project_dir, knowledge_dir)
+    llm = resolve_llm_client(config.llm)
+
+    try:
+        if baseline:
+            plan = compile_baseline_plan(
+                competition,
+                knowledge_dir=config.knowledge_dir,
+                llm_client=llm,
+                priority=priority,
+            )
+        else:
+            assert hypothesis_id is not None
+            hyp_store = HypothesisStore(config.knowledge_dir, competition)
+            hypothesis = hyp_store.get(hypothesis_id)
+            if hypothesis is None:
+                console.print(
+                    f"[red]Hypothesis not found:[/red] {hypothesis_id} "
+                    f"(competition={competition})."
+                )
+                raise typer.Exit(code=1)
+            plan = compile_research_plan(
+                hypothesis,
+                knowledge_dir=config.knowledge_dir,
+                competition=competition,
+                llm_client=llm,
+                priority=priority,
+            )
+    except BaselinePlanError as exc:
+        console.print(f"[red]Baseline plan refused:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
     paths = ResearchPaths(config.knowledge_dir, competition)
     if output_format == "text":
+        kind = plan.metadata.get("plan_kind", "hypothesis")
         console.print(
             f"[green]Created[/green] plan [cyan]{plan.id}[/cyan] "
-            f"({plan.generated_by}, {len(plan.tasks)} tasks)"
+            f"({kind}, {plan.generated_by}, {len(plan.tasks)} tasks)"
         )
         console.print(
             f"  projections: {paths.plans_dir / f'{plan.id}.json'} , "
@@ -235,14 +273,17 @@ def plan_list(
 
     table = Table(title=f"Research plans: {competition}")
     table.add_column("ID", style="cyan")
+    table.add_column("Kind")
     table.add_column("Status")
     table.add_column("Hypothesis")
     table.add_column("By")
     table.add_column("Tasks")
     table.add_column("Goal")
     for plan in plans:
+        kind = str(plan.metadata.get("plan_kind") or ("hypothesis" if plan.hypothesis_id else "—"))
         table.add_row(
             plan.id,
+            kind,
             str(plan.status),
             plan.hypothesis_id or "—",
             plan.generated_by,

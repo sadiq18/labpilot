@@ -1,6 +1,21 @@
-"""Execution Platform slice of the research engine (M2 run/reflect, etc.).
+"""Execution Platform — Research Engineer + capability executors.
 
-Import hygiene: ``execution`` may import ``common`` but must never import
-``research_engine.intelligence`` or ``cli``. Shared Micro Agent contracts
-therefore live in :mod:`labpilot.common.micro_agents`.
+Import hygiene: ``execution`` may import ``common``, ``accessor``, and planner
+store/schema APIs. Prefer ``ResearchPaths`` over deep intelligence imports.
 """
+
+from labpilot.research_engine.execution.engineer import (
+    EngineerError,
+    ResearchEngineer,
+    default_capability_registry,
+    default_stub_registry,
+)
+from labpilot.research_engine.execution.store import ExecutionStore
+
+__all__ = [
+    "EngineerError",
+    "ExecutionStore",
+    "ResearchEngineer",
+    "default_capability_registry",
+    "default_stub_registry",
+]

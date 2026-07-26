@@ -8,7 +8,9 @@ runs training — it only emits plan nodes.
 """
 
 from labpilot.research_engine.planner.planner import (
+    BaselinePlanError,
     blueprint_to_draft,
+    compile_baseline_plan,
     compile_research_plan,
     lower_draft,
 )
@@ -32,7 +34,9 @@ from labpilot.research_engine.planner.validator import (
 )
 
 __all__ = [
+    "BaselinePlanError",
     "blueprint_to_draft",
+    "compile_baseline_plan",
     "compile_research_plan",
     "lower_draft",
     "DraftTask",

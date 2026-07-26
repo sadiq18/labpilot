@@ -218,6 +218,7 @@ CREATE VIEW IF NOT EXISTS repository_techniques AS
 -- research_tasks: DAG nodes (WRITE_CODE, RUN_TRAINING, …); the planner never
 --   performs the side effect — a future executor dispatches on task_type.
 -- research_task_deps: DAG edges (task_id depends on depends_on).
+-- research_executions: one run attempt of a plan (Research Engineer).
 -- ==========================================================================
 CREATE TABLE IF NOT EXISTS research_plans (
     id                 TEXT PRIMARY KEY,
@@ -274,3 +275,24 @@ CREATE TABLE IF NOT EXISTS research_task_deps (
     CHECK (task_id != depends_on)
 );
 CREATE INDEX IF NOT EXISTS idx_research_task_deps_on ON research_task_deps(depends_on);
+
+-- Research Engineer — durable execution attempts for a plan (E-xxx).
+-- Task status remains on research_tasks (MVP: one active execution per plan).
+CREATE TABLE IF NOT EXISTS research_executions (
+    id                 TEXT PRIMARY KEY,          -- E-001
+    plan_id            TEXT NOT NULL REFERENCES research_plans(id),
+    competition_slug   TEXT,
+    status             TEXT NOT NULL DEFAULT 'pending',
+    -- pending|running|succeeded|failed|cancelled
+    workspace_path     TEXT,
+    runtime_target     TEXT,
+    experiment_id      TEXT,
+    error              TEXT,
+    metadata           TEXT NOT NULL DEFAULT '{}',
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    started_at         TEXT,
+    completed_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_exec_plan ON research_executions(plan_id);
+CREATE INDEX IF NOT EXISTS idx_exec_status ON research_executions(status);

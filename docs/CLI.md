@@ -549,15 +549,20 @@ Plans live in `knowledge/<slug>/research/knowledge.db` (`research_plans` /
 ```bash
 research plan create birdclef-2026 --hypothesis H-001
 research plan create birdclef-2026 -H H-001 --priority 2 --format json
-research plan create birdclef-2026 -H H-001 --format markdown
+research plan create birdclef-2026 --baseline
+research plan create birdclef-2026 --baseline --format markdown
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--hypothesis` / `-H` | Required hypothesis id (`H-001`) |
+| `--hypothesis` / `-H` | Hypothesis id (`H-001`) — mutually exclusive with `--baseline` |
+| `--baseline` | Create **P-001** from Analyze context (no hypothesis); must be first plan |
 | `--priority` | Integer priority stored on the plan (default `0`) |
 | `--format` | `text` (default), `json`, or `markdown` |
 | `--config`, `--project-dir`, `--knowledge-dir` | Same idea as analyze |
+
+Provide **either** `--baseline` **or** `--hypothesis`. Baseline requires
+`reports/analyze.json` and refuses if any plan already exists.
 
 Compiles via the planning compiler (template baseline → optional one-shot LLM revision).
 With no LLM key, uses `rule_engine` templates. **No `--execute` flag.**
@@ -575,7 +580,7 @@ Statuses: `draft`, `ready`, `in_progress`, `done`, `abandoned`. Text output prin
 topological DAG levels.
 
 After planning, a human still decides whether to `improve` / `run` — the plan does not
-auto-execute.
+auto-execute. Plan-driven `research run --plan` lands in Research Engineer Plan 10.
 
 Design: [milestones/research-planner/README.md](milestones/research-planner/README.md).
 
@@ -665,6 +670,7 @@ confirm unless `--yes` (or non-TTY / CI).
 | Offline retrieve from knowledge.db | `research retrieve <slug> -q "…"` |
 | Rank untried literature-backed ideas | `research hypothesize <slug>` |
 | Compile a plan DAG from a hypothesis | `research plan create <slug> -H H-xxx` |
+| Compile baseline plan P-001 | `research plan create <slug> --baseline` |
 | Inspect / list plans | `research plan show` / `list` |
 | Pull Kaggle kernels / discussions | `research fetch <slug>` or `analyze --fetch-kaggle`
 

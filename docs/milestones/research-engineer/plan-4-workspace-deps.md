@@ -3,7 +3,7 @@
 Back to [Research Engineer](README.md). Design: [capabilities.md](capabilities.md) ·
 [package-layout.md](package-layout.md).
 
-**Status:** Not started. **Depends on:** Plan 2 (registry). **Unlocks:** Plans 5–6.
+**Status:** Done. **Depends on:** Plan 2 (registry). **Unlocks:** Plans 5–6.
 
 ---
 

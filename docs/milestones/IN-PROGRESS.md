@@ -4,11 +4,10 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-## Research Engineer — Phase B plans ready
+## Research Engineer — Phase B in progress
 
-**Status:** Design Phase A complete; **Phase B plans 1–11 authored** on branch
-`research-execution`. **No application code yet** — implement after plan review,
-one plan at a time.
+**Status:** Plans **1–4 Done** on branch `research-execution`. Plans 5–11 remaining.
+**No plan-driven `research run` yet** (Plan 10).
 
 **Product:** Autonomous Research Engineer — turn an approved Research Plan into a
 verified experiment (implement, review, verify, train, evaluate, submit, evidence).
@@ -21,10 +20,10 @@ schema, package-layout, baseline-plan, capabilities, runtime-and-recovery).
 
 | # | Plan | Depends on | Status |
 |---|------|------------|--------|
-| 1 | [Schema / executions](research-engineer/plan-1-schema-executions.md) | Design A | Not started |
-| 2 | [Engineer controller](research-engineer/plan-2-engineer-controller.md) | 1 | Not started |
-| 3 | [Baseline P-001](research-engineer/plan-3-baseline-plan.md) | Planner MVP; ∥ after 1 | Not started |
-| 4 | [Workspace + Deps](research-engineer/plan-4-workspace-deps.md) | 2 | Not started |
+| 1 | [Schema / executions](research-engineer/plan-1-schema-executions.md) | Design A | Done |
+| 2 | [Engineer controller](research-engineer/plan-2-engineer-controller.md) | 1 | Done |
+| 3 | [Baseline P-001](research-engineer/plan-3-baseline-plan.md) | Planner MVP; ∥ after 1 | Done |
+| 4 | [Workspace + Deps](research-engineer/plan-4-workspace-deps.md) | 2 | Done |
 | 5 | [Code + Review](research-engineer/plan-5-code-review.md) | 4 | Not started |
 | 6 | [Verification / smoke](research-engineer/plan-6-verification.md) | 5 | Not started |
 | 7 | [Runtime](research-engineer/plan-7-runtime.md) | 6 | Not started |
@@ -33,7 +32,7 @@ schema, package-layout, baseline-plan, capabilities, runtime-and-recovery).
 | 10 | [CLI cutover](research-engineer/plan-10-run-cli-cutover.md) | 2–9 | Not started |
 | 11 | [Capstone](research-engineer/plan-11-capstone.md) | 1–10 | Not started |
 
-**Next:** Review Phase B plans → implement Plan 1.
+**Next:** Implement Plan 5 (Code Engineering + Research Review).
 
 ---
 

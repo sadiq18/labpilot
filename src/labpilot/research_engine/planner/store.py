@@ -166,10 +166,40 @@ class PlanStore:
         )
         self._conn.commit()
 
-    def update_task_status(self, task_id: str, status: TaskStatus | str) -> None:
+    def update_task_status(
+        self,
+        task_id: str,
+        status: TaskStatus | str,
+        *,
+        metadata_patch: dict | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Update task status; optionally merge timing/error into metadata."""
+        now = _now()
+        row = self._conn.execute(
+            "SELECT metadata FROM research_tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"unknown task_id: {task_id}")
+
+        metadata = loads(row["metadata"], {})
+        status_s = str(status)
+        if status_s == "running":
+            metadata.setdefault("started_at", now)
+        if status_s in {"done", "failed", "skipped"}:
+            metadata["completed_at"] = now
+        if error is not None:
+            metadata["error"] = error
+        if metadata_patch:
+            metadata.update(metadata_patch)
+
         self._conn.execute(
-            "UPDATE research_tasks SET status = ?, updated_at = ? WHERE id = ?",
-            (str(status), _now(), task_id),
+            """
+            UPDATE research_tasks
+            SET status = ?, metadata = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status_s, dumps(metadata), now, task_id),
         )
         self._conn.commit()
 

@@ -3,7 +3,7 @@
 Back to [Research Engineer](README.md). Design: [baseline-plan.md](baseline-plan.md) ·
 Planner [../research-planner/](../research-planner/).
 
-**Status:** Not started. **Depends on:** Planner MVP; can parallelize with Plan 2 after Plan 1.
+**Status:** Done. **Depends on:** Planner MVP; can parallelize with Plan 2 after Plan 1.
 **Unlocks:** Capstone (Plan 11); plan-driven baseline path.
 
 ---
