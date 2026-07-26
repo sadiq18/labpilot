@@ -21,10 +21,11 @@ research <command> ...
 2. [Pipeline](#2-pipeline) — `run`, `init`, `build`, `resume`, `improve`
 3. [Inspect a run](#3-inspect-a-run) — `status`, `report`, `list-runs`, `runs diff`
 4. [Experiments](#4-experiments) — graph, show, compare, knowledge, rank, search, report, dashboard
-5. [Hypotheses](#5-hypotheses) — add, list, show, update
+5. [Hypotheses](#5-hypotheses) — list, show, update (+ generate via Intelligence)
 6. [Research Intelligence](#6-research-intelligence) — `analyze`, `ingest`, `retrieve`, `hypothesize`, `fetch`
-7. [Environment & project](#7-environment--project) — doctor, workspace, runtime, templates
-8. [Common option patterns](#8-common-option-patterns)
+7. [Research Planner](#7-research-planner) — `plan create` / `show` / `list`
+8. [Environment & project](#8-environment--project) — doctor, workspace, runtime, templates
+9. [Common option patterns](#9-common-option-patterns)
 
 ---
 
@@ -533,7 +534,54 @@ Does **not** register `DiscussionAnalyzer` — run `research ingest` later if yo
 
 ---
 
-## 7. Environment & project
+## 7. Research Planner
+
+Turn a durable hypothesis into an **inspectable, non-executing** task DAG. The planner
+never writes code, mutates configs, or starts training — it only emits typed instruction
+nodes (`WRITE_CODE`, `RUN_TRAINING`, …) for a human (or a future executor) to act on.
+
+Plans live in `knowledge/<slug>/research/knowledge.db` (`research_plans` /
+`research_tasks` / `research_task_deps`) with derived projections under
+`knowledge/<slug>/research/plans/<plan_id>.{json,md}`.
+
+### `research plan create`
+
+```bash
+research plan create birdclef-2026 --hypothesis H-001
+research plan create birdclef-2026 -H H-001 --priority 2 --format json
+research plan create birdclef-2026 -H H-001 --format markdown
+```
+
+| Flag | Description |
+|------|-------------|
+| `--hypothesis` / `-H` | Required hypothesis id (`H-001`) |
+| `--priority` | Integer priority stored on the plan (default `0`) |
+| `--format` | `text` (default), `json`, or `markdown` |
+| `--config`, `--project-dir`, `--knowledge-dir` | Same idea as analyze |
+
+Compiles via the planning compiler (template baseline → optional one-shot LLM revision).
+With no LLM key, uses `rule_engine` templates. **No `--execute` flag.**
+
+### `research plan show` / `list`
+
+```bash
+research plan show birdclef-2026 P-001
+research plan show birdclef-2026 P-001 --format json
+research plan list birdclef-2026
+research plan list birdclef-2026 --status ready
+```
+
+Statuses: `draft`, `ready`, `in_progress`, `done`, `abandoned`. Text output prints
+topological DAG levels.
+
+After planning, a human still decides whether to `improve` / `run` — the plan does not
+auto-execute.
+
+Design: [milestones/research-planner/README.md](milestones/research-planner/README.md).
+
+---
+
+## 8. Environment & project
 
 ### `research doctor`
 
@@ -578,7 +626,7 @@ Lists registered baseline templates (tabular / text / image / deep variants).
 
 ---
 
-## 8. Common option patterns
+## 9. Common option patterns
 
 | Pattern | Typical flags |
 |---------|----------------|
@@ -616,6 +664,8 @@ confirm unless `--yes` (or non-TTY / CI).
 | Research landscape + briefing | `research analyze <slug>` (read `research_brief.md`) |
 | Offline retrieve from knowledge.db | `research retrieve <slug> -q "…"` |
 | Rank untried literature-backed ideas | `research hypothesize <slug>` |
-| Pull Kaggle kernels / discussions | `research fetch <slug>` or `analyze --fetch-kaggle` |
+| Compile a plan DAG from a hypothesis | `research plan create <slug> -H H-xxx` |
+| Inspect / list plans | `research plan show` / `list` |
+| Pull Kaggle kernels / discussions | `research fetch <slug>` or `analyze --fetch-kaggle`
 
 Workflow narrative: [SOP.md](SOP.md).

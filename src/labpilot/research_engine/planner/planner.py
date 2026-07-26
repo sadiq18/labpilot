@@ -52,6 +52,7 @@ def compile_research_plan(
     plan_store: PlanStore | None = None,
     knowledge_store: Any | None = None,
     write_projections: bool = True,
+    priority: int = 0,
 ) -> ResearchPlan:
     """Compile and persist a research plan for ``hypothesis``."""
     competition = competition or hypothesis.competition
@@ -78,6 +79,7 @@ def compile_research_plan(
                 competition=competition,
                 generated_by="rule_engine",
                 metadata={"template": blueprint.template_name},
+                priority=priority,
             )
         )
 
@@ -92,6 +94,7 @@ def compile_research_plan(
                 plan_id=plan_id,
                 template_name=blueprint.template_name,
                 llm_client=llm_client,
+                priority=priority,
             )
 
         store.upsert_plan(plan)
@@ -137,6 +140,7 @@ def lower_draft(
     competition: str,
     generated_by: Literal["llm", "rule_engine"] = "rule_engine",
     metadata: dict[str, Any] | None = None,
+    priority: int = 0,
 ) -> ResearchPlan:
     """Allocate ids/timestamps and build a ``ResearchPlan`` from a slim draft."""
     now = datetime.now(UTC)
@@ -180,6 +184,7 @@ def lower_draft(
         current_state=draft.current_state,
         expected_outcome=draft.expected_outcome,
         status=PlanStatus.READY,
+        priority=priority,
         estimated_gain=hypothesis.expected_impact,
         risk=draft.risk,
         success_criteria=list(draft.success_criteria),
@@ -210,6 +215,7 @@ def _try_llm_revision(
     plan_id: str,
     template_name: str,
     llm_client: Any,
+    priority: int = 0,
 ) -> ResearchPlan:
     """One Planning Engine call; keep baseline unless a revised draft validates."""
     agent = ResearchPlannerAgent(llm_client=llm_client)
@@ -232,6 +238,7 @@ def _try_llm_revision(
                 competition=competition,
                 generated_by="llm",
                 metadata={"template": template_name, "revised_by": "llm"},
+                priority=priority,
             )
         )
     except (PlanValidationError, ValueError, TypeError) as exc:

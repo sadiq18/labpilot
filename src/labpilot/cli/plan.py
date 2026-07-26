@@ -1,0 +1,252 @@
+"""CLI for Research Planner — plan-only operations (no execution).
+
+```bash
+research plan create <competition> --hypothesis H-xxx
+research plan show <competition> <plan-id>
+research plan list <competition>
+```
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from labpilot.config import load_config
+from labpilot.experiments.hypothesis import HypothesisStore
+from labpilot.llm.client import resolve_llm_client
+from labpilot.research_engine.intelligence.paths import ResearchPaths
+from labpilot.research_engine.planner import compile_research_plan
+from labpilot.research_engine.planner.schemas.models import ResearchPlan
+from labpilot.research_engine.planner.schemas.task_types import PlanStatus
+from labpilot.research_engine.planner.serializer import render_markdown
+from labpilot.research_engine.planner.store import PlanStore
+from labpilot.research_engine.planner.validator import topological_levels
+
+plan_app = typer.Typer(
+    help="Compile and inspect research plans (plan-only; never executes tasks).",
+    no_args_is_help=True,
+)
+console = Console()
+
+_FORMATS = ("text", "json", "markdown")
+
+
+def _load_config(
+    config_path: Path,
+    project_dir: Path | None,
+    knowledge_dir: Path | None,
+):
+    config = load_config(config_path, project_dir=project_dir)
+    if knowledge_dir:
+        config.knowledge_dir = knowledge_dir
+    return config
+
+
+def _validate_format(value: str) -> str:
+    key = value.strip().lower()
+    if key not in _FORMATS:
+        raise typer.BadParameter(f"--format must be one of: {', '.join(_FORMATS)}")
+    return key
+
+
+def _parse_status(value: str | None) -> PlanStatus | None:
+    if value is None:
+        return None
+    try:
+        return PlanStatus(value.strip().lower())
+    except ValueError as exc:
+        allowed = ", ".join(s.value for s in PlanStatus)
+        raise typer.BadParameter(f"--status must be one of: {allowed}") from exc
+
+
+def _print_plan(plan: ResearchPlan, output_format: str) -> None:
+    if output_format == "json":
+        print(plan.model_dump_json(indent=2))
+        return
+    if output_format == "markdown":
+        print(render_markdown(plan), end="")
+        return
+
+    console.print(f"\n[bold]Research Plan[/bold] [cyan]{plan.id}[/cyan]")
+    console.print(f"  hypothesis: {plan.hypothesis_id or '—'}")
+    console.print(f"  status: {plan.status}  generated_by: {plan.generated_by}")
+    console.print(f"  priority: {plan.priority}  gain: {plan.estimated_gain}")
+    console.print(f"  goal: {plan.goal or '—'}")
+    if plan.risk:
+        console.print(f"  risk: {plan.risk}")
+    if plan.success_criteria:
+        console.print("  success_criteria:")
+        for item in plan.success_criteria:
+            console.print(f"    • {item}")
+
+    console.print("\n[bold]Task DAG[/bold] (topological levels)")
+    levels = topological_levels(plan)
+    task_by_id = {task.id: task for task in plan.tasks}
+    for level_idx, level in enumerate(levels):
+        console.print(f"  [dim]level {level_idx}[/dim]")
+        for task_id in level:
+            task = task_by_id[task_id]
+            deps = ", ".join(task.dependencies) if task.dependencies else "—"
+            console.print(
+                f"    [cyan]{task.id}[/cyan]  {task.type}  "
+                f"[dim]deps=[{deps}][/dim]"
+            )
+            if task.description:
+                console.print(f"      {task.description}")
+
+    if plan.notes:
+        console.print("\n[bold]Notes[/bold]")
+        for note in plan.notes:
+            console.print(f"  [yellow]•[/yellow] {note}")
+
+
+@plan_app.command("create")
+def plan_create(
+    competition: str = typer.Argument(..., help="Competition slug"),
+    hypothesis_id: str = typer.Option(
+        ..., "--hypothesis", "-H", help="Hypothesis ID (e.g. H-001)"
+    ),
+    priority: int = typer.Option(0, "--priority", help="Plan priority (higher = sooner)"),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        help="What to print: text, json, or markdown",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    project_dir: Path | None = typer.Option(
+        None, "--project-dir", help="Project root containing project.yaml"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Compile a ResearchPlan DAG from a hypothesis (plan-only; no execution).
+
+    Writes ``research_plans`` / ``research_tasks`` / deps into ``knowledge.db``
+    and derived ``plans/<plan_id>.json`` + ``.md``. Never creates ``runs/`` or
+    mutates source/config.
+    """
+    output_format = _validate_format(output_format)
+    config = _load_config(config_path, project_dir, knowledge_dir)
+
+    hyp_store = HypothesisStore(config.knowledge_dir, competition)
+    hypothesis = hyp_store.get(hypothesis_id)
+    if hypothesis is None:
+        console.print(
+            f"[red]Hypothesis not found:[/red] {hypothesis_id} "
+            f"(competition={competition})."
+        )
+        raise typer.Exit(code=1)
+
+    plan = compile_research_plan(
+        hypothesis,
+        knowledge_dir=config.knowledge_dir,
+        competition=competition,
+        llm_client=resolve_llm_client(config.llm),
+        priority=priority,
+    )
+
+    paths = ResearchPaths(config.knowledge_dir, competition)
+    if output_format == "text":
+        console.print(
+            f"[green]Created[/green] plan [cyan]{plan.id}[/cyan] "
+            f"({plan.generated_by}, {len(plan.tasks)} tasks)"
+        )
+        console.print(
+            f"  projections: {paths.plans_dir / f'{plan.id}.json'} , "
+            f"{paths.plans_dir / f'{plan.id}.md'}"
+        )
+    _print_plan(plan, output_format)
+
+
+@plan_app.command("show")
+def plan_show(
+    competition: str = typer.Argument(..., help="Competition slug"),
+    plan_id: str = typer.Argument(..., help="Plan ID (e.g. P-001)"),
+    output_format: str = typer.Option(
+        "text",
+        "--format",
+        help="What to print: text, json, or markdown",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    project_dir: Path | None = typer.Option(
+        None, "--project-dir", help="Project root containing project.yaml"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """Show one research plan and its task DAG."""
+    output_format = _validate_format(output_format)
+    config = _load_config(config_path, project_dir, knowledge_dir)
+    store = PlanStore(config.knowledge_dir, competition)
+    try:
+        plan = store.get_plan(plan_id)
+    finally:
+        store.close()
+
+    if plan is None:
+        console.print(
+            f"[red]Plan not found:[/red] {plan_id} (competition={competition})."
+        )
+        raise typer.Exit(code=1)
+
+    _print_plan(plan, output_format)
+
+
+@plan_app.command("list")
+def plan_list(
+    competition: str = typer.Argument(..., help="Competition slug"),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help="Filter by status: draft, ready, in_progress, done, abandoned",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    project_dir: Path | None = typer.Option(
+        None, "--project-dir", help="Project root containing project.yaml"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+) -> None:
+    """List research plans for a competition."""
+    status_filter = _parse_status(status)
+    config = _load_config(config_path, project_dir, knowledge_dir)
+    store = PlanStore(config.knowledge_dir, competition)
+    try:
+        plans = store.list_plans(status=status_filter)
+    finally:
+        store.close()
+
+    if not plans:
+        console.print(f"No research plans for [cyan]{competition}[/cyan].")
+        raise typer.Exit()
+
+    table = Table(title=f"Research plans: {competition}")
+    table.add_column("ID", style="cyan")
+    table.add_column("Status")
+    table.add_column("Hypothesis")
+    table.add_column("By")
+    table.add_column("Tasks")
+    table.add_column("Goal")
+    for plan in plans:
+        table.add_row(
+            plan.id,
+            str(plan.status),
+            plan.hypothesis_id or "—",
+            plan.generated_by,
+            str(len(plan.tasks)),
+            (plan.goal[:60] + "…") if len(plan.goal) > 60 else (plan.goal or "—"),
+        )
+    console.print(table)

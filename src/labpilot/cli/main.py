@@ -11,6 +11,7 @@ from rich.table import Table
 from typer.core import TyperGroup
 
 from labpilot.baseline.registry import list_templates
+from labpilot.cli.plan import plan_app
 from labpilot.competition.models import CompetitionSpec
 from labpilot.config import (
     AppConfig,
@@ -107,6 +108,7 @@ hypothesize_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(hypothesize_app, name="hypothesize")
+app.add_typer(plan_app, name="plan")
 console = Console()
 
 
