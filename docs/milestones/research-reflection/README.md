@@ -2,7 +2,7 @@
 
 Back to [MILESTONES.md](../../MILESTONES.md).
 
-**Status:** Design Phase A complete; Phase B Plan **1 Done**; Plans 2–10 ready.
+**Status:** Design Phase A complete; Phase B Plans **1–2 Done**; Plans 3–10 ready.
 **Milestone:** 6 — close the research loop.
 **Product name:** Research Reflection.
 **CLI (target):** `research reflect` / `research journal` (+ Engineer auto-hook after `run --plan`).

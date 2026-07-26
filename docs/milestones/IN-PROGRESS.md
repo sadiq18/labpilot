@@ -6,8 +6,8 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ## Research Reflection — Phase B in progress
 
-**Status:** Design Phase A **complete**; Plan **1 Done** (schema +
-`ReflectionStore`, `SCHEMA_VERSION` 5). Plans 2–10 ready.
+**Status:** Design Phase A **complete**; Plans **1–2 Done** (schema +
+`ReflectionStore` + `EvidenceExtractor`, `SCHEMA_VERSION` 5). Plans 3–10 ready.
 **Milestone 6** — close the loop: evidence → critic → beliefs/hypotheses →
 journal.
 
@@ -19,7 +19,7 @@ architecture, schema, package-layout, beliefs-and-claims, cli).
 | # | Plan | Depends on | Status |
 |---|------|------------|--------|
 | 1 | [Schema + stores](research-reflection/plan-1-schema-stores.md) | Design A | Done |
-| 2 | [EvidenceExtractor](research-reflection/plan-2-evidence-extractor.md) | 1 | Ready |
+| 2 | [EvidenceExtractor](research-reflection/plan-2-evidence-extractor.md) | 1 | Done |
 | 3 | [ExperimentCritic](research-reflection/plan-3-experiment-critic.md) | 2 | Ready |
 | 4 | [Belief + Hypothesis](research-reflection/plan-4-belief-hypothesis.md) | 1–3 | Ready |
 | 5 | [Engineer cutover](research-reflection/plan-5-engineer-cutover.md) | 2–4 | Ready |

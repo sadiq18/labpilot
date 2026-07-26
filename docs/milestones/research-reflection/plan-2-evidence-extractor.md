@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md). Design: [architecture.md](architecture.md).
 
-**Status:** Ready. **Depends on:** Plan 1. **Unlocks:** Plans 3–5.
+**Status:** Done. **Depends on:** Plan 1. **Unlocks:** Plans 3–5.
 
 ---
 
@@ -26,6 +26,6 @@ Deterministic extraction of structured evidence from an Engineer execution
 
 ## Acceptance criteria
 
-- [ ] Given fixture execution artifacts, produces stable evidence JSON
-- [ ] Offline / no network / no LLM
-- [ ] Unit tests with fixture competition metrics
+- [x] Given fixture execution artifacts, produces stable evidence JSON
+- [x] Offline / no network / no LLM
+- [x] Unit tests with fixture competition metrics
