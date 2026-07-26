@@ -1,0 +1,38 @@
+Revise the baseline research-plan draft for this hypothesis.
+
+## Competition
+{{ competition }}
+
+## Hypothesis
+- id: {{ hypothesis_id }}
+- observation: {{ observation }}
+- reason: {{ reason }}
+- prediction: {{ prediction }}
+- expected_impact: {{ expected_impact }}
+- confidence: {{ confidence }}
+- tags: {{ tags | join(", ") }}
+
+## Goal / state (from structured context)
+- goal: {{ goal }}
+- current_state: {{ current_state }}
+- expected_outcome: {{ expected_outcome }}
+
+{% if technique_names %}
+## Related techniques
+{% for name in technique_names %}- {{ name }}
+{% endfor %}
+{% endif %}
+{% if belief_summaries %}
+## Beliefs (bounded)
+{% for item in belief_summaries %}- {{ item }}
+{% endfor %}
+{% endif %}
+{% if brief_excerpt %}
+## Research brief excerpt
+{{ brief_excerpt }}
+{% endif %}
+
+## Baseline draft (rule_engine) — revise into the slim JSON schema
+{{ baseline_json }}
+
+Return ONLY the revised JSON object.
