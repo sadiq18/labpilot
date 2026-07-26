@@ -2,32 +2,27 @@
 
 ## North Star
 
-**One command closes the first 80% of a Kaggle competition loop** — from competition page to uploaded submission and a written reflection — without hand-written code.
+**Close the research loop** — from competition landscape to durable knowledge —
+without hand-written experiment code for the first 80% of the work.
 
 ```bash
-research run --competition titanic
+research analyze <slug>
+research plan create <slug> --baseline    # or --hypothesis H-xxx
+research run --plan P-001 --competition <slug>
+research journal --competition <slug>
 ```
 
-After a few hours, a complete run should produce:
+After a successful plan-driven run (and reflection), a competition workspace should
+have:
 
 ```
-✔ Parsed competition
-✔ Downloaded data
-✔ Built research brief
-✔ Generated baseline
-✔ Trained model
-✔ Evaluated CV
-✔ Generated submission
-✔ Uploaded submission
-✔ Logged experiment
-✔ Wrote reflection
-✔ Wrote HTML report
+✔ Analyzed landscape / beliefs / hypotheses
+✔ Compiled research plan (P-001 or hypothesis plan)
+✔ Executed plan (workspace → code → verify → train → eval → submit)
+✔ Logged experiment evidence
+✔ Updated beliefs / hypotheses (Research Reflection)
+✔ Research journal (evidence tiers + next experiment)
 ```
-
-For a reviewable two-step alternative — pause after the brief to sanity-check the resolved
-competition/dataset before spending time training — split it into `research init --competition
-titanic` (parse → download → profile → brief) followed by `research build --run-id <id>` (baseline
-→ code → train → evaluate → submission → upload → log → reflection).
 
 Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 
@@ -38,8 +33,8 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | Track | Document | Summary |
 |-------|----------|---------|
 | **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P2 + P3 + P4 shipped |
-| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Research Engineer Plans 1–11 done (dry-run SoR); Planner MVP; RI Phase 1 |
-| **TODO** | [milestones/TODO.md](milestones/TODO.md) | P2 execution dispatch + post-1.0 items |
+| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Research Reflection Design A; Engineer Plans 1–11 done; Planner MVP; RI Phase 1 |
+| **TODO** | [milestones/TODO.md](milestones/TODO.md) | Reflection Phase B; post-1.0 items |
 | **Backlog** | [milestones/backlog.md](milestones/backlog.md) | Unscheduled extensions (async kernel watcher, webhooks) |
 
 ---
@@ -57,7 +52,8 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | **Experiment Scientist** | v0.5 | **Shipped** | Research memory, comparison, hypotheses, knowledge base, ranking, dashboard |
 | **Research Intelligence** | v0.6 | **Phase 1 shipped** | Analyze landscape + hypotheses + brief; plans 1–11 + spike + F |
 | **Research Planner** | — | **MVP shipped** | Hypothesis → planning compiler → executable DAG (`research plan`); Plans 1–6 |
-| **Research Engineer** | — | **Phase B complete (dry-run SoR)** | Approved plan → implemented, verified experiment (`research run --plan`); autonomous implement/verify/train/submit |
+| **Research Engineer** | — | **Phase B complete (dry-run SoR)** | Approved plan → implemented, verified experiment (`research run --plan`) |
+| **Research Reflection** | — | **Phase B (Plan 1 done)** | Outcomes → durable knowledge (`research reflect` / `journal`) |
 
 Details for each track live in the linked documents above:
 
@@ -65,6 +61,7 @@ Details for each track live in the linked documents above:
 - Research Intelligence: [milestones/research-intelligence/README.md](milestones/research-intelligence/README.md)
 - Research Planner (MVP shipped): [milestones/research-planner/README.md](milestones/research-planner/README.md)
 - Research Engineer (design): [milestones/research-engineer/README.md](milestones/research-engineer/README.md)
+- Research Reflection (design): [milestones/research-reflection/README.md](milestones/research-reflection/README.md)
 
 ---
 

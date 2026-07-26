@@ -296,3 +296,84 @@ CREATE TABLE IF NOT EXISTS research_executions (
 );
 CREATE INDEX IF NOT EXISTS idx_exec_plan ON research_executions(plan_id);
 CREATE INDEX IF NOT EXISTS idx_exec_status ON research_executions(status);
+
+-- ==========================================================================
+-- Research Reflection — durable evidence, belief audit, lessons, claims.
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS experiment_evidence (
+    id               TEXT PRIMARY KEY,
+    competition_slug TEXT,
+    execution_id     TEXT,
+    experiment_id    TEXT,
+    plan_id          TEXT,
+    hypothesis_id    TEXT,
+    metrics          TEXT NOT NULL DEFAULT '{}',
+    config_summary   TEXT NOT NULL DEFAULT '{}',
+    runtime_summary  TEXT NOT NULL DEFAULT '{}',
+    comparison       TEXT NOT NULL DEFAULT '{}',
+    strength         TEXT NOT NULL DEFAULT 'moderate',
+    -- strong|moderate|weak|rejected
+    metadata         TEXT NOT NULL DEFAULT '{}',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exp_evidence_comp ON experiment_evidence(competition_slug);
+CREATE INDEX IF NOT EXISTS idx_exp_evidence_exec ON experiment_evidence(execution_id);
+
+CREATE TABLE IF NOT EXISTS belief_updates (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    belief_id        TEXT NOT NULL REFERENCES beliefs(id),
+    competition_slug TEXT,
+    execution_id     TEXT,
+    experiment_id    TEXT,
+    prior_confidence REAL NOT NULL,
+    new_confidence   REAL NOT NULL,
+    prior_status     TEXT NOT NULL DEFAULT '',
+    new_status       TEXT NOT NULL DEFAULT '',
+    reason           TEXT NOT NULL DEFAULT '',
+    evidence_id      TEXT,
+    metadata         TEXT NOT NULL DEFAULT '{}',
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_belief_updates_belief ON belief_updates(belief_id);
+CREATE INDEX IF NOT EXISTS idx_belief_updates_comp ON belief_updates(competition_slug);
+
+CREATE TABLE IF NOT EXISTS lessons (
+    id               TEXT PRIMARY KEY,
+    competition_slug TEXT,
+    summary          TEXT NOT NULL,
+    category         TEXT NOT NULL DEFAULT '',
+    confidence       REAL NOT NULL DEFAULT 0.5,
+    source_execution TEXT,
+    metadata         TEXT NOT NULL DEFAULT '{}',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lessons_comp ON lessons(competition_slug);
+
+CREATE TABLE IF NOT EXISTS research_claims (
+    id               TEXT PRIMARY KEY,
+    competition_slug TEXT,
+    statement        TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'candidate',
+    -- candidate|supported|contested|withdrawn
+    confidence       REAL NOT NULL DEFAULT 0.5,
+    technique        TEXT NOT NULL DEFAULT '',
+    effect           TEXT NOT NULL DEFAULT '',
+    promoted_from    TEXT,
+    contradictions   TEXT NOT NULL DEFAULT '[]',
+    metadata         TEXT NOT NULL DEFAULT '{}',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_claims_comp ON research_claims(competition_slug);
+CREATE INDEX IF NOT EXISTS idx_claims_status ON research_claims(status);
+
+CREATE TABLE IF NOT EXISTS claim_evidence (
+    claim_id    TEXT NOT NULL REFERENCES research_claims(id) ON DELETE CASCADE,
+    evidence_id TEXT NOT NULL,
+    relation    TEXT NOT NULL DEFAULT 'supports',
+    weight      REAL NOT NULL DEFAULT 1.0,
+    PRIMARY KEY (claim_id, evidence_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_claim_evidence_ev ON claim_evidence(evidence_id);
