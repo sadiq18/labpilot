@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md).
 
-**Status:** Ready. **Depends on:** Plans 1–9.
+**Status:** Done. **Depends on:** Plans 1–9.
 
 ---
 
@@ -29,7 +29,7 @@ belief_updates + hypothesis why + journal green
 
 ## Acceptance criteria
 
-- [ ] Durable evidence + belief_updates without manual hypothesize update
-- [ ] `research journal` answers evidence tiers + next experiment
-- [ ] Claims queryable (if Plan 7 shipped)
-- [ ] rule_engine-only path passes in CI
+- [x] Durable evidence + belief_updates without manual hypothesize update
+- [x] `research journal` answers evidence tiers + next experiment
+- [x] Claims queryable (if Plan 7 shipped)
+- [x] rule_engine-only path passes in CI

@@ -331,6 +331,17 @@ class ReflectionStore:
         ).fetchone()
         return None if row is None else self._claim_from_row(row)
 
+    def list_claims(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM research_claims
+            WHERE competition_slug = ?
+            ORDER BY created_at ASC
+            """,
+            (self.competition,),
+        ).fetchall()
+        return [self._claim_from_row(row) for row in rows]
+
     def link_claim_evidence(
         self,
         claim_id: str,

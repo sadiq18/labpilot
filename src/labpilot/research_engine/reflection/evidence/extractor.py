@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from labpilot.experiments.models import ExperimentComparison, Verdict
+from labpilot.research_engine.shared.experiments.models import ExperimentComparison, Verdict
 from labpilot.research_engine.execution.evidence import evidence_dir
 from labpilot.research_engine.execution.store import ExecutionStore
 from labpilot.research_engine.intelligence.paths import ResearchPaths

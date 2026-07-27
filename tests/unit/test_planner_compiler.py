@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from labpilot.experiments.models import Hypothesis
+from labpilot.research_engine.shared.experiments.models import Hypothesis
 from labpilot.research_engine.planner import compile_research_plan
 from labpilot.research_engine.planner.schemas.task_types import PlanStatus, TaskType
 from labpilot.research_engine.planner.serializer import render_markdown

@@ -17,7 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 from labpilot.config import load_config
-from labpilot.experiments.hypothesis import HypothesisStore
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.llm.client import resolve_llm_client
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.planner import (

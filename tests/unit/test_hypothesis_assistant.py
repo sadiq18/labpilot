@@ -8,8 +8,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from labpilot.cli import main as cli_main
-from labpilot.experiments.hypothesis import HypothesisStore
-from labpilot.experiments.models import HypothesisCreatedBy, HypothesisStatus
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+from labpilot.research_engine.shared.experiments.models import HypothesisCreatedBy, HypothesisStatus
 from labpilot.research_engine.intelligence.context import build_context
 from labpilot.research_engine.intelligence.hypothesis import (
     HypothesisAssistant,

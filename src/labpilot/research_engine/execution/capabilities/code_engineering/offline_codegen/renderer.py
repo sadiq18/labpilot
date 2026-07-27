@@ -8,7 +8,9 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from labpilot.research_engine.execution.baseline.registry import BaselineTemplate
 from labpilot.research_engine.execution.baseline.selector import BaselineChoice
 from labpilot.config import TrainingConfig
-from labpilot.improvement.models import DEFAULT_TABULAR_MODEL_PARAMS
+from labpilot.research_engine.execution.capabilities.code_engineering.offline_codegen.defaults import (
+    DEFAULT_TABULAR_MODEL_PARAMS,
+)
 
 logger = logging.getLogger(__name__)
 

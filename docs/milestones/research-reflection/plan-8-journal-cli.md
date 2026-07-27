@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md). Design: [cli.md](cli.md).
 
-**Status:** Ready. **Depends on:** Plans 2–7 (MVP can ship with 2–5 + stubs).
+**Status:** Done. **Depends on:** Plans 2–7 (MVP can ship with 2–5 + stubs).
 
 ---
 
@@ -25,6 +25,6 @@ Ship `research reflect` and `research journal`; next-experiment suggestion.
 
 ## Acceptance criteria
 
-- [ ] `research journal --competition <slug>` prints evidence tiers + next step
-- [ ] `research reflect --execution E-xxx` re-runs pipeline idempotently enough
-- [ ] Offline path documented and tested
+- [x] `research journal --competition <slug>` prints evidence tiers + next step
+- [x] `research reflect --execution E-xxx` re-runs pipeline idempotently enough
+- [x] Offline path documented and tested

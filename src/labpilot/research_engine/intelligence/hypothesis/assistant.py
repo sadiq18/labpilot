@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from labpilot.accessor.common.micro_agents import StructuredContext
-from labpilot.experiments.models import HypothesisCreatedBy, HypothesisOrigin
+from labpilot.research_engine.shared.experiments.models import HypothesisCreatedBy, HypothesisOrigin
 from labpilot.research_engine.intelligence.hypothesis.candidates import generate_candidates
 from labpilot.research_engine.intelligence.hypothesis.models import (
     HypothesisAssistantResult,

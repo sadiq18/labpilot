@@ -8,9 +8,9 @@ surface as notes and are flagged on the experiments that produced them.
 
 from __future__ import annotations
 
-from labpilot.experiments.graph import build_graph
-from labpilot.experiments.knowledge import KnowledgeBase, normalize_technique
-from labpilot.experiments.models import Experiment
+from labpilot.research_engine.shared.experiments.graph import build_graph
+from labpilot.research_engine.shared.experiments.knowledge import KnowledgeBase, normalize_technique
+from labpilot.research_engine.shared.experiments.models import Experiment
 from labpilot.research_engine.intelligence.analyzers.base import BaseAnalyzer
 from labpilot.research_engine.intelligence.models import (
     AnalyzeContext,

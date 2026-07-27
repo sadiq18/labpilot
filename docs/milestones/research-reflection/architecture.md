@@ -14,7 +14,7 @@ New pillar under `src/labpilot/research_engine/reflection/`, peer of
 | Trigger | After Engineer execution (Reporting TaskTypes) + CLI `research reflect` / `journal` |
 | Capabilities | Deterministic extractors + belief/hypothesis writers; LLM only in Critic / synthesis / lessons / recommendations |
 | No | Standalone “reflection agent” that owns control flow |
-| Import hygiene | `reflection` → `accessor`, `experiments` helpers (today `labpilot.experiments`; target `research_engine.shared.experiments`), planner/execution **read** APIs; execution may call reflection library; intelligence may **read** claims/beliefs — reflection does not deep-import intelligence analyzers |
+| Import hygiene | `reflection` → `accessor`, `labpilot.research_engine.shared.experiments`, planner/execution **read** APIs; execution may call reflection library; intelligence may **read** claims/beliefs — reflection does not deep-import intelligence analyzers |
 
 ---
 
@@ -68,22 +68,30 @@ Existing Reporting TaskTypes in
 **After Plan 5:** call into `research_engine.reflection` library; auto-run on
 execution success/fail when those tasks are in the plan DAG.
 
-`ReflectionGeneratorAgent` (under `execution/micro_agents/`) is promoted into
-`reflection/critic/` and wired from Reporting (unused today).
+LLM reflection slices live co-located with their domain packages
+(`critic/`, `contradiction/`, `confidence/`, `synthesis/`, `lessons/`,
+`hypotheses/`, `recommendation/`) — each has `micro_agent.py` + `skill.md`.
+`RootCauseAgent` aliases the legacy `ReflectionGeneratorAgent` name; execution
+still re-exports that name for compatibility. Facades compose the agents;
+Reporting can call `run_reflection`.
 
 ---
 
 ## 5. LLM boundary (locked)
 
-| Use LLM | Keep deterministic |
-|---------|-------------------|
-| Root cause / critic reasoning | Metric deltas, ranking, storage |
-| Contradiction narrative | Statistical/confidence math (rules) |
-| Lesson generation | Evidence extraction |
-| Hypothesis revision text | Belief confidence arithmetic |
-| Next-experiment recommendation prose | History queries / journal assembly |
+| Use LLM (Micro Agent) | Keep deterministic |
+|----------------------|-------------------|
+| RootCauseAgent | Metric deltas, ranking, storage, EvidenceExtractor |
+| ContradictionDetectorAgent | Belief confidence arithmetic (BeliefUpdater) |
+| EvidenceSynthesisAgent | Journal assembly / history queries |
+| ConfidenceEstimatorAgent (qualitative) | Hypothesis **status** enum writes |
+| LessonGeneratorAgent | Claim promotion thresholds |
+| HypothesisRevisionAgent (why / revised text) | |
+| RecommendationAgent | |
 
-Offline: every LLM stage has a `rule_engine` path (same posture as other Micro Agents).
+Offline: every Micro Agent has a `rule_engine` path (same posture as Intelligence).
+
+Each agent is imported from its domain package (e.g. `reflection.critic.RootCauseAgent`).
 
 ---
 
@@ -97,8 +105,8 @@ Offline: every LLM stage has a `rule_engine` path (same posture as other Micro A
 | SQLite `beliefs` / `experiments` / `evidence_links` | Extend; add reflection tables |
 | M2 `StructuredReflection` + top-level `reflection/` | Schema/prompts migrate; delete top-level after Plan 9 |
 
-Today these live at `labpilot.experiments`. Design target (separate move):
-`labpilot.research_engine.shared.experiments` — see [package-layout.md](package-layout.md) §2.
+These live at `labpilot.research_engine.shared.experiments` — see
+[package-layout.md](package-layout.md) §2.
 
 
 ---

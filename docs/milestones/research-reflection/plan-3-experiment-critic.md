@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md).
 
-**Status:** Ready. **Depends on:** Plan 2. **Unlocks:** Plan 4–5.
+**Status:** Done. **Depends on:** Plan 2. **Unlocks:** Plan 4–5.
 
 ---
 
@@ -25,6 +25,6 @@ and `rule_engine` fallback. Promote/wire `ReflectionGeneratorAgent`.
 
 ## Acceptance criteria
 
-- [ ] rule_engine path works in CI without API keys
-- [ ] LLM path optional behind existing provider config
-- [ ] Reporting can import critic without circular imports
+- [x] rule_engine path works in CI without API keys
+- [x] LLM path optional behind existing provider config
+- [x] Reporting can import critic without circular imports

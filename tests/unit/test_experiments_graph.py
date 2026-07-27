@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from labpilot.experiments.graph import assemble_experiment, build_graph
-from labpilot.experiments.store import ExperimentRecord, ExperimentStore
+from labpilot.research_engine.shared.experiments.graph import assemble_experiment, build_graph
+from labpilot.research_engine.shared.experiments.store import ExperimentRecord, ExperimentStore
 
 # Mirrors experiments/graph.py's `_ALL_PIPELINE_STAGES` — kept as a literal
 # copy here rather than importing the private constant, so the fixture

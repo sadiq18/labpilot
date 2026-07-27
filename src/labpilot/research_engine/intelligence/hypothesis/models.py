@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from labpilot.experiments.models import (
+from labpilot.research_engine.shared.experiments.models import (
     HypothesisCreatedBy,
     HypothesisEvidenceRef,
     HypothesisGenerator,

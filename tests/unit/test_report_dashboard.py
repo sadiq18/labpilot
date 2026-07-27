@@ -9,20 +9,20 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from labpilot.cli.main import app
-from labpilot.experiments.graph import build_graph
-from labpilot.experiments.hypothesis import HypothesisStore
-from labpilot.experiments.knowledge import KnowledgeBase
-from labpilot.experiments.models import (
+from labpilot.research_engine.shared.experiments.graph import build_graph
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+from labpilot.research_engine.shared.experiments.knowledge import KnowledgeBase
+from labpilot.research_engine.shared.experiments.models import (
     ExperimentReport,
     KnowledgeEffect,
     KnowledgeEntry,
 )
-from labpilot.experiments.report import (
+from labpilot.research_engine.shared.experiments.report import (
     NoExperimentsError,
     build_report,
     write_dashboard,
 )
-from labpilot.experiments.manifest import RunManifest, StageStatus, save_manifest
+from labpilot.research_engine.shared.experiments.manifest import RunManifest, StageStatus, save_manifest
 
 
 def _write_run(

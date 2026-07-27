@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from labpilot.experiments.comparator import (
+from labpilot.research_engine.shared.experiments.comparator import (
     compare,
     load_comparison,
     render_markdown,
     write_comparison,
 )
-from labpilot.experiments.models import (
+from labpilot.research_engine.shared.experiments.models import (
     ChangeCategory,
     Experiment,
     Verdict,

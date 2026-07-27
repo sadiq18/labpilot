@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md). Design: [package-layout.md](package-layout.md).
 
-**Status:** Ready. **Depends on:** Plans 3–5, 8 (migration complete).
+**Status:** Done. **Depends on:** Plans 3–5, 8 (migration complete).
 
 ---
 
@@ -23,7 +23,7 @@ lives under `accessor/kaggle/` (top-level `kernel/` removed).
 | **`src/labpilot/report/`** | **Delete** Pipeline-era HTML reporter (see below) |
 | **`src/labpilot/improvement/`** | **Delete** after relocating live bits (see below) |
 | `src/labpilot/kernel/` | **Done** — `exporter` → `accessor/kaggle/exporter.py`; package removed |
-| `src/labpilot/experiments/` (→ planned `shared/experiments/`) | Keep as shared SoR; reflection owns post-run writes; package move is follow-on |
+| `src/labpilot/research_engine/shared/experiments/` | **Done** — moved from `src/labpilot/experiments/`; shared SoR; reflection owns post-run writes |
 | Reporting stubs | Already replaced in Plan 5 |
 
 ---
@@ -93,7 +93,7 @@ Graph / dashboard may still *detect* `has_report` / link to them — they must n
 
 - Delete `src/labpilot/improvement/` entirely.
 - No imports of `labpilot.improvement` remain.
-- Graph / search tests import overrides helpers from `labpilot.experiments…`.
+- Graph / search tests import overrides helpers from `labpilot.research_engine.shared.experiments…`.
 
 ### Follow-on TODO (not Plan 9 exit criteria)
 
@@ -120,10 +120,10 @@ legacy `runs/` support is dropped separately.
 
 ## Acceptance criteria
 
-- [ ] No imports of `labpilot.reflection` remain
-- [ ] `labpilot.report` package deleted; no `ReportGenerator` / `research report`
-- [ ] Dashboard template relocated; `research experiments dashboard` still green
-- [ ] `labpilot.improvement` deleted; codegen imports defaults locally; graph imports run-override DTOs from `experiments`
-- [ ] Follow-on TODO recorded (offline codegen defaults cleanup)
-- [ ] CI green; no Pipeline reflect/report/improve resurrection
-- [ ] Docs point narrative surface at `research journal` / `research_engine.reflection`
+- [x] No imports of `labpilot.reflection` remain
+- [x] `labpilot.report` package deleted; no `ReportGenerator` / `research report`
+- [x] Dashboard template relocated; `research experiments dashboard` still green
+- [x] `labpilot.improvement` deleted; codegen imports defaults locally; graph imports run-override DTOs from `experiments`
+- [x] Follow-on TODO recorded (offline codegen defaults cleanup)
+- [x] CI green; no Pipeline reflect/report/improve resurrection
+- [x] Docs point narrative surface at `research journal` / `research_engine.reflection`

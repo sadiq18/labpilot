@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md).
 
-**Status:** Ready. **Depends on:** Plans 4–5. **Unlocks:** Plans 7–8.
+**Status:** Done. **Depends on:** Plans 4–5. **Unlocks:** Plans 7–8.
 
 ---
 
@@ -15,8 +15,8 @@ Planner inputs.
 
 - `lessons/generator.py` → `lessons` table (LLM + rule_engine)
 - `synthesis/synthesizer.py` — rollup of beliefs, recent evidence, open hyps
-- Dual-write / migrate writers from `experiments/knowledge.py` as needed
-  (path today: `labpilot.experiments`; target: `shared.experiments`)
+- Dual-write / migrate writers from `shared.experiments.knowledge` as needed
+  (`labpilot.research_engine.shared.experiments`)
 
 ## Out of scope
 
@@ -25,6 +25,6 @@ Planner inputs.
 
 ## Acceptance criteria
 
-- [ ] Lesson rows persist after reflect
-- [ ] Synthesis output is stable under rule_engine
-- [ ] Cross-competition lessons can have null competition_slug
+- [x] Lesson rows persist after reflect
+- [x] Synthesis output is stable under rule_engine
+- [x] Cross-competition lessons can have null competition_slug

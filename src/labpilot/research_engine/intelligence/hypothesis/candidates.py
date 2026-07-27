@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from labpilot.experiments.models import HypothesisEvidenceRef, HypothesisOrigin
+from labpilot.research_engine.shared.experiments.models import HypothesisEvidenceRef, HypothesisOrigin
 from labpilot.research_engine.intelligence.hypothesis.models import (
     HypothesisCandidate,
     HypothesisCandidateKind,

@@ -4,10 +4,9 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-## Research Reflection — Phase B in progress
+## Research Reflection — Phase B complete
 
-**Status:** Design Phase A **complete**; Plans **1–2 Done** (schema +
-`ReflectionStore` + `EvidenceExtractor`, `SCHEMA_VERSION` 5). Plans 3–10 ready.
+**Status:** Design Phase A **complete**; Plans **1–10 Done**.
 **Milestone 6** — close the loop: evidence → critic → beliefs/hypotheses →
 journal.
 
@@ -20,16 +19,16 @@ architecture, schema, package-layout, beliefs-and-claims, cli).
 |---|------|------------|--------|
 | 1 | [Schema + stores](research-reflection/plan-1-schema-stores.md) | Design A | Done |
 | 2 | [EvidenceExtractor](research-reflection/plan-2-evidence-extractor.md) | 1 | Done |
-| 3 | [ExperimentCritic](research-reflection/plan-3-experiment-critic.md) | 2 | Ready |
-| 4 | [Belief + Hypothesis](research-reflection/plan-4-belief-hypothesis.md) | 1–3 | Ready |
-| 5 | [Engineer cutover](research-reflection/plan-5-engineer-cutover.md) | 2–4 | Ready |
-| 6 | [Lessons + synthesis](research-reflection/plan-6-lessons-synthesis.md) | 4–5 | Ready |
-| 7 | [Research Claims](research-reflection/plan-7-research-claims.md) | 1, 4, 6 | Ready |
-| 8 | [Journal CLI](research-reflection/plan-8-journal-cli.md) | 2–7 | Ready |
-| 9 | [Legacy cleanup](research-reflection/plan-9-legacy-cleanup.md) | 3–5, 8 | Ready |
-| 10 | [Capstone](research-reflection/plan-10-capstone.md) | 1–9 | Ready |
+| 3 | [ExperimentCritic](research-reflection/plan-3-experiment-critic.md) | 2 | Done |
+| 4 | [Belief + Hypothesis](research-reflection/plan-4-belief-hypothesis.md) | 1–3 | Done |
+| 5 | [Engineer cutover](research-reflection/plan-5-engineer-cutover.md) | 2–4 | Done |
+| 6 | [Lessons + synthesis](research-reflection/plan-6-lessons-synthesis.md) | 4–5 | Done |
+| 7 | [Research Claims](research-reflection/plan-7-research-claims.md) | 1, 4, 6 | Done |
+| 8 | [Journal CLI](research-reflection/plan-8-journal-cli.md) | 2–7 | Done |
+| 9 | [Legacy cleanup](research-reflection/plan-9-legacy-cleanup.md) | 3–5, 8 | Done |
+| 10 | [Capstone](research-reflection/plan-10-capstone.md) | 1–9 | Done |
 
-**CLI (target):** `research reflect` / `research journal` (+ Engineer Reporting hook).
+**CLI:** `research reflect run` / `research journal` / `research claims` (+ Engineer Reporting hook).
 
 ---
 

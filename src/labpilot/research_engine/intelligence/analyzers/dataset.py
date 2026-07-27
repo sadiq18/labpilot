@@ -7,7 +7,7 @@ upstream by the profiler). Never calls an LLM and never touches the network
 
 from __future__ import annotations
 
-from labpilot.experiments.graph import build_graph
+from labpilot.research_engine.shared.experiments.graph import build_graph
 from labpilot.accessor.profiler.report import load_profile
 from labpilot.accessor.profiler.tabular import DatasetProfile
 from labpilot.research_engine.intelligence.analyzers.base import BaseAnalyzer

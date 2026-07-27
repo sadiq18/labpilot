@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from labpilot.experiments.hypothesis import HypothesisStore
-from labpilot.experiments.models import (
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+from labpilot.research_engine.shared.experiments.models import (
     HypothesisCreatedBy,
     HypothesisGenerator,
     HypothesisOrigin,

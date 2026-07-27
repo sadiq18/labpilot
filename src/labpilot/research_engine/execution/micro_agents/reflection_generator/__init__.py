@@ -1,6 +1,9 @@
-from labpilot.research_engine.execution.micro_agents.reflection_generator.agent import (
+"""Thin re-export — RootCauseAgent lives under reflection.critic."""
+
+from labpilot.research_engine.reflection.critic.micro_agent import (
     ReflectionDraft,
     ReflectionGeneratorAgent,
+    RootCauseAgent,
 )
 
-__all__ = ["ReflectionDraft", "ReflectionGeneratorAgent"]
+__all__ = ["ReflectionDraft", "ReflectionGeneratorAgent", "RootCauseAgent"]

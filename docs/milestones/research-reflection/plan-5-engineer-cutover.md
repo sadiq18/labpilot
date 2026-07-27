@@ -2,7 +2,7 @@
 
 Back to [Research Reflection](README.md). Design: [architecture.md](architecture.md) §4.
 
-**Status:** Ready. **Depends on:** Plans 2–4. **Unlocks:** Plans 6–8, 10.
+**Status:** Done. **Depends on:** Plans 2–4. **Unlocks:** Plans 6–8, 10.
 
 ---
 
@@ -26,6 +26,6 @@ with reflection library calls; auto-run on execution success/fail when tasks pre
 
 ## Acceptance criteria
 
-- [ ] Dry-run plan with Reporting tasks writes evidence + belief_updates in DB
-- [ ] No durable mutation required for tasks not in the plan DAG
-- [ ] Existing Engineer unit/integration tests still green
+- [x] Dry-run plan with Reporting tasks writes evidence + belief_updates in DB
+- [x] No durable mutation required for tasks not in the plan DAG
+- [x] Existing Engineer unit/integration tests still green

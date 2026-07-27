@@ -6,14 +6,14 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from labpilot.cli.main import app
-from labpilot.experiments.hypothesis import HypothesisStore
-from labpilot.experiments.knowledge import KnowledgeBase
-from labpilot.experiments.models import (
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+from labpilot.research_engine.shared.experiments.knowledge import KnowledgeBase
+from labpilot.research_engine.shared.experiments.models import (
     KnowledgeEffect,
     KnowledgeEntry,
 )
-from labpilot.experiments.ranking import RankingWeights, rank_candidates
-from labpilot.experiments.manifest import RunManifest, StageStatus, save_manifest
+from labpilot.research_engine.shared.experiments.ranking import RankingWeights, rank_candidates
+from labpilot.research_engine.shared.experiments.manifest import RunManifest, StageStatus, save_manifest
 
 
 def _seed_empty_run(runs_dir: Path, run_id: str, competition: str = "titanic") -> None:

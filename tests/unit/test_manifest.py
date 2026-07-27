@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from labpilot.experiments.manifest import (
+from labpilot.research_engine.shared.experiments.manifest import (
     RunManifest,
     StageStatus,
     generate_run_id,

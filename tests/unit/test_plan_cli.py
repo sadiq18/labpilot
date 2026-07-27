@@ -9,7 +9,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from labpilot.cli.main import app
-from labpilot.experiments.hypothesis import HypothesisStore
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 
 runner = CliRunner()
 _HELP_ENV = {"COLUMNS": "200", "NO_COLOR": "1"}
