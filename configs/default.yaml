@@ -36,9 +36,9 @@ experiments:
 # when no cloud key and Ollama is unreachable. Override with LABPILOT_LLM_MODE
 # (auto|local|cloud), LABPILOT_LLM_PROVIDER, LABPILOT_LLM_MODEL, OLLAMA_HOST.
 llm:
-  mode: auto          # auto | local | cloud
+  mode: auto          # auto | local | cloud — set LABPILOT_LLM_MODE=cloud for demos
   provider: gemini    # default cloud provider (matches LABPILOT_LLM_PROVIDER in .env)
-  # model: gemini-3.5-flash
+  model: gemini-3.5-flash-lite
   temperature: 0.3
   ollama_base_url: http://localhost:11434
   fallback_model: qwen2.5-coder:14b
@@ -47,10 +47,7 @@ llm:
     path: .cache/llm.sqlite
   tasks:
     planning: {}      # inherits gemini
-    coding:
-      model: qwen2.5-coder:14b
-      provider: ollama
-      force_local: true
+    coding: {}        # inherits gemini (override provider/model here for Ollama coding)
     summary: {}       # inherits gemini
     default: {}
   # Local-only alternative for non-coding tasks:

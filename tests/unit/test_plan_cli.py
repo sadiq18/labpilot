@@ -12,7 +12,14 @@ from labpilot.cli.main import app
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 
 runner = CliRunner()
-_HELP_ENV = {"COLUMNS": "200", "NO_COLOR": "1"}
+_HELP_ENV = {
+    "COLUMNS": "200",
+    "NO_COLOR": "1",
+    # Keep plan create offline in unit tests (no Gemini/Ollama hang or flaky llm).
+    "GEMINI_API_KEY": "",
+    "OPENAI_API_KEY": "",
+    "LABPILOT_LLM_MODE": "cloud",
+}
 
 
 def _plain(text: str) -> str:
@@ -67,6 +74,7 @@ def test_plan_create_show_list_round_trip(tmp_path: Path) -> None:
             "--knowledge-dir",
             str(knowledge),
         ],
+        env=_HELP_ENV,
     )
     assert create.exit_code == 0, create.output
     assert "P-001" in create.output
@@ -81,6 +89,7 @@ def test_plan_create_show_list_round_trip(tmp_path: Path) -> None:
     show = runner.invoke(
         app,
         ["plan", "show", "demo", "P-001", "--knowledge-dir", str(knowledge)],
+        env=_HELP_ENV,
     )
     assert show.exit_code == 0, show.output
     assert "P-001" in show.output
@@ -89,6 +98,7 @@ def test_plan_create_show_list_round_trip(tmp_path: Path) -> None:
     listed = runner.invoke(
         app,
         ["plan", "list", "demo", "--status", "ready", "--knowledge-dir", str(knowledge)],
+        env=_HELP_ENV,
     )
     assert listed.exit_code == 0, listed.output
     assert "P-001" in listed.output
@@ -111,6 +121,7 @@ def test_plan_create_json_is_valid(tmp_path: Path) -> None:
             "--knowledge-dir",
             str(knowledge),
         ],
+        env=_HELP_ENV,
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
@@ -135,6 +146,7 @@ def test_plan_create_missing_hypothesis_fails(tmp_path: Path) -> None:
             "--knowledge-dir",
             str(knowledge),
         ],
+        env=_HELP_ENV,
     )
     assert result.exit_code == 1
     assert "Hypothesis not found" in result.output
@@ -146,6 +158,7 @@ def test_plan_show_missing_plan_fails(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         ["plan", "show", "demo", "P-999", "--knowledge-dir", str(knowledge)],
+        env=_HELP_ENV,
     )
     assert result.exit_code == 1
     assert "Plan not found" in result.output

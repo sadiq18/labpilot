@@ -11,9 +11,9 @@ class TrainingRunner:
     """Execute the generated training pipeline as a subprocess."""
 
     def __init__(self, run_dir: Path) -> None:
-        # Resolved defensively: the script runs as a subprocess with
-        # cwd=pipeline_dir, so a relative run_dir would get re-resolved
-        # against that new cwd and double up (e.g. "runs/x/pipeline/runs/x/pipeline/train.py").
+        # Workspace root is the process cwd so generated scripts can open
+        # ``pipeline/config.yaml`` and write ``metrics.json`` / ``submission.csv``
+        # at the competition root (same contract as Code Engineer prompts).
         self.run_dir = Path(run_dir).resolve()
         self.pipeline_dir = self.run_dir / "pipeline"
         self.train_script = self.pipeline_dir / "train.py"
@@ -22,10 +22,10 @@ class TrainingRunner:
         if not self.train_script.exists():
             raise FileNotFoundError(f"Training script not found: {self.train_script}")
 
-        logger.info("Running training script %s", self.train_script)
+        logger.info("Running training script %s (cwd=%s)", self.train_script, self.run_dir)
         result = subprocess.run(
             [sys.executable, str(self.train_script)],
-            cwd=self.pipeline_dir,
+            cwd=self.run_dir,
             capture_output=True,
             text=True,
             timeout=timeout,

@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # OpenAI-flavored default (e.g. "gpt-4o-mini") to a different API.
 DEFAULT_MODEL_BY_PROVIDER: dict[str, str] = {
     "openai": "gpt-4o-mini",
-    "gemini": "gemini-3.5-flash",
+    "gemini": "gemini-3.5-flash-lite",
     "ollama": "qwen2.5-coder:14b",
 }
 
@@ -35,7 +35,7 @@ class TaskProfile(BaseModel):
 class LLMConfig(BaseModel):
     mode: str = "auto"  # auto | local | cloud
     provider: str = "gemini"
-    model: str = "gemini-3.5-flash"
+    model: str = "gemini-3.5-flash-lite"
     temperature: float = 0.3
     api_key: str = Field(default="", exclude=True, repr=False)
     ollama_base_url: str = "http://localhost:11434"

@@ -43,3 +43,16 @@ def test_modality_detects_long_text_column(tmp_path):
     result = ModalityDetector().detect(tmp_path, profile)
     assert result.modality == "text"
     assert result.text_column == "review"
+
+
+def test_modality_prefers_tabular_when_csvs_outnumber_images(tmp_path):
+    raw = tmp_path
+    train = raw / "train"
+    train.mkdir()
+    (train / "well.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (train / "well__typewell.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    (train / "well__horizontal_well.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    (raw / "sample_submission.csv").write_text("id,tvt\n0,0\n", encoding="utf-8")
+    result = ModalityDetector().detect(raw, DatasetProfile(competition="rogii"))
+    assert result.modality == "tabular"
+    assert any("prefer_tabular" in s for s in result.signals)

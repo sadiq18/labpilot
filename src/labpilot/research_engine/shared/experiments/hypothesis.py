@@ -21,6 +21,7 @@ from labpilot.research_engine.shared.experiments.models import (
 logger = logging.getLogger(__name__)
 
 _ID_PATTERN = re.compile(r"^H-(\d+)$")
+BASELINE_HYPOTHESIS_ID = "H-BASELINE"
 
 
 def _now() -> datetime:
@@ -48,6 +49,50 @@ class HypothesisStore:
         next_n = max_n + 1
         width = max(3, len(str(next_n)))
         return f"H-{next_n:0{width}d}"
+
+    def ensure_baseline(
+        self,
+        *,
+        brief_excerpt: str = "",
+    ) -> Hypothesis:
+        """Return the reserved baseline hypothesis, creating it if missing.
+
+        Id is always ``H-BASELINE`` (not sequential ``H-001``). Improvement
+        hypotheses continue to allocate ``H-001``, ``H-002``, …
+        """
+        existing = self.get(BASELINE_HYPOTHESIS_ID)
+        if existing is not None:
+            return existing
+        now = _now()
+        observation = (
+            brief_excerpt.strip()[:280]
+            or f"Establish a registry baseline floor for {self.competition}."
+        )
+        hypothesis = Hypothesis(
+            id=BASELINE_HYPOTHESIS_ID,
+            competition=self.competition,
+            observation=observation,
+            reason=(
+                "Need a reproducible reference experiment before testing "
+                "improvement hypotheses."
+            ),
+            prediction=(
+                "Baseline template produces valid CV metrics and a "
+                "submission artifact."
+            ),
+            confidence=0.5,
+            expected_impact=0.0,
+            tags=["baseline"],
+            source="manual",
+            created_by=HypothesisCreatedBy.MANUAL,
+            generator=HypothesisGenerator.HUMAN,
+            origin=HypothesisOrigin.COMPETITION,
+            origins=[HypothesisOrigin.COMPETITION],
+            created_at=now,
+            updated_at=now,
+        )
+        self._save(hypothesis)
+        return hypothesis
 
     def create(
         self,

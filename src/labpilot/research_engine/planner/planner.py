@@ -23,6 +23,10 @@ from typing import Any, Literal
 
 from labpilot.accessor.common.ids import task_id as make_task_id
 from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.research_engine.shared.experiments.hypothesis import (
+    BASELINE_HYPOTHESIS_ID,
+    HypothesisStore,
+)
 from labpilot.research_engine.shared.experiments.models import Hypothesis
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.planner import optimizer, scheduler, serializer
@@ -36,7 +40,7 @@ from labpilot.research_engine.planner.schemas.models import (
     RetryPolicy,
     TaskVerification,
 )
-from labpilot.research_engine.planner.schemas.task_types import PlanStatus, TaskStatus
+from labpilot.research_engine.planner.schemas.task_types import PlanStatus, TaskStatus, TaskType
 from labpilot.research_engine.planner.store import PlanStore
 from labpilot.research_engine.planner.templates import (
     PlanBlueprint,
@@ -147,6 +151,10 @@ def compile_baseline_plan(
         if paths.brief_path.is_file():
             brief = paths.brief_path.read_text(encoding="utf-8")[:2000]
 
+        baseline_hyp = HypothesisStore(knowledge_dir, competition).ensure_baseline(
+            brief_excerpt=brief
+        )
+
         blueprint = _baseline_template(competition, brief_excerpt=brief)
         plan_id = store.new_plan_id()
         if plan_id != "P-001":
@@ -160,11 +168,12 @@ def compile_baseline_plan(
                 baseline_draft,
                 plan_id=plan_id,
                 competition=competition,
-                hypothesis_id="",
+                hypothesis_id=BASELINE_HYPOTHESIS_ID,
                 generated_by="rule_engine",
                 metadata={
                     "template": blueprint.template_name,
                     "plan_kind": "baseline",
+                    "baseline_hypothesis_id": baseline_hyp.id,
                 },
                 priority=priority,
             )
@@ -186,7 +195,9 @@ def compile_baseline_plan(
                 **dict(plan.metadata),
                 "plan_kind": "baseline",
                 "template": blueprint.template_name,
+                "baseline_hypothesis_id": BASELINE_HYPOTHESIS_ID,
             }
+            plan.hypothesis_id = BASELINE_HYPOTHESIS_ID
 
         store.upsert_plan(plan)
         if write_projections:
@@ -217,7 +228,7 @@ def _try_baseline_llm_revision(
         data={
             "baseline_draft": baseline_draft.model_dump(mode="json"),
             "plan_kind": "baseline",
-            "hypothesis_id": "",
+            "hypothesis_id": BASELINE_HYPOTHESIS_ID,
             "goal": baseline.goal,
             "current_state": baseline.current_state,
             "expected_outcome": baseline.expected_outcome,
@@ -228,21 +239,24 @@ def _try_baseline_llm_revision(
     if not agent.last_used_llm:
         return baseline
     try:
-        return _finalize_plan(
+        revised = _finalize_plan(
             lower_draft(
                 draft,
                 plan_id=plan_id,
                 competition=competition,
-                hypothesis_id="",
+                hypothesis_id=BASELINE_HYPOTHESIS_ID,
                 generated_by="llm",
                 metadata={
                     "template": "baseline",
                     "plan_kind": "baseline",
                     "revised_by": "llm",
+                    "baseline_hypothesis_id": BASELINE_HYPOTHESIS_ID,
                 },
                 priority=priority,
             )
         )
+        _require_baseline_workspace_task(revised)
+        return revised
     except (PlanValidationError, ValueError, TypeError) as exc:
         logger.warning(
             "Baseline LLM revision for %s failed (%s); keeping rule_engine.",
@@ -253,6 +267,38 @@ def _try_baseline_llm_revision(
             f"LLM revision rejected; kept rule_engine baseline ({exc})."
         ]
         return baseline
+
+
+def _require_baseline_workspace_task(plan: ResearchPlan) -> None:
+    """Baseline codegen needs prepare_workspace → profile.json before write_code."""
+    types = {task.type for task in plan.tasks}
+    if TaskType.PREPARE_WORKSPACE not in types:
+        raise PlanValidationError(
+            "baseline plan must include prepare_workspace before write_code "
+            "(LLM revision dropped it)"
+        )
+    if TaskType.WRITE_CODE in types:
+        # prepare_workspace must precede write_code in the DAG.
+        by_id = {t.id: t for t in plan.tasks}
+        write_ids = [t.id for t in plan.tasks if t.type == TaskType.WRITE_CODE]
+        prepare_ids = {t.id for t in plan.tasks if t.type == TaskType.PREPARE_WORKSPACE}
+
+        def _ancestors(task_id: str) -> set[str]:
+            seen: set[str] = set()
+            stack = list(by_id[task_id].dependencies)
+            while stack:
+                dep = stack.pop()
+                if dep in seen or dep not in by_id:
+                    continue
+                seen.add(dep)
+                stack.extend(by_id[dep].dependencies)
+            return seen
+
+        for wid in write_ids:
+            if not (prepare_ids & _ancestors(wid)):
+                raise PlanValidationError(
+                    "baseline write_code must depend (transitively) on prepare_workspace"
+                )
 
 
 def blueprint_to_draft(blueprint: PlanBlueprint) -> ResearchPlanDraft:

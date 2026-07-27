@@ -28,6 +28,21 @@ def test_create_allocates_incrementing_ids(tmp_path: Path):
     assert (tmp_path / "knowledge/titanic/hypotheses/H-002.json").is_file()
 
 
+def test_ensure_baseline_uses_reserved_id(tmp_path: Path):
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    baseline = store.ensure_baseline()
+    assert baseline.id == "H-BASELINE"
+    again = store.ensure_baseline()
+    assert again.id == "H-BASELINE"
+    improvement = store.create(
+        observation="Try Mixup",
+        reason="Regularization",
+        prediction="CV improves",
+        confidence=0.6,
+    )
+    assert improvement.id == "H-001"
+
+
 def test_list_filters_by_status(tmp_path: Path):
     store = HypothesisStore(tmp_path / "knowledge", "titanic")
     store.create(
