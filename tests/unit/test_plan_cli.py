@@ -88,7 +88,15 @@ def test_plan_create_show_list_round_trip(tmp_path: Path) -> None:
 
     show = runner.invoke(
         app,
-        ["plan", "show", "demo", "P-001", "--knowledge-dir", str(knowledge)],
+        [
+            "plan",
+            "show",
+            "P-001",
+            "--competition",
+            "demo",
+            "--knowledge-dir",
+            str(knowledge),
+        ],
         env=_HELP_ENV,
     )
     assert show.exit_code == 0, show.output
@@ -157,7 +165,15 @@ def test_plan_show_missing_plan_fails(tmp_path: Path) -> None:
     _seed_hypothesis(knowledge)
     result = runner.invoke(
         app,
-        ["plan", "show", "demo", "P-999", "--knowledge-dir", str(knowledge)],
+        [
+            "plan",
+            "show",
+            "P-999",
+            "--competition",
+            "demo",
+            "--knowledge-dir",
+            str(knowledge),
+        ],
         env=_HELP_ENV,
     )
     assert result.exit_code == 1

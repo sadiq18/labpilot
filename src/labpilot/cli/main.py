@@ -96,9 +96,8 @@ class _HypothesizeGroup(TyperGroup):
         if not args:
             args = ["new"]
         elif args[0] not in self.commands:
-            if args[0].startswith("-"):
-                args = ["new", *args]
-            else:
+            # Keep group-level --help so subcommands stay visible.
+            if args[0] not in {"--help", "-h"}:
                 args = ["new", *args]
         return super().parse_args(ctx, args)
 
