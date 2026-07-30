@@ -11,6 +11,7 @@ from rich.table import Table
 from typer.core import TyperGroup
 
 from labpilot.research_engine.execution.baseline.registry import list_templates
+from labpilot.cli.config_helpers import load_cli_config, resolve_competition
 from labpilot.cli.plan import plan_app
 from labpilot.cli.reflect import claims_app, reflect_app
 from labpilot.config import (
@@ -18,6 +19,7 @@ from labpilot.config import (
     load_config,
     resolve_runtimes_dir,
 )
+from labpilot.workspace import discover_workspace
 from labpilot.diagnostics import (
     check_environment,
     print_diagnostics_report,
@@ -86,13 +88,18 @@ experiments_app.add_typer(knowledge_app, name="knowledge")
 class _HypothesizeGroup(TyperGroup):
     """Treat ``research hypothesize <slug>`` as ``research hypothesize new <slug>``.
 
-    Click groups cannot own a required positional argument alongside
-    subcommands, so the bare-slug form is rewritten to the default subcommand.
+    Bare ``research hypothesize`` (or flags only) becomes ``new`` so a workspace
+    can omit the slug entirely.
     """
 
     def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
-        if args and not args[0].startswith("-") and args[0] not in self.commands:
-            args = ["new", *args]
+        if not args:
+            args = ["new"]
+        elif args[0] not in self.commands:
+            if args[0].startswith("-"):
+                args = ["new", *args]
+            else:
+                args = ["new", *args]
         return super().parse_args(ctx, args)
 
 
@@ -136,14 +143,32 @@ def _load_app_config(
     config_path: Path,
     runs_dir: Path | None,
     knowledge_dir: Path | None = None,
+    workspace_path: Path | None = None,
 ) -> AppConfig:
-
-    config = load_config(config_path)
-    if runs_dir:
-        config.runs_dir = runs_dir
-    if knowledge_dir:
-        config.knowledge_dir = knowledge_dir
+    config, _ = load_cli_config(
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        runs_dir=runs_dir,
+        workspace_path=workspace_path,
+    )
     return config
+
+
+def _load_config_and_competition(
+    competition: str | None,
+    config_path: Path,
+    runs_dir: Path | None = None,
+    knowledge_dir: Path | None = None,
+    workspace_path: Path | None = None,
+) -> tuple[AppConfig, str]:
+    """Load config with workspace discovery and resolve competition slug."""
+    config, workspace = load_cli_config(
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        runs_dir=runs_dir,
+        workspace_path=workspace_path,
+    )
+    return config, resolve_competition(competition, workspace)
 
 
 def _print_submission_links_if_present(run_dir: Path, submit: bool) -> None:
@@ -171,13 +196,18 @@ def run(
         None,
         "--competition",
         "-c",
-        help="Competition slug (required with --plan)",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
     ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+    workspace_path: Path | None = typer.Option(
+        None,
+        "--workspace",
+        help="Competition workspace root (directory with labpilot.yaml)",
     ),
     submit: bool = typer.Option(
         False,
@@ -203,18 +233,19 @@ def run(
 ) -> None:
     """Run an approved ResearchPlan via the Research Engineer.
 
-    Requires ``--plan P-xxx`` and ``--competition <slug>``. Create a plan first::
+    Requires ``--plan P-xxx``. Competition defaults from ``labpilot.yaml`` when
+    present. Create a plan first::
 
-        research plan create <slug> --baseline
-        research run --plan P-001 --competition <slug>
+        research plan create --baseline
+        research run --plan P-001
     """
-    if plan_id is None or competition is None:
+    if plan_id is None:
         console.print(
             "[red]Plan-driven run required.[/red] Create a plan first, then:\n"
-            "  research plan create <competition> --baseline\n"
-            "  research run --plan P-001 --competition <competition>\n\n"
-            "The linear Pipeline path (`research run -c <slug>` without `--plan`) "
-            "is retired as system of record."
+            "  research plan create --baseline\n"
+            "  research run --plan P-001\n\n"
+            "Inside a competition workspace (``labpilot.yaml``), ``--competition`` "
+            "is optional. The linear Pipeline path without ``--plan`` is retired."
         )
         raise typer.Exit(code=1)
 
@@ -228,6 +259,71 @@ def run(
         dry_run=dry_run,
         submit=submit or force_submit,
         install_packages=install_packages,
+        workspace_path=workspace_path,
+    )
+
+
+@app.command("submit")
+def submit_cmd(
+    execution_id: str = typer.Option(
+        ...,
+        "--execution",
+        "-e",
+        help="Execution id whose submission_<E-id>.csv to upload (e.g. E-001)",
+    ),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
+    config_path: Path = typer.Option(
+        Path("configs/default.yaml"), "--config", help="Path to config file"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+    workspace_path: Path | None = typer.Option(
+        None,
+        "--workspace",
+        help="Competition workspace root (directory with labpilot.yaml)",
+    ),
+    path: Path | None = typer.Option(
+        None,
+        "--path",
+        help="Override CSV path (default: artifacts/submission_<execution>.csv)",
+    ),
+    message: str | None = typer.Option(
+        None,
+        "--message",
+        "-m",
+        help="Kaggle submission message",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Resolve file and patch paths without uploading",
+    ),
+) -> None:
+    """Upload an execution-scoped submission and record leaderboard learning.
+
+    After a successful ``research run``, package lives at
+    ``artifacts/submission_E-xxx.csv``. This command uploads that file, stores
+    ``public_score`` on the linked hypothesis, updates beliefs/techniques/claims,
+    and notifies proposed hypotheses. Mints a new hypothesis only when it is an
+    improvement fork with expected gain (e.g. overfit → regularization).
+    """
+    from labpilot.cli.submit import submit_command
+
+    submit_command(
+        execution_id=execution_id,
+        competition=competition,
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        workspace_path=workspace_path,
+        path=path,
+        message=message,
+        dry_run=dry_run,
     )
 
 
@@ -243,13 +339,18 @@ def resume(
         None,
         "--competition",
         "-c",
-        help="Competition slug for the execution's knowledge DB",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
     ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+    workspace_path: Path | None = typer.Option(
+        None,
+        "--workspace",
+        help="Competition workspace root (directory with labpilot.yaml)",
     ),
     submit: bool = typer.Option(
         False,
@@ -268,9 +369,10 @@ def resume(
     ),
 ) -> None:
     """Resume a Research Engineer execution (``E-xxx``)."""
-    if execution_id is None or competition is None:
+    if execution_id is None:
         console.print(
-            "[red]Provide --execution E-xxx and --competition <slug>.[/red]"
+            "[red]Provide --execution E-xxx "
+            "(and --competition <slug> unless inside a workspace).[/red]"
         )
         raise typer.Exit(code=1)
 
@@ -284,6 +386,7 @@ def resume(
         dry_run=dry_run,
         submit=submit,
         install_packages=install_packages,
+        workspace_path=workspace_path,
     )
 
 
@@ -324,10 +427,75 @@ def _check_llm_or_confirm(config, assume_yes: bool) -> LLMClient | None:
 @app.command()
 def doctor() -> None:
     """Check that the local environment has everything LabPilot needs."""
+    workspace = discover_workspace()
+    if workspace is not None:
+        console.print(
+            f"[bold]Competition workspace[/bold]  "
+            f"[cyan]{workspace.root}[/cyan]  "
+            f"(slug=[cyan]{workspace.competition}[/cyan])"
+        )
+    else:
+        console.print(
+            "[dim]No labpilot.yaml above CWD — using legacy CWD knowledge/ + "
+            "competitions/ paths. Prefer `research init <slug> --path <root>`.[/dim]"
+        )
     results = check_environment()
     all_ok = print_diagnostics_report(results, console)
     if not all_ok:
         raise typer.Exit(code=1)
+
+
+@app.command("init")
+def init_cmd(
+    competition: str = typer.Argument(
+        ...,
+        help="Competition slug or Kaggle URL",
+    ),
+    path: Path = typer.Option(
+        ...,
+        "--path",
+        "-p",
+        help="Parent directory; creates <path>/<slug>/",
+    ),
+    git: bool = typer.Option(False, "--git", help="Initialize a git repo (no prompt)"),
+    no_git: bool = typer.Option(
+        False, "--no-git", help="Skip git without prompting"
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Allow scaffolding into a non-empty directory",
+    ),
+) -> None:
+    """Scaffold a client-owned competition workspace under ``<path>/<slug>/``.
+
+    Writes ``labpilot.yaml``, dirs (knowledge, pipeline, data, …), ``.gitignore``,
+    and an optional git commit. Does **not** download data or run analyze.
+
+    After init, ``cd`` into the workspace and run commands with CWD discovery::
+
+        uv run --project /path/to/labpilot research analyze
+        uv run --project /path/to/labpilot research plan create --baseline
+    """
+    from labpilot.cli.init_workspace import init_workspace_command
+
+    git_choice: bool | None
+    if git and no_git:
+        raise typer.BadParameter("Use either --git or --no-git, not both.")
+    if git:
+        git_choice = True
+    elif no_git:
+        git_choice = False
+    else:
+        git_choice = None
+
+    init_workspace_command(
+        competition=competition,
+        path=path,
+        git=git_choice,
+        force=force,
+        labpilot_hint=Path.cwd(),
+    )
 
 
 def _fail_fast_on_bad_environment(skip_lightgbm: bool = False) -> None:
@@ -380,7 +548,7 @@ def status(
 
 @app.command("journal")
 def journal(
-    competition: str = typer.Option(..., "--competition", "-c"),
+    competition: str | None = typer.Option(None, "--competition", "-c"),
     output_json: bool = typer.Option(False, "--json"),
     config_path: Path = typer.Option(Path("configs/default.yaml"), "--config"),
     knowledge_dir: Path | None = typer.Option(None, "--knowledge-dir"),
@@ -417,9 +585,10 @@ def _parse_analyzer_csv(value: str | None) -> set[str] | None:
 
 @app.command()
 def analyze(
-    target: str = typer.Argument(
-        ...,
-        help="Competition slug/URL, or an analyzer name when a slug follows",
+    target: str | None = typer.Argument(
+        None,
+        help="Competition slug/URL, or an analyzer name when a slug follows "
+        "(optional inside a labpilot.yaml workspace)",
     ),
     competition: str | None = typer.Argument(
         None,
@@ -469,6 +638,11 @@ def analyze(
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
+    workspace_path: Path | None = typer.Option(
+        None,
+        "--workspace",
+        help="Competition workspace root (directory with labpilot.yaml)",
+    ),
 ) -> None:
     """Understand the problem: artifacts, beliefs, hypotheses, and Research Brief.
 
@@ -479,13 +653,32 @@ def analyze(
     if output_format not in {"text", "json"}:
         raise typer.BadParameter("--format must be 'text' or 'json'.")
 
+    config, workspace = load_cli_config(
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        runs_dir=runs_dir,
+        workspace_path=workspace_path,
+    )
+
     # First arg is an analyzer name only when a second (slug) arg is given.
     if competition is not None:
         only: str | None = target
         slug_or_url = competition
-    else:
+    elif target is not None:
         only = None
         slug_or_url = target
+    else:
+        only = None
+        slug_or_url = resolve_competition(None, workspace)
+
+    if workspace is not None and (competition is not None or target is not None):
+        from labpilot.research_engine.intelligence.context import normalize_competition
+
+        try:
+            slug, _ = normalize_competition(slug_or_url)
+        except ValueError:
+            slug = slug_or_url
+        resolve_competition(slug, workspace, required=False)
 
     include_set = _parse_analyzer_csv(include)
     exclude_set = _parse_analyzer_csv(exclude)
@@ -494,7 +687,6 @@ def analyze(
             "A single analyzer argument cannot be combined with --include/--exclude."
         )
 
-    config = _load_app_config(config_path, runs_dir, knowledge_dir)
     context = build_context(
         slug_or_url,
         runs_dir=config.runs_dir,
@@ -544,7 +736,10 @@ def analyze(
 
 @app.command()
 def ingest(
-    competition: str = typer.Argument(..., help="Competition slug"),
+    competition: str | None = typer.Argument(
+        None,
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     force: bool = typer.Option(
         False,
         "--force",
@@ -569,7 +764,11 @@ def ingest(
     merged so existing cross-source evidence is retained. New hypotheses are
     generated afterwards unless ``--skip-hypothesize`` is passed.
     """
-    config = _load_app_config(config_path, None, knowledge_dir)
+    config, workspace = load_cli_config(
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+    )
+    competition = resolve_competition(competition, workspace)
     with KnowledgeStore(config.knowledge_dir, competition) as store:
         artifacts = store.list_artifacts()
         if not artifacts:
@@ -612,7 +811,10 @@ def ingest(
 
 @app.command("retrieve")
 def retrieve_cmd(
-    competition: str = typer.Argument(..., help="Competition slug"),
+    competition: str | None = typer.Argument(
+        None,
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     question: str = typer.Option(
         "",
         "--question",
@@ -657,7 +859,12 @@ def retrieve_cmd(
             "structured_query, explain, compare"
         ) from exc
 
-    config = _load_app_config(config_path, runs_dir, knowledge_dir)
+    config, workspace = load_cli_config(
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        runs_dir=runs_dir,
+    )
+    competition = resolve_competition(competition, workspace)
     pipeline_list = (
         [item.strip() for item in pipeline.split(",") if item.strip()] if pipeline else []
     )
@@ -795,7 +1002,10 @@ def _generate_hypotheses(
 
 @hypothesize_app.command("new")
 def hypothesize_new(
-    competition: str = typer.Argument(..., help="Competition slug"),
+    competition: str | None = typer.Argument(
+        None,
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     question: str = typer.Option(
         "Suggest next experiments",
         "--question",
@@ -832,7 +1042,12 @@ def hypothesize_new(
     if limit < 1 or limit > 10:
         raise typer.BadParameter("--limit must be between 1 and 10.")
 
-    config = _load_app_config(config_path, runs_dir, knowledge_dir)
+    config, workspace = load_cli_config(
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        runs_dir=runs_dir,
+    )
+    competition = resolve_competition(competition, workspace)
     pipeline_list = (
         [item.strip() for item in pipeline.split(",") if item.strip()] if pipeline else None
     )
@@ -874,7 +1089,10 @@ def hypothesize_new(
 
 @app.command("fetch")
 def fetch_cmd(
-    competition: str = typer.Argument(..., help="Competition slug"),
+    competition: str | None = typer.Argument(
+        None,
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     source: str = typer.Option(
         "all",
         "--source",
@@ -929,7 +1147,11 @@ def fetch_cmd(
     # Discussions: UI votes ↔ API top (score sort does not apply).
     discussion_sort = "top"
 
-    config = _load_app_config(config_path, None, knowledge_dir)
+    config, workspace = load_cli_config(
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+    )
+    competition = resolve_competition(competition, workspace)
     from labpilot.accessor.kaggle.client import KaggleClient
 
     service = KaggleFetchService(
@@ -1035,7 +1257,12 @@ def runs_diff(
 
 @experiments_app.command("graph")
 def experiments_graph(
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     metric: str | None = typer.Option(
         None, "--metric", help="Metric key to annotate scores and highlight the best path"
     ),
@@ -1045,9 +1272,9 @@ def experiments_graph(
     runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
 ) -> None:
     """Print the experiment lineage tree (parent/child relationships) for a competition."""
-    config = load_config(config_path)
-    if runs_dir:
-        config.runs_dir = runs_dir
+    config, competition = _load_config_and_competition(
+        competition, config_path, runs_dir=runs_dir
+    )
 
     graph = build_graph(config.runs_dir, competition, knowledge_dir=config.knowledge_dir)
     if not graph.nodes:
@@ -1221,7 +1448,12 @@ def experiments_compare(
 
 @experiments_app.command("rank")
 def experiments_rank(
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     top: int = typer.Option(5, "--top", help="Show at most this many candidates"),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
@@ -1232,7 +1464,9 @@ def experiments_rank(
     ),
 ) -> None:
     """Rank proposed hypotheses (recommendation backlog — does not auto-run)."""
-    config = _load_app_config(config_path, runs_dir, knowledge_dir)
+    config, competition = _load_config_and_competition(
+        competition, config_path, runs_dir=runs_dir, knowledge_dir=knowledge_dir
+    )
     ranking_cfg = config.experiments.ranking
     weights = RankingWeights(
         expected_gain=ranking_cfg.weights.expected_gain,
@@ -1292,7 +1526,12 @@ def experiments_rank(
 
 @experiments_app.command("search")
 def experiments_search(
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     config_equals: list[str] = typer.Option(
         [], "--config", help="Filter key=value (repeatable), e.g. model_params.ema=true"
     ),
@@ -1354,7 +1593,9 @@ def experiments_search(
     filters.status = status
     filters.template = template
 
-    config = _load_app_config(config_path, runs_dir)
+    config, competition = _load_config_and_competition(
+        competition, config_path, runs_dir=runs_dir
+    )
     graph = build_graph(config.runs_dir, competition, knowledge_dir=config.knowledge_dir)
     if not graph.nodes:
         console.print(f"No experiments found for [cyan]{competition}[/cyan].")
@@ -1389,7 +1630,12 @@ def experiments_search(
 
 @experiments_app.command("report")
 def experiments_report(
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     output_format: str = typer.Option(
         "text", "--format", help="Output format: text|json"
     ),
@@ -1404,7 +1650,9 @@ def experiments_report(
     """Competition rollup: discoveries, failures, best path, recommended next."""
     if output_format not in {"text", "json"}:
         raise typer.BadParameter("--format must be text or json")
-    config = _load_app_config(config_path, runs_dir, knowledge_dir)
+    config, competition = _load_config_and_competition(
+        competition, config_path, runs_dir=runs_dir, knowledge_dir=knowledge_dir
+    )
     ranking_cfg = config.experiments.ranking
     try:
         report = build_report(
@@ -1433,7 +1681,12 @@ def experiments_report(
 
 @experiments_app.command("dashboard")
 def experiments_dashboard(
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
@@ -1443,7 +1696,9 @@ def experiments_dashboard(
     ),
 ) -> None:
     """Write a static HTML competition dashboard under knowledge/<slug>/."""
-    config = _load_app_config(config_path, runs_dir, knowledge_dir)
+    config, competition = _load_config_and_competition(
+        competition, config_path, runs_dir=runs_dir, knowledge_dir=knowledge_dir
+    )
     ranking_cfg = config.experiments.ranking
     try:
         report = build_report(
@@ -1478,7 +1733,12 @@ def experiments_dashboard(
 
 @knowledge_app.command("list")
 def experiments_knowledge_list(
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     technique: str | None = typer.Option(
         None, "--technique", help="Filter by normalized technique name"
     ),
@@ -1506,7 +1766,9 @@ def experiments_knowledge_list(
                 "--effect must be one of: improves, hurts, neutral, unknown"
             ) from exc
 
-    config = _load_app_config(config_path, None, knowledge_dir)
+    config, competition = _load_config_and_competition(
+        competition, config_path, knowledge_dir=knowledge_dir
+    )
     kb = KnowledgeBase(config.knowledge_dir, competition)
     entries = kb.list_entries(technique=technique, effect=effect_filter)
     if not entries:
@@ -1539,7 +1801,12 @@ def experiments_knowledge_list(
 
 @hypothesize_app.command("list")
 def hypothesis_list(
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     status: str | None = typer.Option(
         None, "--status", help="Filter by status: proposed, testing, confirmed, ..."
     ),
@@ -1551,7 +1818,9 @@ def hypothesis_list(
     ),
 ) -> None:
     """List hypotheses for a competition."""
-    config = _load_app_config(config_path, None, knowledge_dir)
+    config, competition = _load_config_and_competition(
+        competition, config_path, knowledge_dir=knowledge_dir
+    )
     store = HypothesisStore(config.knowledge_dir, competition)
     status_filter: HypothesisStatus | None = None
     if status is not None:
@@ -1584,7 +1853,12 @@ def hypothesis_list(
 @hypothesize_app.command("show")
 def hypothesis_show(
     hypothesis_id: str = typer.Argument(..., help="Hypothesis ID (e.g. H-001)"),
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     config_path: Path = typer.Option(
         Path("configs/default.yaml"), "--config", help="Path to config file"
     ),
@@ -1594,7 +1868,9 @@ def hypothesis_show(
     runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
 ) -> None:
     """Show one hypothesis and the experiments linked to it."""
-    config = _load_app_config(config_path, runs_dir, knowledge_dir)
+    config, competition = _load_config_and_competition(
+        competition, config_path, runs_dir=runs_dir, knowledge_dir=knowledge_dir
+    )
     store = HypothesisStore(config.knowledge_dir, competition)
     hypothesis = store.get(hypothesis_id)
     if hypothesis is None:
@@ -1636,7 +1912,12 @@ def hypothesis_show(
 @hypothesize_app.command("update")
 def hypothesis_update(
     hypothesis_id: str = typer.Argument(..., help="Hypothesis ID (e.g. H-001)"),
-    competition: str = typer.Option(..., "--competition", "-c", help="Kaggle competition slug"),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     status: str = typer.Option(..., "--status", help="New status"),
     evidence_run: str | None = typer.Option(
         None,
@@ -1657,7 +1938,9 @@ def hypothesis_update(
         allowed = ", ".join(s.value for s in HypothesisStatus)
         raise typer.BadParameter(f"--status must be one of: {allowed}") from exc
 
-    config = _load_app_config(config_path, None, knowledge_dir)
+    config, competition = _load_config_and_competition(
+        competition, config_path, knowledge_dir=knowledge_dir
+    )
     store = HypothesisStore(config.knowledge_dir, competition)
     try:
         updated = store.update_status(

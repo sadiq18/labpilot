@@ -15,7 +15,10 @@ class ResearchBriefAgent(BaseMicroAgent):
             "You write a concise researcher briefing before ML experimentation. "
             "Respond ONLY with JSON: "
             '{"problem_summary": str, "key_risks": [str], "recommended_focus": str}. '
-            "Ground every claim in the provided structured evidence; do not invent scores."
+            "Ground every claim in the provided structured evidence; do not invent scores. "
+            "Write complete sentences that end with '.', '!', or '?'. "
+            "Never end any sentence with '...' or '…'; prefer a shorter finished "
+            "sentence over a truncated one."
         )
 
     def user_prompt(self, context: StructuredContext) -> str:

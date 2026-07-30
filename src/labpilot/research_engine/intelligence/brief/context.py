@@ -50,7 +50,9 @@ def render_competition_context(competition: CompetitionSpec) -> str:
     if competition.raw_html:
         excerpt = competition.raw_html.strip()
         if len(excerpt) > _RULES_EXCERPT_MAX_CHARS:
-            excerpt = excerpt[:_RULES_EXCERPT_MAX_CHARS] + "..."
+            excerpt = excerpt[:_RULES_EXCERPT_MAX_CHARS].rsplit(" ", 1)[0].rstrip(".,;:")
+            if excerpt and excerpt[-1] not in ".!?":
+                excerpt = f"{excerpt}."
         lines.extend(["", "### Rules excerpt", "", excerpt])
 
     lines.append("")

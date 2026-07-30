@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -170,8 +171,85 @@ class Settings(BaseSettings):
     labpilot_runtimes_dir: str = ""
     labpilot_default_runtime: str = ""
 
+    def __init__(self, **values: Any) -> None:
+        # Prefer an explicit ``_env_file``; otherwise use workspace-local ``.env``
+        # (never the LabPilot package/repo). Tests set ``model_config["env_file"]
+        # = None`` to disable file loading entirely.
+        if "_env_file" in values:
+            env_file = values.pop("_env_file")
+        elif self.model_config.get("env_file") is None:
+            env_file = None
+        else:
+            env_file = resolve_env_files()
+        super().__init__(_env_file=env_file, **values)
+
+
+def resolve_env_files() -> tuple[str, ...]:
+    """Workspace-local ``.env`` only (competition folder), not the LabPilot clone.
+
+    When a ``labpilot.yaml`` workspace is active, credentials come from
+    ``<workspace>/.env``. Otherwise legacy mode uses ``./.env`` under CWD/PWD.
+    """
+    # Lazy import: avoid circular import at module load (workspace → config).
+    from labpilot.workspace import discover_workspace
+
+    workspace = discover_workspace()
+    if workspace is not None:
+        return (str(workspace.root / ".env"),)
+
+    files: list[Path] = []
+    seen: set[Path] = set()
+
+    def _add(path: Path) -> None:
+        try:
+            resolved = path.expanduser().resolve()
+        except OSError:
+            return
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        files.append(resolved)
+
+    pwd = os.environ.get("PWD")
+    if pwd:
+        _add(Path(pwd) / ".env")
+    _add(Path.cwd() / ".env")
+    if files:
+        return tuple(str(path) for path in files)
+    return (".env",)
+
+
+def kaggle_credentials_setup_hint() -> str:
+    """Plain-English SOP when Kaggle auth fails or credentials are missing."""
+    from labpilot.workspace import discover_workspace
+
+    workspace = discover_workspace()
+    env_path = (
+        workspace.root / ".env"
+        if workspace is not None
+        else Path.cwd() / ".env"
+    )
+    return (
+        "Kaggle authentication failed.\n"
+        "\n"
+        "Set up credentials in the competition workspace (not the LabPilot repo):\n"
+        f"  1. Create {env_path}\n"
+        "  2. Add:  KAGGLE_API_TOKEN=<token>\n"
+        "     Get a token: https://www.kaggle.com/settings  → API → Create New Token\n"
+        "  3. Join the competition on Kaggle and accept the rules\n"
+        "  4. Re-run your command from the workspace directory\n"
+        "\n"
+        "Optional: save the same token to ~/.kaggle/access_token instead.\n"
+        "Legacy: KAGGLE_USERNAME + KAGGLE_KEY in that .env also work.\n"
+        "See docs/SOP.md § Credentials."
+    )
+
 
 def _package_default_config_path() -> Path:
+    """Repo ``configs/default.yaml`` (not CWD), so competition workspaces can overlay."""
+    repo_default = Path(__file__).resolve().parents[2] / "configs" / "default.yaml"
+    if repo_default.is_file():
+        return repo_default
     return Path("configs/default.yaml")
 
 

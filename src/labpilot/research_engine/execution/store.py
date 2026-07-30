@@ -16,19 +16,9 @@ from labpilot.accessor.sqlite import SqliteClient
 from labpilot.research_engine.execution.evidence import ensure_execution_layout
 from labpilot.research_engine.execution.schemas import ExecutionStatus, ResearchExecution
 from labpilot.research_engine.intelligence.paths import ResearchPaths
+from labpilot.workspace import competition_workspace_path
 
 _EXEC_ID_PREFIX = "E"
-
-
-def competition_workspace_path(knowledge_dir: Path, competition: str) -> Path:
-    """Code workspace root: ``<project>/competitions/<competition-slug>/``.
-
-    ``knowledge_dir`` is the repo-level knowledge root (e.g. ``knowledge/``);
-    the sibling ``competitions/`` directory holds one folder named after the
-    competition slug. Evidence / execution metadata stay under
-    ``knowledge/<slug>/research/executions/E-xxx/``.
-    """
-    return (Path(knowledge_dir).resolve().parent / "competitions" / competition)
 
 
 def _now() -> str:
@@ -72,8 +62,9 @@ class ExecutionStore:
     ) -> ResearchExecution:
         """Allocate ``E-xxx``, insert row, and ensure on-disk layout.
 
-        Default ``workspace_path`` is ``competitions/<competition-slug>/``
-        (code workspace). Execution evidence stays under ``executions/E-xxx/``.
+        Default ``workspace_path`` is the competition code root (client
+        ``labpilot.yaml`` workspace, or legacy ``competitions/<slug>/``).
+        Execution evidence stays under ``executions/E-xxx/``.
         """
         # FK: plan must exist.
         plan_row = self._conn.execute(

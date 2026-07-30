@@ -1,12 +1,12 @@
-"""Workspace capability — create/verify ``competitions/<slug>/`` layout.
+"""Workspace capability — create/verify competition code/data layout.
 
 Capability ``name`` stays ``\"workspace\"``. The on-disk root is the competition
-slug directory (not the execution id).
+slug directory (client workspace or legacy ``competitions/<slug>/``).
 
-Also prepares data + profile when possible so ``research init`` is unnecessary:
-download via accessor (when not dry-run / not skipped), write ``profile.json``,
-and persist ``competition.json`` from Intelligence parser artifacts or a local
-contract.
+Also prepares data + profile when possible (scaffold ``research init`` does not
+download): download via accessor (when not dry-run / not skipped), write
+``profile.json``, and persist ``competition.json`` from Intelligence parser
+artifacts or a local contract (``configs/competition.yaml`` in a workspace).
 """
 
 from __future__ import annotations
@@ -22,8 +22,9 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 logger = logging.getLogger(__name__)
 
-#: Relative dirs created under ``competitions/<competition-slug>/`` (idempotent).
+#: Relative dirs under the competition workspace root (idempotent).
 _WORKSPACE_SUBDIRS = (
+    "pipeline",
     "src",
     "configs",
     "data",
@@ -31,6 +32,7 @@ _WORKSPACE_SUBDIRS = (
     "data/processed",
     "logs",
     "artifacts",
+    "models",
     "tests",
 )
 
@@ -196,6 +198,13 @@ class WorkspaceCapability(BaseCapability):
                 logger.info("Could not hydrate competition.json from analyze: %s", exc)
 
         configs_dir = context.constraints.get("competitions_dir")
+        if configs_dir is None:
+            # Client workspace: prefer local configs/ next to labpilot.yaml
+            local_configs = root / "configs"
+            if (local_configs / "competition.yaml").is_file() or (
+                local_configs / f"{context.competition}.yaml"
+            ).is_file():
+                configs_dir = local_configs
         try:
             from labpilot.research_engine.intelligence.competition.parser import (
                 CompetitionParser,
@@ -438,4 +447,7 @@ class WorkspaceCapability(BaseCapability):
 
 
 def default_workspace_dirs(root: Path) -> list[Path]:
-    return [root / name for name in ("src", "configs", "data", "logs", "artifacts", "tests")]
+    return [
+        root / name
+        for name in ("pipeline", "src", "configs", "data", "logs", "artifacts", "tests")
+    ]

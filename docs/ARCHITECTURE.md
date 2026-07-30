@@ -11,18 +11,26 @@ research run --plan P-001 --competition <slug>
 research resume --execution E-001 --competition <slug>
 ```
 
+Prefer a **client-owned competition workspace** (`research init` → `cd ~/kaggle/<slug>`)
+so artifacts stay out of the LabPilot clone. Design:
+[design/competition-workspace.md](design/competition-workspace.md).
+
 The Research Engineer walks an approved ResearchPlan via stable capabilities
 (workspace, code, review, verify, runtime, train, eval, submit, report) under
-`research_engine/execution/`. Artifacts land in `competitions/<slug>/` and
+`research_engine/execution/`. Artifacts land in the competition workspace root
+(`pipeline/`, `data/`, …) or legacy `competitions/<slug>/`, plus
 `knowledge/<slug>/research/`.
 
-The historical linear Pipeline (`research init` / `build` / `improve`) has been
-**removed**. See [milestones/research-engineer/pipeline-deprecation.md](milestones/research-engineer/pipeline-deprecation.md).
+The historical linear Pipeline (`build` / `improve`, and the old Pipeline-era
+`research init`) has been **removed**. The current `research init` scaffolds a
+competition workspace only — see
+[milestones/research-engineer/pipeline-deprecation.md](milestones/research-engineer/pipeline-deprecation.md).
 
 This document covers **current-state** design. History lives under
 [milestones/](milestones/); start at [MILESTONES.md](MILESTONES.md).
 
 **Operator docs:** [CLI.md](CLI.md), [SOP.md](SOP.md).
+**Workspace design:** [design/competition-workspace.md](design/competition-workspace.md).
 
 ---
 

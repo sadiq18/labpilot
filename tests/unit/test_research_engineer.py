@@ -167,6 +167,73 @@ def test_failed_verify_fails_execution(tmp_path: Path) -> None:
         engineer.close()
 
 
+def test_reopen_abandoned_resets_train_spine(tmp_path: Path) -> None:
+    """False-success training stays DONE; evaluate fails — reopen must re-run train."""
+    knowledge = tmp_path / "knowledge"
+    store = PlanStore(knowledge, "demo")
+    now = datetime.now(UTC)
+    plan = ResearchPlan(
+        id="P-001",
+        competition="demo",
+        hypothesis_id="",
+        goal="spine",
+        status=PlanStatus.ABANDONED,
+        tasks=[
+            ResearchTask(
+                id="P-001-T01",
+                plan_id="P-001",
+                type=TaskType.RUN_TRAINING,
+                description="train",
+                order=0,
+                status=TaskStatus.DONE,
+            ),
+            ResearchTask(
+                id="P-001-T02",
+                plan_id="P-001",
+                type=TaskType.RUN_INFERENCE,
+                description="infer",
+                dependencies=["P-001-T01"],
+                order=1,
+                status=TaskStatus.DONE,
+            ),
+            ResearchTask(
+                id="P-001-T03",
+                plan_id="P-001",
+                type=TaskType.EVALUATE,
+                description="eval",
+                dependencies=["P-001-T02"],
+                order=2,
+                status=TaskStatus.FAILED,
+            ),
+        ],
+        created_at=now,
+        updated_at=now,
+    )
+    store.upsert_plan(plan)
+    store.close()
+
+    ran: list[str] = []
+
+    class TrackStub(StubCapability):
+        def execute(self, context: TaskContext) -> TaskEvidence:
+            ran.append(context.task.type.value)
+            return super().execute(context)
+
+    registry = CapabilityRegistry()
+    registry.register(TrackStub())
+    engineer = ResearchEngineer(
+        knowledge_dir=knowledge,
+        competition="demo",
+        registry=registry,
+    )
+    try:
+        execution = engineer.run_plan("P-001")
+        assert execution.status == "succeeded"
+        assert ran == ["run_training", "run_inference", "evaluate"]
+    finally:
+        engineer.close()
+
+
 def test_topo_dispatch_order(tmp_path: Path) -> None:
     knowledge = tmp_path / "knowledge"
     _seed_dag(knowledge)

@@ -16,41 +16,76 @@ Command flags and every subcommand live in [CLI.md](CLI.md). This doc is the
    # Optional LLM-assisted analyze / code / narrative:
    uv sync --extra llm
    ```
-2. **Credentials** — copy `.env.example` → `.env`:
-   - `KAGGLE_API_TOKEN` (required for download/submit)
-   - `OPENAI_API_KEY` *or* `GEMINI_API_KEY` + `LABPILOT_LLM_PROVIDER=gemini` (optional)
-3. **Join the competition** on Kaggle and accept the rules (otherwise download fails).
-4. **Sanity-check:**
-   ```bash
-   uv run research doctor
-   ```
-5. On macOS, LightGBM often needs: `brew install libomp`.
+2. **Join the competition** on Kaggle and accept the rules (otherwise download fails).
+3. On macOS, LightGBM often needs: `brew install libomp`.
 
 Tabular competitions need only the core install. Image/deep baselines need
 `--extra image` / `--extra deep` — see the root [README](../README.md).
+
+### Credentials (per competition workspace)
+
+LabPilot reads secrets from the **competition workspace** `.env` only — not from
+the LabPilot package/repo `.env`.
+
+```bash
+uv run research init <slug> --path ~/kaggle
+cd ~/kaggle/<slug>
+cp .env.example .env
+```
+
+Edit `.env` and set:
+
+| Variable | Required | Notes |
+|----------|----------|--------|
+| `KAGGLE_API_TOKEN` | Yes (download/submit/fetch) | [Kaggle settings → API](https://www.kaggle.com/settings) → Create New Token |
+| `GEMINI_API_KEY` / `OPENAI_API_KEY` | Optional | LLM-assisted analyze / codegen |
+
+Then sanity-check **from the workspace**:
+
+```bash
+uv run --project /path/to/labpilot research doctor
+```
+
+If auth fails, the CLI prints this same setup path. Optional alternatives:
+`~/.kaggle/access_token`, or legacy `KAGGLE_USERNAME` + `KAGGLE_KEY` in the
+workspace `.env`.
 
 ---
 
 ## 2. Mental model
 
+**Preferred:** one client-owned folder per competition (created by `research init`).
+Full design: [design/competition-workspace.md](design/competition-workspace.md).
+
 ```
-research analyze *         →  knowledge/<slug>/research/   (landscape + brief + hypotheses)
-research plan create *     →  ResearchPlan DAG (P-xxx)     (plan-only; never trains)
-research run --plan *      →  competitions/<slug>/ + E-xxx (Research Engineer)
-research experiments *     →  inspect / rank / compare     (does not train)
+~/kaggle/<slug>/                 ← cd here; labpilot.yaml is the discovery marker
+  knowledge/<slug>/research/…    ← analyze / plans / executions
+  pipeline/                      ← generated train.py
+  data/                          ← gitignored
+  …
 ```
 
-- **One slug** = one competition graph in `knowledge/` and one workspace under
-  `competitions/<slug>/`.
+```
+research init <slug> --path ~/kaggle   →  scaffold workspace (no download)
+research analyze                       →  knowledge/<slug>/research/ …
+research plan create --baseline        →  ResearchPlan DAG (P-xxx)
+research run --plan P-001              →  pipeline/ + E-xxx (Research Engineer)
+research experiments *                 →  inspect / rank / compare
+```
+
+- **One slug** = one workspace folder. Slug and paths come from `labpilot.yaml`
+  when your shell CWD is inside that folder (no `--competition` / `--knowledge-dir`
+  required).
 - **`plan`** compiles intent into typed tasks; it never executes them.
 - **`run --plan`** is the system of record for implementation (Workspace → code →
   verify → train → eval → submit → report).
 - **`experiments` / `hypothesize`** help you decide what to try next; they never
   auto-train.
-- Legacy linear Pipeline (`init` / `build` / `improve`) is **removed**. Historical
-  `runs/<id>/` artifacts remain readable via `status` / `report` / `list-runs`.
+- **Legacy:** with no `labpilot.yaml`, paths stay CWD-relative `knowledge/` +
+  `competitions/<slug>/`. Writing into the LabPilot clone is legacy — prefer `init`
+  for new competitions. The old linear Pipeline (`build` / `improve`) remains removed.
 
-Artifacts to care about:
+Artifacts to care about (inside a competition workspace):
 
 | Path | Why open it |
 |------|-------------|
@@ -58,12 +93,11 @@ Artifacts to care about:
 | `knowledge/<slug>/research/reports/analyze.json` | Full Analyze contract |
 | `knowledge/<slug>/research/plans/P-*.json|.md` | Plan projections |
 | `knowledge/<slug>/research/executions/E-xxx/` | Execution + task evidence |
-| `competitions/<slug>/profile.json` | Dataset profile from Workspace |
-| `competitions/<slug>/pipeline/` | Generated training code |
-| `competitions/<slug>/metrics.json` | CV / eval metrics |
-| `competitions/<slug>/artifacts/submission.csv` | Packaged submission |
+| `profile.json` | Dataset profile from Workspace |
+| `pipeline/` | Generated training code |
+| `metrics.json` | CV / eval metrics |
+| `artifacts/submission.csv` | Packaged submission |
 | `knowledge/<slug>/hypotheses/` | Ideas under test |
-| `knowledge/<slug>/dashboard.html` | Competition overview (on demand) |
 
 Deprecation notes:
 [milestones/research-engineer/pipeline-deprecation.md](milestones/research-engineer/pipeline-deprecation.md).
@@ -75,13 +109,21 @@ Deprecation notes:
 ### A. Happy path (SoR)
 
 ```bash
-uv run research analyze <slug>
+# From the LabPilot clone — scaffold a client-owned folder (once per competition)
+uv run research init <slug> --path ~/kaggle --git
+cd ~/kaggle/<slug>
+cp .env.example .env   # set KAGGLE_API_TOKEN (workspace-local; see § Credentials)
+
+# Optional alias so commands feel local while CWD is the competition folder:
+# alias research='uv run --project /path/to/labpilot research'
+
+uv run --project /path/to/labpilot research analyze
 # Read: knowledge/<slug>/research/reports/research_brief.md
 
-uv run research plan create <slug> --baseline
+uv run --project /path/to/labpilot research plan create --baseline
 # → P-001
 
-uv run research run --plan P-001 --competition <slug>
+uv run --project /path/to/labpilot research run --plan P-001
 # Workspace downloads + profiles data, scaffolds code, verifies, trains (unless --dry-run)
 ```
 
@@ -90,7 +132,7 @@ Leave **without** `--submit` until you have inspected metrics and `submission.cs
 Dry-run (syntax/smoke stubs; no full train / no upload):
 
 ```bash
-uv run research run --plan P-001 --competition <slug> --dry-run --no-install-packages
+uv run --project /path/to/labpilot research run --plan P-001 --dry-run --no-install-packages
 ```
 
 ### B. After the execution finishes
@@ -183,16 +225,23 @@ Then either rank again and plan another hypothesis, or submit (next section).
 
 ## 5. When to submit to Kaggle
 
-Default policy: **train and validate locally first**.
+Default policy: **train and validate locally first**. A successful `research run`
+already writes local learning (`execution_outcome.json`, experiment
+`research_artifacts` card, hypothesis `actual_outcome`) and packages
+`artifacts/submission_<E-id>.csv` — submission is not required for that.
 
 ```bash
 # Inspect first
-ls competitions/<slug>/artifacts/submission.csv
-cat competitions/<slug>/metrics.json
+ls artifacts/submission_E-001.csv
+cat metrics.json
+cat artifacts/execution_outcome.json
 
-# Allow upload on a new or resumed execution:
-uv run research run --plan P-001 --competition <slug> --submit
-uv run research resume --execution E-001 --competition <slug> --submit
+# Recommended: upload by execution id (records public_score + overfit learning)
+uv run research submit --execution E-001
+
+# Or allow upload during a plan run / resume:
+uv run research run --plan P-001 --submit
+uv run research resume --execution E-001 --submit
 ```
 
 Kernel-only competitions: CSV packaging is SoR today; kernel export/push remains a
@@ -216,6 +265,7 @@ capstone notes.
 | Hypothesis → DAG (no train) | `research plan create <slug> -H H-xxx` |
 | Baseline plan | `research plan create <slug> --baseline` → **P-001** |
 | Implement approved plan | `research run --plan P-xxx -c <slug>` |
+| Upload + LB learning | `research submit --execution E-xxx` |
 | Need another operator on the team | Point them at this SOP + [CLI.md](CLI.md) |
 
 ---
@@ -240,7 +290,7 @@ base and experiment tools exist so you don’t rediscover failures by hand.
 
 | Symptom | Check |
 |---------|--------|
-| Download / API errors | Joined competition? `research doctor`? Valid `KAGGLE_*` in `.env`? |
+| Download / API errors | Joined competition? Workspace `.env` with `KAGGLE_API_TOKEN`? `research doctor`? |
 | LightGBM import fails | macOS: `brew install libomp`; reinstall env |
 | Analyze / code look templated | No LLM key / `llm` extra — expected; set key or rely on rule_engine |
 | Image/deep train fails | Install `--extra image` or `--extra deep` |

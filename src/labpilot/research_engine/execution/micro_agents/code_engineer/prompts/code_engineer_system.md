@@ -30,6 +30,9 @@ Hard rules:
   writes a valid submission shape.
 - For baseline WRITE_CODE: produce a runnable train script that writes metrics.json
   and submission.csv under the workspace root (parent of pipeline/).
+- Always include the exact entrypoint:
+  ``if __name__ == "__main__":`` followed by a call to ``main()`` (ASCII only —
+  never alter ``__main__``).
 - Prefer a single cohesive pipeline/train.py (+ config.yaml) over many tiny modules.
 - Do not invent leaderboard scores, call Kaggle APIs, or upload submissions.
 - Do not touch secrets, .env, credentials, or paths outside the workspace.

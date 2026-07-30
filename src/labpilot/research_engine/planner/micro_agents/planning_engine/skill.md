@@ -68,6 +68,10 @@ The caller lowers ids / verification / timestamps and persists.
 5. **DAG integrity** — `depends_on` keys resolve inside the draft; no cycles.
 6. **Plan nodes ≠ execution** — emitting `write_code` / `run_training` does not
    write code or train.
+7. **Complete sentences** — `goal`, `current_state`, `expected_outcome`, `risk`,
+   `success_criteria`, `rollback`, and task `description` must be finished prose.
+   Never end any sentence with `...` or `…`. Do not truncate mid-thought; shorten
+   to a full sentence instead.
 
 ## Few-shot reasoning (examples)
 

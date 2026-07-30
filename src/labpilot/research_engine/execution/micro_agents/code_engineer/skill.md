@@ -42,6 +42,8 @@ generated from scratch from the dataset profile and `data/raw` inventory.
 - Stay under `allowed_roots`; never touch secrets, `.env`, or paths outside workspace
 - Generate from profile/inventory — never invent missing CSVs or reuse Jinja scaffolds
 - Include train → metrics.json + submission.csv behavior for baselines
+- Always end `pipeline/train.py` with exact ``if __name__ == "__main__":`` + ``main()``
+  (ASCII ``__main__`` only — never alter that string)
 - No network calls, no Kaggle upload, no inventing leaderboard scores
 - Prefer one cohesive `pipeline/train.py` (+ small helpers) over sprawling packages
 

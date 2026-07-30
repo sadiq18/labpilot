@@ -212,7 +212,16 @@ def _baseline_template(competition: str, *, brief_excerpt: str = "") -> PlanBlue
             check="Belief store updated.",
         ),
     ]
-    excerpt_note = f" Brief: {brief_excerpt[:120]}…" if brief_excerpt else ""
+    excerpt_note = ""
+    if brief_excerpt:
+        # Prefer a short complete clause — never trail off with an ellipsis.
+        snippet = " ".join(brief_excerpt.split())
+        if len(snippet) > 120:
+            cut = snippet[:120].rsplit(" ", 1)[0].rstrip(".,;:")
+            snippet = cut if cut else snippet[:120].rstrip(".,;:")
+        if snippet and snippet[-1] not in ".!?":
+            snippet = f"{snippet}."
+        excerpt_note = f" Brief: {snippet}"
     return PlanBlueprint(
         goal=f"Establish a verified baseline experiment for {competition}.{excerpt_note}",
         current_state="Analyze complete; no baseline experiment yet.",

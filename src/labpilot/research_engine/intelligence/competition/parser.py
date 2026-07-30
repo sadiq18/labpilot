@@ -56,8 +56,12 @@ class CompetitionParser:
         self.llm_client = llm_client
 
     def parse(self) -> CompetitionSpec:
-        config_path = self.configs_dir / f"{self.competition_slug}.yaml"
-        spec = self._parse_from_file(config_path) if config_path.is_file() else self._resolve_automatically()
+        config_path = self._local_contract_path()
+        spec = (
+            self._parse_from_file(config_path)
+            if config_path is not None
+            else self._resolve_automatically()
+        )
         spec = self._apply_rules_scrape(spec)
         spec = apply_submission_mode(spec)
         spec = self._infer_problem_type_if_unknown(spec)
@@ -71,6 +75,16 @@ class CompetitionParser:
             spec.submission_mode,
         )
         return spec
+
+    def _local_contract_path(self) -> Path | None:
+        """Prefer workspace ``competition.yaml``, then ``configs/competitions/<slug>.yaml``."""
+        workspace_contract = self.configs_dir / "competition.yaml"
+        if workspace_contract.is_file():
+            return workspace_contract
+        slug_path = self.configs_dir / f"{self.competition_slug}.yaml"
+        if slug_path.is_file():
+            return slug_path
+        return None
 
     def _parse_from_file(self, config_path: Path) -> CompetitionSpec:
         logger.info(
