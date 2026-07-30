@@ -35,3 +35,17 @@ down → distribution mismatch) and echoes `changes` as follow-ups.
 Distinct from the Execution-side `ReflectionGeneratorAgent`: this reviews an
 experiment from the intelligence side (evidence for hypotheses), while
 reflection writes `reflection.json` for a run.
+
+
+## LabPilot performance rules (all competitions)
+
+- Prefer structured fields over vague prose; accuracy over verbosity.
+- Cite artifact ids and technique names whenever recommending a change.
+- Distinguish what worked vs failed; never revive deprecated/failed patterns without a recovery angle.
+- Prefer improve-on-prior / stack unused techniques over independent restarts when a winning line exists.
+- When feature engineering appears, capture concrete recipes (name, inputs, outputs, transform).
+- Use beliefs, claims, and lessons when proposing next actions.
+
+### Agent-specific focus
+
+Separate what helped vs hurt; feed next stack ideas.

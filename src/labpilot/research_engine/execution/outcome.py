@@ -88,6 +88,64 @@ class ExecutionOutcomeSummary(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
+def update_competition_skill_overlays(
+    *,
+    workspace_root: Path,
+    summary: ExecutionOutcomeSummary,
+    reflection: dict[str, Any] | None = None,
+    techniques: list[str] | None = None,
+) -> None:
+    """Upsert per-run competition skill overlays (bounded / summarized on disk)."""
+    try:
+        from labpilot.research_engine.shared.skills import upsert_skill_overlay
+    except Exception as exc:
+        logger.warning("Skill overlay update skipped: %s", exc)
+        return
+
+    assessment = (reflection or {}).get("assessment") or {}
+    lessons = (reflection or {}).get("lessons") or {}
+    keep: list[str] = []
+    avoid: list[str] = []
+    try_next: list[str] = []
+    if summary.learning_gain and summary.learning_gain > 0:
+        keep.extend(techniques or [])
+        if summary.hypothesis_id:
+            keep.append(f"parent stack from {summary.hypothesis_id}")
+    if summary.learning_loss and summary.learning_loss > 0:
+        avoid.extend(techniques or [])
+        avoid.append(f"regression on {summary.execution_id}")
+    rec = str(assessment.get("recommendation") or "").strip()
+    if rec:
+        try_next.append(rec[:200])
+    summary_lesson = str(
+        lessons.get("summary") or assessment.get("summary") or ""
+    ).strip()
+    note = summary_lesson or str(
+        (summary.hypothesis_outcome or {}).get("actual_outcome") or ""
+    )
+    lesson_id = f"{summary.execution_id}"
+    for agent_key in (
+        "code_engineer",
+        "hypothesis_generator",
+        "research_planner",
+        "planning_engine",
+        "experiment_reviewer",
+        "research_brief",
+    ):
+        try:
+            upsert_skill_overlay(
+                workspace_root,
+                agent_key,
+                lesson_id=lesson_id,
+                keep=keep,
+                avoid=avoid,
+                try_next=try_next,
+                note=note[:400],
+            )
+        except Exception as exc:
+            logger.warning("Skill overlay %s failed: %s", agent_key, exc)
+
+
 def package_execution_submission(
     workspace_root: Path,
     execution_id: str,
@@ -568,8 +626,12 @@ def maybe_mint_improvement_hypothesis(
     if expected_impact <= 0:
         return None
 
-    if parent:
-        tags.append(f"fork:{parent.id}")
+    parent_id = parent.id if parent else summary.hypothesis_id or None
+    if parent_id:
+        tags.append(f"fork:{parent_id}")
+    stack = list(parent.technique_stack) if parent else []
+    if parent and parent.technique and parent.technique not in stack:
+        stack.append(parent.technique)
 
     follow = store.create(
         observation=observation[:500] or prediction[:500],
@@ -589,8 +651,94 @@ def maybe_mint_improvement_hypothesis(
                 "note": "improvement fork from experiment outcome",
             }
         ],
+        technique=parent.technique if parent else None,
+        parent_hypothesis_id=parent_id,
+        technique_stack=stack,
     )
     return follow.id
+
+
+def maybe_mint_stacked_from_success(
+    *,
+    knowledge_dir: Path,
+    competition: str,
+    summary: ExecutionOutcomeSummary,
+    limit: int = 3,
+) -> list[str]:
+    """After a local gain, mint high-confidence stacked hyps from unused techniques."""
+    if summary.learning_gain is None or summary.learning_gain <= 0:
+        return []
+    try:
+        from labpilot.research_engine.intelligence.hypothesis.ledger import (
+            build_experiment_ledger,
+        )
+    except Exception as exc:
+        logger.warning("Stacked mint skipped (ledger): %s", exc)
+        return []
+
+    ledger = build_experiment_ledger(knowledge_dir, competition)
+    parent_id = summary.hypothesis_id or ledger.winning_hypothesis_id
+    if not parent_id:
+        return []
+    store = HypothesisStore(knowledge_dir, competition)
+    parent = store.get(parent_id)
+    stack = list(parent.technique_stack) if parent else list(ledger.winning_stack)
+    if parent and parent.technique and parent.technique not in stack:
+        stack.append(parent.technique)
+
+    minted: list[str] = []
+    for name in ledger.techniques_untried:
+        if ledger.is_failed(name):
+            continue
+        if any(
+            h.technique == name and h.parent_hypothesis_id == parent_id
+            for h in store.list()
+            if h.status == HypothesisStatus.PROPOSED
+        ):
+            continue
+        conf = min(
+            0.95,
+            float(parent.confidence if parent else 0.5)
+            + 0.08
+            + 0.05,
+        )
+        impact = max(0.005, float(summary.learning_gain) * 0.4)
+        new_stack = [*stack, name] if name not in stack else list(stack)
+        hyp = store.create(
+            observation=(
+                f"Parent {parent_id} gained {summary.learning_gain:.4g} on "
+                f"{summary.execution_id}; unused technique {name} remains. "
+                f"(technique {name})"
+            ),
+            reason=(
+                f"Stack improvement: keep what worked on {parent_id} and merge {name} "
+                f"(artifact experiment:{summary.execution_id}; technique {name})."
+            ),
+            prediction=(
+                f"Adding {name} on top of {parent_id} will further improve the primary metric."
+            ),
+            confidence=conf,
+            expected_impact=impact,
+            tags=[name, "stacked", "improvement", f"fork:{parent_id}"],
+            source="reflection",
+            created_by=HypothesisCreatedBy.REFLECTION,
+            generator=HypothesisGenerator.RULE_ENGINE,
+            origin=HypothesisOrigin.EXPERIMENT,
+            evidence=[
+                {
+                    "kind": "experiment",
+                    "ref": summary.execution_id,
+                    "note": "successful parent execution",
+                }
+            ],
+            technique=name,
+            parent_hypothesis_id=parent_id,
+            technique_stack=new_stack,
+        )
+        minted.append(hyp.id)
+        if len(minted) >= limit:
+            break
+    return minted
 
 
 def promote_outcome_claims(
@@ -669,13 +817,21 @@ def update_hypothesis_from_local(
         else None,
     )
 
-    return maybe_mint_improvement_hypothesis(
+    follow_id = maybe_mint_improvement_hypothesis(
         knowledge_dir=knowledge_dir,
         competition=competition,
         summary=summary,
         reflection=reflection,
         overfitting=bool(summary.leaderboard and summary.leaderboard.overfitting),
     )
+    stacked_ids = maybe_mint_stacked_from_success(
+        knowledge_dir=knowledge_dir,
+        competition=competition,
+        summary=summary,
+    )
+    if stacked_ids and not follow_id:
+        follow_id = stacked_ids[0]
+    return follow_id
 
 
 def record_successful_execution(
@@ -751,6 +907,12 @@ def record_successful_execution(
     )
     summary.follow_up_hypothesis_id = follow_id
     summary.updated_at = datetime.now(UTC).isoformat()
+    update_competition_skill_overlays(
+        workspace_root=root,
+        summary=summary,
+        reflection=reflection,
+        techniques=techniques,
+    )
 
     write_outcome_files(summary, workspace_root=root, paths=paths)
     # Re-upsert so metadata includes follow_up id if minted.

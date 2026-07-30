@@ -109,6 +109,9 @@ class HypothesisStore:
         origin: HypothesisOrigin | str | None = None,
         origins: Iterable[HypothesisOrigin | str] = (),
         evidence: Iterable[HypothesisEvidenceRef | dict] = (),
+        technique: str | None = None,
+        parent_hypothesis_id: str | None = None,
+        technique_stack: Iterable[str] = (),
     ) -> Hypothesis:
         now = _now()
         resolved_created_by = _coerce_created_by(created_by, source)
@@ -125,6 +128,10 @@ class HypothesisStore:
             else HypothesisEvidenceRef.model_validate(item)
             for item in evidence
         ]
+        stack = [str(item).strip() for item in technique_stack if str(item).strip()]
+        tech = (technique or "").strip() or None
+        if tech and tech not in stack:
+            stack = [*stack, tech]
         hypothesis = Hypothesis(
             id=self._allocate_id(),
             competition=self.competition,
@@ -140,6 +147,9 @@ class HypothesisStore:
             origin=resolved_origin,
             origins=resolved_origins,
             evidence=evidence_refs,
+            technique=tech,
+            parent_hypothesis_id=(parent_hypothesis_id or None),
+            technique_stack=stack,
             created_at=now,
             updated_at=now,
         )

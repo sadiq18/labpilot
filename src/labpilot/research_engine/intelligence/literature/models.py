@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from labpilot.research_engine.intelligence.feature_recipes import FeatureRecipe
+
 
 class Paper(BaseModel):
     """Normalized catalog entry — every backend maps into this shape."""
@@ -70,6 +72,7 @@ class PaperKnowledge(BaseModel):
     limitations: list[str] = Field(default_factory=list)
     ideas_worth_testing: list[str] = Field(default_factory=list)
     techniques: list[str] = Field(default_factory=list)
+    feature_recipes: list[FeatureRecipe] = Field(default_factory=list)
     datasets_used: list[str] = Field(default_factory=list)
     benchmarks: list[str] = Field(default_factory=list)
     code_urls: list[str] = Field(default_factory=list)

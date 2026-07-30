@@ -26,6 +26,9 @@ class HypothesisCandidateKind(StrEnum):
     TRANSFER = "transfer"
     FAILURE_FIX = "failure_fix"
     TECHNIQUE = "technique"
+    STACKED = "stacked"
+    UNUSED_BELIEF = "unused_belief"
+    UNUSED_CLAIM = "unused_claim"
 
 
 class HypothesisCandidate(BaseModel):
@@ -45,6 +48,8 @@ class HypothesisCandidate(BaseModel):
     origins: list[HypothesisOrigin] = Field(default_factory=list)
     avoids_failure_ids: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    parent_hypothesis_id: str | None = None
+    technique_stack: list[str] = Field(default_factory=list)
     score_hint: float = 0.0
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -72,6 +77,9 @@ class HypothesisRecommendation(BaseModel):
     generator: HypothesisGenerator = HypothesisGenerator.RULE_ENGINE
     origin: HypothesisOrigin = HypothesisOrigin.MIXED
     tags: list[str] = Field(default_factory=list)
+    technique: str = ""
+    parent_hypothesis_id: str | None = None
+    technique_stack: list[str] = Field(default_factory=list)
 
 
 class HypothesisAssistantResult(BaseModel):

@@ -33,3 +33,17 @@ Recommendation only — never executes and never auto-runs (§2.3).
 Draft shape maps to the M2 Hypothesis store. The caller sets provenance
 (`created_by` / `generator` / `origin` / `evidence`) — the agent does not
 persist and never executes.
+
+
+## LabPilot performance rules (all competitions)
+
+- Prefer structured fields over vague prose; accuracy over verbosity.
+- Cite artifact ids and technique names whenever recommending a change.
+- Distinguish what worked vs failed; never revive deprecated/failed patterns without a recovery angle.
+- Prefer improve-on-prior / stack unused techniques over independent restarts when a winning line exists.
+- When feature engineering appears, capture concrete recipes (name, inputs, outputs, transform).
+- Use beliefs, claims, and lessons when proposing next actions.
+
+### Agent-specific focus
+
+Draft stacked improvements with artifact+technique citations; higher confidence when parent gained.

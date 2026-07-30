@@ -39,3 +39,19 @@ architectures, losses, augmentation, and training tricks.
 ## Notes
 
 The agent never calls GitHub. `RepoDiffer` computes effort/gain separately.
+
+
+## LabPilot performance rules (all competitions)
+
+- Prefer structured fields over vague prose; accuracy over verbosity.
+- Cite artifact ids and technique names whenever recommending a change.
+- Distinguish what worked vs failed; never revive deprecated/failed patterns without a recovery angle.
+- Prefer improve-on-prior / stack unused techniques over independent restarts when a winning line exists.
+- When feature engineering appears, capture concrete recipes (name, inputs, outputs, transform).
+- Use beliefs, claims, and lessons when proposing next actions.
+
+### Agent-specific focus
+
+Extract FE recipes and pipeline techniques from repos/kernels — including arithmetic/derived
+columns (`f1+f2`, `f1/f2`) when code/text shows them; transferable deltas only.
+LLM decides what is grounded.

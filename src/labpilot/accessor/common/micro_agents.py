@@ -21,7 +21,9 @@ importing ``intelligence`` (import-hygiene rule).
 
 from __future__ import annotations
 
+import inspect
 import logging
+import re
 import time
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -163,7 +165,34 @@ class BaseMicroAgent:
 
     def _run_llm(self, context: StructuredContext) -> BaseModel:
         assert self.llm_client is not None
-        raw = self.llm_client.complete(self.system_prompt(), self.user_prompt(context))
+        system = self.system_prompt()
+        try:
+            from labpilot.research_engine.shared.skills import compose_system_prompt
+
+            from pathlib import Path as _Path
+
+            agent_file = inspect.getfile(type(self))
+            workspace = (
+                context.data.get("workspace_root")
+                or context.data.get("skill_overlay_dir")
+                or ""
+            )
+            agent_key = str(context.data.get("skill_agent_key") or "").strip()
+            if not agent_key:
+                # Prefer package folder name (matches .labpilot/skills/<name>.md).
+                agent_key = _Path(agent_file).resolve().parent.name
+            if agent_key.endswith("Agent"):
+                raw_key = agent_key[: -len("Agent")]
+                agent_key = re.sub(r"(?<!^)(?=[A-Z])", "_", raw_key).lower()
+            system = compose_system_prompt(
+                system,
+                agent_file=agent_file,
+                workspace_root=workspace or None,
+                agent_key=agent_key,
+            )
+        except Exception:  # noqa: BLE001 — skill injection must never break agents
+            pass
+        raw = self.llm_client.complete(system, self.user_prompt(context))
         return self._parse(raw)
 
     def _parse(self, raw: str) -> BaseModel:

@@ -47,7 +47,16 @@ def score_candidate(candidate: HypothesisCandidate) -> float:
         "transfer": 0.03,
         "technique": 0.0,
         "belief": 0.02,
+        "stacked": 0.12,
+        "unused_belief": 0.08,
+        "unused_claim": 0.07,
     }.get(str(candidate.kind), 0.0)
+    parent_bonus = 0.06 if candidate.parent_hypothesis_id else 0.0
+    stack_bonus = 0.02 * min(3, max(0, len(candidate.technique_stack) - 1))
+    if candidate.parent_hypothesis_id and "stacked" in {
+        t.lower() for t in candidate.tags
+    }:
+        parent_bonus += 0.04
     return (
         gain * _W_GAIN
         + candidate.confidence * _W_CONF
@@ -56,6 +65,8 @@ def score_candidate(candidate: HypothesisCandidate) -> float:
         + diversity
         + failure_bonus
         + kind_bonus
+        + parent_bonus
+        + stack_bonus
         + 0.01 * candidate.score_hint
     )
 

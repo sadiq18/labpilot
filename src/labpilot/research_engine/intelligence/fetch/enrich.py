@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, coerce_str_list
 from labpilot.research_engine.intelligence.micro_agents.forum_analyzer import (
     ForumAnalyzerAgent,
 )
 from labpilot.research_engine.intelligence.micro_agents.repository_analyzer import (
     RepositoryAnalyzerAgent,
+)
+from labpilot.research_engine.intelligence.feature_recipes import (
+    FEATURE_ENGINEERING_CATEGORY,
+    recipes_to_metadata,
 )
 from labpilot.research_engine.intelligence.models import ResearchArtifact
 from labpilot.research_engine.intelligence.repositories.models import RepoKnowledge
@@ -62,6 +66,9 @@ def enrich_kernel_artifact(
         summary = f"{summary} | techniques: {', '.join(card.techniques[:6])}"
     meta["extraction_source"] = source
     meta["repo_knowledge"] = card.model_dump(mode="json")
+    if card.feature_recipes:
+        meta["feature_recipes"] = recipes_to_metadata(card.feature_recipes)
+        meta["feature_engineering_category"] = FEATURE_ENGINEERING_CATEGORY
     updated = artifact.model_copy(
         update={
             "techniques": techniques,
@@ -115,9 +122,16 @@ def enrich_discussion_artifact(
     if bits:
         joined = "; ".join(bits[:6])
         summary = f"{summary} | {joined}" if summary else joined
+    techniques = list(
+        dict.fromkeys([*artifact.techniques, *coerce_str_list(payload.get("techniques"))])
+    )
+    if payload.get("feature_recipes"):
+        meta["feature_recipes"] = list(payload.get("feature_recipes") or [])
+        meta["feature_engineering_category"] = FEATURE_ENGINEERING_CATEGORY
     updated = artifact.model_copy(
         update={
             "summary": summary,
+            "techniques": techniques,
             "metadata": meta,
             "confidence": max(artifact.confidence, 0.55 if bits else artifact.confidence),
         }

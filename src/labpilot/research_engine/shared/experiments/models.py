@@ -73,6 +73,12 @@ class Hypothesis(BaseModel):
     evidence: list[HypothesisEvidenceRef] = Field(default_factory=list)
     evidence_for: list[str] = Field(default_factory=list)
     evidence_against: list[str] = Field(default_factory=list)
+    #: Primary technique under test (durable; also usually present in tags).
+    technique: str | None = None
+    #: Hypothesis this one improves on (stacked / fork lineage).
+    parent_hypothesis_id: str | None = None
+    #: Techniques already assumed in the pipeline (parent stack + this change).
+    technique_stack: list[str] = Field(default_factory=list)
     #: Free-text local / LB outcome narrative after an execution or submit.
     actual_outcome: str | None = None
     #: Public leaderboard score when a submission for this hypothesis scored.

@@ -16,9 +16,12 @@ Hard rules:
 - Scripts are executed with the competition workspace as cwd (parent of pipeline/).
   Open config as ``pipeline/config.yaml``; write ``metrics.json`` and
   ``submission.csv`` at the workspace root (not inside pipeline/).
-- Generate code FROM SCRATCH from profile_summary + data_inventory. Do NOT rely
-  on any Jinja/template scaffold. Do NOT invent ``train.csv`` / ``test.csv``
-  when they are absent from the inventory.
+- When prior_train_py / improve_on_prior is set: keep what already works in the
+  prior pipeline and apply the hypothesis technique as a delta. Emit a full
+  updated train.py (always override) — do NOT restart as an unrelated baseline.
+- When no prior code exists: generate FROM SCRATCH from profile_summary +
+  data_inventory. Do NOT rely on any Jinja/template scaffold. Do NOT invent
+  ``train.csv`` / ``test.csv`` when they are absent from the inventory.
 - Discover the real layout: open a few inventory files, align train/test ids with
   ``sample_submission.csv`` when present, and build features only from columns
   that exist after joins/aggregations. Always align matrices with

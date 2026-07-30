@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext, coerce_str_list
+from labpilot.research_engine.intelligence.feature_recipes import (
+    coerce_feature_recipes,
+    heuristic_feature_recipes,
+    merge_feature_recipes,
+    recipe_technique_names,
+)
 from labpilot.research_engine.intelligence.repositories.models import RepoKnowledge
 
 _ARCHITECTURE = (
@@ -39,8 +45,16 @@ class RepositoryAnalyzerAgent(BaseMicroAgent):
             "text. Respond ONLY with JSON: {\"repo_id\":str,\"full_name\":str,"
             "\"architecture\":[str],\"loss\":[str],\"augmentation\":[str],"
             "\"training_tricks\":[str],\"interesting_files\":[str],"
-            "\"dependencies\":[str],\"techniques\":[str],\"confidence\":float,"
+            "\"dependencies\":[str],\"techniques\":[str],"
+            "\"feature_recipes\":[{\"name\":str,\"description\":str,"
+            "\"inputs\":[str],\"outputs\":[str],\"transform\":str}],"
+            "\"confidence\":float,"
             "\"grounded_in\":\"readme|code_excerpt|deps|mixed\"}. "
+            "For feature engineering, capture concrete new features created "
+            "(name, inputs, outputs, transform) — including arithmetic/derived "
+            "columns such as new=f1+f2 or new=f1/f2 when present in code/text, "
+            "not only encoders/scalers. You decide which creations are worth "
+            "recording; omit unsupported inventions. "
             "Do not summarize the repository and do not infer unsupported claims."
         )
 
@@ -65,6 +79,10 @@ class RepositoryAnalyzerAgent(BaseMicroAgent):
             text, _TRICKS
         )
         dependencies = coerce_str_list(d.get("dependencies"))
+        recipes = merge_feature_recipes(
+            coerce_feature_recipes(d.get("feature_recipes")),
+            heuristic_feature_recipes(context.text or ""),
+        )
         techniques = list(
             dict.fromkeys(
                 [
@@ -73,6 +91,7 @@ class RepositoryAnalyzerAgent(BaseMicroAgent):
                     *losses,
                     *augmentation,
                     *tricks,
+                    *recipe_technique_names(recipes),
                 ]
             )
         )
@@ -100,6 +119,7 @@ class RepositoryAnalyzerAgent(BaseMicroAgent):
             interesting_files=files,
             dependencies=dependencies,
             techniques=techniques,
+            feature_recipes=recipes,
             confidence=0.65 if techniques else 0.35,
             grounded_in=grounded,
         )

@@ -222,6 +222,14 @@ def knowledge_to_artifact(
     summary = transfers[0].summary if transfers else (
         "; ".join(knowledge.techniques[:3]) or repo.description or repo.full_name
     )
+    meta = {
+        "repository": repo.model_dump(mode="json"),
+        "knowledge": knowledge.model_dump(mode="json"),
+        "transfers": [transfer.model_dump(mode="json") for transfer in transfers],
+        "feature_recipes": [
+            recipe.model_dump(mode="json") for recipe in knowledge.feature_recipes
+        ],
+    }
     return ResearchArtifact(
         id=f"repo:{repo.full_name.lower()}",
         type=ResearchArtifactType.REPOSITORY,
@@ -233,11 +241,7 @@ def knowledge_to_artifact(
         references=[repo.url, *repo.linked_paper_ids],
         confidence=knowledge.confidence,
         competition_slug=context.competition,
-        metadata={
-            "repository": repo.model_dump(mode="json"),
-            "knowledge": knowledge.model_dump(mode="json"),
-            "transfers": [transfer.model_dump(mode="json") for transfer in transfers],
-        },
+        metadata=meta,
     )
 
 
