@@ -44,10 +44,18 @@ class ResearchReviewCapability(BaseCapability):
         if not train.is_file():
             findings.append("critical: missing pipeline/train.py")
         else:
+            source = train.read_text(encoding="utf-8")
             try:
-                ast.parse(train.read_text(encoding="utf-8"))
+                tree = ast.parse(source)
             except SyntaxError as exc:
                 findings.append(f"critical: train.py syntax error: {exc}")
+            else:
+                if not _has_standard_main_guard(tree):
+                    findings.append(
+                        "critical: train.py missing standard "
+                        "``if __name__ == '__main__':`` entrypoint "
+                        "(script would exit without running training)"
+                    )
 
         # Optional LLM judgement slice (soft): never invent metrics; may add notes.
         llm_notes: list[str] = []
@@ -70,3 +78,27 @@ class ResearchReviewCapability(BaseCapability):
                 "decision": "allow" if passed else "block",
             },
         )
+
+
+def _has_standard_main_guard(tree: ast.AST) -> bool:
+    """True when the module has ``if __name__ == "__main__":`` (ASCII exact)."""
+    for node in tree.body:
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        if not isinstance(test.ops[0], ast.Eq) or len(test.comparators) != 1:
+            continue
+        left, right = test.left, test.comparators[0]
+        # ``__name__ == "__main__"`` or ``"__main__" == __name__``
+        names = {left, right}
+        name_nodes = [n for n in names if isinstance(n, ast.Name) and n.id == "__name__"]
+        str_nodes = [
+            n
+            for n in names
+            if isinstance(n, ast.Constant) and n.value == "__main__"
+        ]
+        if name_nodes and str_nodes:
+            return True
+    return False

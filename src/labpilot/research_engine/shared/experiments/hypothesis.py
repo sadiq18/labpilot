@@ -21,6 +21,7 @@ from labpilot.research_engine.shared.experiments.models import (
 logger = logging.getLogger(__name__)
 
 _ID_PATTERN = re.compile(r"^H-(\d+)$")
+BASELINE_HYPOTHESIS_ID = "H-BASELINE"
 
 
 def _now() -> datetime:
@@ -48,6 +49,50 @@ class HypothesisStore:
         next_n = max_n + 1
         width = max(3, len(str(next_n)))
         return f"H-{next_n:0{width}d}"
+
+    def ensure_baseline(
+        self,
+        *,
+        brief_excerpt: str = "",
+    ) -> Hypothesis:
+        """Return the reserved baseline hypothesis, creating it if missing.
+
+        Id is always ``H-BASELINE`` (not sequential ``H-001``). Improvement
+        hypotheses continue to allocate ``H-001``, ``H-002``, …
+        """
+        existing = self.get(BASELINE_HYPOTHESIS_ID)
+        if existing is not None:
+            return existing
+        now = _now()
+        observation = (
+            brief_excerpt.strip()[:280]
+            or f"Establish a registry baseline floor for {self.competition}."
+        )
+        hypothesis = Hypothesis(
+            id=BASELINE_HYPOTHESIS_ID,
+            competition=self.competition,
+            observation=observation,
+            reason=(
+                "Need a reproducible reference experiment before testing "
+                "improvement hypotheses."
+            ),
+            prediction=(
+                "Baseline template produces valid CV metrics and a "
+                "submission artifact."
+            ),
+            confidence=0.5,
+            expected_impact=0.0,
+            tags=["baseline"],
+            source="manual",
+            created_by=HypothesisCreatedBy.MANUAL,
+            generator=HypothesisGenerator.HUMAN,
+            origin=HypothesisOrigin.COMPETITION,
+            origins=[HypothesisOrigin.COMPETITION],
+            created_at=now,
+            updated_at=now,
+        )
+        self._save(hypothesis)
+        return hypothesis
 
     def create(
         self,
@@ -172,6 +217,90 @@ class HypothesisStore:
         self._save(updated)
         return updated
 
+    def update_outcome(
+        self,
+        hypothesis_id: str,
+        *,
+        actual_outcome: str | None = None,
+        public_score: float | None = None,
+        status: HypothesisStatus | None = None,
+        evidence_run_id: str | None = None,
+        why: str | None = None,
+    ) -> Hypothesis:
+        """Update actual_outcome / public_score and optionally status."""
+        hypothesis = self.get(hypothesis_id)
+        if hypothesis is None:
+            raise FileNotFoundError(
+                f"Hypothesis '{hypothesis_id}' not found for competition "
+                f"'{self.competition}' under {self.hypotheses_dir}."
+            )
+        patch: dict = {"updated_at": _now()}
+        if actual_outcome is not None:
+            patch["actual_outcome"] = actual_outcome
+        if public_score is not None:
+            patch["public_score"] = public_score
+        if why:
+            note = f"[reflection] {why.strip()}"
+            reason = hypothesis.reason
+            patch["reason"] = f"{reason}\n\n{note}".strip() if reason else note
+        if status is not None:
+            evidence_for = list(hypothesis.evidence_for)
+            evidence_against = list(hypothesis.evidence_against)
+            if evidence_run_id:
+                if status == HypothesisStatus.CONFIRMED:
+                    if evidence_run_id not in evidence_for:
+                        evidence_for.append(evidence_run_id)
+                elif status == HypothesisStatus.REJECTED:
+                    if evidence_run_id not in evidence_against:
+                        evidence_against.append(evidence_run_id)
+            patch["status"] = status
+            patch["evidence_for"] = evidence_for
+            patch["evidence_against"] = evidence_against
+        updated = hypothesis.model_copy(update=patch)
+        self._save(updated)
+        return updated
+
+    def annotate_experiment(
+        self,
+        hypothesis_id: str,
+        *,
+        execution_id: str,
+        note: str,
+        artifact_id: str | None = None,
+    ) -> Hypothesis:
+        """Append experiment awareness to a hypothesis without changing status."""
+        hypothesis = self.get(hypothesis_id)
+        if hypothesis is None:
+            raise FileNotFoundError(
+                f"Hypothesis '{hypothesis_id}' not found for competition "
+                f"'{self.competition}' under {self.hypotheses_dir}."
+            )
+        marker = f"[experiment {execution_id}]"
+        reason = hypothesis.reason or ""
+        if marker in reason:
+            return hypothesis
+        line = f"{marker} {note.strip()}"
+        reason = f"{reason}\n\n{line}".strip() if reason else line
+        evidence = list(hypothesis.evidence)
+        ref = artifact_id or execution_id
+        if not any(e.ref == ref or e.ref == execution_id for e in evidence):
+            evidence.append(
+                HypothesisEvidenceRef(
+                    kind=HypothesisOrigin.EXPERIMENT,
+                    ref=ref,
+                    note=note.strip()[:200],
+                )
+            )
+        updated = hypothesis.model_copy(
+            update={
+                "reason": reason,
+                "evidence": evidence,
+                "updated_at": _now(),
+            }
+        )
+        self._save(updated)
+        return updated
+
     def mark_testing_if_proposed(self, hypothesis_id: str) -> Hypothesis:
         """Flip `proposed` → `testing` when a run attaches this hypothesis.
 
@@ -226,6 +355,8 @@ class HypothesisStore:
                     ],
                     "evidence_for": list(hypothesis.evidence_for),
                     "evidence_against": list(hypothesis.evidence_against),
+                    "actual_outcome": hypothesis.actual_outcome,
+                    "public_score": hypothesis.public_score,
                     "file_created_at": hypothesis.created_at.isoformat(),
                     "file_updated_at": hypothesis.updated_at.isoformat(),
                 }

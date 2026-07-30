@@ -48,9 +48,9 @@ def test_auto_resolves_metadata_when_no_local_file_exists(tmp_path: Path):
     assert spec.tags == ["Getting Started"]
     assert spec.evaluation_metric is not None
     assert spec.evaluation_metric.direction == "minimize"
-    # Problem type is deliberately left for the profiler to infer from the
-    # actual data, not guessed from the metric text.
-    assert spec.problem_type.value == "unknown"
+    # RMSE in competition metadata maps to tabular_regression when no local YAML
+    # sets problem_type (profiler can still refine later from data).
+    assert spec.problem_type.value == "tabular_regression"
 
 
 def test_falls_back_to_bare_contract_when_fetch_raises(tmp_path: Path):

@@ -34,7 +34,7 @@ Rules:
 2. Refuses if any research plan already exists for the competition (baseline must be first).
 3. Allocates **`P-001`**.
 4. Sets `metadata.plan_kind = "baseline"`.
-5. `hypothesis_id` may be null/empty (no improvement hypothesis required).
+5. Links reserved hypothesis id **`H-BASELINE`** (created if missing; not `H-001`).
 6. Optional Planning Engine LLM may refine the slim draft; soft-fail keeps rule_engine
    baseline template (same Option B posture as Planner).
 

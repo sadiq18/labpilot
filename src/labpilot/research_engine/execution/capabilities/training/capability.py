@@ -73,20 +73,35 @@ class TrainingCapability(BaseCapability):
             log_path = runner.save_run_log(result)
             artifacts = runner.collect_artifacts()
             duration = time.monotonic() - started
-            ok = result.returncode == 0
+            metrics_path = Path(artifacts["metrics"]) if artifacts.get("metrics") else root / "metrics.json"
             metrics: dict = {}
-            metrics_path = artifacts.get("metrics")
-            if metrics_path and Path(metrics_path).is_file():
-                metrics = json.loads(Path(metrics_path).read_text(encoding="utf-8"))
+            if metrics_path.is_file():
+                try:
+                    loaded = json.loads(metrics_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        metrics = loaded
+                except json.JSONDecodeError:
+                    metrics = {}
+
+            ok = result.returncode == 0
+            error = None if ok else (result.stderr or result.stdout)[:2000]
+            # Exit 0 alone is not enough — codegen sometimes emits a broken
+            # ``__main__`` guard so the script no-ops without writing metrics.
+            if ok and not metrics_path.is_file():
+                ok = False
+                error = (
+                    "training exited 0 but did not write metrics.json "
+                    "(check ``if __name__ == '__main__':`` and that main() runs)"
+                )
             return evidence(
                 context,
                 capability=self.name,
                 passed=ok,
                 summary="training completed" if ok else "training failed",
-                checks=["train_runner"],
+                checks=["train_runner", "metrics_json"],
                 paths=[str(p) for p in artifacts.values()] + [str(log_path)],
-                metrics=metrics if isinstance(metrics, dict) else {},
-                error=None if ok else (result.stderr or result.stdout)[:2000],
+                metrics=metrics,
+                error=error,
                 metadata={"returncode": result.returncode, "duration_s": duration},
             )
         except Exception as exc:

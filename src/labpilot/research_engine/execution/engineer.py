@@ -21,7 +21,7 @@ from labpilot.research_engine.execution.store import (
 from labpilot.research_engine.execution.verification import verify_evidence
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.planner.schemas.models import ResearchPlan
-from labpilot.research_engine.planner.schemas.task_types import PlanStatus, TaskStatus
+from labpilot.research_engine.planner.schemas.task_types import PlanStatus, TaskStatus, TaskType
 from labpilot.research_engine.planner.store import PlanStore
 from labpilot.research_engine.planner.validator import topological_levels, validate_plan
 
@@ -76,7 +76,7 @@ class ResearchEngineer:
         return self._run_execution(execution.id)
 
     def resume(self, execution_id: str) -> ResearchExecution:
-        """Continue from the first non-terminal task."""
+        """Continue from the first non-terminal task (retries failed tasks)."""
         execution = self._exec_store.get_execution(execution_id)
         if execution is None:
             raise EngineerError(f"unknown execution_id: {execution_id}")
@@ -84,8 +84,14 @@ class ResearchEngineer:
             return execution
         self._exec_store.update_status(execution_id, "running")
         plan = self._plan_store.get_plan(execution.plan_id)
-        if plan is not None and plan.status != PlanStatus.IN_PROGRESS:
-            self._plan_store.update_plan_status(execution.plan_id, PlanStatus.IN_PROGRESS)
+        if plan is not None:
+            # Re-queue train/eval spine when a downstream task failed without
+            # metrics (false-success training marked done).
+            self._reset_tasks_for_retry(plan)
+            if plan.status != PlanStatus.IN_PROGRESS:
+                self._plan_store.update_plan_status(
+                    execution.plan_id, PlanStatus.IN_PROGRESS
+                )
         return self._run_execution(execution_id)
 
     def _run_execution(self, execution_id: str) -> ResearchExecution:
@@ -102,15 +108,18 @@ class ResearchEngineer:
                     plan = self._plan_store.get_plan(execution.plan_id)
                     assert plan is not None
                     task = next(t for t in plan.tasks if t.id == task_id)
-                    if task.status in {
-                        TaskStatus.DONE,
-                        TaskStatus.SKIPPED,
-                        TaskStatus.FAILED,
-                    }:
-                        if task.status == TaskStatus.FAILED:
-                            raise EngineerError(
-                                f"task {task.id} already failed; cannot continue"
-                            )
+                    if task.status == TaskStatus.FAILED:
+                        # Retry after a failed run (e.g. fixed train.py).
+                        self._plan_store.update_task_status(
+                            task.id,
+                            TaskStatus.PENDING,
+                            metadata_patch={"retried_after_failure": True},
+                            error="",
+                        )
+                    plan = self._plan_store.get_plan(execution.plan_id)
+                    assert plan is not None
+                    task = next(t for t in plan.tasks if t.id == task_id)
+                    if task.status in {TaskStatus.DONE, TaskStatus.SKIPPED}:
                         continue
                     self._run_task(plan, execution_id, task_id)
         except EngineerError as exc:
@@ -124,6 +133,27 @@ class ResearchEngineer:
         self._plan_store.update_plan_status(execution.plan_id, PlanStatus.DONE)
         result = self._exec_store.get_execution(execution_id)
         assert result is not None
+        try:
+            from labpilot.research_engine.execution.outcome import (
+                record_successful_execution,
+            )
+
+            workspace = Path(
+                result.workspace_path
+                or competition_workspace_path(self.knowledge_dir, self.competition)
+            )
+            record_successful_execution(
+                knowledge_dir=self.knowledge_dir,
+                competition=self.competition,
+                execution=result,
+                plan=plan,
+                workspace_root=workspace,
+                llm_client=self.constraints.get("llm_client"),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record execution learning for %s", execution_id
+            )
         return result
 
     def _run_task(
@@ -217,12 +247,66 @@ class ResearchEngineer:
         plan = self._plan_store.get_plan(plan_id)
         if plan is None:
             raise EngineerError(f"unknown plan_id: {plan_id}")
+        if plan.status == PlanStatus.ABANDONED:
+            # Re-run after a failed execution: clear failed tasks and reopen.
+            # Also re-queue earlier "done" train/eval spine tasks — a no-op
+            # training run can be marked done without writing metrics.json.
+            self._reset_tasks_for_retry(plan)
+            self._plan_store.update_plan_status(plan_id, PlanStatus.READY)
+            plan = self._plan_store.get_plan(plan_id)
+            assert plan is not None
+            logger.info("Reopened abandoned plan %s for retry", plan_id)
         if plan.status not in {PlanStatus.READY, PlanStatus.IN_PROGRESS}:
             raise EngineerError(
                 f"plan {plan_id} status={plan.status}; need ready or in_progress"
             )
         validate_plan(plan)
         return plan
+
+    def _reset_tasks_for_retry(self, plan: ResearchPlan) -> None:
+        """Reset failed tasks and the train/eval spine so retries re-produce artifacts."""
+        spine = {
+            TaskType.RUN_SMOKE_TEST,
+            TaskType.RUN_TRAINING,
+            TaskType.RUN_INFERENCE,
+            TaskType.EVALUATE,
+            TaskType.BUILD_SUBMISSION,
+            TaskType.GENERATE_REPORT,
+            TaskType.REFLECT,
+            TaskType.UPDATE_BELIEF,
+        }
+        failed_ids = {t.id for t in plan.tasks if t.status == TaskStatus.FAILED}
+        if not failed_ids:
+            return
+
+        # Transitive dependencies of every failed task (ancestors in the DAG).
+        by_id = {t.id: t for t in plan.tasks}
+        ancestors: set[str] = set()
+        stack = list(failed_ids)
+        while stack:
+            tid = stack.pop()
+            task = by_id.get(tid)
+            if task is None:
+                continue
+            for dep in task.dependencies:
+                if dep not in ancestors:
+                    ancestors.add(dep)
+                    stack.append(dep)
+
+        for task in plan.tasks:
+            reset = task.id in failed_ids or (
+                task.id in ancestors
+                and task.type in spine
+                and task.status in {TaskStatus.DONE, TaskStatus.FAILED}
+            )
+            if not reset:
+                continue
+            self._plan_store.update_task_status(
+                task.id,
+                TaskStatus.PENDING,
+                metadata_patch={"retried_after_abandon": True},
+                error="",
+            )
 
 
 def default_stub_registry() -> CapabilityRegistry:

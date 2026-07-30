@@ -1,7 +1,7 @@
 Competition: {{ competition }}
 Plan: {{ plan_id }} (kind={{ plan_kind }}) hypothesis={{ hypothesis_id or "—" }}
 Task: {{ task_id }} type={{ task_type }}
-Problem type hint: {{ problem_type }}
+Problem type: {{ problem_type }}
 
 Goal:
 {{ goal }}
@@ -12,15 +12,27 @@ Task description:
 Research brief / Analyze excerpt:
 {{ brief_excerpt }}
 
+Dataset profile (JSON):
+```json
+{{ profile_summary_json }}
+```
+
+Data inventory under data/raw (use these real paths — generate code from scratch):
+{% for f in data_inventory %}- {{ f }}
+{% else %}- (empty — download may still be required)
+{% endfor %}
+
+Baseline choice hints (problem type / metric only — not a code template):
+```json
+{{ baseline_choice_json }}
+```
+
 Allowed roots: {{ allowed_roots | join(", ") }}
 Existing files (inventory):
 {% for f in existing_files %}- {{ f }}
 {% else %}- (none yet)
 {% endfor %}
 
-Jinja baseline (rule_engine scaffold — refine or replace with full equivalent):
-```json
-{{ jinja_baseline_json }}
-```
-
-Return a CodeProposal JSON with full file contents for a working baseline pipeline.
+Return a CodeProposal JSON with full file contents for a working baseline that
+reads the real data above and writes workspace-root metrics.json + submission.csv.
+Do not reuse or refine any legacy Jinja scaffold.

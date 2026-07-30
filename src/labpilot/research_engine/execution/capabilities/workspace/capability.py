@@ -1,12 +1,12 @@
-"""Workspace capability — create/verify ``competitions/<slug>/`` layout.
+"""Workspace capability — create/verify competition code/data layout.
 
 Capability ``name`` stays ``\"workspace\"``. The on-disk root is the competition
-slug directory (not the execution id).
+slug directory (client workspace or legacy ``competitions/<slug>/``).
 
-Also prepares data + profile when possible so ``research init`` is unnecessary:
-download via accessor (when not dry-run / not skipped), write ``profile.json``,
-and persist ``competition.json`` from Intelligence parser artifacts or a local
-contract.
+Also prepares data + profile when possible (scaffold ``research init`` does not
+download): download via accessor (when not dry-run / not skipped), write
+``profile.json``, and persist ``competition.json`` from Intelligence parser
+artifacts or a local contract (``configs/competition.yaml`` in a workspace).
 """
 
 from __future__ import annotations
@@ -22,8 +22,9 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 logger = logging.getLogger(__name__)
 
-#: Relative dirs created under ``competitions/<competition-slug>/`` (idempotent).
+#: Relative dirs under the competition workspace root (idempotent).
 _WORKSPACE_SUBDIRS = (
+    "pipeline",
     "src",
     "configs",
     "data",
@@ -31,6 +32,7 @@ _WORKSPACE_SUBDIRS = (
     "data/processed",
     "logs",
     "artifacts",
+    "models",
     "tests",
 )
 
@@ -130,7 +132,79 @@ class WorkspaceCapability(BaseCapability):
             metadata["competition_json_source"] = "knowledge"
             return out
 
+        # Hydrate from Analyze report when available (tags / description / metric).
+        analyze_path = context.paths.report_path
+        if analyze_path.is_file():
+            try:
+                import json as _json
+
+                from labpilot.research_engine.intelligence.competition.infer_problem_type import (
+                    infer_problem_type_from_metadata,
+                )
+                from labpilot.research_engine.intelligence.competition.models import (
+                    CompetitionSpec,
+                    MetricSpec,
+                    ProblemType,
+                )
+
+                report = _json.loads(analyze_path.read_text(encoding="utf-8"))
+                comp = report.get("competition") or {}
+                meta = (comp.get("metadata") or {}) if isinstance(comp, dict) else {}
+                nested = meta.get("metadata") if isinstance(meta.get("metadata"), dict) else meta
+                tags = list(nested.get("tags") or meta.get("tags") or [])
+                description = str(
+                    nested.get("description")
+                    or nested.get("overview_summary")
+                    or comp.get("description")
+                    or ""
+                )
+                title = str(comp.get("title") or context.competition)
+                metric_raw = comp.get("metric") or {}
+                metric = None
+                if isinstance(metric_raw, dict) and metric_raw.get("name"):
+                    metric = MetricSpec(
+                        name=str(metric_raw.get("name")),
+                        direction=str(metric_raw.get("direction") or "maximize"),
+                        description=str(metric_raw.get("description") or ""),
+                        key=metric_raw.get("key"),
+                    )
+                problem_type = ProblemType.UNKNOWN
+                raw_pt = str(comp.get("problem_type") or "unknown")
+                try:
+                    problem_type = ProblemType(raw_pt)
+                except ValueError:
+                    problem_type = ProblemType.UNKNOWN
+                if problem_type is ProblemType.UNKNOWN:
+                    problem_type = infer_problem_type_from_metadata(
+                        title=title,
+                        description=description,
+                        tags=tags,
+                        metric_name=(metric.name if metric else ""),
+                        metric_description=(metric.description if metric else ""),
+                    )
+                spec = CompetitionSpec(
+                    slug=context.competition,
+                    title=title,
+                    description=description,
+                    tags=tags,
+                    problem_type=problem_type,
+                    evaluation_metric=metric,
+                )
+                out.write_text(spec.model_dump_json(indent=2) + "\n", encoding="utf-8")
+                metadata["competition_json"] = str(out)
+                metadata["competition_json_source"] = "analyze"
+                return out
+            except Exception as exc:
+                logger.info("Could not hydrate competition.json from analyze: %s", exc)
+
         configs_dir = context.constraints.get("competitions_dir")
+        if configs_dir is None:
+            # Client workspace: prefer local configs/ next to labpilot.yaml
+            local_configs = root / "configs"
+            if (local_configs / "competition.yaml").is_file() or (
+                local_configs / f"{context.competition}.yaml"
+            ).is_file():
+                configs_dir = local_configs
         try:
             from labpilot.research_engine.intelligence.competition.parser import (
                 CompetitionParser,
@@ -265,12 +339,115 @@ class WorkspaceCapability(BaseCapability):
             checks.append("profile_written")
             return True
         except Exception as exc:
-            logger.warning("Workspace profile failed: %s", exc)
+            logger.warning("Workspace tabular profile failed: %s", exc)
             metadata["profile_error"] = str(exc)
+            # Non-CSV / scientific layouts: still write an inventory profile so
+            # baseline selection + codegen know what files exist.
+            inventory_ok = self._write_inventory_profile(
+                context, root, raw_dir, metadata, checks, str(exc)
+            )
+            if inventory_ok:
+                return True
             checks.append("profile_skipped")
-            # Non-fatal — Code Engineering falls back to defaults without a profile.
             return None
+
+    def _write_inventory_profile(
+        self,
+        context: TaskContext,
+        root: Path,
+        raw_dir: Path,
+        metadata: dict[str, Any],
+        checks: list[str],
+        tabular_error: str,
+    ) -> bool:
+        try:
+            from labpilot.accessor.profiler.modality import IMAGE_EXTENSIONS, ModalityDetector
+            from labpilot.accessor.profiler.report import write_profile
+            from labpilot.accessor.profiler.tabular import DatasetProfile
+            from labpilot.research_engine.intelligence.competition.infer_problem_type import (
+                infer_problem_type_from_metadata,
+            )
+            from labpilot.research_engine.intelligence.competition.models import (
+                CompetitionSpec,
+                ProblemType,
+            )
+
+            competition = CompetitionSpec(slug=context.competition)
+            comp_path = root / "competition.json"
+            if comp_path.is_file():
+                competition = CompetitionSpec.model_validate_json(
+                    comp_path.read_text(encoding="utf-8")
+                )
+
+            files: list[str] = []
+            for path in sorted(raw_dir.rglob("*")):
+                if path.is_file():
+                    files.append(str(path.relative_to(raw_dir)))
+                if len(files) >= 200:
+                    break
+
+            profile = DatasetProfile(
+                competition=context.competition,
+                files=files,
+                warnings=[
+                    f"tabular profiler unavailable: {tabular_error}",
+                    "using filesystem inventory profile",
+                ],
+            )
+            modality = ModalityDetector().detect(
+                raw_dir,
+                profile,
+                competition_title=competition.title,
+                competition_description=competition.description,
+            )
+            if modality.modality == "tabular":
+                # Metadata may still say vision/tracking when files are exotic.
+                inferred = infer_problem_type_from_metadata(
+                    title=competition.title,
+                    description=competition.description,
+                    tags=list(competition.tags),
+                )
+                if inferred is ProblemType.IMAGE_CLASSIFICATION:
+                    profile.modality = "image"
+                    profile.warnings.append("modality=image from competition metadata")
+                elif inferred is ProblemType.TEXT_CLASSIFICATION:
+                    profile.modality = "text"
+                    profile.warnings.append("modality=text from competition metadata")
+                else:
+                    # Presence of image-like files without CSV roles.
+                    has_images = any(
+                        Path(f).suffix.lower() in IMAGE_EXTENSIONS for f in files
+                    )
+                    has_zarr = any(".zarr" in f for f in files) or any(
+                        p.is_dir() and p.name.endswith(".zarr") for p in raw_dir.rglob("*")
+                    )
+                    if has_images or has_zarr:
+                        profile.modality = "image"
+                        profile.warnings.append("modality=image from file extensions")
+                    else:
+                        profile.modality = modality.modality
+            else:
+                profile.modality = modality.modality
+            profile.image_dir = modality.image_dir
+            profile.image_column = modality.image_column
+            profile.text_column = modality.text_column
+            if modality.signals:
+                profile.warnings.extend(modality.signals)
+
+            json_path, md_path = write_profile(root, profile)
+            metadata["profile"] = str(json_path)
+            metadata["profile_md"] = str(md_path)
+            metadata["profile_kind"] = "inventory"
+            checks.append("profile_inventory")
+            return True
+        except Exception as inv_exc:
+            logger.warning("Inventory profile failed: %s", inv_exc)
+            metadata["inventory_profile_error"] = str(inv_exc)
+            return False
 
 
 def default_workspace_dirs(root: Path) -> list[Path]:
-    return [root / name for name in ("src", "configs", "data", "logs", "artifacts", "tests")]
+    return [
+        root / name
+        for name in ("pipeline", "src", "configs", "data", "logs", "artifacts", "tests")
+    ]

@@ -3,8 +3,10 @@
 Primary path: :class:`CodeEngineerAgent` → typed :class:`CodeProposal` →
 deterministic apply under allow-list.
 
-Offline / CI: Jinja baseline templates as ``rule_engine`` (full scaffold code).
-A tiny stub is only the last resort when Jinja cannot render.
+Baseline selection still records ``baseline_choice.json`` (problem type / metric
+hints). Jinja template scaffolds are **not** used — code is always generated
+from scratch from the dataset profile + inventory (LLM), with a tiny last-resort
+stub only when the LLM is unavailable.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 logger = logging.getLogger(__name__)
 
 # Last-resort only — never the primary SoR for code generation.
-_LAST_RESORT_TRAIN = '''"""Emergency fallback train scaffold (Jinja/LLM unavailable)."""
+_LAST_RESORT_TRAIN = '''"""Emergency fallback train scaffold (LLM unavailable)."""
 from __future__ import annotations
 
 import json
@@ -128,7 +130,29 @@ class CodeEngineeringCapability(BaseCapability):
                 metadata={"idempotent": True, "digest": file_digest(train_path)},
             )
 
-        jinja_baseline = self._render_jinja_baseline(context, root)
+        profile_path = root / "profile.json"
+        if not profile_path.is_file() and not is_dry_run(context):
+            return evidence(
+                context,
+                capability=self.name,
+                passed=False,
+                summary="code write blocked: missing dataset profile",
+                checks=["write_code", "profile_required"],
+                error=(
+                    "profile.json missing under the competition workspace. "
+                    "prepare_workspace must download and profile data before write_code."
+                ),
+            )
+
+        choice = self._select_baseline(context, root)
+        problem_type = (
+            choice.problem_type
+            if choice is not None
+            else str(context.constraints.get("problem_type") or "unknown")
+        )
+        profile_summary = self._profile_summary(root)
+        data_inventory = self._data_inventory(root)
+
         brief = ""
         brief_path = context.paths.brief_path
         if brief_path.is_file():
@@ -146,24 +170,23 @@ class CodeEngineeringCapability(BaseCapability):
                 "plan_goal": context.plan.goal,
                 "plan_kind": context.plan.metadata.get("plan_kind", ""),
                 "hypothesis_id": context.plan.hypothesis_id,
-                "problem_type": context.constraints.get(
-                    "problem_type", "tabular_classification"
-                ),
+                "problem_type": problem_type,
+                "baseline_choice": choice.model_dump(mode="json") if choice else {},
+                "profile_summary": profile_summary,
+                "data_inventory": data_inventory,
                 "allowed_roots": list(ALLOWED_ROOTS),
                 "existing_files": self._inventory(root),
-                "jinja_baseline": jinja_baseline,
                 "brief_excerpt": brief,
                 "dry_run": is_dry_run(context),
             },
         )
         proposal = self._agent.run(structured)
-        origin = "llm" if self._agent.last_used_llm else "rule_engine"
+        origin = "llm" if self._agent.last_used_llm else "last_resort"
 
         if not proposal.files:
-            # Last resort only.
             proposal = CodeProposal(
                 summary="last-resort scaffold",
-                rationale="Jinja and LLM produced no files",
+                rationale="LLM produced no files",
                 files=[
                     CodeFileSpec(
                         path="pipeline/train.py",
@@ -185,7 +208,7 @@ class CodeEngineeringCapability(BaseCapability):
                 summary="code proposal rejected",
                 checks=["write_code", "apply"],
                 error=str(exc),
-                metadata={"origin": origin},
+                metadata={"origin": origin, "problem_type": problem_type},
             )
 
         digests = {str(p): file_digest(p) for p in written}
@@ -199,10 +222,12 @@ class CodeEngineeringCapability(BaseCapability):
             metadata={
                 "digests": digests,
                 "origin": origin,
+                "problem_type": problem_type,
                 "summary": proposal.summary,
                 "rationale": proposal.rationale,
                 "used_llm": self._agent.last_used_llm,
                 "dry_run": is_dry_run(context),
+                "used_jinja": False,
             },
             error=None if train_path.is_file() else "train.py missing after apply",
         )
@@ -248,24 +273,39 @@ class CodeEngineeringCapability(BaseCapability):
                     items.append(str(path.relative_to(root)))
         return items
 
-    def _render_jinja_baseline(
-        self, context: TaskContext, root: Path
-    ) -> dict[str, str]:
-        """Render full Jinja templates into memory (path → content)."""
+    def _profile_summary(self, root: Path) -> dict:
+        path = root / "profile.json"
+        if not path.is_file():
+            return {}
         try:
-            from labpilot.config import TrainingConfig
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _data_inventory(self, root: Path) -> list[str]:
+        raw = root / "data" / "raw"
+        if not raw.is_dir():
+            return []
+        items: list[str] = []
+        for path in sorted(raw.rglob("*")):
+            if path.is_file() or (path.is_dir() and path.name.endswith(".zarr")):
+                items.append(str(path.relative_to(root)))
+            if len(items) >= 80:
+                break
+        return items
+
+    def _select_baseline(self, context: TaskContext, root: Path) -> object | None:
+        """Record baseline_choice.json for problem-type / metric hints (no Jinja)."""
+        try:
             from labpilot.accessor.profiler.tabular import DatasetProfile
-            from labpilot.research_engine.execution.baseline.registry import get_template
             from labpilot.research_engine.execution.baseline.selector import (
-                BaselineChoice,
                 BaselineSelector,
             )
-            from labpilot.research_engine.execution.capabilities.code_engineering.offline_codegen.renderer import CodeRenderer
             from labpilot.research_engine.intelligence.competition.models import (
                 CompetitionSpec,
             )
         except Exception:
-            return {}
+            return None
 
         competition = CompetitionSpec(slug=context.competition)
         comp_path = root / "competition.json"
@@ -289,61 +329,14 @@ class CodeEngineeringCapability(BaseCapability):
 
         try:
             choice = BaselineSelector().select(competition, profile)
-        except Exception:
-            problem_type = str(
-                context.constraints.get("problem_type", "tabular_classification")
-            )
-            if problem_type not in {
-                "tabular_classification",
-                "tabular_regression",
-                "text_classification",
-                "image_classification",
-            }:
-                problem_type = "tabular_classification"
-            template = get_template(problem_type)
-            if template is None:
-                return {}
-            choice = BaselineChoice(
-                problem_type=problem_type,
-                template_name=template.name,
-                rationale="Research Engineer baseline scaffold",
-                metric_name="accuracy" if "regression" not in problem_type else "rmse",
-            )
+        except Exception as exc:
+            logger.info("Baseline selection deferred to LLM: %s", exc)
+            return None
 
-        template = get_template(choice.problem_type, template_name=choice.template_name)
-        if template is None:
-            return {}
-
-        # Persist choice for inspectability (idempotent overwrite).
         try:
             (root / "baseline_choice.json").write_text(
                 choice.model_dump_json(indent=2) + "\n", encoding="utf-8"
             )
         except Exception:
             pass
-
-        # Render into a temp sibling then read back — CodeRenderer writes to disk.
-        scratch = root / ".codegen_scratch"
-        try:
-            if scratch.exists():
-                import shutil
-
-                shutil.rmtree(scratch)
-            scratch.mkdir(parents=True, exist_ok=True)
-            CodeRenderer(TrainingConfig()).render(template, choice, scratch)
-            files: dict[str, str] = {}
-            pipeline = scratch / "pipeline"
-            if pipeline.is_dir():
-                for path in pipeline.rglob("*"):
-                    if path.is_file():
-                        rel = f"pipeline/{path.relative_to(pipeline).as_posix()}"
-                        files[rel] = path.read_text(encoding="utf-8")
-            return files
-        except Exception as exc:
-            logger.info("Jinja baseline render failed: %s", exc)
-            return {}
-        finally:
-            import shutil
-
-            if scratch.exists():
-                shutil.rmtree(scratch, ignore_errors=True)
+        return choice

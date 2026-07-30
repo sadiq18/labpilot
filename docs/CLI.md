@@ -18,14 +18,15 @@ research <command> ...
 ## Contents
 
 1. [Global flags](#1-global-flags)
-2. [Execution](#2-execution) — `run`, `resume` (Research Engineer)
-3. [Inspect a run](#3-inspect-a-run) — `status`, `report`, `list-runs`, `runs diff`
-4. [Experiments](#4-experiments) — graph, show, compare, knowledge, rank, search, report, dashboard
-5. [Hypotheses](#5-hypotheses) — list, show, update (+ generate via Intelligence)
-6. [Research Intelligence](#6-research-intelligence) — `analyze`, `ingest`, `retrieve`, `hypothesize`, `fetch`
-7. [Research Planner](#7-research-planner) — `plan create` / `show` / `list`
-8. [Environment](#8-environment) — doctor, runtime, templates
-9. [Common option patterns](#9-common-option-patterns)
+2. [Competition workspace](#2-competition-workspace) — `init`, discovery
+3. [Execution](#3-execution) — `run`, `resume` (Research Engineer)
+4. [Inspect a run](#4-inspect-a-run) — `status`, `report`, `list-runs`, `runs diff`
+5. [Experiments](#5-experiments) — graph, show, compare, knowledge, rank, search, report, dashboard
+6. [Hypotheses](#6-hypotheses) — list, show, update (+ generate via Intelligence)
+7. [Research Intelligence](#7-research-intelligence) — `analyze`, `ingest`, `retrieve`, `hypothesize`, `fetch`
+8. [Research Planner](#8-research-planner) — `plan create` / `show` / `list`
+9. [Environment](#9-environment) — doctor, runtime, templates
+10. [Common option patterns](#10-common-option-patterns)
 
 ---
 
@@ -45,7 +46,59 @@ research -q status --run-id 20260715-003000-house-prices-advanced-regression-tec
 
 ---
 
-## 2. Execution
+## 2. Competition workspace
+
+Design reference (layout, discovery, path rewiring, deferred installable CLI):
+[design/competition-workspace.md](design/competition-workspace.md).
+
+### `research init`
+
+Scaffold a **client-owned** folder for one competition. Does not download data or run analyze.
+
+```bash
+# From the LabPilot clone
+uv run research init <slug-or-kaggle-url> --path ~/kaggle
+uv run research init <slug> --path ~/kaggle --git      # git init + scaffold commit
+uv run research init <slug> --path ~/kaggle --no-git   # skip prompt
+```
+
+Creates ``~/kaggle/<slug>/`` with:
+
+- `labpilot.yaml` — discovery marker + relative paths
+- `knowledge/`, `pipeline/`, `data/`, `artifacts/`, `logs/`, `models/`, `.cache/`
+- `configs/default.yaml` — thin overlay
+- `.env.example` — copy to `.env` and set `KAGGLE_API_TOKEN` (workspace-local)
+- `.gitignore` — `data/`, `.cache/`, `.env`, …
+- optional git repo
+
+| Option | Description |
+|--------|-------------|
+| `--path, -p` | Parent directory (**required**); creates `<path>/<slug>/` |
+| `--git` / `--no-git` | Initialize git without prompting (default: prompt) |
+| `--force` | Allow scaffolding into a non-empty directory |
+
+**After init**, `cd` into the workspace. Commands walk parents for `labpilot.yaml`
+(and shell `PWD` when tools chdir). Prefer `uv run --project` so CWD stays here:
+
+```bash
+cd ~/kaggle/<slug>
+cp .env.example .env   # set KAGGLE_API_TOKEN — see docs/SOP.md § Credentials
+uv run --project /path/to/labpilot research analyze
+uv run --project /path/to/labpilot research plan create --baseline
+uv run --project /path/to/labpilot research run --plan P-001
+```
+
+Convenience alias:
+
+```bash
+alias research='uv run --project /path/to/labpilot research'
+```
+
+Without a marker, LabPilot keeps legacy CWD-relative `knowledge/` + `competitions/<slug>/`.
+
+---
+
+## 3. Execution
 
 ### `research run`
 
@@ -54,6 +107,10 @@ Plan-driven Research Engineer (SoR). Requires an approved plan:
 ```bash
 research plan create <slug> --baseline
 research run --plan P-001 --competition <slug>
+
+# Inside a labpilot.yaml workspace, slug is optional:
+research plan create --baseline
+research run --plan P-001
 
 # Dry-run: syntax smoke + stub metrics; no upload
 research run --plan P-001 --competition <slug> --dry-run --no-install-packages
@@ -65,20 +122,53 @@ research run --plan P-001 --competition <slug> --submit
 | Option | Description |
 |--------|-------------|
 | `--plan, -p` | Research plan id (**required**, e.g. `P-001`) |
-| `--competition, -c` | Competition slug (**required** with `--plan`) |
-| `--config` | Config YAML (default: `configs/default.yaml`) |
-| `--knowledge-dir` | Override knowledge directory |
+| `--competition, -c` | Competition slug (optional inside a workspace) |
+| `--workspace` | Explicit workspace root (directory with `labpilot.yaml`) |
+| `--config` | Config YAML (default: `configs/default.yaml` or workspace overlay) |
+| `--knowledge-dir` | Override knowledge directory (wins over workspace) |
 | `--submit` | Allow Kaggle upload (default: package only) |
 | `--dry-run` | Syntax/smoke stub path; no full train/upload |
 | `--install-packages / --no-install-packages` | Dependency capability pip install |
 
-Running without `--plan` errors with a migration message. Legacy `init` / `build` /
-`improve` Pipeline commands have been **removed** — see
+Running without `--plan` errors with a migration message. Legacy Pipeline
+`build` / `improve` remain **removed** — see
 [pipeline-deprecation.md](milestones/research-engineer/pipeline-deprecation.md).
+(`research init` now means competition workspace scaffold, not the old Pipeline init.)
+
+A successful run always records local learning: `artifacts/submission_<E-id>.csv`,
+`artifacts/execution_outcome.json`, and a `research_artifacts` row
+(`type=experiment`, id `exp:execution:<E-id>`). Upload is separate — prefer
+[`research submit`](#research-submit).
 
 ---
 
+### `research submit`
 
+Upload an execution-scoped submission CSV and patch leaderboard learning onto the
+same experiment artifact / hypothesis:
+
+```bash
+# After a successful run that wrote artifacts/submission_E-001.csv
+research submit --execution E-001
+research submit --execution E-001 --dry-run
+research submit --execution E-001 --path /custom/file.csv -m "baseline v2"
+```
+
+| Option | Description |
+|--------|-------------|
+| `--execution, -e` | Execution id (**required**) — selects `artifacts/submission_<E-id>.csv` |
+| `--competition, -c` | Competition slug (optional inside a workspace) |
+| `--path` | Override CSV path (default: execution-scoped filename) |
+| `--message, -m` | Kaggle submission message |
+| `--dry-run` | Resolve file only; no upload |
+
+On score: sets hypothesis `public_score`, refreshes `actual_outcome`, upserts
+belief/technique links, notifies open **proposed** hypotheses of the new
+experiment, and promotes strong beliefs to claims. A new hypothesis is minted
+**only** when it is an improvement fork with expected gain (e.g. overfit →
+regularization) — not a baseline-like follow-up with no benefit.
+
+---
 
 ### `research resume`
 
@@ -87,23 +177,26 @@ Resume a Research Engineer execution:
 ```bash
 research resume --execution E-001 --competition <slug>
 research resume --execution E-001 --competition <slug> --dry-run
+# Inside a workspace:
+research resume --execution E-001
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--execution, -e` | Execution id (**required**, e.g. `E-001`) |
-| `--competition, -c` | Competition slug (**required**) |
+| `--competition, -c` | Competition slug (optional inside a workspace) |
+| `--workspace` | Explicit workspace root |
 | `--submit` / `--dry-run` / `--install-packages` | Same idea as `run` |
 
 
 ---
 
 
-## 3. Inspect a run
+## 4. Inspect a run
 
 These commands read **legacy** `runs/<run_id>/` manifests (pre-Engineer artifacts).
-New executions live under `knowledge/<slug>/research/executions/` and
-`competitions/<slug>/`.
+New executions live under `knowledge/<slug>/research/executions/` and the
+competition code root (`pipeline/` in a workspace, or legacy `competitions/<slug>/`).
 
 ### `research status`
 
@@ -140,7 +233,7 @@ Prefer `research experiments compare` when you want categorized changes + verdic
 
 ---
 
-## 4. Experiments
+## 5. Experiments
 
 Competition-scoped research memory (Milestone 2). Most commands need `--competition`
 (`-c`) and optionally `--runs-dir` / `--knowledge-dir` / `--config`.
@@ -236,7 +329,7 @@ research experiments dashboard --competition titanic
 
 ---
 
-## 5. Hypotheses
+## 6. Hypotheses
 
 Stored under `knowledge/<slug>/hypotheses/H-NNN.json` (local / gitignored) and mirrored
 into `knowledge/<slug>/research/knowledge.db`. Every hypothesis command lives under the
@@ -272,7 +365,7 @@ research run --plan P-002 --competition <slug>
 
 ---
 
-## 6. Research Intelligence
+## 7. Research Intelligence
 
 Milestone 3 research partner: synthesize papers / repos / local experiments into a
 validated `analyze.json` contract, then retrieve or hypothesize offline. **No HTML**
@@ -454,7 +547,7 @@ Does **not** register `DiscussionAnalyzer` — run `research ingest` later if yo
 
 ---
 
-## 7. Research Planner
+## 8. Research Planner
 
 Turn a durable hypothesis into an **inspectable, non-executing** task DAG. The planner
 never writes code, mutates configs, or starts training — it only emits typed instruction
@@ -470,16 +563,17 @@ Plans live in `knowledge/<slug>/research/knowledge.db` (`research_plans` /
 research plan create birdclef-2026 --hypothesis H-001
 research plan create birdclef-2026 -H H-001 --priority 2 --format json
 research plan create birdclef-2026 --baseline
-research plan create birdclef-2026 --baseline --format markdown
+research plan create --baseline          # slug from labpilot.yaml
 ```
 
 | Flag | Description |
 |------|-------------|
+| competition (arg) | Optional inside a workspace |
 | `--hypothesis` / `-H` | Hypothesis id (`H-001`) — mutually exclusive with `--baseline` |
 | `--baseline` | Create **P-001** from Analyze context (no hypothesis); must be first plan |
 | `--priority` | Integer priority stored on the plan (default `0`) |
 | `--format` | `text` (default), `json`, or `markdown` |
-| `--config`, `--knowledge-dir` | Same idea as analyze |
+| `--config`, `--knowledge-dir`, `--workspace` | Same idea as analyze |
 
 Provide **either** `--baseline` **or** `--hypothesis`. Baseline requires
 `reports/analyze.json` and refuses if any plan already exists.
@@ -490,10 +584,11 @@ With no LLM key, uses `rule_engine` templates. **No `--execute` flag.**
 ### `research plan show` / `list`
 
 ```bash
-research plan show birdclef-2026 P-001
-research plan show birdclef-2026 P-001 --format json
+research plan show P-001 -c birdclef-2026
+research plan show P-001                 # inside a workspace
 research plan list birdclef-2026
-research plan list birdclef-2026 --status ready
+research plan list                       # inside a workspace
+research plan list --status ready
 ```
 
 Statuses: `draft`, `ready`, `in_progress`, `done`, `abandoned`. Text output prints
@@ -509,12 +604,13 @@ Design: [milestones/research-planner/README.md](milestones/research-planner/READ
 
 ---
 
-## 8. Environment
+## 9. Environment
 
 ### `research doctor`
 
 Core checks (Python, LightGBM, Kaggle credentials) plus optional image/deep imports.
-Exits non-zero if a **core** check fails.
+Exits non-zero if a **core** check fails. Also reports the active competition
+workspace (`labpilot.yaml` root + slug) when discovered from CWD.
 
 ```bash
 research doctor
@@ -545,7 +641,7 @@ Lists registered baseline templates (tabular / text / image / deep variants).
 
 ---
 
-## 9. Common option patterns
+## 10. Common option patterns
 
 | Pattern | Typical flags |
 |---------|----------------|
@@ -553,7 +649,7 @@ Lists registered baseline templates (tabular / text / image / deep variants).
 | Point at another knowledge tree | `--knowledge-dir /path/to/knowledge` |
 | Non-interactive / CI | `--yes` |
 | No training | `--dry-run` (on `run` / `resume`) |
-| Upload to Kaggle | `--submit` on `run` / `resume` |
+| Upload to Kaggle | `research submit --execution E-xxx` (preferred); or `--submit` on `run` / `resume` |
 
 **Kernel-only competitions:** CSV packaging is SoR today. Kernel export/push is a
 follow-on under Execution Submission/Runtime (helpers live at

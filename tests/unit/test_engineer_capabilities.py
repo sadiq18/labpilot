@@ -99,15 +99,62 @@ def _ctx(
 def test_code_engineering_writes_without_llm(tmp_path: Path) -> None:
     knowledge = tmp_path / "knowledge"
     ctx = _ctx(knowledge, task_type=TaskType.WRITE_CODE)
+    # Minimal tabular profile so selector has real schema signals.
+    (ctx.workspace_root / "profile.json").write_text(
+        json.dumps(
+            {
+                "competition": "demo",
+                "files": ["train.csv"],
+                "train_file": "train.csv",
+                "test_file": "test.csv",
+                "sample_submission_file": "sample_submission.csv",
+                "row_count": 100,
+                "column_count": 3,
+                "columns": [
+                    {
+                        "name": "id",
+                        "dtype": "int64",
+                        "unique_count": 100,
+                        "is_numeric": True,
+                    },
+                    {
+                        "name": "feat",
+                        "dtype": "float64",
+                        "unique_count": 50,
+                        "is_numeric": True,
+                    },
+                    {
+                        "name": "target",
+                        "dtype": "int64",
+                        "unique_count": 2,
+                        "is_numeric": True,
+                    },
+                ],
+                "target_column": "target",
+                "id_column": "id",
+                "submission_columns": ["id", "target"],
+                "modality": "tabular",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ctx.workspace_root / "competition.json").write_text(
+        json.dumps(
+            {
+                "slug": "demo",
+                "title": "Demo",
+                "problem_type": "tabular_classification",
+                "tags": ["tabular", "classification"],
+            }
+        ),
+        encoding="utf-8",
+    )
     ev = CodeEngineeringCapability().execute(ctx)
     assert ev.passed
     assert (ctx.workspace_root / "pipeline" / "train.py").is_file()
-    # Offline path should prefer Jinja full templates (rule_engine), not last_resort.
-    assert ev.metadata.get("origin") in {"rule_engine", "last_resort", "llm"}
-    train = (ctx.workspace_root / "pipeline" / "train.py").read_text(encoding="utf-8")
-    # Full Jinja tabular baseline is much larger than the emergency stub.
-    if ev.metadata.get("origin") == "rule_engine":
-        assert "lightgbm" in train.lower() or "LightGBM" in train or len(train) > 500
+    # Offline (no LLM): last-resort stub only — Jinja scaffolds are disabled.
+    assert ev.metadata.get("origin") == "last_resort"
+    assert ev.metadata.get("used_jinja") is False
     assert "digests" in ev.metadata
 
 
@@ -141,6 +188,10 @@ def test_code_engineering_applies_llm_proposal(tmp_path: Path) -> None:
 
     knowledge = tmp_path / "knowledge"
     ctx = _ctx(knowledge, task_type=TaskType.WRITE_CODE)
+    (ctx.workspace_root / "profile.json").write_text(
+        json.dumps({"competition": "demo", "modality": "tabular", "row_count": 10}),
+        encoding="utf-8",
+    )
     ev = CodeEngineeringCapability(llm_client=FakeLLM()).execute(ctx)
     assert ev.passed
     assert ev.metadata.get("origin") == "llm"

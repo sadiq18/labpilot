@@ -1,10 +1,99 @@
-from labpilot.research_engine.execution.baseline.selector import BaselineSelector
-from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, MetricSpec, ProblemType
+"""Tests for metadata problem-type inference + baseline selection."""
+
+from __future__ import annotations
+
+import pytest
+
 from labpilot.accessor.profiler.tabular import ColumnProfile, DatasetProfile
+from labpilot.research_engine.execution.baseline.selector import BaselineSelector
+from labpilot.research_engine.intelligence.competition.infer_problem_type import (
+    infer_problem_type_from_metadata,
+)
+from labpilot.research_engine.intelligence.competition.models import (
+    CompetitionSpec,
+    MetricSpec,
+    ProblemType,
+)
 
 
-def _profile() -> DatasetProfile:
-    return DatasetProfile(
+def test_infer_biohub_tracking_as_image() -> None:
+    inferred = infer_problem_type_from_metadata(
+        title="Biohub - Cell Tracking During Development",
+        description="Detect and track zebrafish cells through 3D space and time",
+        tags=["Research", "biology", "computer vision", "image", "video", "object detection"],
+    )
+    assert inferred is ProblemType.IMAGE_CLASSIFICATION
+
+
+def test_infer_titanic_style_classification() -> None:
+    inferred = infer_problem_type_from_metadata(
+        title="Titanic",
+        description="Binary classification survival prediction",
+        tags=["tabular", "classification"],
+    )
+    assert inferred is ProblemType.TABULAR_CLASSIFICATION
+
+
+def test_infer_rogii_mse_as_tabular_regression() -> None:
+    inferred = infer_problem_type_from_metadata(
+        title="ROGII - Wellbore Geology Prediction",
+        description="Predict wellbore geology (tvt) from well log data",
+        tags=["Featured", "geology", "multimodal", "evaluation", "mean squared error"],
+        metric_name="Mean Squared Error",
+        metric_description="MSE",
+    )
+    assert inferred is ProblemType.TABULAR_REGRESSION
+
+
+def test_selector_prefers_mse_metadata_over_image_modality() -> None:
+    competition = CompetitionSpec(
+        slug="rogii-wellbore-geology-prediction",
+        title="ROGII - Wellbore Geology Prediction",
+        tags=["geology", "multimodal", "mean squared error"],
+        evaluation_metric=MetricSpec(name="Mean Squared Error", direction="minimize", key="mse"),
+    )
+    profile = DatasetProfile(
+        competition=competition.slug,
+        modality="image",
+        files=["train/a.png", "train/a__typewell.csv"],
+        warnings=["images_in=train"],
+    )
+    choice = BaselineSelector().select(competition, profile)
+    assert choice.problem_type == ProblemType.TABULAR_REGRESSION.value
+    assert choice.metric_name == "mse"
+
+
+def test_selector_uses_metadata_when_profile_empty() -> None:
+    competition = CompetitionSpec(
+        slug="biohub-cell-tracking-during-development",
+        title="Biohub - Cell Tracking During Development",
+        description="Detect and track zebrafish cells through 3D space and time",
+        tags=["computer vision", "image", "video", "object detection"],
+        evaluation_metric=MetricSpec(name="czi_biohub_zebrafish_133605", direction="maximize"),
+    )
+    profile = DatasetProfile(competition=competition.slug)  # empty
+    choice = BaselineSelector().select(competition, profile)
+    assert choice.problem_type == ProblemType.IMAGE_CLASSIFICATION.value
+    assert choice.template_name == "image_classification"
+
+
+def test_selector_refuses_empty_unknown() -> None:
+    competition = CompetitionSpec(slug="mystery-comp")
+    profile = DatasetProfile(competition="mystery-comp")
+    with pytest.raises(ValueError, match="Cannot infer problem type"):
+        BaselineSelector().select(competition, profile)
+
+
+def test_selector_uses_competition_metric_key_when_supported() -> None:
+    competition = CompetitionSpec(
+        slug="test",
+        evaluation_metric=MetricSpec(
+            name="area_under_the_roc_curve",
+            direction="maximize",
+            key="auc",
+        ),
+    )
+    profile = DatasetProfile(
         competition="test",
         files=["train.csv"],
         row_count=100,
@@ -18,29 +107,5 @@ def _profile() -> DatasetProfile:
         target_column="target",
         id_column="id",
     )
-
-
-def test_selector_uses_competition_metric_key_when_supported():
-    competition = CompetitionSpec(
-        slug="test",
-        evaluation_metric=MetricSpec(
-            name="area_under_the_roc_curve",
-            direction="maximize",
-            key="auc",
-        ),
-    )
-    choice = BaselineSelector().select(competition, _profile())
+    choice = BaselineSelector().select(competition, profile)
     assert choice.metric_name == "auc"
-
-
-def test_selector_falls_back_for_unsupported_key():
-    competition = CompetitionSpec(
-        slug="test",
-        evaluation_metric=MetricSpec(
-            name="quadratic_weighted_kappa",
-            direction="maximize",
-            key=None,
-        ),
-    )
-    choice = BaselineSelector().select(competition, _profile())
-    assert choice.metric_name == "accuracy"

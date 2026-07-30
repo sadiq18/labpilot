@@ -2,7 +2,7 @@
 
 ```bash
 research plan create <competition> --hypothesis H-xxx
-research plan create <competition> --baseline
+research plan create --baseline          # slug from labpilot.yaml
 research plan show <competition> <plan-id>
 research plan list <competition>
 ```
@@ -16,7 +16,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from labpilot.config import load_config
+from labpilot.cli.config_helpers import load_cli_config, resolve_competition
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.llm.client import resolve_llm_client
 from labpilot.research_engine.intelligence.paths import ResearchPaths
@@ -38,16 +38,6 @@ plan_app = typer.Typer(
 console = Console()
 
 _FORMATS = ("text", "json", "markdown")
-
-
-def _load_config(
-    config_path: Path,
-    knowledge_dir: Path | None,
-):
-    config = load_config(config_path)
-    if knowledge_dir:
-        config.knowledge_dir = knowledge_dir
-    return config
 
 
 def _validate_format(value: str) -> str:
@@ -114,7 +104,10 @@ def _print_plan(plan: ResearchPlan, output_format: str) -> None:
 
 @plan_app.command("create")
 def plan_create(
-    competition: str = typer.Argument(..., help="Competition slug"),
+    competition: str | None = typer.Argument(
+        None,
+        help="Competition slug (optional inside a labpilot.yaml workspace)",
+    ),
     hypothesis_id: str | None = typer.Option(
         None, "--hypothesis", "-H", help="Hypothesis ID (e.g. H-001)"
     ),
@@ -135,6 +128,11 @@ def plan_create(
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
+    workspace_path: Path | None = typer.Option(
+        None,
+        "--workspace",
+        help="Competition workspace root (directory with labpilot.yaml)",
+    ),
 ) -> None:
     """Compile a ResearchPlan DAG (plan-only; no execution).
 
@@ -153,7 +151,12 @@ def plan_create(
         )
         raise typer.Exit(code=1)
 
-    config = _load_config(config_path, knowledge_dir)
+    config, workspace = load_cli_config(
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        workspace_path=workspace_path,
+    )
+    competition = resolve_competition(competition, workspace)
     llm = resolve_llm_client(config.llm)
 
     try:
@@ -201,8 +204,13 @@ def plan_create(
 
 @plan_app.command("show")
 def plan_show(
-    competition: str = typer.Argument(..., help="Competition slug"),
     plan_id: str = typer.Argument(..., help="Plan ID (e.g. P-001)"),
+    competition: str | None = typer.Option(
+        None,
+        "--competition",
+        "-c",
+        help="Competition slug (optional inside a workspace)",
+    ),
     output_format: str = typer.Option(
         "text",
         "--format",
@@ -214,10 +222,18 @@ def plan_show(
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
+    workspace_path: Path | None = typer.Option(
+        None, "--workspace", help="Competition workspace root"
+    ),
 ) -> None:
     """Show one research plan and its task DAG."""
     output_format = _validate_format(output_format)
-    config = _load_config(config_path, knowledge_dir)
+    config, workspace = load_cli_config(
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        workspace_path=workspace_path,
+    )
+    competition = resolve_competition(competition, workspace)
     store = PlanStore(config.knowledge_dir, competition)
     try:
         plan = store.get_plan(plan_id)
@@ -235,7 +251,10 @@ def plan_show(
 
 @plan_app.command("list")
 def plan_list(
-    competition: str = typer.Argument(..., help="Competition slug"),
+    competition: str | None = typer.Argument(
+        None,
+        help="Competition slug (optional inside a workspace)",
+    ),
     status: str | None = typer.Option(
         None,
         "--status",
@@ -247,10 +266,18 @@ def plan_list(
     knowledge_dir: Path | None = typer.Option(
         None, "--knowledge-dir", help="Override knowledge directory"
     ),
+    workspace_path: Path | None = typer.Option(
+        None, "--workspace", help="Competition workspace root"
+    ),
 ) -> None:
     """List research plans for a competition."""
     status_filter = _parse_status(status)
-    config = _load_config(config_path, knowledge_dir)
+    config, workspace = load_cli_config(
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        workspace_path=workspace_path,
+    )
+    competition = resolve_competition(competition, workspace)
     store = PlanStore(config.knowledge_dir, competition)
     try:
         plans = store.list_plans(status=status_filter)
@@ -278,6 +305,6 @@ def plan_list(
             plan.hypothesis_id or "—",
             plan.generated_by,
             str(len(plan.tasks)),
-            (plan.goal[:60] + "…") if len(plan.goal) > 60 else (plan.goal or "—"),
+            (plan.goal or "—")[:40],
         )
     console.print(table)

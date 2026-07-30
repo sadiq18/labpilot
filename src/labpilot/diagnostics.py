@@ -51,11 +51,22 @@ def _check_kaggle_credentials() -> CheckResult:
     # this check can't disagree with what a real run will do.
     ok = kaggle_credentials_present()
     detail = "found" if ok else "not found"
-    fix = (
-        "Set KAGGLE_API_TOKEN in .env, or save a token to ~/.kaggle/access_token "
-        "(see README for setup)."
-    )
-    return CheckResult("Kaggle credentials", ok, detail, "" if ok else fix)
+    from labpilot.workspace import discover_workspace
+
+    if ok:
+        fix = ""
+    else:
+        workspace = discover_workspace()
+        env_path = (
+            workspace.root / ".env"
+            if workspace is not None
+            else Path.cwd() / ".env"
+        )
+        fix = (
+            f"Create {env_path} with KAGGLE_API_TOKEN "
+            "(see docs/SOP.md § Credentials)."
+        )
+    return CheckResult("Kaggle credentials", ok, detail, fix)
 
 
 def _check_lightgbm() -> CheckResult:

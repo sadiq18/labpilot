@@ -73,6 +73,10 @@ class Hypothesis(BaseModel):
     evidence: list[HypothesisEvidenceRef] = Field(default_factory=list)
     evidence_for: list[str] = Field(default_factory=list)
     evidence_against: list[str] = Field(default_factory=list)
+    #: Free-text local / LB outcome narrative after an execution or submit.
+    actual_outcome: str | None = None
+    #: Public leaderboard score when a submission for this hypothesis scored.
+    public_score: float | None = None
     created_at: datetime
     updated_at: datetime
 

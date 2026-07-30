@@ -5,8 +5,15 @@ from typing import Protocol
 
 import yaml
 
+from labpilot.research_engine.intelligence.competition.infer_problem_type import (
+    infer_problem_type_from_metadata,
+)
 from labpilot.research_engine.intelligence.competition.metrics import enrich_metric_spec, normalize_metric
-from labpilot.research_engine.intelligence.competition.models import CompetitionMetadata, CompetitionSpec
+from labpilot.research_engine.intelligence.competition.models import (
+    CompetitionMetadata,
+    CompetitionSpec,
+    ProblemType,
+)
 from labpilot.research_engine.intelligence.competition.rules import fetch_rules_excerpt
 from labpilot.research_engine.intelligence.competition.submission_mode import apply_submission_mode
 from labpilot.accessor.kaggle.urls import competition_submissions_url
@@ -49,10 +56,15 @@ class CompetitionParser:
         self.llm_client = llm_client
 
     def parse(self) -> CompetitionSpec:
-        config_path = self.configs_dir / f"{self.competition_slug}.yaml"
-        spec = self._parse_from_file(config_path) if config_path.is_file() else self._resolve_automatically()
+        config_path = self._local_contract_path()
+        spec = (
+            self._parse_from_file(config_path)
+            if config_path is not None
+            else self._resolve_automatically()
+        )
         spec = self._apply_rules_scrape(spec)
         spec = apply_submission_mode(spec)
+        spec = self._infer_problem_type_if_unknown(spec)
         self._warn_if_competition_closed(spec)
 
         logger.info(
@@ -63,6 +75,16 @@ class CompetitionParser:
             spec.submission_mode,
         )
         return spec
+
+    def _local_contract_path(self) -> Path | None:
+        """Prefer workspace ``competition.yaml``, then ``configs/competitions/<slug>.yaml``."""
+        workspace_contract = self.configs_dir / "competition.yaml"
+        if workspace_contract.is_file():
+            return workspace_contract
+        slug_path = self.configs_dir / f"{self.competition_slug}.yaml"
+        if slug_path.is_file():
+            return slug_path
+        return None
 
     def _parse_from_file(self, config_path: Path) -> CompetitionSpec:
         logger.info(
@@ -118,6 +140,26 @@ class CompetitionParser:
             raw["evaluation_metric"] = metric.model_dump()
         spec = CompetitionSpec.model_validate(raw)
         return self._enrich_metric(spec)
+
+    def _infer_problem_type_if_unknown(self, spec: CompetitionSpec) -> CompetitionSpec:
+        if spec.problem_type is not ProblemType.UNKNOWN:
+            return spec
+        metric = spec.evaluation_metric
+        inferred = infer_problem_type_from_metadata(
+            title=spec.title,
+            description=spec.description,
+            tags=list(spec.tags),
+            metric_name=(metric.name if metric else ""),
+            metric_description=(metric.description if metric else ""),
+        )
+        if inferred is ProblemType.UNKNOWN:
+            return spec
+        logger.info(
+            "Inferred problem_type=%s for '%s' from competition metadata.",
+            inferred.value,
+            self.competition_slug,
+        )
+        return spec.model_copy(update={"problem_type": inferred})
 
     def _enrich_metric(self, spec: CompetitionSpec) -> CompetitionSpec:
         """Fill in metric.key via rules or LLM when missing from local YAML."""

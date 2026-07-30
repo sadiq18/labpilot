@@ -1,7 +1,8 @@
 """``CodeEngineerAgent`` — propose full pipeline code as a typed CodeProposal.
 
-Option B: rule_engine returns a Jinja-rendered baseline (full template code).
-LLM may revise/replace that into a richer proposal. Never writes disk.
+Always generates from scratch from profile / data inventory. Never uses Jinja
+template packs. Soft-fails to an empty proposal when the LLM is unavailable
+(caller may apply a last-resort stub).
 """
 
 from __future__ import annotations
@@ -12,10 +13,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext
-from labpilot.research_engine.execution.schemas.code_proposal import (
-    CodeFileSpec,
-    CodeProposal,
-)
+from labpilot.research_engine.execution.schemas.code_proposal import CodeProposal
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
@@ -37,7 +35,8 @@ class CodeEngineerAgent(BaseMicroAgent):
 
     def user_prompt(self, context: StructuredContext) -> str:
         data = context.data
-        jinja = data.get("jinja_baseline") or {}
+        profile = data.get("profile_summary") or {}
+        choice = data.get("baseline_choice") or {}
         return self._env.get_template("code_engineer_user.j2").render(
             competition=context.competition,
             goal=context.question or str(data.get("plan_goal") or ""),
@@ -48,28 +47,18 @@ class CodeEngineerAgent(BaseMicroAgent):
             plan_id=str(data.get("plan_id") or ""),
             plan_kind=str(data.get("plan_kind") or ""),
             hypothesis_id=str(data.get("hypothesis_id") or ""),
-            problem_type=str(data.get("problem_type") or "tabular_classification"),
+            problem_type=str(data.get("problem_type") or "unknown"),
             allowed_roots=list(data.get("allowed_roots") or []),
             existing_files=list(data.get("existing_files") or []),
-            jinja_baseline_json=json.dumps(jinja, indent=2, ensure_ascii=False)[:12000],
+            data_inventory=list(data.get("data_inventory") or []),
+            profile_summary_json=json.dumps(profile, indent=2, ensure_ascii=False)[:8000],
+            baseline_choice_json=json.dumps(choice, indent=2, ensure_ascii=False)[:4000],
         )
 
     def _run_rule_engine(self, context: StructuredContext) -> CodeProposal:
-        """Return Jinja baseline files if provided; else empty (caller may stub)."""
-        jinja = context.data.get("jinja_baseline") or {}
-        files = [
-            CodeFileSpec(path=path, content=content, action="write")
-            for path, content in jinja.items()
-            if isinstance(path, str) and isinstance(content, str) and content.strip()
-        ]
-        if files:
-            return CodeProposal(
-                summary="Jinja baseline template pack",
-                rationale="rule_engine fallback — full template render, not a stub",
-                files=files,
-            )
+        """No offline template pack — LLM must generate from inventory."""
         return CodeProposal(
-            summary="No Jinja baseline available",
-            rationale="rule_engine could not render templates",
+            summary="Awaiting LLM codegen",
+            rationale="Jinja scaffolds disabled; generate from profile inventory",
             files=[],
         )

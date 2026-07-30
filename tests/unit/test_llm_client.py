@@ -62,7 +62,7 @@ def test_create_llm_client_returns_gemini_client_with_key_and_package_available(
     client = create_llm_client(_config(provider="gemini", api_key="fake-key"))
 
     assert isinstance(client, GeminiClient)
-    assert client.model == "gemini-3.5-flash"
+    assert client.model == "gemini-3.5-flash-lite"
 
 
 def test_create_llm_client_respects_explicit_model_override():
@@ -198,7 +198,7 @@ def test_complete_with_fallback_tries_alternate_provider_on_api_error(monkeypatc
             raise RuntimeError("quota exceeded")
 
     class WorkingGemini:
-        model = "gemini-3.5-flash"
+        model = "gemini-3.5-flash-lite"
 
         def complete(self, system: str, user: str) -> str:
             return "gemini narrative"

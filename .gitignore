@@ -18,6 +18,9 @@ runs/
 # src/labpilot/research_engine/intelligence/knowledge/.
 /knowledge/
 
+# Per-competition workspaces (data, pipeline, artifacts) from `research run`
+/competitions/
+
 # Local Obsidian reference (plans/milestones copies — not part of the package)
 obsidian-vault/
 

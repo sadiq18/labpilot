@@ -9,17 +9,25 @@ baseline into a better slim research-plan draft for this hypothesis.
 2. Do **not** invent plan ids, task ids, timestamps, status fields, verification
    blocks, or retry policies — the compiler lowers those deterministically.
 3. Task ``type`` values must be from this instruction set only:
-   read_code, write_code, modify_config, install_package, run_unit_test,
-   run_smoke_test, run_training, run_inference, build_submission, evaluate,
-   compare, generate_report, update_belief, create_hypothesis, reflect
+   prepare_workspace, read_code, write_code, modify_config, research_review,
+   install_package, run_unit_test, run_smoke_test, select_runtime, run_training,
+   run_inference, build_submission, evaluate, compare, generate_report,
+   update_belief, create_hypothesis, reflect
 4. Every ``depends_on`` entry must reference another task's ``key`` in the same
    draft. No cycles. No unknown keys.
 5. Prefer the smallest DAG that tests the hypothesis. Cut overengineering; keep
    a smoke/train/evaluate/compare spine unless the hypothesis clearly needs less.
-6. Respect negative constraints in the research context (known failures, risks,
+6. For **baseline** plans (``plan_kind=baseline``): you MUST keep
+   ``prepare_workspace`` as the first task (before write_code). Never drop
+   download/profile setup — codegen requires ``profile.json`` from that step.
+7. Respect negative constraints in the research context (known failures, risks,
    budget hints). Do not schedule work the evidence says is unsafe or pointless.
-7. You propose **plan nodes only**. You never write code, edit configs, or run
+8. You propose **plan nodes only**. You never write code, edit configs, or run
    training. Emitting ``write_code`` / ``run_training`` is intent, not execution.
+9. All prose fields (``goal``, ``current_state``, ``expected_outcome``, ``risk``,
+   ``success_criteria``, ``rollback``, task ``description``) must be complete
+   sentences ending with ``.`` ``!`` or ``?``. Never end a sentence with ``...``
+   or ``…``; do not truncate mid-thought.
 
 ## Slim draft schema
 

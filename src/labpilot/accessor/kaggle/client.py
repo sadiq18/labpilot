@@ -10,7 +10,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel
 
 from labpilot.accessor.kaggle.models import CompetitionMetadata
-from labpilot.config import KaggleConfig
+from labpilot.config import KaggleConfig, kaggle_credentials_setup_hint
 from labpilot.accessor.kaggle.urls import competition_submissions_url, kernel_notebook_url, parse_kernel_ref
 
 logger = logging.getLogger(__name__)
@@ -81,10 +81,8 @@ class KaggleClient:
 
         logger.info("Authenticating with the Kaggle API.")
         self._configure_environment()
-        auth_error = RuntimeError(
-            "Kaggle authentication failed. Set KAGGLE_API_TOKEN, or configure "
-            "~/.kaggle/access_token (legacy KAGGLE_USERNAME/KAGGLE_KEY also work)."
-        )
+        auth_error = RuntimeError(kaggle_credentials_setup_hint())
+
         try:
             # kaggle>=2.0 checks for credentials as soon as this module is
             # imported and calls sys.exit(1) (raising SystemExit, not a

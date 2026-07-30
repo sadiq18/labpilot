@@ -15,7 +15,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
+IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".bmp",
+    ".gif",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".npy",
+    ".npz",
+}
 TEXT_COLUMN_HINTS = {"text", "comment", "review", "description", "body", "content", "message"}
 MIN_TEXT_AVG_LENGTH = 60
 
@@ -79,17 +90,57 @@ class ModalityDetector:
                     rel_dir = ""
                 dir_counts[rel_dir] = dir_counts.get(rel_dir, 0) + 1
 
-        if not dir_counts:
+        zarr_dirs = [
+            p
+            for p in data_dir.rglob("*")
+            if p.is_dir() and (p.suffix.lower() == ".zarr" or p.name.endswith(".zarr"))
+        ]
+
+        if not dir_counts and not zarr_dirs:
             return ModalityResult(modality="tabular", confidence="high")
+
+        csv_count = sum(
+            1
+            for path in data_dir.rglob("*")
+            if path.is_file() and path.suffix.lower() == ".csv"
+        )
+        image_count = sum(dir_counts.values())
+        # Multimodal geology-style layouts: many per-well CSVs plus PNG
+        # previews. Prefer tabular so baselines use the structured logs.
+        if csv_count > 0 and csv_count >= max(image_count, 1):
+            return ModalityResult(
+                modality="tabular",
+                confidence="ambiguous",
+                signals=[
+                    f"csv_files={csv_count}",
+                    f"image_files={image_count}",
+                    "prefer_tabular_over_auxiliary_images",
+                ],
+            )
+
+        if zarr_dirs and not dir_counts:
+            rel = str(zarr_dirs[0].relative_to(data_dir))
+            return ModalityResult(
+                modality="image",
+                confidence="high",
+                signals=[f"zarr_store={rel}"],
+                image_dir=rel,
+            )
 
         best_dir = max(dir_counts, key=dir_counts.get)
         image_dir_path = data_dir / best_dir if best_dir else data_dir
         image_column = self._match_filename_column(data_dir, profile, image_dir_path)
         if image_column is None:
+            # Scientific / tracking datasets often have images without a CSV
+            # filename column — still treat as image modality.
             return ModalityResult(
-                modality="tabular",
-                confidence="ambiguous",
-                signals=[f"images_in={best_dir or '.'} but no filename column"],
+                modality="image",
+                confidence="high",
+                signals=[
+                    f"images_in={best_dir or '.'}",
+                    "no_filename_column",
+                ],
+                image_dir=best_dir or ".",
             )
 
         return ModalityResult(

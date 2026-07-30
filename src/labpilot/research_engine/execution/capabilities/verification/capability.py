@@ -134,7 +134,9 @@ class VerificationCapability(BaseCapability):
             capture_output=True,
             text=True,
             check=False,
-            cwd=train.parent,
+            # Workspace root so scripts can open pipeline/config.yaml and write
+            # metrics.json / submission.csv at the competition root.
+            cwd=context.workspace_root,
             timeout=int(context.constraints.get("smoke_timeout_s", 120)),
             env={
                 **dict(__import__("os").environ),

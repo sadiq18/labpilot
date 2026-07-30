@@ -4,6 +4,9 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from labpilot.research_engine.execution.baseline.registry import get_template
+from labpilot.research_engine.intelligence.competition.infer_problem_type import (
+    infer_problem_type_from_metadata,
+)
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, ProblemType
 from labpilot.accessor.profiler.tabular import DatasetProfile
 
@@ -100,12 +103,30 @@ class BaselineSelector:
         if competition.problem_type not in (ProblemType.UNKNOWN,):
             return competition.problem_type.value
 
+        metric = competition.evaluation_metric
+        from_meta = infer_problem_type_from_metadata(
+            title=competition.title,
+            description=competition.description,
+            tags=list(competition.tags),
+            metric_name=(metric.name if metric else ""),
+            metric_description=(metric.description if metric else ""),
+        )
+
+        # Regression/classification from tags/metric beats incidental images in
+        # the inventory (e.g. ROGII: well-log CSVs + PNG previews, MSE metric).
+        if from_meta in (
+            ProblemType.TABULAR_REGRESSION,
+            ProblemType.TABULAR_CLASSIFICATION,
+        ):
+            return from_meta.value
+
+        # Profile modality is authoritative for clear vision/text layouts.
         if profile.modality == "image":
             return ProblemType.IMAGE_CLASSIFICATION.value
         if profile.modality == "text":
             return ProblemType.TEXT_CLASSIFICATION.value
 
-        if profile.target_column:
+        if profile.target_column and profile.row_count > 0:
             target = next((c for c in profile.columns if c.name == profile.target_column), None)
             if target:
                 looks_like_discrete_labels = (
@@ -116,8 +137,19 @@ class BaselineSelector:
                     return ProblemType.TABULAR_CLASSIFICATION.value
                 return ProblemType.TABULAR_REGRESSION.value
 
-        # Default P0 assumption: tabular classification
-        return ProblemType.TABULAR_CLASSIFICATION.value
+        if from_meta is not ProblemType.UNKNOWN:
+            return from_meta.value
+
+        if profile.row_count > 0 and profile.column_count > 0:
+            # Tabular-looking profile without a clear target — classification default.
+            return ProblemType.TABULAR_CLASSIFICATION.value
+
+        raise ValueError(
+            "Cannot infer problem type: competition.problem_type is unknown, "
+            "dataset profile is empty/unusable, and metadata tags/description "
+            "do not indicate tabular/text/image. Run prepare_workspace (download + "
+            "profile) or set problem_type in configs/competitions/<slug>.yaml."
+        )
 
     def _resolve_metric_name(self, competition: CompetitionSpec, problem_type: str) -> str:
         default = DEFAULT_METRIC_BY_PROBLEM_TYPE.get(problem_type, "accuracy")
