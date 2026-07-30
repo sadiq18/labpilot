@@ -13,6 +13,7 @@ from typing import Any
 from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.research_engine.shared.experiments.models import HypothesisCreatedBy, HypothesisOrigin
 from labpilot.research_engine.intelligence.hypothesis.candidates import generate_candidates
+from labpilot.research_engine.intelligence.hypothesis.ledger import build_experiment_ledger
 from labpilot.research_engine.intelligence.hypothesis.models import (
     HypothesisAssistantResult,
     HypothesisCandidate,
@@ -41,14 +42,36 @@ from labpilot.research_engine.intelligence.retrieval.models import (
 )
 
 #: Candidate-kind marker tags — not techniques, so they never match a backlog tag.
-_KIND_TAGS = frozenset({"technique", "pipeline_diff", "transfer", "failure_fix"})
+_KIND_TAGS = frozenset(
+    {
+        "technique",
+        "pipeline_diff",
+        "transfer",
+        "failure_fix",
+        "stacked",
+        "improvement",
+        "untried",
+        "unused_belief",
+        "unused_claim",
+        "belief",
+    }
+)
 
 
 def _candidate_labels(candidate: HypothesisCandidate) -> set[str]:
     """Normalized technique labels a candidate would be filed under."""
-    labels = {normalize_label(tag) for tag in candidate.tags if tag not in _KIND_TAGS}
+    labels = {
+        normalize_label(tag)
+        for tag in candidate.tags
+        if tag not in _KIND_TAGS and not str(tag).lower().startswith("fork:")
+    }
     if candidate.technique:
         labels.add(normalize_label(candidate.technique))
+    # Stacked candidates are unique per parent+technique, not technique alone.
+    if candidate.parent_hypothesis_id and candidate.technique:
+        labels = {
+            normalize_label(f"{candidate.parent_hypothesis_id}+{candidate.technique}")
+        }
     return {label for label in labels if label}
 
 
@@ -94,10 +117,21 @@ class HypothesisAssistant:
             notes.extend(research_context.notes)
 
         tried = load_existing_technique_tags(knowledge_dir, competition)
+        ledger = build_experiment_ledger(knowledge_dir, competition)
+        notes.append(
+            "hypothesis: ledger "
+            f"artifacts={len(ledger.artifacts)} "
+            f"untried={len(ledger.techniques_untried)} "
+            f"worked={len(ledger.techniques_worked)} "
+            f"failed={len(ledger.techniques_failed)} "
+            f"unused_beliefs={len(ledger.beliefs_unused)} "
+            f"winning={ledger.winning_hypothesis_id or '—'}"
+        )
         candidates = generate_candidates(
             research_context,
             transfers=transfers,
             tried_techniques=tried,
+            ledger=ledger,
         )
         if not candidates:
             notes.append("hypothesis: no candidates generated from ResearchContext.")
@@ -124,14 +158,23 @@ class HypothesisAssistant:
             drafted, used_llm = self._draft(candidate, research_context)
             used_llm_any = used_llm_any or used_llm
             origins = list(candidate.origins) or [HypothesisOrigin.MIXED]
+            observation = drafted.observation or candidate.observation
+            reason = drafted.rationale or candidate.reason
+            prediction = drafted.prediction or candidate.prediction
+            # Preserve technique/artifact citations even if LLM polishes text.
+            if candidate.technique and candidate.technique not in observation:
+                observation = f"{observation} (technique {candidate.technique})"
+            if candidate.evidence and "artifact" not in reason.lower():
+                refs = "; ".join(f"{e.kind}:{e.ref}" for e in candidate.evidence[:3])
+                reason = f"{reason} (artifact {refs}; technique {candidate.technique})"
             recommendations.append(
                 HypothesisRecommendation(
                     rank=rank,
                     hypothesis_id="",  # filled on persist
                     title=candidate.title,
-                    observation=drafted.observation or candidate.observation,
-                    reason=drafted.rationale or candidate.reason,
-                    prediction=drafted.prediction or candidate.prediction,
+                    observation=observation,
+                    reason=reason,
+                    prediction=prediction,
                     expected_impact=candidate.expected_impact,
                     expected_impact_value=(
                         drafted.expected_impact or _impact_float(candidate)
@@ -148,6 +191,9 @@ class HypothesisAssistant:
                     generator=as_generator(used_llm),
                     origin=default_origin(origins),
                     tags=list(candidate.tags),
+                    technique=candidate.technique,
+                    parent_hypothesis_id=candidate.parent_hypothesis_id,
+                    technique_stack=list(candidate.technique_stack),
                 )
             )
 

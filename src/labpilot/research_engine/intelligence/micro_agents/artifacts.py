@@ -60,6 +60,8 @@ class ForumExtract(BaseModel):
     dataset_bugs: list[str] = Field(default_factory=list)
     lb_shakeups: list[str] = Field(default_factory=list)
     ood_notes: list[str] = Field(default_factory=list)
+    techniques: list[str] = Field(default_factory=list)
+    feature_recipes: list[dict] = Field(default_factory=list)
 
 
 class HypothesisDraft(BaseModel):

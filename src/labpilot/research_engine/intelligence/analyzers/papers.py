@@ -265,6 +265,9 @@ def knowledge_to_artifact(
             "limitations": knowledge.limitations,
             "methods": knowledge.methods,
             "grounded_in": knowledge.grounded_in,
+            "feature_recipes": [
+                recipe.model_dump(mode="json") for recipe in knowledge.feature_recipes
+            ],
         },
     )
 

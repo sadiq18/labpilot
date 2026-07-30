@@ -53,6 +53,18 @@ class CodeEngineerAgent(BaseMicroAgent):
             data_inventory=list(data.get("data_inventory") or []),
             profile_summary_json=json.dumps(profile, indent=2, ensure_ascii=False)[:8000],
             baseline_choice_json=json.dumps(choice, indent=2, ensure_ascii=False)[:4000],
+            improve_on_prior=bool(data.get("improve_on_prior")),
+            parent_hypothesis_id=str(data.get("parent_hypothesis_id") or ""),
+            technique=str(data.get("technique") or ""),
+            technique_stack=list(data.get("technique_stack") or []),
+            observation=str(data.get("observation") or ""),
+            reason=str(data.get("reason") or ""),
+            prediction=str(data.get("prediction") or ""),
+            evidence_json=json.dumps(data.get("evidence") or [], ensure_ascii=False)[:2000],
+            prior_train_py=str(data.get("prior_train_py") or "")[:20000],
+            parent_metrics_json=json.dumps(
+                data.get("parent_metrics") or {}, ensure_ascii=False
+            )[:2000],
         )
 
     def _run_rule_engine(self, context: StructuredContext) -> CodeProposal:

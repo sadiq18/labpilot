@@ -10,6 +10,12 @@ from __future__ import annotations
 import re
 
 from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext, coerce_str_list
+from labpilot.research_engine.intelligence.feature_recipes import (
+    coerce_feature_recipes,
+    heuristic_feature_recipes,
+    merge_feature_recipes,
+    recipe_technique_names,
+)
 from labpilot.research_engine.intelligence.literature.models import PaperKnowledge
 
 _METHODISH = (
@@ -57,12 +63,19 @@ class PaperAnalyzerAgent(BaseMicroAgent):
             '"paper_id": str, "title": str, '
             '"contributions": [str], "methods": [str], "limitations": [str], '
             '"ideas_worth_testing": [str], "techniques": [str], '
+            '"feature_recipes": [{"name": str, "description": str, '
+            '"inputs": [str], "outputs": [str], "transform": str}], '
             '"datasets_used": [str], "benchmarks": [str], "code_urls": [str], '
             '"confidence": float, '
             '"grounded_in": "abstract"|"pdf_excerpt"|"metadata"'
             "}. "
             "Extract what is claimed as new, how it works, what breaks, and "
             "ideas worth testing on the competition named in the context. "
+            "When the paper creates new features, fill feature_recipes with "
+            "concrete name/inputs/outputs/transform — including arithmetic or "
+            "derived columns (e.g. new=f1+f2, new=f1/f2, interactions, ratios), "
+            "not only encoders/scalers. You decide which creations are worth "
+            "recording; leave feature_recipes empty if none are grounded. "
             "Do not summarize sections."
         )
 
@@ -82,6 +95,9 @@ class PaperAnalyzerAgent(BaseMicroAgent):
         limitations = coerce_str_list(d.get("limitations"))
         ideas = coerce_str_list(d.get("ideas_worth_testing") or d.get("hypotheses"))
         techniques = coerce_str_list(d.get("techniques"))
+        recipes = merge_feature_recipes(
+            coerce_feature_recipes(d.get("feature_recipes")),
+        )
         datasets = coerce_str_list(d.get("datasets_used") or d.get("datasets"))
         benchmarks = coerce_str_list(d.get("benchmarks"))
         code_urls = coerce_str_list(d.get("code_urls") or d.get("github_urls"))
@@ -98,6 +114,11 @@ class PaperAnalyzerAgent(BaseMicroAgent):
             contributions, methods, limitations, ideas, techniques = _heuristic_extract(
                 text, techniques=techniques, ideas=ideas
             )
+        if text:
+            recipes = merge_feature_recipes(recipes, heuristic_feature_recipes(text))
+        techniques = list(
+            dict.fromkeys([*techniques, *recipe_technique_names(recipes)])
+        )
 
         grounded = str(d.get("grounded_in", "abstract") or "abstract")
         if grounded not in {"abstract", "pdf_excerpt", "metadata"}:
@@ -120,6 +141,7 @@ class PaperAnalyzerAgent(BaseMicroAgent):
             limitations=limitations,
             ideas_worth_testing=ideas,
             techniques=techniques,
+            feature_recipes=recipes,
             datasets_used=datasets,
             benchmarks=benchmarks,
             code_urls=code_urls,

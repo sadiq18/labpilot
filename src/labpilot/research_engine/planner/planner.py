@@ -78,9 +78,24 @@ def compile_research_plan(
             competition=competition,
             knowledge_store=knowledge_store,
         )
-        context = build_context(retrieved)
+        context = build_context(
+            retrieved, knowledge_dir=knowledge_dir, competition=competition
+        )
         blueprint = select_template(context)
         plan_id = store.new_plan_id()
+        plan_metadata = {
+            "template": blueprint.template_name,
+            "technique": context.technique,
+            "technique_stack": list(context.technique_stack),
+            "tags": list(context.tags),
+            "change_category": context.change_category,
+            **dict(context.parent_metadata or {}),
+            "parent_hypothesis_id": context.parent_hypothesis_id,
+            "parent_execution_id": context.parent_execution_id,
+            "parent_metrics": dict(context.parent_metrics or {}),
+            "parent_actual_outcome": context.parent_actual_outcome,
+            "force_rewrite": True,
+        }
 
         baseline_draft = blueprint_to_draft(blueprint)
         baseline = _finalize_plan(
@@ -90,7 +105,7 @@ def compile_research_plan(
                 hypothesis=hypothesis,
                 competition=competition,
                 generated_by="rule_engine",
-                metadata={"template": blueprint.template_name},
+                metadata=plan_metadata,
                 priority=priority,
             )
         )
@@ -435,7 +450,11 @@ def _try_llm_revision(
                 hypothesis=hypothesis,
                 competition=competition,
                 generated_by="llm",
-                metadata={"template": template_name, "revised_by": "llm"},
+                metadata={
+                    **dict(baseline.metadata or {}),
+                    "template": template_name,
+                    "revised_by": "llm",
+                },
                 priority=priority,
             )
         )
@@ -478,6 +497,10 @@ def _planning_structured_context(
             "expected_impact": hypothesis.expected_impact,
             "confidence": hypothesis.confidence,
             "tags": list(hypothesis.tags),
+            "technique": hypothesis.technique,
+            "technique_stack": list(hypothesis.technique_stack),
+            "parent_hypothesis_id": context.parent_hypothesis_id,
+            "parent_metrics": dict(context.parent_metrics or {}),
             "goal": context.goal,
             "current_state": context.current_state,
             "expected_outcome": context.expected_outcome,

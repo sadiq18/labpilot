@@ -11,6 +11,13 @@ from __future__ import annotations
 import re
 
 from labpilot.accessor.common.micro_agents import BaseMicroAgent, StructuredContext, coerce_str_list
+from labpilot.research_engine.intelligence.feature_recipes import (
+    coerce_feature_recipes,
+    heuristic_feature_recipes,
+    looks_like_feature_engineering,
+    recipe_technique_names,
+    recipes_to_metadata,
+)
 from labpilot.research_engine.intelligence.micro_agents.artifacts import ForumExtract
 
 _MISTAKE = (
@@ -43,7 +50,14 @@ class ForumAnalyzerAgent(BaseMicroAgent):
         return (
             "You extract actionable signals from a Kaggle discussion thread. "
             'Respond ONLY with JSON: {"mistakes": [str], "discoveries": [str], '
-            '"dataset_bugs": [str], "lb_shakeups": [str], "ood_notes": [str]}.'
+            '"dataset_bugs": [str], "lb_shakeups": [str], "ood_notes": [str], '
+            '"techniques": [str], '
+            '"feature_recipes": [{"name": str, "description": str, '
+            '"inputs": [str], "outputs": [str], "transform": str}]}. '
+            "When discoveries describe new features, fill feature_recipes and "
+            "techniques with concrete labels — including arithmetic/derived "
+            "features (e.g. sum/ratio/product of columns), not only encodings. "
+            "You decide what is grounded in the thread; leave arrays empty otherwise."
         )
 
     def user_prompt(self, context: StructuredContext) -> str:
@@ -51,12 +65,16 @@ class ForumAnalyzerAgent(BaseMicroAgent):
 
     def _run_rule_engine(self, context: StructuredContext) -> ForumExtract:
         d = context.data
+        recipes = coerce_feature_recipes(d.get("feature_recipes"))
+        techniques = coerce_str_list(d.get("techniques"))
         pre = ForumExtract(
             mistakes=coerce_str_list(d.get("mistakes")),
             discoveries=coerce_str_list(d.get("discoveries")),
             dataset_bugs=coerce_str_list(d.get("dataset_bugs")),
             lb_shakeups=coerce_str_list(d.get("lb_shakeups")),
             ood_notes=coerce_str_list(d.get("ood_notes")),
+            techniques=techniques,
+            feature_recipes=recipes_to_metadata(recipes),
         )
         if any(
             (
@@ -65,10 +83,12 @@ class ForumAnalyzerAgent(BaseMicroAgent):
                 pre.dataset_bugs,
                 pre.lb_shakeups,
                 pre.ood_notes,
+                pre.techniques,
+                pre.feature_recipes,
             )
         ):
-            return pre
-        return _heuristic_extract(context.text or "")
+            return _attach_fe(pre, context.text or "")
+        return _attach_fe(_heuristic_extract(context.text or ""), context.text or "")
 
 
 def _heuristic_extract(text: str) -> ForumExtract:
@@ -97,4 +117,24 @@ def _heuristic_extract(text: str) -> ForumExtract:
         dataset_bugs=dataset_bugs,
         lb_shakeups=lb_shakeups,
         ood_notes=ood_notes,
+    )
+
+
+def _attach_fe(extract: ForumExtract, text: str) -> ForumExtract:
+    recipes = coerce_feature_recipes(extract.feature_recipes)
+    if not recipes:
+        recipes = heuristic_feature_recipes(text)
+    fe_from_discoveries = [
+        line for line in extract.discoveries if looks_like_feature_engineering(line)
+    ]
+    if fe_from_discoveries and not recipes:
+        recipes = heuristic_feature_recipes("\n".join(fe_from_discoveries))
+    techniques = list(
+        dict.fromkeys([*extract.techniques, *recipe_technique_names(recipes)])
+    )
+    return extract.model_copy(
+        update={
+            "techniques": techniques,
+            "feature_recipes": recipes_to_metadata(recipes),
+        }
     )

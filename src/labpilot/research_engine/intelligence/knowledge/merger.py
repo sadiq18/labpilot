@@ -15,6 +15,10 @@ from collections import Counter
 from pydantic import BaseModel, Field
 
 from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.research_engine.intelligence.feature_recipes import (
+    FEATURE_ENGINEERING_CATEGORY,
+    looks_like_feature_engineering,
+)
 from labpilot.research_engine.intelligence.knowledge.extractor import ConceptCandidate
 from labpilot.research_engine.intelligence.knowledge.models import EntityType, EvidenceRef
 from labpilot.research_engine.intelligence.micro_agents.concept_normalizer import (
@@ -166,13 +170,15 @@ class KnowledgeMerger:
         if seeded:
             for canonical in ALIAS_SEEDS:
                 if normalize_key(canonical) == key:
-                    return canonical, "alias_seed", ""
+                    return canonical, "alias_seed", _fe_category(canonical, variants)
         distinct = list(dict.fromkeys(variants))
         if len(distinct) > 1 and self.llm_client is not None:
             named = self._ask_agent(distinct)
             if named is not None:
-                return named
-        return _most_common_variant(distinct, variants), "rule_engine", ""
+                canonical, by, category = named
+                return canonical, by, category or _fe_category(canonical, variants)
+        canonical = _most_common_variant(distinct, variants)
+        return canonical, "rule_engine", _fe_category(canonical, variants)
 
     def _ask_agent(self, distinct: list[str]) -> tuple[str, str, str] | None:
         agent = ConceptNormalizerAgent(llm_client=self.llm_client)
@@ -194,6 +200,13 @@ class KnowledgeMerger:
 def _most_common_variant(distinct: list[str], variants: list[str]) -> str:
     counts = Counter(variants)
     return sorted(distinct, key=lambda name: (-counts[name], len(name), name))[0]
+
+
+def _fe_category(canonical: str, variants: list[str] | None = None) -> str:
+    haystack = " ".join([canonical, *(variants or [])])
+    if looks_like_feature_engineering(haystack):
+        return FEATURE_ENGINEERING_CATEGORY
+    return ""
 
 
 def _dedupe_evidence(refs: list[EvidenceRef]) -> list[EvidenceRef]:

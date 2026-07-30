@@ -119,16 +119,21 @@ class CodeEngineeringCapability(BaseCapability):
         (root / "pipeline").mkdir(parents=True, exist_ok=True)
         train_path = root / "pipeline" / "train.py"
 
-        if train_path.is_file() and not context.task.metadata.get("force_rewrite"):
-            return evidence(
-                context,
-                capability=self.name,
-                passed=True,
-                summary="train.py already present",
-                checks=["write_code", "idempotent"],
-                paths=[str(train_path)],
-                metadata={"idempotent": True, "digest": file_digest(train_path)},
-            )
+        prior_train = ""
+        backup_path: Path | None = None
+        if train_path.is_file():
+            try:
+                prior_train = train_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                prior_train = ""
+            backup_dir = root / "artifacts" / "code_backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            backup_path = backup_dir / f"train_{context.execution.id}.py"
+            try:
+                backup_path.write_text(prior_train, encoding="utf-8")
+            except OSError as exc:
+                logger.warning("Could not backup train.py: %s", exc)
+                backup_path = None
 
         profile_path = root / "profile.json"
         if not profile_path.is_file() and not is_dry_run(context):
@@ -158,6 +163,8 @@ class CodeEngineeringCapability(BaseCapability):
         if brief_path.is_file():
             brief = brief_path.read_text(encoding="utf-8")[:3000]
 
+        hyp_fields = self._hypothesis_fields(context)
+        plan_meta = dict(context.plan.metadata or {})
         structured = StructuredContext(
             competition=context.competition,
             question=context.plan.goal or context.task.description,
@@ -168,7 +175,7 @@ class CodeEngineeringCapability(BaseCapability):
                 "task_description": context.task.description,
                 "plan_id": context.plan.id,
                 "plan_goal": context.plan.goal,
-                "plan_kind": context.plan.metadata.get("plan_kind", ""),
+                "plan_kind": plan_meta.get("plan_kind", ""),
                 "hypothesis_id": context.plan.hypothesis_id,
                 "problem_type": problem_type,
                 "baseline_choice": choice.model_dump(mode="json") if choice else {},
@@ -178,6 +185,24 @@ class CodeEngineeringCapability(BaseCapability):
                 "existing_files": self._inventory(root),
                 "brief_excerpt": brief,
                 "dry_run": is_dry_run(context),
+                "workspace_root": str(root),
+                "skill_agent_key": "code_engineer",
+                "prior_train_py": prior_train[:120_000],
+                "parent_hypothesis_id": plan_meta.get("parent_hypothesis_id"),
+                "parent_metrics": plan_meta.get("parent_metrics") or {},
+                "technique": plan_meta.get("technique") or hyp_fields.get("technique"),
+                "technique_stack": plan_meta.get("technique_stack")
+                or hyp_fields.get("technique_stack")
+                or [],
+                "observation": hyp_fields.get("observation", ""),
+                "reason": hyp_fields.get("reason", ""),
+                "prediction": hyp_fields.get("prediction", ""),
+                "evidence": hyp_fields.get("evidence") or [],
+                "improve_on_prior": bool(
+                    prior_train
+                    or plan_meta.get("parent_hypothesis_id")
+                    or context.plan.hypothesis_id
+                ),
             },
         )
         proposal = self._agent.run(structured)
@@ -212,13 +237,16 @@ class CodeEngineeringCapability(BaseCapability):
             )
 
         digests = {str(p): file_digest(p) for p in written}
+        paths = [str(p) for p in written]
+        if backup_path is not None:
+            paths.append(str(backup_path))
         return evidence(
             context,
             capability=self.name,
             passed=train_path.is_file(),
-            summary=f"code written via {origin} ({len(written)} files)",
-            checks=["write_code", "apply", origin],
-            paths=[str(p) for p in written],
+            summary=f"code written via {origin} ({len(written)} files; overridden)",
+            checks=["write_code", "apply", origin, "override"],
+            paths=paths,
             metadata={
                 "digests": digests,
                 "origin": origin,
@@ -228,6 +256,8 @@ class CodeEngineeringCapability(BaseCapability):
                 "used_llm": self._agent.last_used_llm,
                 "dry_run": is_dry_run(context),
                 "used_jinja": False,
+                "overrode_existing": bool(prior_train),
+                "backup": str(backup_path) if backup_path else None,
             },
             error=None if train_path.is_file() else "train.py missing after apply",
         )
@@ -261,6 +291,31 @@ class CodeEngineeringCapability(BaseCapability):
             paths=[str(config_path)],
             metadata={"digest": file_digest(config_path), "idempotent": existed},
         )
+
+    def _hypothesis_fields(self, context: TaskContext) -> dict:
+        hyp_id = context.plan.hypothesis_id
+        if not hyp_id:
+            return {}
+        try:
+            from labpilot.research_engine.shared.experiments.hypothesis import (
+                HypothesisStore,
+            )
+
+            hyp = HypothesisStore(context.paths.base_dir, context.competition).get(
+                hyp_id
+            )
+        except Exception:
+            return {}
+        if hyp is None:
+            return {}
+        return {
+            "observation": hyp.observation,
+            "reason": hyp.reason,
+            "prediction": hyp.prediction,
+            "technique": hyp.technique,
+            "technique_stack": list(hyp.technique_stack),
+            "evidence": [e.model_dump(mode="json") for e in hyp.evidence],
+        }
 
     def _inventory(self, root: Path) -> list[str]:
         items: list[str] = []

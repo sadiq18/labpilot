@@ -37,6 +37,9 @@ def persist_recommendations(
             origin=card.origin,
             origins=card.origins,
             evidence=card.supporting_evidence,
+            technique=card.technique or None,
+            parent_hypothesis_id=card.parent_hypothesis_id,
+            technique_stack=card.technique_stack,
         )
         updated.append(card.model_copy(update={"hypothesis_id": hyp.id}))
     return updated
@@ -143,10 +146,31 @@ def load_open_hypothesis_tags(knowledge_dir: Path, competition: str) -> set[str]
     """
     from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_label
 
+    _meta = {
+        "technique",
+        "pipeline_diff",
+        "transfer",
+        "failure_fix",
+        "stacked",
+        "improvement",
+        "untried",
+        "unused_belief",
+        "unused_claim",
+        "belief",
+        "baseline",
+    }
     open_tags: set[str] = set()
     for hyp in HypothesisStore(knowledge_dir, competition).list():
         if hyp.status not in _OPEN_HYPOTHESIS_STATUSES:
             continue
         for tag in hyp.tags:
+            if tag.lower() in _meta or tag.lower().startswith("fork:"):
+                continue
             open_tags.add(normalize_label(tag))
+        if hyp.technique:
+            open_tags.add(normalize_label(hyp.technique))
+        if hyp.parent_hypothesis_id and hyp.technique:
+            open_tags.add(
+                normalize_label(f"{hyp.parent_hypothesis_id}+{hyp.technique}")
+            )
     return open_tags

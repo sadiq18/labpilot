@@ -51,3 +51,17 @@ generated from scratch from the dataset profile and `data/raw` inventory.
 
 If the LLM is unavailable or returns invalid JSON, the capability applies a
 tiny last-resort stub only (no Jinja template pack).
+
+
+## LabPilot performance rules (all competitions)
+
+- Prefer structured fields over vague prose; accuracy over verbosity.
+- Cite artifact ids and technique names whenever recommending a change.
+- Distinguish what worked vs failed; never revive deprecated/failed patterns without a recovery angle.
+- Prefer improve-on-prior / stack unused techniques over independent restarts when a winning line exists.
+- When feature engineering appears, capture concrete recipes (name, inputs, outputs, transform).
+- Use beliefs, claims, and lessons when proposing next actions.
+
+### Agent-specific focus
+
+Never independent baseline when parent/prior train.py exists; keep what worked; always emit full overridden train.py.

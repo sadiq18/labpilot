@@ -2,12 +2,23 @@ Competition: {{ competition }}
 Plan: {{ plan_id }} (kind={{ plan_kind }}) hypothesis={{ hypothesis_id or "—" }}
 Task: {{ task_id }} type={{ task_type }}
 Problem type: {{ problem_type }}
+Improve on prior: {{ improve_on_prior }}
+Parent hypothesis: {{ parent_hypothesis_id or "—" }}
+Technique: {{ technique or "—" }}
+Technique stack: {{ technique_stack | join(", ") if technique_stack else "—" }}
 
 Goal:
 {{ goal }}
 
 Task description:
 {{ task_description }}
+
+Hypothesis triad:
+- observation: {{ observation }}
+- reason: {{ reason }}
+- prediction: {{ prediction }}
+Evidence JSON: {{ evidence_json }}
+Parent metrics JSON: {{ parent_metrics_json }}
 
 Research brief / Analyze excerpt:
 {{ brief_excerpt }}
@@ -17,7 +28,7 @@ Dataset profile (JSON):
 {{ profile_summary_json }}
 ```
 
-Data inventory under data/raw (use these real paths — generate code from scratch):
+Data inventory under data/raw (use these real paths):
 {% for f in data_inventory %}- {{ f }}
 {% else %}- (empty — download may still be required)
 {% endfor %}
@@ -33,6 +44,20 @@ Existing files (inventory):
 {% else %}- (none yet)
 {% endfor %}
 
-Return a CodeProposal JSON with full file contents for a working baseline that
-reads the real data above and writes workspace-root metrics.json + submission.csv.
+{% if prior_train_py %}
+Prior best train.py (keep what works; apply the hypothesis technique as a delta;
+return a FULL updated pipeline/train.py that overrides this file):
+```python
+{{ prior_train_py }}
+```
+{% endif %}
+
+Return a CodeProposal JSON with full file contents.
+{% if improve_on_prior and prior_train_py %}
+Keep the working prior pipeline and merge technique `{{ technique or "the change" }}`.
+Do not restart as an unrelated baseline.
+{% else %}
+Produce a working baseline that reads the real data above and writes
+workspace-root metrics.json + submission.csv.
+{% endif %}
 Do not reuse or refine any legacy Jinja scaffold.
