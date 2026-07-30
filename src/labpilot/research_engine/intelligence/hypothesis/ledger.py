@@ -15,6 +15,25 @@ from labpilot.research_engine.shared.experiments.hypothesis import (
 )
 from labpilot.research_engine.shared.experiments.models import Hypothesis, HypothesisStatus
 
+_META_TAGS = frozenset(
+    {
+        "baseline",
+        "technique",
+        "pipeline_diff",
+        "transfer",
+        "failure_fix",
+        "improvement",
+        "stacked",
+        "follow-up",
+        "execution",
+        "submit",
+        "belief",
+        "unused_belief",
+        "unused_claim",
+        "untried",
+    }
+)
+
 
 class TechniqueRecord(BaseModel):
     name: str
@@ -158,7 +177,7 @@ def build_experiment_ledger(
     untried = [
         t.name
         for t in technique_index.values()
-        if t.status == "untried"
+        if t.status == "untried" and t.label not in _META_TAGS and t.name.lower() not in _META_TAGS
     ]
     avoid_pairs: list[tuple[str, str]] = []
     for hyp in hyps:
@@ -202,7 +221,9 @@ def _index_technique(
     category: str = "",
 ) -> None:
     label = normalize_label(name)
-    if not label:
+    if not label or label in _META_TAGS or name.strip().lower() in _META_TAGS:
+        return
+    if label.startswith("hyp:") or label.startswith("fork:"):
         return
     existing = index.get(label)
     if existing is None:
@@ -240,25 +261,6 @@ def _technique_outcomes(hyps: list[Hypothesis]) -> tuple[set[str], set[str]]:
             elif "loss" in outcome or "overfit" in outcome or "worse" in outcome:
                 failed |= labels
     return worked, failed
-
-
-_META_TAGS = frozenset(
-    {
-        "baseline",
-        "technique",
-        "pipeline_diff",
-        "transfer",
-        "failure_fix",
-        "improvement",
-        "stacked",
-        "follow-up",
-        "execution",
-        "submit",
-        "belief",
-        "unused_belief",
-        "unused_claim",
-    }
-)
 
 
 def _hyp_text_labels(hyps: list[Hypothesis]) -> set[str]:

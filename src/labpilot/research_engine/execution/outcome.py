@@ -454,8 +454,7 @@ def _techniques_from_plan(plan: ResearchPlan) -> list[str]:
         if key and key not in seen:
             seen.add(key)
             out.append(key)
-    if not out:
-        out = ["baseline"]
+    # Prefer real technique tags; never invent a "baseline" technique label.
     return out
 
 
@@ -686,8 +685,28 @@ def maybe_mint_stacked_from_success(
     if parent and parent.technique and parent.technique not in stack:
         stack.append(parent.technique)
 
+    _skip_labels = {
+        "baseline",
+        "stacked",
+        "improvement",
+        "technique",
+        "untried",
+        "unused_belief",
+        "unused_claim",
+        "belief",
+        "pipeline_diff",
+        "transfer",
+        "failure_fix",
+        "follow-up",
+        "execution",
+        "submit",
+    }
     minted: list[str] = []
     for name in ledger.techniques_untried:
+        if not name or name.strip().lower() in _skip_labels:
+            continue
+        if str(name).lower().startswith("fork:"):
+            continue
         if ledger.is_failed(name):
             continue
         if any(

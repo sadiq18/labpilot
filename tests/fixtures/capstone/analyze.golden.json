@@ -610,7 +610,7 @@
       "hypothesis_id": "H-XXX",
       "title": "Add SpecAugment to the current pipeline",
       "observation": "Current pipeline is missing SpecAugment, which has supporting evidence.",
-      "reason": "Pipeline-diff: SpecAugment is present in domain knowledge but not in [\u2014].",
+      "reason": "Pipeline-diff: SpecAugment is present in domain knowledge but not in [\u2014]. (artifact paper:paper:specaugment; technique SpecAugment)",
       "prediction": "Inserting SpecAugment will raise validation score vs the current stack.",
       "expected_impact": "high",
       "expected_impact_value": 0.03,
@@ -634,14 +634,91 @@
       "tags": [
         "SpecAugment",
         "pipeline_diff"
-      ]
+      ],
+      "technique": "SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": []
     },
     {
       "rank": 2,
       "hypothesis_id": "H-XXX",
+      "title": "Test unused belief: EMA",
+      "observation": "Belief about EMA was never part of a prior hypothesis. (artifact mixed:belief_tech_ema; technique EMA)",
+      "reason": "Unused belief fuel. (artifact mixed:belief_tech_ema; technique EMA)",
+      "prediction": "Testing EMA will improve the primary metric.",
+      "expected_impact": "medium",
+      "expected_impact_value": 0.015,
+      "confidence": 0.58,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "belief_tech_ema",
+          "note": "unknown"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.428,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "EMA",
+        "unused_belief",
+        "belief"
+      ],
+      "technique": "EMA",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "EMA"
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis_id": "H-XXX",
+      "title": "Test unused belief: SpecAugment",
+      "observation": "Belief about SpecAugment was never part of a prior hypothesis. (artifact mixed:belief_tech_specaugment; technique SpecAugment)",
+      "reason": "Unused belief fuel. (artifact mixed:belief_tech_specaugment; technique SpecAugment)",
+      "prediction": "Testing SpecAugment will improve the primary metric.",
+      "expected_impact": "medium",
+      "expected_impact_value": 0.015,
+      "confidence": 0.58,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "belief_tech_specaugment",
+          "note": "unknown"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.428,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "SpecAugment",
+        "unused_belief",
+        "belief"
+      ],
+      "technique": "SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "SpecAugment"
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis_id": "H-XXX",
       "title": "Add EMA to the current pipeline",
       "observation": "Current pipeline is missing EMA, which has supporting evidence.",
-      "reason": "Pipeline-diff: EMA is present in domain knowledge but not in [\u2014].",
+      "reason": "Pipeline-diff: EMA is present in domain knowledge but not in [\u2014]. (artifact paper:paper:ema-birdclef; technique EMA)",
       "prediction": "Inserting EMA will raise validation score vs the current stack.",
       "expected_impact": "medium",
       "expected_impact_value": 0.015,
@@ -665,15 +742,18 @@
       "tags": [
         "EMA",
         "pipeline_diff"
-      ]
+      ],
+      "technique": "EMA",
+      "parent_hypothesis_id": null,
+      "technique_stack": []
     },
     {
-      "rank": 3,
+      "rank": 5,
       "hypothesis_id": "H-XXX",
       "title": "Try SpecAugment",
-      "observation": "SpecAugment appears in retrieved knowledge for this competition.",
-      "reason": "Retrieved technique card: confidence=0.60; papers=1; experiments=0; repos=0",
-      "prediction": "Adopting SpecAugment will improve the primary metric.",
+      "observation": "SpecAugment appears in retrieved knowledge for this competition. (artifact paper:paper:specaugment; technique SpecAugment)",
+      "reason": "Retrieved technique card: confidence=0.60; papers=1; experiments=0; repos=0 (artifact paper:paper:specaugment; technique SpecAugment)",
+      "prediction": "Adopting SpecAugment will improve the primary metric. (artifact paper:paper:specaugment; technique SpecAugment)",
       "expected_impact": "medium",
       "expected_impact_value": 0.015,
       "confidence": 0.6,
@@ -696,15 +776,97 @@
       "tags": [
         "SpecAugment",
         "technique"
+      ],
+      "technique": "SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": []
+    },
+    {
+      "rank": 6,
+      "hypothesis_id": "H-XXX",
+      "title": "Try unused technique SpecAugment",
+      "observation": "Technique SpecAugment is in knowledge but never tested. (artifact mixed:paper:specaugment; mixed:repo:owner/audio-pipeline; technique SpecAugment)",
+      "reason": "Full-ledger coverage: unused technique. (artifact mixed:paper:specaugment; mixed:repo:owner/audio-pipeline; technique SpecAugment)",
+      "prediction": "Adopting SpecAugment will improve the primary metric.",
+      "expected_impact": "medium",
+      "expected_impact_value": 0.015,
+      "confidence": 0.55,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "paper:specaugment",
+          "note": "technique SpecAugment"
+        },
+        {
+          "kind": "mixed",
+          "ref": "repo:owner/audio-pipeline",
+          "note": "technique SpecAugment"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.36,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "SpecAugment",
+        "technique",
+        "untried"
+      ],
+      "technique": "SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "SpecAugment"
       ]
     },
     {
-      "rank": 4,
+      "rank": 7,
+      "hypothesis_id": "H-XXX",
+      "title": "Try unused technique EMA",
+      "observation": "Technique EMA is in knowledge but never tested. (artifact mixed:paper:ema-birdclef; technique EMA)",
+      "reason": "Full-ledger coverage: unused technique. (artifact mixed:paper:ema-birdclef; technique EMA)",
+      "prediction": "Adopting EMA will improve the primary metric.",
+      "expected_impact": "medium",
+      "expected_impact_value": 0.015,
+      "confidence": 0.55,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "paper:ema-birdclef",
+          "note": "technique EMA"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.34,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "EMA",
+        "technique",
+        "untried"
+      ],
+      "technique": "EMA",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "EMA"
+      ]
+    },
+    {
+      "rank": 8,
       "hypothesis_id": "H-XXX",
       "title": "Try EMA",
-      "observation": "EMA appears in retrieved knowledge for this competition.",
-      "reason": "Retrieved technique card: confidence=0.40; papers=1; experiments=0; repos=0",
-      "prediction": "Adopting EMA will improve the primary metric.",
+      "observation": "EMA appears in retrieved knowledge for this competition. (artifact paper:paper:ema-birdclef; technique EMA)",
+      "reason": "Retrieved technique card: confidence=0.40; papers=1; experiments=0; repos=0 (artifact paper:paper:ema-birdclef; technique EMA)",
+      "prediction": "Adopting EMA will improve the primary metric. (artifact paper:paper:ema-birdclef; technique EMA)",
       "expected_impact": "low",
       "expected_impact_value": 0.005,
       "confidence": 0.4,
@@ -727,7 +889,10 @@
       "tags": [
         "EMA",
         "technique"
-      ]
+      ],
+      "technique": "EMA",
+      "parent_hypothesis_id": null,
+      "technique_stack": []
     }
   ],
   "techniques": {
@@ -753,6 +918,22 @@
     },
     {
       "id": "H-XXX",
+      "title": "Test unused belief: EMA",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed"
+    },
+    {
+      "id": "H-XXX",
+      "title": "Test unused belief: SpecAugment",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed"
+    },
+    {
+      "id": "H-XXX",
       "title": "Add EMA to the current pipeline",
       "status": "proposed",
       "created_by": "analyze",
@@ -769,6 +950,22 @@
     },
     {
       "id": "H-XXX",
+      "title": "Try unused technique SpecAugment",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed"
+    },
+    {
+      "id": "H-XXX",
+      "title": "Try unused technique EMA",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed"
+    },
+    {
+      "id": "H-XXX",
       "title": "Try EMA",
       "status": "proposed",
       "created_by": "analyze",
@@ -782,7 +979,7 @@
       "hypothesis_id": "H-XXX",
       "title": "Add SpecAugment to the current pipeline",
       "observation": "Current pipeline is missing SpecAugment, which has supporting evidence.",
-      "reason": "Pipeline-diff: SpecAugment is present in domain knowledge but not in [\u2014].",
+      "reason": "Pipeline-diff: SpecAugment is present in domain knowledge but not in [\u2014]. (artifact paper:paper:specaugment; technique SpecAugment)",
       "prediction": "Inserting SpecAugment will raise validation score vs the current stack.",
       "expected_impact": "high",
       "expected_impact_value": 0.03,
@@ -806,14 +1003,91 @@
       "tags": [
         "SpecAugment",
         "pipeline_diff"
-      ]
+      ],
+      "technique": "SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": []
     },
     {
       "rank": 2,
       "hypothesis_id": "H-XXX",
+      "title": "Test unused belief: EMA",
+      "observation": "Belief about EMA was never part of a prior hypothesis. (artifact mixed:belief_tech_ema; technique EMA)",
+      "reason": "Unused belief fuel. (artifact mixed:belief_tech_ema; technique EMA)",
+      "prediction": "Testing EMA will improve the primary metric.",
+      "expected_impact": "medium",
+      "expected_impact_value": 0.015,
+      "confidence": 0.58,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "belief_tech_ema",
+          "note": "unknown"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.428,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "EMA",
+        "unused_belief",
+        "belief"
+      ],
+      "technique": "EMA",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "EMA"
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis_id": "H-XXX",
+      "title": "Test unused belief: SpecAugment",
+      "observation": "Belief about SpecAugment was never part of a prior hypothesis. (artifact mixed:belief_tech_specaugment; technique SpecAugment)",
+      "reason": "Unused belief fuel. (artifact mixed:belief_tech_specaugment; technique SpecAugment)",
+      "prediction": "Testing SpecAugment will improve the primary metric.",
+      "expected_impact": "medium",
+      "expected_impact_value": 0.015,
+      "confidence": 0.58,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "belief_tech_specaugment",
+          "note": "unknown"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.428,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "SpecAugment",
+        "unused_belief",
+        "belief"
+      ],
+      "technique": "SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "SpecAugment"
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis_id": "H-XXX",
       "title": "Add EMA to the current pipeline",
       "observation": "Current pipeline is missing EMA, which has supporting evidence.",
-      "reason": "Pipeline-diff: EMA is present in domain knowledge but not in [\u2014].",
+      "reason": "Pipeline-diff: EMA is present in domain knowledge but not in [\u2014]. (artifact paper:paper:ema-birdclef; technique EMA)",
       "prediction": "Inserting EMA will raise validation score vs the current stack.",
       "expected_impact": "medium",
       "expected_impact_value": 0.015,
@@ -837,15 +1111,18 @@
       "tags": [
         "EMA",
         "pipeline_diff"
-      ]
+      ],
+      "technique": "EMA",
+      "parent_hypothesis_id": null,
+      "technique_stack": []
     },
     {
-      "rank": 3,
+      "rank": 5,
       "hypothesis_id": "H-XXX",
       "title": "Try SpecAugment",
-      "observation": "SpecAugment appears in retrieved knowledge for this competition.",
-      "reason": "Retrieved technique card: confidence=0.60; papers=1; experiments=0; repos=0",
-      "prediction": "Adopting SpecAugment will improve the primary metric.",
+      "observation": "SpecAugment appears in retrieved knowledge for this competition. (artifact paper:paper:specaugment; technique SpecAugment)",
+      "reason": "Retrieved technique card: confidence=0.60; papers=1; experiments=0; repos=0 (artifact paper:paper:specaugment; technique SpecAugment)",
+      "prediction": "Adopting SpecAugment will improve the primary metric. (artifact paper:paper:specaugment; technique SpecAugment)",
       "expected_impact": "medium",
       "expected_impact_value": 0.015,
       "confidence": 0.6,
@@ -868,15 +1145,97 @@
       "tags": [
         "SpecAugment",
         "technique"
+      ],
+      "technique": "SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": []
+    },
+    {
+      "rank": 6,
+      "hypothesis_id": "H-XXX",
+      "title": "Try unused technique SpecAugment",
+      "observation": "Technique SpecAugment is in knowledge but never tested. (artifact mixed:paper:specaugment; mixed:repo:owner/audio-pipeline; technique SpecAugment)",
+      "reason": "Full-ledger coverage: unused technique. (artifact mixed:paper:specaugment; mixed:repo:owner/audio-pipeline; technique SpecAugment)",
+      "prediction": "Adopting SpecAugment will improve the primary metric.",
+      "expected_impact": "medium",
+      "expected_impact_value": 0.015,
+      "confidence": 0.55,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "paper:specaugment",
+          "note": "technique SpecAugment"
+        },
+        {
+          "kind": "mixed",
+          "ref": "repo:owner/audio-pipeline",
+          "note": "technique SpecAugment"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.36,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "SpecAugment",
+        "technique",
+        "untried"
+      ],
+      "technique": "SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "SpecAugment"
       ]
     },
     {
-      "rank": 4,
+      "rank": 7,
+      "hypothesis_id": "H-XXX",
+      "title": "Try unused technique EMA",
+      "observation": "Technique EMA is in knowledge but never tested. (artifact mixed:paper:ema-birdclef; technique EMA)",
+      "reason": "Full-ledger coverage: unused technique. (artifact mixed:paper:ema-birdclef; technique EMA)",
+      "prediction": "Adopting EMA will improve the primary metric.",
+      "expected_impact": "medium",
+      "expected_impact_value": 0.015,
+      "confidence": 0.55,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "paper:ema-birdclef",
+          "note": "technique EMA"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.34,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "EMA",
+        "technique",
+        "untried"
+      ],
+      "technique": "EMA",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "EMA"
+      ]
+    },
+    {
+      "rank": 8,
       "hypothesis_id": "H-XXX",
       "title": "Try EMA",
-      "observation": "EMA appears in retrieved knowledge for this competition.",
-      "reason": "Retrieved technique card: confidence=0.40; papers=1; experiments=0; repos=0",
-      "prediction": "Adopting EMA will improve the primary metric.",
+      "observation": "EMA appears in retrieved knowledge for this competition. (artifact paper:paper:ema-birdclef; technique EMA)",
+      "reason": "Retrieved technique card: confidence=0.40; papers=1; experiments=0; repos=0 (artifact paper:paper:ema-birdclef; technique EMA)",
+      "prediction": "Adopting EMA will improve the primary metric. (artifact paper:paper:ema-birdclef; technique EMA)",
       "expected_impact": "low",
       "expected_impact_value": 0.005,
       "confidence": 0.4,
@@ -899,7 +1258,10 @@
       "tags": [
         "EMA",
         "technique"
-      ]
+      ],
+      "technique": "EMA",
+      "parent_hypothesis_id": null,
+      "technique_stack": []
     }
   ],
   "research_brief": {
@@ -934,9 +1296,10 @@
     ],
     "top_hypotheses": [
       "H-001: Add SpecAugment to the current pipeline",
-      "H-002: Add EMA to the current pipeline",
-      "H-003: Try SpecAugment",
-      "H-004: Try EMA"
+      "H-002: Test unused belief: EMA",
+      "H-003: Test unused belief: SpecAugment",
+      "H-004: Add EMA to the current pipeline",
+      "H-005: Try SpecAugment"
     ],
     "known_risks": [
       "Mixup hurt rare classes when alpha was too high.",
@@ -944,8 +1307,12 @@
     ],
     "suggested_experiments": [
       "Add SpecAugment to the current pipeline",
+      "Test unused belief: EMA",
+      "Test unused belief: SpecAugment",
       "Add EMA to the current pipeline",
       "Try SpecAugment",
+      "Try unused technique SpecAugment",
+      "Try unused technique EMA",
       "Try EMA"
     ],
     "generated_by": "rule_engine",
@@ -960,7 +1327,7 @@
     "repository_count": 1,
     "transfer_count": 1,
     "knowledge_unit_count": 4,
-    "hypothesis_count": 4,
+    "hypothesis_count": 8,
     "has_research_brief": true
   },
   "notes": [
@@ -974,8 +1341,9 @@
     "[hypothesis] discussions: stub empty until Plan F.",
     "[hypothesis] symbolic: 4 technique(s), 4 paper(s), 3 experiment(s), 1 repo(s), 2 failure(s).",
     "[hypothesis] context: brief=1389/14700 chars (dropped_sections=0).",
-    "[hypothesis] hypothesis: 4 candidate(s) \u2192 top 4 (generator=rule_engine drafts).",
-    "[hypothesis] hypothesis: 4 new hypothesis generated (status=proposed).",
+    "[hypothesis] hypothesis: ledger artifacts=10 untried=4 worked=0 failed=0 unused_beliefs=4 winning=\u2014",
+    "[hypothesis] hypothesis: 8 candidate(s) \u2192 top 8 (generator=rule_engine drafts).",
+    "[hypothesis] hypothesis: 8 new hypothesis generated (status=proposed).",
     "[research-brief] generated_by=rule_engine"
   ]
 }

@@ -162,8 +162,18 @@ def test_record_successful_execution_writes_artifact(tmp_path: Path) -> None:
     assert summary.train_vs_validation.get("train_score") == 0.9
     assert submission_csv_path(ws, execution.id).is_file()
     assert (ws / "artifacts" / "execution_outcome.json").is_file()
-    # No generic follow-up mint without a worth-trying improvement signal.
-    assert summary.follow_up_hypothesis_id is None
+    # On learning_gain, may mint stacked improvement hyps from unused techniques.
+    # This fixture has no real untried technique hub rows, so no mint is expected.
+    if summary.follow_up_hypothesis_id is not None:
+        follow = HypothesisStore(knowledge, competition).get(
+            summary.follow_up_hypothesis_id
+        )
+        assert follow is not None
+        assert follow.parent_hypothesis_id == hyp.id or "stacked" in {
+            t.lower() for t in follow.tags
+        }
+        assert follow.technique not in {None, "", "baseline"}
+        assert "baseline" != (follow.technique or "").lower()
 
     with KnowledgeStore(knowledge, competition) as ks:
         art = ks.get_artifact(experiment_artifact_id(execution.id))

@@ -229,8 +229,23 @@ def _candidates_from_ledger(
                 return True
         return False
 
+    _meta = {
+        "baseline",
+        "stacked",
+        "improvement",
+        "technique",
+        "untried",
+        "unused_belief",
+        "unused_claim",
+        "belief",
+        "pipeline_diff",
+        "transfer",
+        "failure_fix",
+    }
     # Untried techniques → stacked when parent win exists, else standalone high coverage.
     for name in ledger.techniques_untried:
+        if not name or name.strip().lower() in _meta:
+            continue
         if _blocked(name):
             continue
         record = next((t for t in ledger.techniques if t.name == name), None)
