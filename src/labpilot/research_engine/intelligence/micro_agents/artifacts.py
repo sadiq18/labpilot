@@ -74,6 +74,21 @@ class HypothesisDraft(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
 
 
+class ComboPick(BaseModel):
+    """One multi-technique portfolio chosen from a grounded shortlist."""
+
+    techniques: list[str] = Field(default_factory=list)
+    rationale: str = ""
+    confidence: float = Field(ge=0.0, le=1.0, default=0.6)
+    expected_impact: float = 0.015
+
+
+class ComboPortfolioDraft(BaseModel):
+    """LLM/rule output: top combination merges (never invent outside shortlist)."""
+
+    picks: list[ComboPick] = Field(default_factory=list)
+
+
 class ConceptNormalization(BaseModel):
     """One canonical concept plus the aliases that collapse into it."""
 

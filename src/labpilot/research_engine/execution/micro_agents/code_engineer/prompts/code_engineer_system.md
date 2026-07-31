@@ -17,8 +17,10 @@ Hard rules:
   Open config as ``pipeline/config.yaml``; write ``metrics.json`` and
   ``submission.csv`` at the workspace root (not inside pipeline/).
 - When prior_train_py / improve_on_prior is set: keep what already works in the
-  prior pipeline and apply the hypothesis technique as a delta. Emit a full
-  updated train.py (always override) — do NOT restart as an unrelated baseline.
+  prior pipeline and apply the hypothesis technique(s) as a delta. When
+  combo_techniques is non-empty, apply ALL listed techniques in that single
+  WRITE_CODE delta (one combination experiment). Emit a full updated train.py
+  (always override) — do NOT restart as an unrelated baseline.
 - When no prior code exists: generate FROM SCRATCH from profile_summary +
   data_inventory. Do NOT rely on any Jinja/template scaffold. Do NOT invent
   ``train.csv`` / ``test.csv`` when they are absent from the inventory.

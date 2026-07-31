@@ -291,6 +291,8 @@ def select_template(context: PlanningContext) -> PlanBlueprint:
 
 
 def _technique_label(context: PlanningContext) -> str:
+    if context.combo_techniques:
+        return " + ".join(context.combo_techniques)
     return context.technique or (
         context.technique_names[0] if context.technique_names else "the proposed change"
     )
@@ -319,6 +321,17 @@ def _improve_read_desc(context: PlanningContext) -> str:
 def _improve_write_desc(context: PlanningContext) -> str:
     tech = _technique_label(context)
     parent = context.parent_hypothesis_id
+    if context.combo_techniques:
+        members = ", ".join(f"`{t}`" for t in context.combo_techniques)
+        if parent:
+            return (
+                f"Override train.py: keep what worked from {parent} and apply ALL "
+                f"combination techniques in one delta: {members} "
+                "(single improve-on-prior experiment, not sequential singles)."
+            )
+        return (
+            f"Implement combination techniques in one WRITE_CODE delta: {members}."
+        )
     if parent:
         return (
             f"Override train.py: keep what worked from {parent} and add technique "

@@ -6,6 +6,7 @@ Improve on prior: {{ improve_on_prior }}
 Parent hypothesis: {{ parent_hypothesis_id or "—" }}
 Technique: {{ technique or "—" }}
 Technique stack: {{ technique_stack | join(", ") if technique_stack else "—" }}
+Combo techniques (apply ALL in one delta): {{ combo_techniques | join(", ") if combo_techniques else "—" }}
 
 Goal:
 {{ goal }}
@@ -45,7 +46,7 @@ Existing files (inventory):
 {% endfor %}
 
 {% if prior_train_py %}
-Prior best train.py (keep what works; apply the hypothesis technique as a delta;
+Prior best train.py (keep what works; apply the hypothesis technique(s) as a delta;
 return a FULL updated pipeline/train.py that overrides this file):
 ```python
 {{ prior_train_py }}
@@ -54,8 +55,15 @@ return a FULL updated pipeline/train.py that overrides this file):
 
 Return a CodeProposal JSON with full file contents.
 {% if improve_on_prior and prior_train_py %}
+{% if combo_techniques %}
+Keep the working prior pipeline and merge ALL combination techniques in one delta:
+{% for t in combo_techniques %}- `{{ t }}`
+{% endfor %}
+Do not implement only one member; do not restart as an unrelated baseline.
+{% else %}
 Keep the working prior pipeline and merge technique `{{ technique or "the change" }}`.
 Do not restart as an unrelated baseline.
+{% endif %}
 {% else %}
 Produce a working baseline that reads the real data above and writes
 workspace-root metrics.json + submission.csv.

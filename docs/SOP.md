@@ -277,13 +277,18 @@ capstone notes.
 3. First time on a competition: `plan create --baseline` → `run --plan P-001`.
 4. `experiments rank` or `research hypothesize` — pick one proposed hypothesis.
    Hypothesize scans the **full experiment ledger** (all artifacts/techniques,
-   worked vs failed vs untried, unused beliefs/claims) and prefers **stacked**
-   improvements on the winning line (higher confidence) over fresh restarts.
+   worked vs failed vs untried, unused beliefs/claims) and prefers
+   **combination** merges (2–3 complementary techniques, LLM-chosen from a
+   deterministic shortlist) over one-by-one **stacked** singles, and stacked
+   over fresh restarts. That cuts sequential runs: one combo plan/run tests
+   multiple techniques; ablate leave-one-out only if the combo wins (losses
+   record `avoid_pairs`).
 5. `plan create -H H-xxx` — compile an inspectable improve-on-prior DAG
-   (technique-inlined tasks; compare vs parent metrics).
+   (technique-inlined tasks; compare vs parent metrics). Combination hyps
+   apply all `combo_techniques` in one WRITE_CODE delta.
 6. `run --plan P-xxx` — implement via Research Engineer. `WRITE_CODE` always
    overrides `pipeline/train.py` (backup under `artifacts/code_backups/`),
-   keeping what worked and applying the hypothesis technique as a delta.
+   keeping what worked and applying the hypothesis technique(s) as a delta.
 7. Review metrics / evidence / knowledge effects. Each run also updates
    competition-local skill overlays under `.labpilot/skills/` (summarized when
    long) so agents improve for the next cycle; packaged `skill.md` files are

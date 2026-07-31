@@ -31,6 +31,7 @@ class PlanningContext:
     parent_actual_outcome: str | None = None
     technique: str | None = None
     technique_stack: list[str] = field(default_factory=list)
+    combo_techniques: list[str] = field(default_factory=list)
     change_category: str = "other"
     parent_metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -58,6 +59,7 @@ def build_context(
     hypothesis = retrieved.hypothesis
     technique = hypothesis.technique
     stack = list(hypothesis.technique_stack)
+    combo = list(hypothesis.combo_techniques)
     parent_meta: dict[str, Any] = {}
     if knowledge_dir is not None:
         parent_meta = resolve_parent_context(
@@ -68,9 +70,14 @@ def build_context(
         technique = technique or parent_meta.get("technique")
         if not stack:
             stack = list(parent_meta.get("technique_stack") or [])
+        if not combo:
+            combo = list(parent_meta.get("combo_techniques") or [])
 
     parent_id = parent_meta.get("parent_hypothesis_id") or hypothesis.parent_hypothesis_id
-    tech_label = technique or (hypothesis.tags[0] if hypothesis.tags else "the change")
+    if combo:
+        tech_label = " + ".join(combo)
+    else:
+        tech_label = technique or (hypothesis.tags[0] if hypothesis.tags else "the change")
     if parent_id:
         goal = (
             f"Improve on {parent_id} by applying {tech_label}; "
@@ -98,6 +105,9 @@ def build_context(
     ]
     if technique and technique not in technique_names:
         technique_names.insert(0, technique)
+    for member in combo:
+        if member and member not in technique_names:
+            technique_names.append(member)
     belief_summaries = [
         str(row.get("technique", "")).strip()
         for row in retrieved.beliefs
@@ -118,6 +128,7 @@ def build_context(
         parent_actual_outcome=parent_meta.get("parent_actual_outcome"),
         technique=technique,
         technique_stack=stack,
+        combo_techniques=combo,
         change_category=str(parent_meta.get("change_category") or "other"),
         parent_metadata=parent_meta,
     )

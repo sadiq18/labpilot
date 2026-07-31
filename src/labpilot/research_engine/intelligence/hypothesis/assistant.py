@@ -13,6 +13,11 @@ from typing import Any
 from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.research_engine.shared.experiments.models import HypothesisCreatedBy, HypothesisOrigin
 from labpilot.research_engine.intelligence.hypothesis.candidates import generate_candidates
+from labpilot.research_engine.intelligence.hypothesis.combo import (
+    build_combo_shortlist,
+    filter_picks_to_shortlist,
+    picks_to_candidates,
+)
 from labpilot.research_engine.intelligence.hypothesis.ledger import build_experiment_ledger
 from labpilot.research_engine.intelligence.hypothesis.models import (
     HypothesisAssistantResult,
@@ -29,7 +34,13 @@ from labpilot.research_engine.intelligence.hypothesis.persist import (
 )
 from labpilot.research_engine.intelligence.hypothesis.ranking import rank_candidates
 from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
-from labpilot.research_engine.intelligence.micro_agents.artifacts import HypothesisDraft
+from labpilot.research_engine.intelligence.micro_agents.artifacts import (
+    ComboPortfolioDraft,
+    HypothesisDraft,
+)
+from labpilot.research_engine.intelligence.micro_agents.combo_portfolio import (
+    ComboPortfolioAgent,
+)
 from labpilot.research_engine.intelligence.micro_agents.hypothesis_generator import (
     HypothesisGeneratorAgent,
 )
@@ -54,6 +65,8 @@ _KIND_TAGS = frozenset(
         "unused_belief",
         "unused_claim",
         "belief",
+        "combination",
+        "ablation",
     }
 )
 
@@ -67,6 +80,18 @@ def _candidate_labels(candidate: HypothesisCandidate) -> set[str]:
     }
     if candidate.technique:
         labels.add(normalize_label(candidate.technique))
+    combo = list(candidate.metadata.get("combo_techniques") or [])
+    if combo:
+        joined = "+".join(sorted(normalize_label(t) for t in combo))
+        labels = {
+            joined,
+            normalize_label(
+                f"{candidate.parent_hypothesis_id or 'root'}+{joined}"
+            ),
+        }
+        if candidate.technique:
+            labels.add(normalize_label(candidate.technique))
+        return {label for label in labels if label}
     # Stacked candidates are unique per parent+technique, not technique alone.
     if candidate.parent_hypothesis_id and candidate.technique:
         labels = {
@@ -133,6 +158,13 @@ class HypothesisAssistant:
             tried_techniques=tried,
             ledger=ledger,
         )
+        combo_candidates, combo_note = self._combo_candidates(
+            ledger, research_context=research_context
+        )
+        if combo_note:
+            notes.append(combo_note)
+        if combo_candidates:
+            candidates = [*combo_candidates, *candidates]
         if not candidates:
             notes.append("hypothesis: no candidates generated from ResearchContext.")
             return HypothesisAssistantResult(notes=notes, context=research_context)
@@ -194,6 +226,12 @@ class HypothesisAssistant:
                     technique=candidate.technique,
                     parent_hypothesis_id=candidate.parent_hypothesis_id,
                     technique_stack=list(candidate.technique_stack),
+                    combo_techniques=list(
+                        candidate.metadata.get("combo_techniques") or []
+                    ),
+                    combo_rationale=str(
+                        candidate.metadata.get("combo_rationale") or ""
+                    ),
                 )
             )
 
@@ -228,12 +266,72 @@ class HypothesisAssistant:
             context=research_context,
         )
 
+    def _combo_candidates(
+        self,
+        ledger: object,
+        *,
+        research_context: ResearchContext,
+    ) -> tuple[list[HypothesisCandidate], str]:
+        shortlist = build_combo_shortlist(ledger)  # type: ignore[arg-type]
+        if not shortlist:
+            return [], "hypothesis: combo shortlist empty (need ≥2 untried techniques)."
+        agent = ComboPortfolioAgent(llm_client=self.llm_client)
+        draft = agent.run(
+            StructuredContext(
+                competition=str(
+                    (research_context.competition or {}).get("slug")
+                    or getattr(ledger, "competition", "")
+                ),
+                text=(research_context.brief or "")[:3000],
+                data={
+                    "shortlist": shortlist,
+                    "limit": 3,
+                    "parent_stack": list(getattr(ledger, "winning_stack", []) or []),
+                    "parent_metrics": {},
+                    "avoid_pairs": [
+                        list(pair) for pair in getattr(ledger, "avoid_pairs", []) or []
+                    ],
+                    "failed": list(getattr(ledger, "techniques_failed", []) or []),
+                    "skill_agent_key": "combo_portfolio",
+                },
+            )
+        )
+        picks_raw: list[dict[str, Any]] = []
+        if isinstance(draft, ComboPortfolioDraft):
+            picks_raw = [p.model_dump(mode="json") for p in draft.picks]
+        picks = filter_picks_to_shortlist(picks_raw, shortlist)
+        if not picks:
+            from labpilot.research_engine.intelligence.hypothesis.combo import (
+                rule_engine_pick_combos,
+            )
+
+            picks = rule_engine_pick_combos(shortlist, limit=3)
+        candidates = picks_to_candidates(picks, ledger)  # type: ignore[arg-type]
+        source = "llm" if agent.last_used_llm else "rule_engine"
+        note = (
+            f"hypothesis: combo shortlist={len(shortlist)} → "
+            f"picks={len(candidates)} ({source})"
+        )
+        return candidates, note
+
     def _draft(
         self,
         candidate: HypothesisCandidate,
         context: ResearchContext,
     ) -> tuple[HypothesisDraft, bool]:
         """Optional LLM text draft; ranking already fixed. Rule engine always valid."""
+        # Combination text is already curated; skip polishing that drops combo refs.
+        if candidate.kind.value == "combination":
+            return (
+                HypothesisDraft(
+                    observation=candidate.observation,
+                    prediction=candidate.prediction,
+                    rationale=candidate.reason,
+                    expected_impact=_impact_float(candidate),
+                    confidence=candidate.confidence,
+                ),
+                False,
+            )
         agent = HypothesisGeneratorAgent(llm_client=self.llm_client)
         evidence_text = context.brief or candidate.reason
         result = agent.run(
@@ -265,5 +363,8 @@ class HypothesisAssistant:
 
 
 def _impact_float(candidate: HypothesisCandidate) -> float:
+    meta_val = candidate.metadata.get("expected_impact_value")
+    if isinstance(meta_val, (int, float)) and float(meta_val) > 0:
+        return float(meta_val)
     mapping = {"high": 0.03, "medium": 0.015, "low": 0.005, "unknown": 0.01}
     return mapping.get(str(candidate.expected_impact), 0.01)

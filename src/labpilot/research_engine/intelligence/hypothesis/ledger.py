@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,8 @@ _META_TAGS = frozenset(
         "failure_fix",
         "improvement",
         "stacked",
+        "combination",
+        "ablation",
         "follow-up",
         "execution",
         "submit",
@@ -181,9 +184,21 @@ def build_experiment_ledger(
     ]
     avoid_pairs: list[tuple[str, str]] = []
     for hyp in hyps:
-        if hyp.status == HypothesisStatus.REJECTED and hyp.technique and winning_stack:
+        if hyp.status != HypothesisStatus.REJECTED:
+            continue
+        if hyp.technique and winning_stack:
             for parent_tech in winning_stack:
                 avoid_pairs.append((parent_tech, hyp.technique))
+        # Failed combination: avoid re-trying the same member pairs.
+        combo = list(hyp.combo_techniques or [])
+        if len(combo) >= 2:
+            for a, b in combinations(combo, 2):
+                avoid_pairs.append((a, b))
+        elif hyp.technique and "+" in hyp.technique:
+            parts = [p.strip() for p in hyp.technique.split("+") if p.strip()]
+            if len(parts) >= 2:
+                for a, b in combinations(parts, 2):
+                    avoid_pairs.append((a, b))
 
     return ExperimentLedger(
         competition=competition,
@@ -244,11 +259,22 @@ def _technique_outcomes(hyps: list[Hypothesis]) -> tuple[set[str], set[str]]:
     worked: set[str] = set()
     failed: set[str] = set()
     for hyp in hyps:
+        is_combo = bool(hyp.combo_techniques) or "combination" in {
+            t.lower() for t in hyp.tags
+        }
+        if is_combo and hyp.status == HypothesisStatus.REJECTED:
+            # Combo loss → avoid_pairs for members; do not blacklist each member.
+            joined = normalize_label(hyp.technique or "")
+            if joined:
+                failed.add(joined)
+            continue
         labels = {
             normalize_label(hyp.technique or ""),
             *[normalize_label(t) for t in hyp.technique_stack],
             *[normalize_label(t) for t in hyp.tags if t.lower() not in _META_TAGS],
         }
+        if is_combo and hyp.combo_techniques:
+            labels |= {normalize_label(t) for t in hyp.combo_techniques}
         labels.discard("")
         if hyp.status == HypothesisStatus.CONFIRMED:
             worked |= labels
@@ -259,7 +285,12 @@ def _technique_outcomes(hyps: list[Hypothesis]) -> tuple[set[str], set[str]]:
             if "gain" in outcome or "improv" in outcome:
                 worked |= labels
             elif "loss" in outcome or "overfit" in outcome or "worse" in outcome:
-                failed |= labels
+                if is_combo:
+                    joined = normalize_label(hyp.technique or "")
+                    if joined:
+                        failed.add(joined)
+                else:
+                    failed |= labels
     return worked, failed
 
 

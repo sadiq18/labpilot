@@ -194,6 +194,9 @@ class CodeEngineeringCapability(BaseCapability):
                 "technique_stack": plan_meta.get("technique_stack")
                 or hyp_fields.get("technique_stack")
                 or [],
+                "combo_techniques": plan_meta.get("combo_techniques")
+                or hyp_fields.get("combo_techniques")
+                or [],
                 "observation": hyp_fields.get("observation", ""),
                 "reason": hyp_fields.get("reason", ""),
                 "prediction": hyp_fields.get("prediction", ""),
@@ -314,6 +317,7 @@ class CodeEngineeringCapability(BaseCapability):
             "prediction": hyp.prediction,
             "technique": hyp.technique,
             "technique_stack": list(hyp.technique_stack),
+            "combo_techniques": list(hyp.combo_techniques),
             "evidence": [e.model_dump(mode="json") for e in hyp.evidence],
         }
 

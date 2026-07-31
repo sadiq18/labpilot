@@ -446,15 +446,40 @@ def _techniques_from_plan(plan: ResearchPlan) -> list[str]:
         tags.append(str(kind))
     if plan.hypothesis_id:
         tags.append(f"hyp:{plan.hypothesis_id}")
-    # Deduplicate preserving order.
+    for key in ("technique",):
+        val = plan.metadata.get(key)
+        if val:
+            tags.append(str(val))
+    for key in ("combo_techniques", "technique_stack"):
+        for item in plan.metadata.get(key) or []:
+            tags.append(str(item))
+    # Deduplicate preserving order; drop meta labels.
+    _skip = {
+        "baseline",
+        "stacked",
+        "combination",
+        "ablation",
+        "improvement",
+        "technique",
+    }
     seen: set[str] = set()
     out: list[str] = []
     for t in tags:
         key = str(t).strip()
-        if key and key not in seen:
-            seen.add(key)
-            out.append(key)
-    # Prefer real technique tags; never invent a "baseline" technique label.
+        if not key or key.lower() in _skip or key.lower().startswith("fork:"):
+            continue
+        if key in seen:
+            continue
+        # Expand joined combo labels so members are indexed separately.
+        if "+" in key and key.count("+") <= 2 and " " not in key:
+            for part in key.split("+"):
+                part = part.strip()
+                if part and part not in seen and part.lower() not in _skip:
+                    seen.add(part)
+                    out.append(part)
+            continue
+        seen.add(key)
+        out.append(key)
     return out
 
 
@@ -688,6 +713,8 @@ def maybe_mint_stacked_from_success(
     _skip_labels = {
         "baseline",
         "stacked",
+        "combination",
+        "ablation",
         "improvement",
         "technique",
         "untried",
@@ -758,6 +785,241 @@ def maybe_mint_stacked_from_success(
         if len(minted) >= limit:
             break
     return minted
+
+
+def _combo_members_from_hypothesis(hyp: Any) -> list[str]:
+    if hyp is None:
+        return []
+    members = [str(t).strip() for t in (hyp.combo_techniques or []) if str(t).strip()]
+    if len(members) >= 2:
+        return members
+    tech = str(hyp.technique or "").strip()
+    tags_l = {str(t).lower() for t in (hyp.tags or [])}
+    if "combination" in tags_l and "+" in tech:
+        parts = [p.strip() for p in tech.split("+") if p.strip()]
+        if len(parts) >= 2:
+            return parts
+    return members
+
+
+def maybe_mint_ablation_from_combo_win(
+    *,
+    knowledge_dir: Path,
+    competition: str,
+    summary: ExecutionOutcomeSummary,
+) -> list[str]:
+    """On combination gain: mint leave-one-out ablation forks (no ablation on loss)."""
+    if summary.learning_gain is None or summary.learning_gain <= 0:
+        return []
+    if not summary.hypothesis_id:
+        return []
+    store = HypothesisStore(knowledge_dir, competition)
+    parent = store.get(summary.hypothesis_id)
+    members = _combo_members_from_hypothesis(parent)
+    if len(members) < 2:
+        return []
+
+    stack = list(parent.technique_stack) if parent else []
+    minted: list[str] = []
+    for drop in members:
+        kept = [m for m in members if m != drop]
+        if not kept:
+            continue
+        label = "+".join(kept)
+        if any(
+            h.parent_hypothesis_id == parent.id
+            and "ablation" in {t.lower() for t in h.tags}
+            and set(h.combo_techniques or []) == set(kept)
+            for h in store.list()
+            if h.status == HypothesisStatus.PROPOSED
+        ):
+            continue
+        hyp = store.create(
+            observation=(
+                f"Combination {parent.id} gained {summary.learning_gain:.4g}; "
+                f"ablate by dropping `{drop}` to test if `{label}` alone suffices."
+            ),
+            reason=(
+                f"Leave-one-out ablation after winning combo on {summary.execution_id}: "
+                f"keep {kept}, drop {drop}."
+            ),
+            prediction=(
+                f"Removing `{drop}` from the winning combo will show whether the gain "
+                f"depends on that member or on {label}."
+            ),
+            confidence=min(0.9, float(parent.confidence) + 0.05),
+            expected_impact=max(0.003, float(summary.learning_gain) * 0.25),
+            tags=[*kept, "ablation", "stacked", "improvement", f"fork:{parent.id}"],
+            source="reflection",
+            created_by=HypothesisCreatedBy.REFLECTION,
+            generator=HypothesisGenerator.RULE_ENGINE,
+            origin=HypothesisOrigin.EXPERIMENT,
+            evidence=[
+                {
+                    "kind": "experiment",
+                    "ref": summary.execution_id,
+                    "note": "ablation after combination win",
+                }
+            ],
+            technique=label,
+            parent_hypothesis_id=parent.id,
+            technique_stack=stack,
+            combo_techniques=kept,
+        )
+        minted.append(hyp.id)
+    return minted
+
+
+def maybe_mint_combo_from_success(
+    *,
+    knowledge_dir: Path,
+    competition: str,
+    summary: ExecutionOutcomeSummary,
+    llm_client: Any | None = None,
+) -> list[str]:
+    """After a gain, mint one LLM/rule-chosen combination hyp from the ledger shortlist."""
+    if summary.learning_gain is None or summary.learning_gain <= 0:
+        return []
+    try:
+        from labpilot.accessor.common.micro_agents import StructuredContext
+        from labpilot.research_engine.intelligence.hypothesis.combo import (
+            build_combo_shortlist,
+            filter_picks_to_shortlist,
+            picks_to_candidates,
+            rule_engine_pick_combos,
+        )
+        from labpilot.research_engine.intelligence.hypothesis.ledger import (
+            build_experiment_ledger,
+        )
+        from labpilot.research_engine.intelligence.micro_agents.artifacts import (
+            ComboPortfolioDraft,
+        )
+        from labpilot.research_engine.intelligence.micro_agents.combo_portfolio import (
+            ComboPortfolioAgent,
+        )
+    except Exception as exc:
+        logger.warning("Combo mint skipped (import): %s", exc)
+        return []
+
+    ledger = build_experiment_ledger(knowledge_dir, competition)
+    shortlist = build_combo_shortlist(ledger)
+    if not shortlist:
+        return []
+
+    agent = ComboPortfolioAgent(llm_client=llm_client)
+    draft = agent.run(
+        StructuredContext(
+            competition=competition,
+            text="",
+            data={
+                "shortlist": shortlist,
+                "limit": 1,
+                "parent_stack": list(ledger.winning_stack),
+                "parent_metrics": {},
+                "avoid_pairs": [list(p) for p in ledger.avoid_pairs],
+                "failed": list(ledger.techniques_failed),
+                "skill_agent_key": "combo_portfolio",
+            },
+        )
+    )
+    picks_raw: list[dict[str, Any]] = []
+    if isinstance(draft, ComboPortfolioDraft):
+        picks_raw = [p.model_dump(mode="json") for p in draft.picks]
+    picks = filter_picks_to_shortlist(picks_raw, shortlist) or rule_engine_pick_combos(
+        shortlist, limit=1
+    )
+    if not picks:
+        return []
+    candidates = picks_to_candidates(picks[:1], ledger)
+    if not candidates:
+        return []
+
+    store = HypothesisStore(knowledge_dir, competition)
+    parent_id = summary.hypothesis_id or ledger.winning_hypothesis_id
+    minted: list[str] = []
+    for cand in candidates:
+        techs = list(cand.metadata.get("combo_techniques") or [])
+        if len(techs) < 2:
+            continue
+        if any(
+            set(h.combo_techniques or []) == set(techs)
+            and h.status == HypothesisStatus.PROPOSED
+            for h in store.list()
+        ):
+            continue
+        hyp = store.create(
+            observation=cand.observation,
+            reason=cand.reason,
+            prediction=cand.prediction,
+            confidence=cand.confidence,
+            expected_impact=float(
+                cand.metadata.get("expected_impact_value")
+                or max(0.01, float(summary.learning_gain) * 0.5)
+            ),
+            tags=list(cand.tags),
+            source="reflection",
+            created_by=HypothesisCreatedBy.REFLECTION,
+            generator=(
+                HypothesisGenerator.LLM
+                if agent.last_used_llm
+                else HypothesisGenerator.RULE_ENGINE
+            ),
+            origin=HypothesisOrigin.EXPERIMENT,
+            evidence=[
+                {
+                    "kind": "experiment",
+                    "ref": summary.execution_id,
+                    "note": "post-gain combination portfolio",
+                }
+            ],
+            technique=cand.technique,
+            parent_hypothesis_id=parent_id or cand.parent_hypothesis_id,
+            technique_stack=list(cand.technique_stack),
+            combo_techniques=techs,
+        )
+        minted.append(hyp.id)
+    return minted
+
+
+def record_combo_avoid_on_loss(
+    *,
+    knowledge_dir: Path,
+    competition: str,
+    summary: ExecutionOutcomeSummary,
+) -> None:
+    """On combination loss: ensure hyp is rejected so ledger records avoid_pairs.
+
+    Ablation is never minted on loss.
+    """
+    if summary.learning_loss is None or summary.learning_loss <= 0:
+        return
+    if not summary.hypothesis_id:
+        return
+    store = HypothesisStore(knowledge_dir, competition)
+    hyp = store.get(summary.hypothesis_id)
+    members = _combo_members_from_hypothesis(hyp)
+    if len(members) < 2:
+        return
+    # Status update usually happens via reflection; force REJECTED for combo losses
+    # so avoid_pairs are groundable from the ledger.
+    if hyp and hyp.status == HypothesisStatus.PROPOSED:
+        try:
+            store.update_outcome(
+                hyp.id,
+                actual_outcome=str(
+                    (summary.hypothesis_outcome or {}).get("actual_outcome") or "loss"
+                ),
+                status=HypothesisStatus.REJECTED,
+                evidence_run_id=summary.execution_id,
+                why="Combination experiment lost; members recorded as avoid_pairs.",
+            )
+        except FileNotFoundError:
+            pass
+    logger.info(
+        "Combo loss on %s — avoid_pairs for %s (no ablation)",
+        summary.execution_id,
+        members,
+    )
 
 
 def promote_outcome_claims(
@@ -836,6 +1098,11 @@ def update_hypothesis_from_local(
         else None,
     )
 
+    record_combo_avoid_on_loss(
+        knowledge_dir=knowledge_dir,
+        competition=competition,
+        summary=summary,
+    )
     follow_id = maybe_mint_improvement_hypothesis(
         knowledge_dir=knowledge_dir,
         competition=competition,
@@ -843,13 +1110,26 @@ def update_hypothesis_from_local(
         reflection=reflection,
         overfitting=bool(summary.leaderboard and summary.leaderboard.overfitting),
     )
-    stacked_ids = maybe_mint_stacked_from_success(
+    ablation_ids = maybe_mint_ablation_from_combo_win(
         knowledge_dir=knowledge_dir,
         competition=competition,
         summary=summary,
     )
-    if stacked_ids and not follow_id:
-        follow_id = stacked_ids[0]
+    combo_ids = maybe_mint_combo_from_success(
+        knowledge_dir=knowledge_dir,
+        competition=competition,
+        summary=summary,
+    )
+    stacked_ids = maybe_mint_stacked_from_success(
+        knowledge_dir=knowledge_dir,
+        competition=competition,
+        summary=summary,
+        limit=2 if combo_ids else 3,
+    )
+    for group in (ablation_ids, combo_ids, stacked_ids):
+        if group and not follow_id:
+            follow_id = group[0]
+            break
     return follow_id
 
 

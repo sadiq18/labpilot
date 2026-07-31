@@ -112,6 +112,7 @@ class HypothesisStore:
         technique: str | None = None,
         parent_hypothesis_id: str | None = None,
         technique_stack: Iterable[str] = (),
+        combo_techniques: Iterable[str] = (),
     ) -> Hypothesis:
         now = _now()
         resolved_created_by = _coerce_created_by(created_by, source)
@@ -129,9 +130,15 @@ class HypothesisStore:
             for item in evidence
         ]
         stack = [str(item).strip() for item in technique_stack if str(item).strip()]
+        combo = [str(item).strip() for item in combo_techniques if str(item).strip()]
         tech = (technique or "").strip() or None
-        if tech and tech not in stack:
+        if tech and tech not in stack and "+" not in tech:
             stack = [*stack, tech]
+        for member in combo:
+            if member not in stack:
+                stack.append(member)
+        if combo and not tech:
+            tech = "+".join(combo)
         hypothesis = Hypothesis(
             id=self._allocate_id(),
             competition=self.competition,
@@ -150,6 +157,7 @@ class HypothesisStore:
             technique=tech,
             parent_hypothesis_id=(parent_hypothesis_id or None),
             technique_stack=stack,
+            combo_techniques=combo,
             created_at=now,
             updated_at=now,
         )
