@@ -11,6 +11,9 @@ Back to [README](README.md). Extends `accessor/sqlite/schema.sql`
 - Audit trail for belief mutations (`belief_updates`).
 - Claims are first-class; beliefs remain short-horizon working assumptions.
 - Align hypothesis status vocabulary across file SoR and SQLite.
+- **Evidence Cards** (`research/evidence/EV-xxx.json`) are the causal learning SoR
+  after each run; they drive `decision` → hyp status and Research Graph edges.
+  See [design/evidence-card.md](../../design/evidence-card.md).
 
 ---
 

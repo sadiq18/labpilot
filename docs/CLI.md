@@ -348,6 +348,13 @@ only adds genuinely new items.
 research hypothesize list --competition titanic
 research hypothesize list -c titanic --status proposed
 research hypothesize show H-001 --competition titanic
+```
+
+`show` prints parent/fork lineage and, when present, the **Evidence Card**
+(control vs treatment, expected/observed gains, attribution, decision). See
+[design/evidence-card.md](design/evidence-card.md).
+
+```bash
 research hypothesize update H-001 -c titanic --status confirmed --evidence-run <run_id>
 research hypothesize update H-001 -c titanic --status rejected --evidence-run <run_id>
 ```

@@ -39,7 +39,6 @@ class EvaluationCapability(BaseCapability):
         root = context.workspace_root
         pred = root / "predictions.csv"
         if not pred.is_file():
-            # Prefer submission as predictions stand-in; else stub.
             submission = root / "submission.csv"
             if submission.is_file():
                 pred.write_text(submission.read_text(encoding="utf-8"), encoding="utf-8")
@@ -64,6 +63,10 @@ class EvaluationCapability(BaseCapability):
                     json.dumps(
                         {
                             "cv_accuracy": 0.5,
+                            "cv_fold_scores": [0.48, 0.52],
+                            "cv_mean": 0.5,
+                            "cv_std": 0.02,
+                            "train_time_s": 1.0,
                             "status": "dry_run_eval",
                             "execution_id": context.execution.id,
                         },
@@ -96,40 +99,37 @@ class EvaluationCapability(BaseCapability):
         )
 
     def _compare(self, context: TaskContext) -> TaskEvidence:
-        root = context.workspace_root
-        metrics_path = root / "metrics.json"
-        metrics = {}
-        if metrics_path.is_file():
-            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-
-        baseline_ref = (
-            context.constraints.get("compare_to_plan")
-            or context.plan.metadata.get("compare_to")
-            or "P-001"
+        from labpilot.research_engine.evidence.compare_service import (
+            run_compare_and_build_card,
         )
-        comparison = {
-            "plan_id": context.plan.id,
-            "execution_id": context.execution.id,
-            "compare_to": baseline_ref,
-            "metrics": metrics,
-            "delta": None,
-            "outcome": "baseline"
-            if context.plan.metadata.get("plan_kind") == "baseline"
-            else "inconclusive",
-            "created_at": datetime.now(UTC).isoformat(),
-        }
-        out = root / "artifacts" / "comparison.json"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(comparison, indent=2) + "\n", encoding="utf-8")
+
+        card = run_compare_and_build_card(context)
+        root = context.workspace_root
+        paths = [
+            str(root / "comparison.json"),
+            str(root / "artifacts" / "comparison.json"),
+        ]
         return evidence(
             context,
             capability=self.name,
             passed=True,
-            summary=f"compared against {baseline_ref}",
-            checks=["compare"],
-            paths=[str(out)],
-            metrics=metrics if isinstance(metrics, dict) else {},
-            metadata=comparison,
+            summary=(
+                f"Evidence {card.id}: {card.decision.value} "
+                f"(cv_gain={card.observed.cv_gain})"
+            ),
+            checks=["compare", "evidence_card"],
+            paths=paths,
+            metrics={
+                "cv_delta": card.observed.cv_gain,
+                "primary_delta": card.observed.cv_gain,
+            },
+            metadata={
+                "evidence_card_id": card.id,
+                "decision": card.decision.value,
+                "control_experiment": card.control_experiment,
+                "technique_attribution": card.technique_attribution,
+                **card.to_comparison_dict(),
+            },
         )
 
     def _upsert_experiment(self, context: TaskContext, metrics: dict) -> str:
@@ -174,6 +174,5 @@ class EvaluationCapability(BaseCapability):
             finally:
                 client.close()
         except Exception:
-            # Disk metrics remain SoR if DB write fails in odd test layouts.
             pass
         return exp_id

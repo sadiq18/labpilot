@@ -4,6 +4,18 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
+## Evidence Card + Research Graph (causal learning)
+
+**Status:** In progress on `research-execution`.
+**Design:** [design/evidence-card.md](../design/evidence-card.md),
+[design/research-graph.md](../design/research-graph.md).
+
+Parent-vs-child COMPARE → Evidence Card → evidenced graph edges → belief/claim
+steps. Graph DB and cross-competition shared knowledge remain on
+[backlog.md](backlog.md).
+
+---
+
 ## Research Reflection — Phase B complete
 
 **Status:** Design Phase A **complete**; Plans **1–10 Done**.

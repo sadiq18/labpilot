@@ -1,6 +1,7 @@
 """Generated P0 tabular classification baseline using LightGBM."""
 
 import json
+import time
 from pathlib import Path
 
 import joblib
@@ -160,8 +161,10 @@ def main() -> None:
     oof_proba = np.zeros((len(train), num_classes), dtype=float)
     test_proba = np.zeros((len(test), num_classes), dtype=float)
     models = []
+    fold_scores: list[float] = []
     splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=RANDOM_SEED)
 
+    train_t0 = time.perf_counter()
     for train_idx, val_idx in splitter.split(X, y):
         X_train = X.iloc[train_idx]
         X_val = X.iloc[val_idx]
@@ -181,6 +184,22 @@ def main() -> None:
         oof_proba[np.ix_(val_idx, model.classes_)] = model.predict_proba(X_val)
         test_proba[:, model.classes_] += model.predict_proba(X_test_fold)
         models.append(model)
+        fold_pred = oof_proba[val_idx].argmax(axis=1)
+        fold_proba = None
+        if METRIC_NAME in ("auc", "logloss") and num_classes == 2:
+            fold_proba = oof_proba[val_idx][:, 1]
+        fold_scores.append(
+            float(
+                compute_metric(
+                    y[val_idx],
+                    fold_pred,
+                    METRIC_NAME,
+                    y_proba=fold_proba,
+                    num_classes=num_classes,
+                )
+            )
+        )
+    train_elapsed = time.perf_counter() - train_t0
 
     oof_codes = oof_proba.argmax(axis=1)
     proba_for_metric = None
@@ -193,8 +212,22 @@ def main() -> None:
         y_proba=proba_for_metric,
         num_classes=num_classes,
     )
+    cv_std = float(np.std(fold_scores)) if len(fold_scores) > 1 else 0.0
     predicted_codes = (test_proba / folds).argmax(axis=1)
     predicted_labels = encoder.inverse_transform(predicted_codes)
+
+    infer_t0 = time.perf_counter()
+    _ = models[-1].predict_proba(X_test) if models else None
+    infer_elapsed = time.perf_counter() - infer_t0
+    peak_mem = None
+    try:
+        import resource
+        import sys
+
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        peak_mem = float(usage) / (1024.0 * 1024.0) if sys.platform == "darwin" else float(usage) / 1024.0
+    except Exception:
+        peak_mem = None
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
@@ -209,7 +242,13 @@ def main() -> None:
     metrics = {
         f"cv_{METRIC_NAME}": float(cv_score),
         "cv_folds": folds,
+        "cv_fold_scores": [float(x) for x in fold_scores] if fold_scores else [],
+        "cv_mean": float(cv_score),
+        "cv_std": float(cv_std) if fold_scores and len(fold_scores) > 1 else 0.0,
         "num_classes": num_classes,
+        "train_time_s": float(train_elapsed),
+        "inference_time_s": float(infer_elapsed),
+        "peak_memory_mb": peak_mem,
     }
     (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2))
 

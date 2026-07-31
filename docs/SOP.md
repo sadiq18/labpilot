@@ -289,11 +289,15 @@ capstone notes.
 6. `run --plan P-xxx` — implement via Research Engineer. `WRITE_CODE` always
    overrides `pipeline/train.py` (backup under `artifacts/code_backups/`),
    keeping what worked and applying the hypothesis technique(s) as a delta.
-7. Review metrics / evidence / knowledge effects. Each run also updates
-   competition-local skill overlays under `.labpilot/skills/` (summarized when
-   long) so agents improve for the next cycle; packaged `skill.md` files are
-   the global baseline.
-8. Repeat; submit only when local CV looks worth a leaderboard hit.
+7. Review metrics / evidence / knowledge effects. Each successful COMPARE writes an
+   **Evidence Card** (parent vs treatment: CV Δ, stability, attribution, decision).
+   Success = card `decision` vs parent, not “LB went up alone.” See
+   [design/evidence-card.md](design/evidence-card.md).
+   Each run also updates competition-local skill overlays under `.labpilot/skills/`
+   (summarized when long) so agents improve for the next cycle; packaged `skill.md`
+   files are the global baseline.
+8. Repeat; submit only when local CV looks worth a leaderboard hit (`submit` patches
+   `observed.lb_gain` on the card and steps beliefs).
 
 Avoid burning daily submission quota on undiagnosed regressions — the knowledge
 base and experiment tools exist so you don’t rediscover failures by hand.

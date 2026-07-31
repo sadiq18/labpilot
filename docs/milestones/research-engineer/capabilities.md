@@ -83,8 +83,12 @@ Aim for **~8–12 capabilities**, not 15+ agents and not hundreds of agents as t
 
 ### 8. Inference & Evaluation
 
-- Serves `RUN_INFERENCE`, `EVALUATE`, `COMPARE`  
-- Deterministic predictions, CV/metrics, reproducibility check, plots, baseline delta  
+- Serves `RUN_INFERENCE`, `EVALUATE`, `COMPARE`
+- Deterministic predictions, CV/metrics, reproducibility check
+- **COMPARE** resolves parent/champion control metrics, writes
+  `comparison.json` (root + artifacts) with `cv_delta` / `primary_delta`, and
+  assembles an **Evidence Card** (see [design/evidence-card.md](../../design/evidence-card.md)).
+  Not a stub against P-001 with null delta.
 
 ### 9. Submission
 

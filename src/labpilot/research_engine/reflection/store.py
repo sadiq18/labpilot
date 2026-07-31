@@ -283,6 +283,61 @@ class ReflectionStore:
         rows = self._conn.execute("SELECT id FROM research_claims").fetchall()
         return allocate_sequential_id(_CLAIM_PREFIX, (row["id"] for row in rows))
 
+    def upsert_claim_by_statement(
+        self,
+        *,
+        statement: str,
+        technique: str = "",
+        confidence: float = 0.5,
+        status: str = "candidate",
+        effect: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Return claim id for statement; create or bump confidence/status."""
+        statement = (statement or "").strip()
+        for claim in self.list_claims():
+            if str(claim.get("statement") or "").strip() == statement:
+                claim_id = str(claim["id"])
+                new_conf = max(float(claim.get("confidence") or 0.5), confidence)
+                # Advance candidate → supported when requested.
+                new_status = str(claim.get("status") or "candidate")
+                if status == "supported" and new_status == "candidate":
+                    new_status = "supported"
+                if status == "contested":
+                    new_status = "contested"
+                if status == "withdrawn":
+                    new_status = "withdrawn"
+                meta = dict(claim.get("metadata") or {})
+                meta.update(metadata or {})
+                now = _now()
+                self._conn.execute(
+                    """
+                    UPDATE research_claims
+                    SET confidence = ?, status = ?, technique = COALESCE(NULLIF(?, ''), technique),
+                        metadata = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        new_conf,
+                        new_status,
+                        technique,
+                        dumps(meta),
+                        now,
+                        claim_id,
+                    ),
+                )
+                self._conn.commit()
+                return claim_id
+        row = self.create_claim(
+            statement=statement,
+            status=status,
+            confidence=confidence,
+            technique=technique,
+            effect=effect,
+            metadata=metadata,
+        )
+        return str(row["id"])
+
     def create_claim(
         self,
         statement: str,

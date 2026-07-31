@@ -67,8 +67,10 @@ def score_candidate(candidate: HypothesisCandidate) -> float:
         parent_bonus += 0.06
     combo = list(candidate.metadata.get("combo_techniques") or [])
     if combo:
-        # Mild bonus for multi-technique portfolios (size 2–3).
         stack_bonus += 0.03 * min(3, len(combo))
+    # Soft prior from graph-backed belief confidence when present.
+    graph_prior = float(candidate.metadata.get("graph_confidence") or 0.0)
+    graph_bonus = 0.08 * min(1.0, max(0.0, graph_prior - 0.5)) if graph_prior else 0.0
     return (
         gain * _W_GAIN
         + candidate.confidence * _W_CONF
@@ -79,6 +81,7 @@ def score_candidate(candidate: HypothesisCandidate) -> float:
         + kind_bonus
         + parent_bonus
         + stack_bonus
+        + graph_bonus
         + 0.01 * candidate.score_hint
     )
 

@@ -193,6 +193,73 @@ def _apply_submit_knowledge(
     if status is not None:
         summary.hypothesis_outcome["status"] = status.value
 
+    # Patch Evidence Card with LB gain and re-apply beliefs (step, never overwrite).
+    try:
+        from labpilot.research_engine.evidence.apply import (
+            apply_card_to_beliefs,
+            apply_card_to_hypothesis,
+        )
+        from labpilot.research_engine.evidence.builder import build_evidence_card
+        from labpilot.research_engine.evidence.store import EvidenceCardStore
+        from labpilot.research_engine.intelligence.graph.writer import (
+            write_graph_edges_from_card,
+        )
+
+        store = EvidenceCardStore(knowledge_dir, competition)
+        card = store.get_for_execution(summary.execution_id)
+        lb_delta = (
+            summary.leaderboard.delta_vs_prior if summary.leaderboard else None
+        )
+        if card is not None:
+            observed = card.observed.model_copy(update={"lb_gain": lb_delta})
+            # Rebuild decision with LB signal.
+            from labpilot.research_engine.evidence.builder import decide_evidence
+
+            decision, reason = decide_evidence(
+                cv_gain=card.observed.cv_gain,
+                lb_gain=lb_delta,
+                stability=card.observed.stability,
+                maximize=card.maximize,
+                missing_control=card.control_experiment is None
+                and card.observed.parent_cv is None,
+                overfitting=overfitting,
+            )
+            card = card.model_copy(
+                update={
+                    "observed": observed,
+                    "decision": decision,
+                    "decision_reason": reason,
+                }
+            )
+            card = store.save(card)
+            write_graph_edges_from_card(
+                knowledge_dir=knowledge_dir,
+                competition=competition,
+                card=card,
+            )
+            apply_card_to_beliefs(
+                knowledge_dir=knowledge_dir,
+                competition=competition,
+                card=card,
+            )
+            apply_card_to_hypothesis(
+                knowledge_dir=knowledge_dir,
+                competition=competition,
+                card=card,
+            )
+            summary.hypothesis_outcome["evidence_card_id"] = card.id
+            summary.hypothesis_outcome["decision"] = card.decision.value
+            if status is None:
+                status = {
+                    "accepted": HypothesisStatus.CONFIRMED,
+                    "rejected": HypothesisStatus.REJECTED,
+                    "inconclusive": HypothesisStatus.INCONCLUSIVE,
+                }.get(card.decision.value)
+                if status is not None:
+                    summary.hypothesis_outcome["status"] = status.value
+    except Exception as exc:
+        logger.warning("Evidence card LB patch skipped: %s", exc)
+
     if summary.hypothesis_id:
         try:
             why = "Public score recorded after submit."
@@ -276,17 +343,29 @@ def _apply_submit_knowledge(
                 weight=1.0,
             )
         else:
+            # Step belief confidence from prior (do not overwrite absolute values).
+            existing = kstore.get_belief(belief_id)
+            prior = float(existing["confidence"]) if existing else 0.5
             effect = "positive" if (summary.learning_gain or 0) > 0 else "unknown"
-            conf = 0.72 if effect == "positive" and public is not None else 0.6
+            if summary.leaderboard and summary.leaderboard.delta_vs_prior is not None:
+                if summary.leaderboard.delta_vs_prior >= 0:
+                    effect = "positive"
+                    prior = min(0.99, prior + 0.06)
+                else:
+                    effect = "negative"
+                    prior = max(0.05, prior - 0.08)
+            elif effect == "positive":
+                prior = min(0.99, prior + 0.04)
             kstore.upsert_belief(
                 belief_id=belief_id,
                 technique=technique,
-                status="suggested",
+                status="suggested" if prior < 0.65 else "validated",
                 effect=effect,
-                confidence=conf,
+                confidence=prior,
                 metadata={
                     "execution_id": summary.execution_id,
                     "public_score": public,
+                    "stepped_from_submit": True,
                 },
             )
             tid = kstore.merge_technique(
