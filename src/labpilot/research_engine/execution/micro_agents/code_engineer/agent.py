@@ -57,6 +57,7 @@ class CodeEngineerAgent(BaseMicroAgent):
             parent_hypothesis_id=str(data.get("parent_hypothesis_id") or ""),
             technique=str(data.get("technique") or ""),
             technique_stack=list(data.get("technique_stack") or []),
+            combo_techniques=list(data.get("combo_techniques") or []),
             observation=str(data.get("observation") or ""),
             reason=str(data.get("reason") or ""),
             prediction=str(data.get("prediction") or ""),

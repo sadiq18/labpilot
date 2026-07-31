@@ -79,6 +79,8 @@ class Hypothesis(BaseModel):
     parent_hypothesis_id: str | None = None
     #: Techniques already assumed in the pipeline (parent stack + this change).
     technique_stack: list[str] = Field(default_factory=list)
+    #: Techniques applied together in a combination experiment (size 2–3).
+    combo_techniques: list[str] = Field(default_factory=list)
     #: Free-text local / LB outcome narrative after an execution or submit.
     actual_outcome: str | None = None
     #: Public leaderboard score when a submission for this hypothesis scored.

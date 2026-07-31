@@ -97,6 +97,16 @@ def test_hypothesize_cli_list_update_show(tmp_path: Path) -> None:
         confidence=0.74,
         tags=["loss", "class-imbalance"],
     )
+    HypothesisStore(knowledge, "titanic").create(
+        observation="Stack on H-001",
+        reason="parent gained",
+        prediction="Add SpecAugment on top of H-001",
+        confidence=0.8,
+        tags=["SpecAugment", "stacked", "fork:H-001"],
+        technique="SpecAugment",
+        parent_hypothesis_id="H-001",
+        technique_stack=["Focal Loss", "SpecAugment"],
+    )
     assert (knowledge / "titanic" / "hypotheses" / "H-001.json").is_file()
 
     list_result = runner.invoke(
@@ -113,6 +123,8 @@ def test_hypothesize_cli_list_update_show(tmp_path: Path) -> None:
     assert list_result.exit_code == 0, list_result.output
     assert "H-001" in list_result.output
     assert "proposed" in list_result.output
+    assert "fork:H-001" in list_result.output
+    assert "SpecAugment" in list_result.output
 
     update = runner.invoke(
         app,
@@ -142,7 +154,7 @@ def test_hypothesize_cli_list_update_show(tmp_path: Path) -> None:
         [
             "hypothesize",
             "show",
-            "H-001",
+            "H-002",
             "--competition",
             "titanic",
             "--knowledge-dir",
@@ -152,9 +164,9 @@ def test_hypothesize_cli_list_update_show(tmp_path: Path) -> None:
         ],
     )
     assert show.exit_code == 0, show.output
-    assert "Focal Loss will improve Macro F1" in show.output
-    assert "confirmed" in show.output
-
+    assert "fork:H-001" in show.output
+    assert "SpecAugment" in show.output
+    assert "Add SpecAugment on top of H-001" in show.output
 
 def test_hypothesize_list_filters_by_status(tmp_path: Path) -> None:
     knowledge = tmp_path / "knowledge"

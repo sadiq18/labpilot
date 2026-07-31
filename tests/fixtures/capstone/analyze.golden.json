@@ -608,6 +608,141 @@
     {
       "rank": 1,
       "hypothesis_id": "H-XXX",
+      "title": "Combine EMA + SpecAugment",
+      "observation": "Unused complementary techniques ['EMA', 'SpecAugment'] can be tested together to reduce sequential experiments. Rule-engine combo: complementary categories ['training_strategy', 'augmentation'] (technique EMA+SpecAugment)",
+      "reason": "Combination experiment (LLM/rule pick): Rule-engine combo: complementary categories ['training_strategy', 'augmentation'] (techniques EMA+SpecAugment) (artifact mixed:ledger; technique EMA+SpecAugment)",
+      "prediction": "Applying EMA+SpecAugment together on the prior pipeline will improve the primary metric more efficiently than sequential singles.",
+      "expected_impact": "high",
+      "expected_impact_value": 0.02,
+      "confidence": 0.7000000000000001,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "ledger",
+          "note": "combination portfolio"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.8855,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "EMA",
+        "SpecAugment",
+        "combination",
+        "stacked",
+        "improvement"
+      ],
+      "technique": "EMA+SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "EMA",
+        "SpecAugment"
+      ],
+      "combo_techniques": [
+        "EMA",
+        "SpecAugment"
+      ],
+      "combo_rationale": "Rule-engine combo: complementary categories ['training_strategy', 'augmentation']"
+    },
+    {
+      "rank": 2,
+      "hypothesis_id": "H-XXX",
+      "title": "Combine Focal Loss + EMA",
+      "observation": "Unused complementary techniques ['Focal Loss', 'EMA'] can be tested together to reduce sequential experiments. Rule-engine combo: complementary categories ['other', 'training_strategy'] (technique Focal Loss+EMA)",
+      "reason": "Combination experiment (LLM/rule pick): Rule-engine combo: complementary categories ['other', 'training_strategy'] (techniques Focal Loss+EMA) (artifact mixed:ledger; technique Focal Loss+EMA)",
+      "prediction": "Applying Focal Loss+EMA together on the prior pipeline will improve the primary metric more efficiently than sequential singles.",
+      "expected_impact": "high",
+      "expected_impact_value": 0.02,
+      "confidence": 0.7000000000000001,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "ledger",
+          "note": "combination portfolio"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.8855,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "Focal Loss",
+        "EMA",
+        "combination",
+        "stacked",
+        "improvement"
+      ],
+      "technique": "Focal Loss+EMA",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "Focal Loss",
+        "EMA"
+      ],
+      "combo_techniques": [
+        "Focal Loss",
+        "EMA"
+      ],
+      "combo_rationale": "Rule-engine combo: complementary categories ['other', 'training_strategy']"
+    },
+    {
+      "rank": 3,
+      "hypothesis_id": "H-XXX",
+      "title": "Combine Focal Loss + SpecAugment",
+      "observation": "Unused complementary techniques ['Focal Loss', 'SpecAugment'] can be tested together to reduce sequential experiments. Rule-engine combo: complementary categories ['other', 'augmentation'] (technique Focal Loss+SpecAugment)",
+      "reason": "Combination experiment (LLM/rule pick): Rule-engine combo: complementary categories ['other', 'augmentation'] (techniques Focal Loss+SpecAugment) (artifact mixed:ledger; technique Focal Loss+SpecAugment)",
+      "prediction": "Applying Focal Loss+SpecAugment together on the prior pipeline will improve the primary metric more efficiently than sequential singles.",
+      "expected_impact": "high",
+      "expected_impact_value": 0.02,
+      "confidence": 0.7000000000000001,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "ledger",
+          "note": "combination portfolio"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.8855,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "Focal Loss",
+        "SpecAugment",
+        "combination",
+        "stacked",
+        "improvement"
+      ],
+      "technique": "Focal Loss+SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "Focal Loss",
+        "SpecAugment"
+      ],
+      "combo_techniques": [
+        "Focal Loss",
+        "SpecAugment"
+      ],
+      "combo_rationale": "Rule-engine combo: complementary categories ['other', 'augmentation']"
+    },
+    {
+      "rank": 4,
+      "hypothesis_id": "H-XXX",
       "title": "Add SpecAugment to the current pipeline",
       "observation": "Current pipeline is missing SpecAugment, which has supporting evidence.",
       "reason": "Pipeline-diff: SpecAugment is present in domain knowledge but not in [\u2014]. (artifact paper:paper:specaugment; technique SpecAugment)",
@@ -627,7 +762,7 @@
         "paper"
       ],
       "avoids_failure_ids": [],
-      "score": 0.597,
+      "score": 0.517,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "paper",
@@ -637,10 +772,12 @@
       ],
       "technique": "SpecAugment",
       "parent_hypothesis_id": null,
-      "technique_stack": []
+      "technique_stack": [],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 2,
+      "rank": 5,
       "hypothesis_id": "H-XXX",
       "title": "Test unused belief: EMA",
       "observation": "Belief about EMA was never part of a prior hypothesis. (artifact mixed:belief_tech_ema; technique EMA)",
@@ -661,7 +798,7 @@
         "mixed"
       ],
       "avoids_failure_ids": [],
-      "score": 0.428,
+      "score": 0.348,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "mixed",
@@ -674,10 +811,12 @@
       "parent_hypothesis_id": null,
       "technique_stack": [
         "EMA"
-      ]
+      ],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 3,
+      "rank": 6,
       "hypothesis_id": "H-XXX",
       "title": "Test unused belief: SpecAugment",
       "observation": "Belief about SpecAugment was never part of a prior hypothesis. (artifact mixed:belief_tech_specaugment; technique SpecAugment)",
@@ -698,7 +837,7 @@
         "mixed"
       ],
       "avoids_failure_ids": [],
-      "score": 0.428,
+      "score": -0.002,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "mixed",
@@ -711,10 +850,12 @@
       "parent_hypothesis_id": null,
       "technique_stack": [
         "SpecAugment"
-      ]
+      ],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 4,
+      "rank": 7,
       "hypothesis_id": "H-XXX",
       "title": "Add EMA to the current pipeline",
       "observation": "Current pipeline is missing EMA, which has supporting evidence.",
@@ -735,7 +876,7 @@
         "paper"
       ],
       "avoids_failure_ids": [],
-      "score": 0.405,
+      "score": -0.025,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "paper",
@@ -745,10 +886,12 @@
       ],
       "technique": "EMA",
       "parent_hypothesis_id": null,
-      "technique_stack": []
+      "technique_stack": [],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 5,
+      "rank": 8,
       "hypothesis_id": "H-XXX",
       "title": "Try SpecAugment",
       "observation": "SpecAugment appears in retrieved knowledge for this competition. (artifact paper:paper:specaugment; technique SpecAugment)",
@@ -769,7 +912,7 @@
         "paper"
       ],
       "avoids_failure_ids": [],
-      "score": 0.386,
+      "score": -0.044,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "paper",
@@ -779,10 +922,12 @@
       ],
       "technique": "SpecAugment",
       "parent_hypothesis_id": null,
-      "technique_stack": []
+      "technique_stack": [],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 6,
+      "rank": 9,
       "hypothesis_id": "H-XXX",
       "title": "Try unused technique SpecAugment",
       "observation": "Technique SpecAugment is in knowledge but never tested. (artifact mixed:paper:specaugment; mixed:repo:owner/audio-pipeline; technique SpecAugment)",
@@ -808,7 +953,7 @@
         "mixed"
       ],
       "avoids_failure_ids": [],
-      "score": 0.36,
+      "score": -0.07,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "mixed",
@@ -821,10 +966,12 @@
       "parent_hypothesis_id": null,
       "technique_stack": [
         "SpecAugment"
-      ]
+      ],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 7,
+      "rank": 10,
       "hypothesis_id": "H-XXX",
       "title": "Try unused technique EMA",
       "observation": "Technique EMA is in knowledge but never tested. (artifact mixed:paper:ema-birdclef; technique EMA)",
@@ -845,7 +992,7 @@
         "mixed"
       ],
       "avoids_failure_ids": [],
-      "score": 0.34,
+      "score": -0.09,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "mixed",
@@ -858,41 +1005,9 @@
       "parent_hypothesis_id": null,
       "technique_stack": [
         "EMA"
-      ]
-    },
-    {
-      "rank": 8,
-      "hypothesis_id": "H-XXX",
-      "title": "Try EMA",
-      "observation": "EMA appears in retrieved knowledge for this competition. (artifact paper:paper:ema-birdclef; technique EMA)",
-      "reason": "Retrieved technique card: confidence=0.40; papers=1; experiments=0; repos=0 (artifact paper:paper:ema-birdclef; technique EMA)",
-      "prediction": "Adopting EMA will improve the primary metric. (artifact paper:paper:ema-birdclef; technique EMA)",
-      "expected_impact": "low",
-      "expected_impact_value": 0.005,
-      "confidence": 0.4,
-      "supporting_evidence": [
-        {
-          "kind": "paper",
-          "ref": "paper:ema-birdclef",
-          "note": ""
-        }
       ],
-      "implementation_effort": "20m",
-      "origins": [
-        "paper"
-      ],
-      "avoids_failure_ids": [],
-      "score": 0.194,
-      "created_by": "analyze",
-      "generator": "rule_engine",
-      "origin": "paper",
-      "tags": [
-        "EMA",
-        "technique"
-      ],
-      "technique": "EMA",
-      "parent_hypothesis_id": null,
-      "technique_stack": []
+      "combo_techniques": [],
+      "combo_rationale": ""
     }
   ],
   "techniques": {
@@ -910,6 +1025,30 @@
   "hypotheses": [
     {
       "id": "H-XXX",
+      "title": "Combine EMA + SpecAugment",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed"
+    },
+    {
+      "id": "H-XXX",
+      "title": "Combine Focal Loss + EMA",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed"
+    },
+    {
+      "id": "H-XXX",
+      "title": "Combine Focal Loss + SpecAugment",
+      "status": "proposed",
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed"
+    },
+    {
+      "id": "H-XXX",
       "title": "Add SpecAugment to the current pipeline",
       "status": "proposed",
       "created_by": "analyze",
@@ -963,19 +1102,146 @@
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "mixed"
-    },
-    {
-      "id": "H-XXX",
-      "title": "Try EMA",
-      "status": "proposed",
-      "created_by": "analyze",
-      "generator": "rule_engine",
-      "origin": "paper"
     }
   ],
   "suggested_experiments": [
     {
       "rank": 1,
+      "hypothesis_id": "H-XXX",
+      "title": "Combine EMA + SpecAugment",
+      "observation": "Unused complementary techniques ['EMA', 'SpecAugment'] can be tested together to reduce sequential experiments. Rule-engine combo: complementary categories ['training_strategy', 'augmentation'] (technique EMA+SpecAugment)",
+      "reason": "Combination experiment (LLM/rule pick): Rule-engine combo: complementary categories ['training_strategy', 'augmentation'] (techniques EMA+SpecAugment) (artifact mixed:ledger; technique EMA+SpecAugment)",
+      "prediction": "Applying EMA+SpecAugment together on the prior pipeline will improve the primary metric more efficiently than sequential singles.",
+      "expected_impact": "high",
+      "expected_impact_value": 0.02,
+      "confidence": 0.7000000000000001,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "ledger",
+          "note": "combination portfolio"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.8855,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "EMA",
+        "SpecAugment",
+        "combination",
+        "stacked",
+        "improvement"
+      ],
+      "technique": "EMA+SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "EMA",
+        "SpecAugment"
+      ],
+      "combo_techniques": [
+        "EMA",
+        "SpecAugment"
+      ],
+      "combo_rationale": "Rule-engine combo: complementary categories ['training_strategy', 'augmentation']"
+    },
+    {
+      "rank": 2,
+      "hypothesis_id": "H-XXX",
+      "title": "Combine Focal Loss + EMA",
+      "observation": "Unused complementary techniques ['Focal Loss', 'EMA'] can be tested together to reduce sequential experiments. Rule-engine combo: complementary categories ['other', 'training_strategy'] (technique Focal Loss+EMA)",
+      "reason": "Combination experiment (LLM/rule pick): Rule-engine combo: complementary categories ['other', 'training_strategy'] (techniques Focal Loss+EMA) (artifact mixed:ledger; technique Focal Loss+EMA)",
+      "prediction": "Applying Focal Loss+EMA together on the prior pipeline will improve the primary metric more efficiently than sequential singles.",
+      "expected_impact": "high",
+      "expected_impact_value": 0.02,
+      "confidence": 0.7000000000000001,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "ledger",
+          "note": "combination portfolio"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.8855,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "Focal Loss",
+        "EMA",
+        "combination",
+        "stacked",
+        "improvement"
+      ],
+      "technique": "Focal Loss+EMA",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "Focal Loss",
+        "EMA"
+      ],
+      "combo_techniques": [
+        "Focal Loss",
+        "EMA"
+      ],
+      "combo_rationale": "Rule-engine combo: complementary categories ['other', 'training_strategy']"
+    },
+    {
+      "rank": 3,
+      "hypothesis_id": "H-XXX",
+      "title": "Combine Focal Loss + SpecAugment",
+      "observation": "Unused complementary techniques ['Focal Loss', 'SpecAugment'] can be tested together to reduce sequential experiments. Rule-engine combo: complementary categories ['other', 'augmentation'] (technique Focal Loss+SpecAugment)",
+      "reason": "Combination experiment (LLM/rule pick): Rule-engine combo: complementary categories ['other', 'augmentation'] (techniques Focal Loss+SpecAugment) (artifact mixed:ledger; technique Focal Loss+SpecAugment)",
+      "prediction": "Applying Focal Loss+SpecAugment together on the prior pipeline will improve the primary metric more efficiently than sequential singles.",
+      "expected_impact": "high",
+      "expected_impact_value": 0.02,
+      "confidence": 0.7000000000000001,
+      "supporting_evidence": [
+        {
+          "kind": "mixed",
+          "ref": "ledger",
+          "note": "combination portfolio"
+        }
+      ],
+      "implementation_effort": "1h",
+      "origins": [
+        "mixed"
+      ],
+      "avoids_failure_ids": [],
+      "score": 0.8855,
+      "created_by": "analyze",
+      "generator": "rule_engine",
+      "origin": "mixed",
+      "tags": [
+        "Focal Loss",
+        "SpecAugment",
+        "combination",
+        "stacked",
+        "improvement"
+      ],
+      "technique": "Focal Loss+SpecAugment",
+      "parent_hypothesis_id": null,
+      "technique_stack": [
+        "Focal Loss",
+        "SpecAugment"
+      ],
+      "combo_techniques": [
+        "Focal Loss",
+        "SpecAugment"
+      ],
+      "combo_rationale": "Rule-engine combo: complementary categories ['other', 'augmentation']"
+    },
+    {
+      "rank": 4,
       "hypothesis_id": "H-XXX",
       "title": "Add SpecAugment to the current pipeline",
       "observation": "Current pipeline is missing SpecAugment, which has supporting evidence.",
@@ -996,7 +1262,7 @@
         "paper"
       ],
       "avoids_failure_ids": [],
-      "score": 0.597,
+      "score": 0.517,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "paper",
@@ -1006,10 +1272,12 @@
       ],
       "technique": "SpecAugment",
       "parent_hypothesis_id": null,
-      "technique_stack": []
+      "technique_stack": [],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 2,
+      "rank": 5,
       "hypothesis_id": "H-XXX",
       "title": "Test unused belief: EMA",
       "observation": "Belief about EMA was never part of a prior hypothesis. (artifact mixed:belief_tech_ema; technique EMA)",
@@ -1030,7 +1298,7 @@
         "mixed"
       ],
       "avoids_failure_ids": [],
-      "score": 0.428,
+      "score": 0.348,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "mixed",
@@ -1043,10 +1311,12 @@
       "parent_hypothesis_id": null,
       "technique_stack": [
         "EMA"
-      ]
+      ],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 3,
+      "rank": 6,
       "hypothesis_id": "H-XXX",
       "title": "Test unused belief: SpecAugment",
       "observation": "Belief about SpecAugment was never part of a prior hypothesis. (artifact mixed:belief_tech_specaugment; technique SpecAugment)",
@@ -1067,7 +1337,7 @@
         "mixed"
       ],
       "avoids_failure_ids": [],
-      "score": 0.428,
+      "score": -0.002,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "mixed",
@@ -1080,10 +1350,12 @@
       "parent_hypothesis_id": null,
       "technique_stack": [
         "SpecAugment"
-      ]
+      ],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 4,
+      "rank": 7,
       "hypothesis_id": "H-XXX",
       "title": "Add EMA to the current pipeline",
       "observation": "Current pipeline is missing EMA, which has supporting evidence.",
@@ -1104,7 +1376,7 @@
         "paper"
       ],
       "avoids_failure_ids": [],
-      "score": 0.405,
+      "score": -0.025,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "paper",
@@ -1114,10 +1386,12 @@
       ],
       "technique": "EMA",
       "parent_hypothesis_id": null,
-      "technique_stack": []
+      "technique_stack": [],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 5,
+      "rank": 8,
       "hypothesis_id": "H-XXX",
       "title": "Try SpecAugment",
       "observation": "SpecAugment appears in retrieved knowledge for this competition. (artifact paper:paper:specaugment; technique SpecAugment)",
@@ -1138,7 +1412,7 @@
         "paper"
       ],
       "avoids_failure_ids": [],
-      "score": 0.386,
+      "score": -0.044,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "paper",
@@ -1148,10 +1422,12 @@
       ],
       "technique": "SpecAugment",
       "parent_hypothesis_id": null,
-      "technique_stack": []
+      "technique_stack": [],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 6,
+      "rank": 9,
       "hypothesis_id": "H-XXX",
       "title": "Try unused technique SpecAugment",
       "observation": "Technique SpecAugment is in knowledge but never tested. (artifact mixed:paper:specaugment; mixed:repo:owner/audio-pipeline; technique SpecAugment)",
@@ -1177,7 +1453,7 @@
         "mixed"
       ],
       "avoids_failure_ids": [],
-      "score": 0.36,
+      "score": -0.07,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "mixed",
@@ -1190,10 +1466,12 @@
       "parent_hypothesis_id": null,
       "technique_stack": [
         "SpecAugment"
-      ]
+      ],
+      "combo_techniques": [],
+      "combo_rationale": ""
     },
     {
-      "rank": 7,
+      "rank": 10,
       "hypothesis_id": "H-XXX",
       "title": "Try unused technique EMA",
       "observation": "Technique EMA is in knowledge but never tested. (artifact mixed:paper:ema-birdclef; technique EMA)",
@@ -1214,7 +1492,7 @@
         "mixed"
       ],
       "avoids_failure_ids": [],
-      "score": 0.34,
+      "score": -0.09,
       "created_by": "analyze",
       "generator": "rule_engine",
       "origin": "mixed",
@@ -1227,41 +1505,9 @@
       "parent_hypothesis_id": null,
       "technique_stack": [
         "EMA"
-      ]
-    },
-    {
-      "rank": 8,
-      "hypothesis_id": "H-XXX",
-      "title": "Try EMA",
-      "observation": "EMA appears in retrieved knowledge for this competition. (artifact paper:paper:ema-birdclef; technique EMA)",
-      "reason": "Retrieved technique card: confidence=0.40; papers=1; experiments=0; repos=0 (artifact paper:paper:ema-birdclef; technique EMA)",
-      "prediction": "Adopting EMA will improve the primary metric. (artifact paper:paper:ema-birdclef; technique EMA)",
-      "expected_impact": "low",
-      "expected_impact_value": 0.005,
-      "confidence": 0.4,
-      "supporting_evidence": [
-        {
-          "kind": "paper",
-          "ref": "paper:ema-birdclef",
-          "note": ""
-        }
       ],
-      "implementation_effort": "20m",
-      "origins": [
-        "paper"
-      ],
-      "avoids_failure_ids": [],
-      "score": 0.194,
-      "created_by": "analyze",
-      "generator": "rule_engine",
-      "origin": "paper",
-      "tags": [
-        "EMA",
-        "technique"
-      ],
-      "technique": "EMA",
-      "parent_hypothesis_id": null,
-      "technique_stack": []
+      "combo_techniques": [],
+      "combo_rationale": ""
     }
   ],
   "research_brief": {
@@ -1295,25 +1541,25 @@
       "SpecAugment [suggested, conf=0.50]"
     ],
     "top_hypotheses": [
-      "H-001: Add SpecAugment to the current pipeline",
-      "H-002: Test unused belief: EMA",
-      "H-003: Test unused belief: SpecAugment",
-      "H-004: Add EMA to the current pipeline",
-      "H-005: Try SpecAugment"
+      "H-001: Combine EMA + SpecAugment",
+      "H-002: Combine Focal Loss + EMA",
+      "H-003: Combine Focal Loss + SpecAugment",
+      "H-004: Add SpecAugment to the current pipeline",
+      "H-005: Test unused belief: EMA"
     ],
     "known_risks": [
       "Mixup hurt rare classes when alpha was too high.",
       "Focal Loss hurt performance on the rare-species head (delta < 0)."
     ],
     "suggested_experiments": [
+      "Combine EMA + SpecAugment",
+      "Combine Focal Loss + EMA",
+      "Combine Focal Loss + SpecAugment",
       "Add SpecAugment to the current pipeline",
       "Test unused belief: EMA",
       "Test unused belief: SpecAugment",
       "Add EMA to the current pipeline",
-      "Try SpecAugment",
-      "Try unused technique SpecAugment",
-      "Try unused technique EMA",
-      "Try EMA"
+      "Try SpecAugment"
     ],
     "generated_by": "rule_engine",
     "notes": [
@@ -1327,7 +1573,7 @@
     "repository_count": 1,
     "transfer_count": 1,
     "knowledge_unit_count": 4,
-    "hypothesis_count": 8,
+    "hypothesis_count": 10,
     "has_research_brief": true
   },
   "notes": [
@@ -1342,8 +1588,9 @@
     "[hypothesis] symbolic: 4 technique(s), 4 paper(s), 3 experiment(s), 1 repo(s), 2 failure(s).",
     "[hypothesis] context: brief=1389/14700 chars (dropped_sections=0).",
     "[hypothesis] hypothesis: ledger artifacts=10 untried=4 worked=0 failed=0 unused_beliefs=4 winning=\u2014",
-    "[hypothesis] hypothesis: 8 candidate(s) \u2192 top 8 (generator=rule_engine drafts).",
-    "[hypothesis] hypothesis: 8 new hypothesis generated (status=proposed).",
+    "[hypothesis] hypothesis: combo shortlist=6 \u2192 picks=3 (rule_engine)",
+    "[hypothesis] hypothesis: 11 candidate(s) \u2192 top 10 (generator=rule_engine drafts).",
+    "[hypothesis] hypothesis: 10 new hypothesis generated (status=proposed).",
     "[research-brief] generated_by=rule_engine"
   ]
 }

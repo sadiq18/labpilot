@@ -85,11 +85,12 @@ def compile_research_plan(
         plan_id = store.new_plan_id()
         plan_metadata = {
             "template": blueprint.template_name,
-            "technique": context.technique,
-            "technique_stack": list(context.technique_stack),
             "tags": list(context.tags),
             "change_category": context.change_category,
             **dict(context.parent_metadata or {}),
+            "technique": context.technique,
+            "technique_stack": list(context.technique_stack),
+            "combo_techniques": list(context.combo_techniques),
             "parent_hypothesis_id": context.parent_hypothesis_id,
             "parent_execution_id": context.parent_execution_id,
             "parent_metrics": dict(context.parent_metrics or {}),
@@ -499,6 +500,7 @@ def _planning_structured_context(
             "tags": list(hypothesis.tags),
             "technique": hypothesis.technique,
             "technique_stack": list(hypothesis.technique_stack),
+            "combo_techniques": list(hypothesis.combo_techniques),
             "parent_hypothesis_id": context.parent_hypothesis_id,
             "parent_metrics": dict(context.parent_metrics or {}),
             "goal": context.goal,

@@ -1798,6 +1798,28 @@ def experiments_knowledge_list(
     console.print(table)
 
 
+def _hypothesis_parent_label(hypothesis) -> str:
+    """Human-readable parent / fork lineage for list/show."""
+    parent = getattr(hypothesis, "parent_hypothesis_id", None)
+    if parent:
+        return f"fork:{parent}"
+    for tag in getattr(hypothesis, "tags", []) or []:
+        text = str(tag)
+        if text.lower().startswith("fork:"):
+            return text
+    return "—"
+
+
+def _hypothesis_technique_label(hypothesis) -> str:
+    combo = list(getattr(hypothesis, "combo_techniques", None) or [])
+    if combo:
+        return " + ".join(combo)
+    technique = getattr(hypothesis, "technique", None)
+    if technique:
+        return str(technique)
+    return "—"
+
+
 @hypothesize_app.command("list")
 def hypothesis_list(
     competition: str | None = typer.Option(
@@ -1837,12 +1859,16 @@ def hypothesis_list(
     table = Table(title=f"Hypotheses: {competition}")
     table.add_column("ID", style="cyan")
     table.add_column("Status")
+    table.add_column("Parent / fork")
+    table.add_column("Technique")
     table.add_column("Confidence")
     table.add_column("Prediction")
     for hypothesis in hypotheses:
         table.add_row(
             hypothesis.id,
             hypothesis.status.value,
+            _hypothesis_parent_label(hypothesis),
+            _hypothesis_technique_label(hypothesis),
             f"{hypothesis.confidence:.2f}",
             hypothesis.prediction,
         )
@@ -1884,6 +1910,18 @@ def hypothesis_show(
     table.add_column("Value")
     table.add_row("Competition", hypothesis.competition)
     table.add_row("Status", hypothesis.status.value)
+    table.add_row("Parent / fork", _hypothesis_parent_label(hypothesis))
+    table.add_row("Technique", _hypothesis_technique_label(hypothesis))
+    table.add_row(
+        "Technique stack",
+        " → ".join(hypothesis.technique_stack) if hypothesis.technique_stack else "-",
+    )
+    table.add_row(
+        "Combo techniques",
+        " + ".join(hypothesis.combo_techniques)
+        if hypothesis.combo_techniques
+        else "-",
+    )
     table.add_row("Confidence", f"{hypothesis.confidence:.2f}")
     table.add_row(
         "Expected impact",

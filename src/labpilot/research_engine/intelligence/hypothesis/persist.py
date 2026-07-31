@@ -40,6 +40,7 @@ def persist_recommendations(
             technique=card.technique or None,
             parent_hypothesis_id=card.parent_hypothesis_id,
             technique_stack=card.technique_stack,
+            combo_techniques=card.combo_techniques,
         )
         updated.append(card.model_copy(update={"hypothesis_id": hyp.id}))
     return updated
@@ -152,6 +153,8 @@ def load_open_hypothesis_tags(knowledge_dir: Path, competition: str) -> set[str]
         "transfer",
         "failure_fix",
         "stacked",
+        "combination",
+        "ablation",
         "improvement",
         "untried",
         "unused_belief",
@@ -172,5 +175,12 @@ def load_open_hypothesis_tags(knowledge_dir: Path, competition: str) -> set[str]
         if hyp.parent_hypothesis_id and hyp.technique:
             open_tags.add(
                 normalize_label(f"{hyp.parent_hypothesis_id}+{hyp.technique}")
+            )
+        combo = [str(t).strip() for t in (hyp.combo_techniques or []) if str(t).strip()]
+        if len(combo) >= 2:
+            joined = "+".join(sorted(normalize_label(t) for t in combo))
+            open_tags.add(joined)
+            open_tags.add(
+                normalize_label(f"{hyp.parent_hypothesis_id or 'root'}+{joined}")
             )
     return open_tags

@@ -27,8 +27,10 @@ class HypothesisCandidateKind(StrEnum):
     FAILURE_FIX = "failure_fix"
     TECHNIQUE = "technique"
     STACKED = "stacked"
+    COMBINATION = "combination"
     UNUSED_BELIEF = "unused_belief"
     UNUSED_CLAIM = "unused_claim"
+    ABLATION = "ablation"
 
 
 class HypothesisCandidate(BaseModel):
@@ -80,6 +82,8 @@ class HypothesisRecommendation(BaseModel):
     technique: str = ""
     parent_hypothesis_id: str | None = None
     technique_stack: list[str] = Field(default_factory=list)
+    combo_techniques: list[str] = Field(default_factory=list)
+    combo_rationale: str = ""
 
 
 class HypothesisAssistantResult(BaseModel):

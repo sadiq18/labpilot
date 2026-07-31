@@ -39,6 +39,7 @@ def resolve_parent_context(
         "parent_technique_stack": list(parent.technique_stack) if parent else [],
         "technique": hypothesis.technique,
         "technique_stack": list(hypothesis.technique_stack),
+        "combo_techniques": list(hypothesis.combo_techniques),
         "change_category": _change_category(hypothesis),
         "evidence": [e.model_dump(mode="json") for e in hypothesis.evidence],
     }
@@ -73,11 +74,45 @@ def _change_category(hypothesis: Hypothesis) -> str:
     hay = " ".join(
         [
             hypothesis.technique or "",
+            *hypothesis.combo_techniques,
             *hypothesis.tags,
             hypothesis.observation,
             hypothesis.prediction,
         ]
     ).lower()
+    if "combination" in hay or len(hypothesis.combo_techniques) >= 2:
+        # Prefer FE when a combo member is feature work (template selection).
+        if any(
+            tok in hay
+            for tok in (
+                "feature",
+                "encod",
+                "tfidf",
+                "binning",
+                "aggregat",
+                "feature_engineering",
+            )
+        ):
+            return "feature_engineering"
+        if any(
+            tok in hay
+            for tok in ("augment", "mixup", "cutmix", "specaugment", "cutout")
+        ):
+            return "augmentation"
+        if any(
+            tok in hay
+            for tok in (
+                "model",
+                "xgboost",
+                "lightgbm",
+                "catboost",
+                "resnet",
+                "transformer",
+                "architecture",
+            )
+        ):
+            return "model"
+        return "combination"
     if any(
         tok in hay
         for tok in (

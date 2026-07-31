@@ -362,3 +362,92 @@ def test_aligned_submit_does_not_mint_useless_follow_up(tmp_path: Path) -> None:
     assert summary.follow_up_hypothesis_id is None
     after = {h.id for h in HypothesisStore(knowledge, competition).list()}
     assert after == before
+
+
+def test_submit_confirms_on_lb_win_without_learning_gain(tmp_path: Path) -> None:
+    """LB beat prior must confirm even when local learning_gain is missing."""
+    from labpilot.research_engine.shared.experiments.models import HypothesisStatus
+
+    knowledge = tmp_path / "knowledge"
+    competition = "demo"
+    plan = _seed_plan(knowledge, competition)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    # No comparison.json → learning_gain stays null (H-013 style).
+    (ws / "metrics.json").write_text(json.dumps({"cv_score": 0.87}), encoding="utf-8")
+    (ws / "predictions.csv").write_text("id,pred\n1,0.2\n", encoding="utf-8")
+
+    hyp = HypothesisStore(knowledge, competition).create(
+        observation="combo",
+        reason="r",
+        prediction="p",
+        confidence=0.7,
+        tags=["combo"],
+    )
+    HypothesisStore(knowledge, competition).update_status(
+        hyp.id, HypothesisStatus.INCONCLUSIVE
+    )
+    prior = HypothesisStore(knowledge, competition).create(
+        observation="prior",
+        reason="r",
+        prediction="p",
+        confidence=0.5,
+    )
+    HypothesisStore(knowledge, competition).update_outcome(prior.id, public_score=0.872)
+
+    store = PlanStore(knowledge, competition)
+    plan.hypothesis_id = hyp.id
+    store.upsert_plan(plan)
+    store.close()
+
+    exec_store = ExecutionStore(knowledge, competition)
+    execution = exec_store.create_execution("P-001", workspace_path=str(ws))
+    exec_store.update_status(execution.id, "running")
+    exec_store.update_status(execution.id, "succeeded")
+    execution = exec_store.get_execution(execution.id)
+    assert execution is not None
+    exec_store.close()
+
+    plan = PlanStore(knowledge, competition).get_plan("P-001")
+    assert plan is not None
+    record_successful_execution(
+        knowledge_dir=knowledge,
+        competition=competition,
+        execution=execution,
+        plan=plan,
+        workspace_root=ws,
+        llm_client=None,
+    )
+
+    mock_client = MagicMock()
+    mock_client.count_todays_submissions.return_value = 0
+    mock_client.fetch_competition_metadata.return_value = MagicMock(
+        max_daily_submissions=5
+    )
+    mock_client.upload_submission.return_value = SubmissionResult(
+        competition=competition,
+        submission_path=str(submission_csv_path(ws, execution.id)),
+        status="scored",
+        public_score=0.87226,
+        message="labpilot",
+        submissions_url="https://www.kaggle.com/c/demo/submissions",
+    )
+
+    summary = submit_and_learn(
+        knowledge_dir=knowledge,
+        competition=competition,
+        execution_id=execution.id,
+        workspace_root=ws,
+        kaggle_config=KaggleConfig(),
+        client=mock_client,
+    )
+    assert summary.learning_gain is None
+    assert summary.leaderboard is not None
+    assert summary.leaderboard.delta_vs_prior == pytest.approx(0.00026)
+    assert summary.leaderboard.overfitting is False
+
+    updated = HypothesisStore(knowledge, competition).get(hyp.id)
+    assert updated is not None
+    assert updated.status == HypothesisStatus.CONFIRMED
+    assert updated.public_score == pytest.approx(0.87226)
+    assert summary.hypothesis_outcome.get("status") == "confirmed"
