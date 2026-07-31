@@ -31,6 +31,34 @@ This document covers **current-state** design. History lives under
 
 **Operator docs:** [CLI.md](CLI.md), [SOP.md](SOP.md).
 **Workspace design:** [design/competition-workspace.md](design/competition-workspace.md).
+**Causal learning:** [design/evidence-card.md](design/evidence-card.md),
+[design/research-graph.md](design/research-graph.md).
+
+### Post-run learning (Evidence Card → Research Graph)
+
+```mermaid
+flowchart TD
+  artifacts[Artifacts techniques] --> hyps[Hypotheses]
+  hyps --> run[Plan run treatment E]
+  run --> metrics[Rich metrics]
+  metrics --> compare[COMPARE vs control E]
+  compare --> card[Evidence Card]
+  card --> graph[Research Graph edges]
+  card --> beliefs[Beliefs confidence]
+  card --> claims[Claims confidence]
+  graph --> query[Graph query for planner]
+  beliefs --> artifacts
+  query --> hyps
+```
+
+Canonical evidenced path:
+
+```text
+Technique --supports--> Claim --used_in--> Hypothesis
+  --executed_as--> Execution --produced--> Evidence Card --updates--> Belief
+```
+
+COMPARE is parent-vs-child (not score-only). See [design/evidence-card.md](design/evidence-card.md).
 
 ---
 

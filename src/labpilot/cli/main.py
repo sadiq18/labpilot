@@ -1936,6 +1936,51 @@ def hypothesis_show(
     table.add_row("Evidence against", ", ".join(hypothesis.evidence_against) or "-")
     console.print(table)
 
+    try:
+        from labpilot.research_engine.evidence.store import EvidenceCardStore
+
+        card = EvidenceCardStore(config.knowledge_dir, competition).get_for_hypothesis(
+            hypothesis_id
+        )
+        if card is not None:
+            ev = Table(title=f"Evidence Card: {card.id}")
+            ev.add_column("Field", style="cyan")
+            ev.add_column("Value")
+            ev.add_row("Control", card.control_experiment or "—")
+            ev.add_row("Treatment", card.treatment_experiment)
+            ev.add_row("Decision", card.decision.value)
+            ev.add_row(
+                "Expected cv_gain",
+                f"{card.expected.cv_gain:+.6g}"
+                if card.expected.cv_gain is not None
+                else "—",
+            )
+            ev.add_row(
+                "Observed cv_gain",
+                f"{card.observed.cv_gain:+.6g}"
+                if card.observed.cv_gain is not None
+                else "—",
+            )
+            ev.add_row(
+                "Observed lb_gain",
+                f"{card.observed.lb_gain:+.6g}"
+                if card.observed.lb_gain is not None
+                else "—",
+            )
+            ev.add_row("Stability", card.observed.stability.value)
+            ev.add_row(
+                "Impact error",
+                f"{card.impact_error:+.6g}" if card.impact_error is not None else "—",
+            )
+            attrib = ", ".join(
+                f"{k}={v:+.4g}" for k, v in card.technique_attribution.items()
+            )
+            ev.add_row("Attribution", attrib or "—")
+            ev.add_row("Reusable for", ", ".join(card.reusable_for) or "—")
+            console.print(ev)
+    except Exception:
+        pass
+
     graph = build_graph(
         config.runs_dir, competition, knowledge_dir=config.knowledge_dir
     )

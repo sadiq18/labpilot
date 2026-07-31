@@ -165,6 +165,36 @@ class HypothesisAssistant:
             notes.append(combo_note)
         if combo_candidates:
             candidates = [*combo_candidates, *candidates]
+        try:
+            from labpilot.research_engine.intelligence.graph.query import (
+                query_techniques,
+            )
+
+            graph_hits = {
+                str(row["technique"]).lower(): float(row["confidence"])
+                for row in query_techniques(
+                    knowledge_dir=knowledge_dir,
+                    competition=competition,
+                    limit=50,
+                )
+            }
+            enriched: list[HypothesisCandidate] = []
+            for cand in candidates:
+                tech = (cand.technique or "").lower()
+                conf = graph_hits.get(tech)
+                if conf is None:
+                    for member in cand.metadata.get("combo_techniques") or []:
+                        conf = graph_hits.get(str(member).lower())
+                        if conf is not None:
+                            break
+                if conf is not None:
+                    meta = dict(cand.metadata)
+                    meta["graph_confidence"] = conf
+                    cand = cand.model_copy(update={"metadata": meta})
+                enriched.append(cand)
+            candidates = enriched
+        except Exception:
+            pass
         if not candidates:
             notes.append("hypothesis: no candidates generated from ResearchContext.")
             return HypothesisAssistantResult(notes=notes, context=research_context)

@@ -240,6 +240,13 @@ def _learning_deltas(comparison: dict[str, Any], metrics: dict[str, Any]) -> tup
         if key in comparison and isinstance(comparison[key], (int, float)):
             delta = float(comparison[key])
             break
+    if delta is None:
+        md = comparison.get("metric_deltas")
+        if isinstance(md, dict):
+            for val in md.values():
+                if isinstance(val, (int, float)):
+                    delta = float(val)
+                    break
     if delta is None and isinstance(metrics.get("cv_delta"), (int, float)):
         delta = float(metrics["cv_delta"])
     if delta is None:
@@ -284,6 +291,9 @@ def build_execution_outcome(
     root = Path(workspace_root)
     metrics = _load_json(root / "metrics.json")
     comparison = _load_json(root / "comparison.json")
+    # Also try artifacts/comparison.json (COMPARE historically wrote only there).
+    if not comparison:
+        comparison = _load_json(root / "artifacts" / "comparison.json")
     missing: list[str] = []
     if not metrics:
         missing.append("metrics")
@@ -810,6 +820,9 @@ def maybe_mint_ablation_from_combo_win(
 ) -> list[str]:
     """On combination gain: mint leave-one-out ablation forks (no ablation on loss)."""
     if summary.learning_gain is None or summary.learning_gain <= 0:
+        return []
+    # Sparse ablation: only for material gains (≥ 0.01 absolute).
+    if float(summary.learning_gain) < 0.01:
         return []
     if not summary.hypothesis_id:
         return []

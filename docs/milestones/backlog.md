@@ -168,6 +168,8 @@ flowchart TD
 
 | Item | Notes |
 |------|-------|
+| **Graph database migration** | Keep SQLite SoR + logical Research Graph. Move to Neo4j/etc. **only if** SQL graph queries become a bottleneck. Design: [design/research-graph.md](../design/research-graph.md). |
+| **Cross-competition shared knowledge** | Aggregate technique evidence across competitions by modality (e.g. SpecAugment ✓ audio / ✗ tabular, overall conf). Planner seeds new comps from shared priors. Local precursor: Evidence Card `reusable_for`. Design: [design/evidence-card.md](../design/evidence-card.md). |
 | **P3.1 — tabular grid search (pick best)** | Train all grid combos and select best CV score (v0.4 only advances one grid step). |
 | **P3.1 — text/image hyperparameter tuning** | Extend `improve --strategy tune` beyond tabular templates. |
 | Inbound webhook server | `research events listen` for external cron/CI |

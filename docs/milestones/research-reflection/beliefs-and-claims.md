@@ -10,9 +10,13 @@ Back to [README](README.md).
 |--------|------|
 | **Belief** | Fast-moving working assumption (technique × effect × confidence) — already in SQLite `beliefs` |
 | **Research Claim** | Synthesized conclusion the system will stand behind — first-class object with evidence + contradictions |
+| **Evidence Card** | Atomic causal learning unit for one hyp execution — drives belief/claim steps ([design/evidence-card.md](../../design/evidence-card.md)) |
 
 Claims are what Planner/ranker should prefer as **stable inputs**.  
 Beliefs remain for **short-horizon** updates after each experiment.
+Evidence Cards close expected vs observed and write Research Graph edges.
+
+**Submit must step belief confidence**, not overwrite absolute values.
 
 ---
 

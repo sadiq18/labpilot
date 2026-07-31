@@ -38,6 +38,8 @@ Hard rules:
 - Always include the exact entrypoint:
   ``if __name__ == "__main__":`` followed by a call to ``main()`` (ASCII only —
   never alter ``__main__``).
-- Prefer a single cohesive pipeline/train.py (+ config.yaml) over many tiny modules.
+- When writing metrics.json include when possible: cv_<metric>, cv_folds,
+  cv_fold_scores (list), cv_mean, cv_std, train_time_s, inference_time_s,
+  peak_memory_mb. Never invent values you did not measure — omit or null.
 - Do not invent leaderboard scores, call Kaggle APIs, or upload submissions.
 - Do not touch secrets, .env, credentials, or paths outside the workspace.
