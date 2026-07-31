@@ -170,26 +170,57 @@ def _apply_submit_knowledge(
     status = None
     if overfitting:
         status = HypothesisStatus.INCONCLUSIVE
-    elif summary.learning_gain is not None and summary.learning_gain > 0 and public is not None:
-        if summary.leaderboard and summary.leaderboard.delta_vs_prior is not None:
-            if summary.leaderboard.delta_vs_prior >= 0:
-                status = HypothesisStatus.CONFIRMED
-            else:
-                status = HypothesisStatus.REJECTED
+    elif (
+        public is not None
+        and summary.leaderboard
+        and summary.leaderboard.delta_vs_prior is not None
+    ):
+        # Public LB vs prior is the ground-truth confirm signal. Do not require
+        # local learning_gain (often missing when comparison.json was absent).
+        if summary.leaderboard.delta_vs_prior >= 0:
+            status = HypothesisStatus.CONFIRMED
+        else:
+            status = HypothesisStatus.REJECTED
+    elif (
+        summary.learning_gain is not None
+        and summary.learning_gain > 0
+        and public is not None
+        and (summary.leaderboard is None or summary.leaderboard.delta_vs_prior is None)
+    ):
+        # Scored, local gain, but no prior LB to compare — leave inconclusive.
+        status = HypothesisStatus.INCONCLUSIVE
+
+    if status is not None:
+        summary.hypothesis_outcome["status"] = status.value
 
     if summary.hypothesis_id:
         try:
+            why = "Public score recorded after submit."
+            if overfitting:
+                why = "Public LB weaker than local CV — likely overfitting."
+            elif status == HypothesisStatus.CONFIRMED:
+                delta = summary.leaderboard.delta_vs_prior if summary.leaderboard else None
+                why = (
+                    f"Public LB beat prior "
+                    f"(delta_vs_prior={delta:+.6g})."
+                    if delta is not None
+                    else "Public LB recorded; confirmed."
+                )
+            elif status == HypothesisStatus.REJECTED:
+                delta = summary.leaderboard.delta_vs_prior if summary.leaderboard else None
+                why = (
+                    f"Public LB worse than prior "
+                    f"(delta_vs_prior={delta:+.6g})."
+                    if delta is not None
+                    else "Public LB recorded; rejected."
+                )
             hyp_store.update_outcome(
                 summary.hypothesis_id,
                 actual_outcome=actual,
                 public_score=public,
                 status=status,
                 evidence_run_id=summary.execution_id,
-                why=(
-                    "Public LB weaker than local CV — likely overfitting."
-                    if overfitting
-                    else "Public score recorded after submit."
-                ),
+                why=why,
             )
         except FileNotFoundError:
             logger.warning("Hypothesis %s missing during submit learn", summary.hypothesis_id)
