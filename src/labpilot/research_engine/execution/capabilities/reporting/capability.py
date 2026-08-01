@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -10,8 +11,11 @@ from labpilot.research_engine.execution.capabilities._helpers import evidence
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
+from labpilot.research_engine.memory.hooks import persist_experience_from_completion
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 from labpilot.research_engine.reflection.pipeline import run_reflection
+
+logger = logging.getLogger(__name__)
 
 
 class ReportingCapability(BaseCapability):
@@ -95,6 +99,27 @@ class ReportingCapability(BaseCapability):
             metrics=metrics,
         )
 
+    def _persist_experience_fallback(
+        self, context: TaskContext, *, reflection: dict
+    ) -> None:
+        """Write-only memory upsert when Blinker completion may not have fired."""
+        metrics = self._load_metrics(context.workspace_root)
+        experiment_id = getattr(context.execution, "experiment_id", None)
+        persist_experience_from_completion(
+            {
+                "competition": context.competition,
+                "knowledge_dir": str(context.paths.base_dir),
+                "workspace_root": str(context.workspace_root),
+                "execution_id": context.execution.id,
+                "experiment_id": experiment_id or context.execution.id,
+                "plan_id": context.plan.id,
+                "hypothesis_id": context.plan.hypothesis_id or None,
+                "status": getattr(context.execution, "status", None) or "completed",
+                "metrics": metrics,
+                "reflection": reflection,
+            }
+        )
+
     def _reflect(self, context: TaskContext) -> TaskEvidence:
         result = self._run_reflection_pipeline(context)
         root = context.workspace_root
@@ -111,6 +136,10 @@ class ReportingCapability(BaseCapability):
             "created_at": datetime.now(UTC).isoformat(),
         }
         path.write_text(json.dumps(projection, indent=2) + "\n", encoding="utf-8")
+        try:
+            self._persist_experience_fallback(context, reflection=result)
+        except Exception:  # noqa: BLE001 — never fail reflect for memory
+            logger.exception("experience memory fallback after reflect failed")
         return evidence(
             context,
             capability=self.name,

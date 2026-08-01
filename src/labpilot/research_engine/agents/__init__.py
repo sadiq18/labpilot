@@ -42,7 +42,11 @@ from labpilot.research_engine.agents.parallel import (
 )
 from labpilot.research_engine.agents.ports import Agent, CodingTool
 from labpilot.research_engine.agents.registry import SpecialistRegistry
-from labpilot.research_engine.agents.subscribers import install_evidence_refresh_subscriber
+from labpilot.research_engine.agents.subscribers import (
+    install_default_subscribers,
+    install_evidence_refresh_subscriber,
+)
+from labpilot.research_engine.memory.hooks import install_experience_memory_subscriber
 from labpilot.research_engine.git import (
     CODE_PATHS,
     CommitSnapshot,
@@ -76,7 +80,9 @@ __all__ = [
     "default_event_bus",
     "execute_agent_sync",
     "find_experiment_record",
+    "install_default_subscribers",
     "install_evidence_refresh_subscriber",
+    "install_experience_memory_subscriber",
     "noop_emit",
     "open_git_tool",
     "parallel_summary",

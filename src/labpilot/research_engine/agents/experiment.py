@@ -159,6 +159,7 @@ class ExperimentSpecialist:
             "execution_id": execution_id,
             "plan_id": plan_id,
             "competition": workspace.competition,
+            "knowledge_dir": str(workspace.knowledge_dir),
             "workspace_root": str(workspace.root),
             "metrics": metrics,
             "status": status,

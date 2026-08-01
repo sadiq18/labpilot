@@ -12,6 +12,7 @@ from labpilot.research_engine.agents.events import (
     EXPERIMENT_COMPLETED,
     EventBus,
 )
+from labpilot.research_engine.memory.hooks import install_experience_memory_subscriber
 
 
 def _evidence_note_path(payload: dict[str, Any]) -> Path | None:
@@ -73,3 +74,9 @@ def install_evidence_refresh_subscriber(bus: EventBus) -> None:
         )
 
     bus.subscribe(EXPERIMENT_COMPLETED, _on_experiment_completed)
+
+
+def install_default_subscribers(bus: EventBus) -> None:
+    """Install evidence refresh + experience memory write hooks."""
+    install_evidence_refresh_subscriber(bus)
+    install_experience_memory_subscriber(bus)
