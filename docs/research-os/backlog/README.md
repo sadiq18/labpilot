@@ -11,3 +11,7 @@ milestone or explicit pickup.
 | [memory-hierarchy-ports.md](memory-hierarchy-ports.md) | Public Short/Working/Long/Episodic/Semantic ports (M4 hides these) |
 | [hybrid-semantic-retrieval.md](hybrid-semantic-retrieval.md) | Embeddings + Qdrant when `bm25_metrics` show lexical gaps |
 | [kuzu-graph-backend.md](kuzu-graph-backend.md) | Kuzu behind abstract GraphPort (after SQL graph) |
+| [future-specialists.md](future-specialists.md) | Paper, Critic, Eval, Submit, EDA, Feature Engineering (post M5 Impl+Experiment) |
+| [parallel-research-branches.md](parallel-research-branches.md) | Full branch-merge research campaigns (Campaign Engine v2) |
+| [coding-tool-adapters.md](coding-tool-adapters.md) | Claude Code / Aider / OpenHands behind CodingTool |
+| [async-conductor.md](async-conductor.md) | Async Conductor + distributed scheduler — pull for multi-campaign orchestration |
