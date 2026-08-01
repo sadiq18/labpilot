@@ -15,3 +15,5 @@ milestone or explicit pickup.
 | [parallel-research-branches.md](parallel-research-branches.md) | Full branch-merge research campaigns (Campaign Engine v2) |
 | [coding-tool-adapters.md](coding-tool-adapters.md) | Claude Code / Aider / OpenHands behind CodingTool |
 | [async-conductor.md](async-conductor.md) | Async Conductor + distributed scheduler — pull for multi-campaign orchestration |
+| [git-remote-adapters.md](git-remote-adapters.md) | GitHub/GitLab adapters behind GitTool (after local GitPython) |
+| [git-worktrees-patches.md](git-worktrees-patches.md) | Parallel experiment worktrees + PatchManager for review |

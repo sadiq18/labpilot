@@ -13,6 +13,7 @@ Engine v2 than M5 specialist runtime.
 - Max workers + shared budget
 - `asyncio.gather` / AnyIO for independent **experiment tasks**
 - Collect results; no autonomous branch tree
+- Local `GitTool` (GitPython) branch+commit per experiment
 
 ## Proposed later work
 
@@ -25,6 +26,9 @@ Evidence merge
         ↓
 Conductor chooses winner
 ```
+
+Prefer **git worktrees** for isolation when picking this up
+([git-worktrees-patches](git-worktrees-patches.md)).
 
 Requirements when picked up:
 

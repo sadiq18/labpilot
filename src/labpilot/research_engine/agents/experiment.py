@@ -14,6 +14,11 @@ from labpilot.research_engine.agents.events import (
     EventEmitter,
     noop_emit,
 )
+from labpilot.research_engine.agents.git_evolution import (
+    short_commit,
+    snapshot_before_experiment,
+    write_experiment_git_record,
+)
 from labpilot.research_engine.agents.models import as_agent_task
 from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.context.models import ContextBundle
@@ -32,31 +37,6 @@ def _load_metrics(root: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {"value": data}
-
-
-def _write_experiment_record(
-    workspace: Workspace,
-    *,
-    task_id: str,
-    execution_id: str,
-    plan_id: str,
-    metrics: dict[str, Any],
-    status: str,
-) -> Path:
-    exp_dir = workspace.root / "experiment"
-    exp_dir.mkdir(parents=True, exist_ok=True)
-    path = exp_dir / "record.json"
-    payload = {
-        "experiment_id": f"exp_{workspace.competition}_{execution_id}",
-        "task_id": task_id,
-        "execution_id": execution_id,
-        "plan_id": plan_id,
-        "competition": workspace.competition,
-        "status": status,
-        "metrics": metrics,
-    }
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return path
 
 
 class ExperimentSpecialist:
@@ -96,6 +76,23 @@ class ExperimentSpecialist:
         # Submit stays Conductor-gated — specialist never uploads.
         submit = False
 
+        session_id = str(meta.get("session_id") or "local")
+        experiment_key = str(
+            meta.get("execution_id") or meta.get("experiment_key") or agent_task.id
+        )
+        description = agent_task.description or plan_id
+        snapshot = await anyio.to_thread.run_sync(
+            lambda: snapshot_before_experiment(
+                workspace.root,
+                session_id=session_id,
+                experiment_key=experiment_key,
+                message=f"experiment: {description}",
+            )
+        )
+        git_branch = snapshot.branch if snapshot else None
+        git_commit = snapshot.commit if snapshot else None
+        files_changed = list(snapshot.files_changed) if snapshot else []
+
         # Lazy import avoids agents ↔ tools package cycle at import time.
         from labpilot.research_engine.tools.handlers.run import run_plan
 
@@ -114,14 +111,21 @@ class ExperimentSpecialist:
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
         status = str(result.data.get("status") or "unknown")
         experiment_id = f"exp_{workspace.competition}_{execution_id}"
-        record_path = _write_experiment_record(
-            workspace,
-            task_id=agent_task.id,
-            execution_id=execution_id,
-            plan_id=plan_id,
-            metrics=metrics,
-            status=status,
-        )
+        record_payload = {
+            "experiment_id": experiment_id,
+            "task_id": agent_task.id,
+            "execution_id": execution_id,
+            "plan_id": plan_id,
+            "competition": workspace.competition,
+            "status": status,
+            "metrics": metrics,
+            "git_commit": git_commit,
+            "git_commit_short": short_commit(git_commit),
+            "git_branch": git_branch,
+            "files_changed": files_changed,
+            "aliases": [experiment_key],
+        }
+        record_path = write_experiment_git_record(workspace.root, record_payload)
 
         refs = list(result.refs)
         refs.append(
@@ -158,6 +162,9 @@ class ExperimentSpecialist:
             "workspace_root": str(workspace.root),
             "metrics": metrics,
             "status": status,
+            "git_commit": git_commit,
+            "git_branch": git_branch,
+            "files_changed": files_changed,
             "paths": [r.path for r in refs if r.path],
             "refs": ref_payload,
         }
