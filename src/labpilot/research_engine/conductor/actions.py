@@ -48,10 +48,15 @@ _TEMPLATES: list[tuple[tuple[str, ...], list[ToolStep]]] = [
         [ToolStep(tool="generate_plan", args={"baseline": True})],
     ),
     (
+        ("implement", "write code", "code fix", "eda", "feature"),
+        [ToolStep(tool="implement", args={"description": "update workspace code"})],
+    ),
+    (
         ("experiment", "run", "train", "try"),
         [
             ToolStep(tool="generate_plan", args={"baseline": True}),
-            ToolStep(tool="run_plan", args={"plan_id": "P-001", "dry_run": True}),
+            ToolStep(tool="implement", args={"description": "prepare train/infer code"}),
+            ToolStep(tool="run_experiment", args={"plan_id": "P-001", "dry_run": True}),
             ToolStep(tool="reflect", args={"persist": False}),
         ],
     ),
@@ -60,7 +65,7 @@ _TEMPLATES: list[tuple[tuple[str, ...], list[ToolStep]]] = [
         [
             ToolStep(tool="search_papers", args={"offline": True}),
             ToolStep(tool="generate_plan", args={"baseline": True}),
-            ToolStep(tool="run_plan", args={"plan_id": "P-001", "dry_run": True}),
+            ToolStep(tool="run_experiment", args={"plan_id": "P-001", "dry_run": True}),
             ToolStep(tool="reflect", args={"persist": False}),
         ],
     ),
@@ -124,6 +129,10 @@ def _default_args(tool: str) -> dict[str, Any]:
         return {"offline": True}
     if tool == "run_plan":
         return {"plan_id": "P-001", "dry_run": True}
+    if tool == "run_experiment":
+        return {"plan_id": "P-001", "dry_run": True}
+    if tool == "implement":
+        return {"description": "update workspace code"}
     if tool == "submit":
         return {"execution_id": "E-001"}
     return {}

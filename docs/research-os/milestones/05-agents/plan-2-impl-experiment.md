@@ -25,9 +25,9 @@ and approval policy stay with Conductor.
 
 ## Acceptance
 
-- [ ] Implementation + Experiment registered and routable from Conductor
-- [ ] Implementation updates existing code when present; does not always rewrite from scratch
-- [ ] Generated/updated layout keeps train and inference concerns separable
-- [ ] Experiment runs produce metrics on experiment artifacts
-- [ ] No peer agent→agent calls; path is Conductor → registry → specialist → tools
-- [ ] Submit remains gated; no ungated live Kaggle in this plan
+- [x] Implementation + Experiment registered and routable from Conductor
+- [x] Implementation updates existing code when present; does not always rewrite from scratch
+- [x] Generated/updated layout keeps train and inference concerns separable
+- [x] Experiment runs produce metrics on experiment artifacts
+- [x] No peer agent→agent calls; path is Conductor → registry → specialist → tools
+- [x] Submit remains gated; no ungated live Kaggle in this plan

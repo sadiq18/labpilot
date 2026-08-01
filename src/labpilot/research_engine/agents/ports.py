@@ -22,7 +22,7 @@ class Agent(Protocol):
         workspace: Workspace,
         context: ContextBundle,
     ) -> list[ArtifactRef]:
-        """Run one task; ``context`` is a required M4 ContextBundle."""
+        """Run one task; ``context`` is a required ContextBundle."""
         ...
 
 

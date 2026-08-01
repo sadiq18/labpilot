@@ -61,6 +61,24 @@ if __name__ == "__main__":
     main()
 '''
 
+_LAST_RESORT_INFER = '''"""Emergency fallback inference module (keep separate from training)."""
+from __future__ import annotations
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def predict() -> None:
+    sub = ROOT / "submission.csv"
+    if not sub.is_file():
+        sub.write_text("id,prediction\\n0,0\\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    predict()
+'''
+
 
 class CodeEngineeringCapability(BaseCapability):
     name = "code_engineering"
@@ -220,7 +238,12 @@ class CodeEngineeringCapability(BaseCapability):
                         path="pipeline/train.py",
                         content=_LAST_RESORT_TRAIN,
                         action="write",
-                    )
+                    ),
+                    CodeFileSpec(
+                        path="pipeline/infer.py",
+                        content=_LAST_RESORT_INFER,
+                        action="write",
+                    ),
                 ],
             )
             origin = "last_resort"
