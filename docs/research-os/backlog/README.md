@@ -17,3 +17,5 @@ milestone or explicit pickup.
 | [async-conductor.md](async-conductor.md) | Async Conductor + distributed scheduler — pull for multi-campaign orchestration |
 | [git-remote-adapters.md](git-remote-adapters.md) | GitHub/GitLab adapters behind GitTool (after local GitPython) |
 | [git-worktrees-patches.md](git-worktrees-patches.md) | Parallel experiment worktrees + PatchManager for review |
+| [automatic-transfer-confidence.md](automatic-transfer-confidence.md) | Auto warm-start with confidence scoring (M7+; M6 is human-visible seed only) |
+| [experience-pattern-extraction.md](experience-pattern-extraction.md) | Emergent prompt/model/feature/paper patterns from experience usage (post-M6) |

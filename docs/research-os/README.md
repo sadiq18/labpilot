@@ -52,7 +52,7 @@ Details: [architecture.md](architecture.md).
 | **M3** | Campaign Engine | Dynamic tasks, budgets, continue/pause/resume | [milestones/03-campaigns/](milestones/03-campaigns/) | `research-os-m3-campaigns` |
 | **M4** | Memory & context | Retrieve→rank→compress; hierarchy ports | [milestones/04-context/](milestones/04-context/) | `research-os-m4-context` |
 | **M5** | Agents, events, parallel | Specialists + bus + concurrent branches | [milestones/05-agents/](milestones/05-agents/) | `research-os-m5-agents` |
-| **M6** | Self-improving memory | Cross-comp transfer + experience | [milestones/06-transfer-memory/](milestones/06-transfer-memory/) | `research-os-m6-transfer-memory` |
+| **M6** | Self-improving memory | Experience records + retrieve/seed CLI | [milestones/06-transfer-memory/](milestones/06-transfer-memory/) | `research-os-m6-transfer-memory` |
 
 **Critical path:** M1 → M2 → M3 (Orchestrator). M4–M6 deepen the OS into a research
 **manager** (better decisions → delegate/parallel → learn across campaigns).  
@@ -272,19 +272,24 @@ Depth: [design/08–09](design/08-agents.md) · [05-agents](milestones/05-agents
 
 ## M6 — Self-improving system
 
-**Goal:** Future competitions start with prior experience.
+**Goal:** Future competitions start with prior experience — research memory, not a wiki.
 
-**Architecture that ships:** Experience store — good/bad prompts, winning models/papers/
-augmentations/HPs; transfer into new workspace observe().
+**Architecture that ships:** Structured **Experience Records** (goal / hypothesis /
+action / result / outcome / artifact links / tags). Context Engine retrieves similar
+experiences into `ContextBundle`. Optional `research memory seed|inspect` for
+human-visible warm-start. Memory influences Conductor; never silently controls it.
 
-**Usable system:** Second competition warm-starts above blank slate.
+**Usable system:** Second competition can retrieve cross-comp experience; operators
+can seed/inspect explicitly. Pattern libraries and auto-transfer with confidence are
+post-M6 backlog.
 
 **Tech that ships with M6:**
 
 | Area | Technology |
 |------|------------|
-| Graph / vectors | Reuse M4 choices (Kuzu / Qdrant when present) |
-| Analytics (optional) | **DuckDB** for offline experience analysis |
+| Store | SQLite ExperienceStore (cross-competition) |
+| Retrieve | M4 Context Engine + experience provider (BM25/filters/graph as available) |
+| Analytics / vectors | **Defer** (DuckDB, Qdrant — backlog) |
 
 Depth: [design/10-memory-os.md](design/10-memory-os.md) · [06-transfer-memory](milestones/06-transfer-memory/).
 
