@@ -1,0 +1,73 @@
+"""run_plan tool handler."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from labpilot.research_engine.artifacts.base import ArtifactRef
+from labpilot.research_engine.artifacts.execution import ExecutionArtifacts
+from labpilot.research_engine.execution import (
+    ResearchEngineer,
+    default_capability_registry,
+)
+from labpilot.research_engine.tools.descriptors import ToolResult
+from labpilot.research_engine.workspace_facade import Workspace
+
+
+def run_plan(
+    workspace: Workspace,
+    *,
+    plan_id: str,
+    dry_run: bool = False,
+    submit: bool = False,
+    install_packages: bool = False,
+    llm_client: Any | None = None,
+    constraints: dict[str, Any] | None = None,
+) -> ToolResult:
+    """Create an execution via adapters and run the Engineer for ``plan_id``."""
+    exec_arts = ExecutionArtifacts(workspace.knowledge_dir, workspace.competition)
+    merged = {
+        "dry_run": dry_run,
+        "allow_upload": submit,
+        "smoke_syntax_only": dry_run,
+        "train_stub": dry_run,
+        "remote_dry_run": True,
+        "skip_download": dry_run,
+        "llm_client": llm_client,
+        **(constraints or {}),
+    }
+    registry = default_capability_registry(
+        install_packages=install_packages and not dry_run,
+        llm_client=llm_client,
+    )
+    engineer = ResearchEngineer(
+        knowledge_dir=workspace.knowledge_dir,
+        competition=workspace.competition,
+        registry=registry,
+        execution_store=exec_arts.store,
+        constraints=merged,
+    )
+    try:
+        execution, create_ref = exec_arts.create(plan_id)
+        execution = engineer.run_plan(plan_id, execution=execution)
+    finally:
+        engineer.close()
+        exec_arts.close()
+
+    ref = ArtifactRef(
+        kind="execution",
+        id=execution.id,
+        schema_id=create_ref.schema_id,
+        path=execution.workspace_path,
+        competition=workspace.competition,
+    )
+    return ToolResult(
+        refs=[ref],
+        data={
+            "execution_id": execution.id,
+            "plan_id": execution.plan_id,
+            "status": execution.status,
+            "error": execution.error,
+            "workspace_path": execution.workspace_path,
+        },
+    )
