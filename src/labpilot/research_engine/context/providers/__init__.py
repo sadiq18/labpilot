@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from labpilot.research_engine.context.providers.episodic import EpisodicProvider
+from labpilot.research_engine.context.providers.experience import ExperienceProvider
 from labpilot.research_engine.context.providers.experiments import ExperimentProvider
 from labpilot.research_engine.context.providers.ri import (
     RIRetrievalProvider,
@@ -12,6 +13,7 @@ from labpilot.research_engine.context.providers.workspace import WorkspaceProvid
 
 __all__ = [
     "EpisodicProvider",
+    "ExperienceProvider",
     "ExperimentProvider",
     "RIRetrievalProvider",
     "WorkspaceProvider",

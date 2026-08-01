@@ -2,6 +2,8 @@
 
 Back to [README.md](README.md).
 
+**Status:** Done.
+
 ## Goal
 
 Add an **experience provider** to the M4 Context Engine pipeline so retrieve →
@@ -20,12 +22,18 @@ tasks or overrides approvals. Memory **influences**; it does not control.
 
 ## Acceptance
 
-- [ ] Experience provider registered in Context Engine retrieve path
-- [ ] Similar experiences appear in ContextBundle for a new competition / query
-- [ ] Ranking respects budgets (`max_items` / `max_chars`); experiences compressible
-- [ ] No path from provider to Task Queue / Conductor schedule (observe-only via bundle)
-- [ ] Unit/integration tests: store has records from slug A; retrieve for slug B surfaces them when similar
-- [ ] Explain/retrieve paths can cite experience refs (reuse M4 explain patterns where applicable)
+- [x] Experience provider registered in Context Engine retrieve path
+- [x] Similar experiences appear in ContextBundle for a new competition / query
+- [x] Ranking respects budgets (`max_items` / `max_chars`); experiences compressible
+- [x] No path from provider to Task Queue / Conductor schedule (observe-only via bundle)
+- [x] Unit/integration tests: store has records from slug A; retrieve for slug B surfaces them when similar
+- [x] Explain/retrieve paths can cite experience refs (reuse M4 explain patterns where applicable)
+
+## Implementation notes
+
+- `ExperienceProvider` in `context/providers/experience.py`; registered in `default_providers`
+- Metadata uses `source_competition` (not `competition`) so filters keep cross-comp items
+- Operator seeds boost score via `memory/seeds/*.json`
 
 ## Out of scope
 
