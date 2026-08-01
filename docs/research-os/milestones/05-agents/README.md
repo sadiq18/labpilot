@@ -24,7 +24,10 @@ Dynamic “who can solve this?”; decoupled subscribers; faster independent wor
 | Implementation coding | Adapter to Claude Code / Aider / OpenHands (do not rebuild) |
 | LLM / structured | LiteLLM + PydanticAI (or Instructor) |
 | Event bus | Blinker → NATS/Redis if multi-process |
-| Parallel / execute | asyncio + Docker sandboxes → Ray if needed |
+| Parallel / execute | **asyncio + AnyIO** workers + Docker sandboxes → Ray if needed |
+
+M3 kept a **sync** Conductor loop on purpose. M5 is where concurrent experiments,
+background jobs, and remote/GPU workers enter scope.
 
 ## Non-goals
 

@@ -84,6 +84,16 @@ class ConductorStore:
         )
         self._conn.commit()
 
+    def update_session_metadata(self, session_id: str, metadata: dict[str, Any]) -> None:
+        self._conn.execute(
+            "UPDATE os_sessions SET metadata_json = ?, updated_at = ? WHERE id = ?",
+            (dumps(metadata), _now(), session_id),
+        )
+        self._conn.commit()
+
+    def get_session_for_update(self, session_id: str) -> ConductSession | None:
+        return self.get_session(session_id)
+
     # -- tasks -------------------------------------------------------------
 
     def enqueue(
@@ -285,6 +295,136 @@ class ConductorStore:
             (session_id, limit),
         ).fetchall()
         return [self._row_to_feedback(r) for r in reversed(rows)]
+
+    # -- metrics / suggestions (M3) ----------------------------------------
+
+    def new_suggestion_id(self) -> str:
+        return self._new_id("G", "os_suggestions")
+
+    def append_suggestion(self, suggestion: Any) -> Any:
+        from labpilot.research_engine.conductor.metrics import Suggestion
+
+        assert isinstance(suggestion, Suggestion)
+        self._conn.execute(
+            """
+            INSERT INTO os_suggestions (id, session_id, kind, message, context_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                suggestion.id,
+                suggestion.session_id,
+                suggestion.kind,
+                suggestion.message,
+                dumps(suggestion.context),
+                suggestion.created_at,
+            ),
+        )
+        self._conn.commit()
+        return suggestion
+
+    def list_suggestions(self, session_id: str, *, limit: int = 50) -> list[Any]:
+        from labpilot.research_engine.conductor.metrics import Suggestion
+
+        rows = self._conn.execute(
+            """
+            SELECT * FROM os_suggestions WHERE session_id = ?
+            ORDER BY id DESC LIMIT ?
+            """,
+            (session_id, limit),
+        ).fetchall()
+        out: list[Suggestion] = []
+        for row in reversed(rows):
+            out.append(
+                Suggestion(
+                    id=row["id"],
+                    session_id=row["session_id"],
+                    kind=row["kind"],
+                    message=row["message"],
+                    context=loads(row["context_json"], {}),
+                    created_at=row["created_at"],
+                )
+            )
+        return out
+
+    def get_metrics(self, session_id: str) -> Any | None:
+        from labpilot.research_engine.conductor.metrics import CampaignMetrics
+
+        row = self._conn.execute(
+            "SELECT * FROM os_campaign_metrics WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return CampaignMetrics(
+            session_id=row["session_id"],
+            tasks_failed=row["tasks_failed"],
+            tasks_blocked=row["tasks_blocked"],
+            unmet_goal=row["unmet_goal"],
+            human_interventions=row["human_interventions"],
+            no_capability=row["no_capability"],
+            submissions=row["submissions"],
+            llm_cost_usd=row["llm_cost_usd"],
+            updated_at=row["updated_at"],
+        )
+
+    def upsert_metrics(self, metrics: Any) -> Any:
+        from labpilot.research_engine.conductor.metrics import CampaignMetrics
+
+        assert isinstance(metrics, CampaignMetrics)
+        now = _now()
+        self._conn.execute(
+            """
+            INSERT INTO os_campaign_metrics (
+                session_id, tasks_failed, tasks_blocked, unmet_goal, human_interventions,
+                no_capability, submissions, llm_cost_usd, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                tasks_failed=excluded.tasks_failed,
+                tasks_blocked=excluded.tasks_blocked,
+                unmet_goal=excluded.unmet_goal,
+                human_interventions=excluded.human_interventions,
+                no_capability=excluded.no_capability,
+                submissions=excluded.submissions,
+                llm_cost_usd=excluded.llm_cost_usd,
+                updated_at=excluded.updated_at
+            """,
+            (
+                metrics.session_id,
+                metrics.tasks_failed,
+                metrics.tasks_blocked,
+                metrics.unmet_goal,
+                metrics.human_interventions,
+                metrics.no_capability,
+                metrics.submissions,
+                metrics.llm_cost_usd,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_metrics(metrics.session_id)
+
+    def increment_metric(self, session_id: str, field: str, amount: float | int = 1) -> None:
+        allowed = {
+            "tasks_failed",
+            "tasks_blocked",
+            "unmet_goal",
+            "human_interventions",
+            "no_capability",
+            "submissions",
+            "llm_cost_usd",
+        }
+        if field not in allowed:
+            raise ValueError(f"unknown metric field: {field}")
+        if self.get_metrics(session_id) is None:
+            from labpilot.research_engine.conductor.metrics import CampaignMetrics
+
+            self.upsert_metrics(CampaignMetrics(session_id=session_id))
+        now = _now()
+        self._conn.execute(
+            f"UPDATE os_campaign_metrics SET {field} = {field} + ?, updated_at = ? WHERE session_id = ?",  # noqa: S608
+            (amount, now, session_id),
+        )
+        self._conn.commit()
 
     # -- helpers -----------------------------------------------------------
 

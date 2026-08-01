@@ -441,3 +441,30 @@ CREATE TABLE IF NOT EXISTS os_operator_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_os_feedback_session ON os_operator_feedback(session_id);
 
+-- ---------------------------------------------------------------------------
+-- Campaign Engine (M3) — suggestions + metrics for capability gaps
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS os_suggestions (
+    id              TEXT PRIMARY KEY,
+    session_id      TEXT NOT NULL REFERENCES os_sessions(id) ON DELETE CASCADE,
+    kind            TEXT NOT NULL DEFAULT 'no_capability',
+    message         TEXT NOT NULL,
+    context_json    TEXT NOT NULL DEFAULT '{}',
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_os_suggestions_session ON os_suggestions(session_id);
+
+CREATE TABLE IF NOT EXISTS os_campaign_metrics (
+    session_id      TEXT PRIMARY KEY REFERENCES os_sessions(id) ON DELETE CASCADE,
+    tasks_failed    INTEGER NOT NULL DEFAULT 0,
+    tasks_blocked   INTEGER NOT NULL DEFAULT 0,
+    unmet_goal      INTEGER NOT NULL DEFAULT 0,
+    human_interventions INTEGER NOT NULL DEFAULT 0,
+    no_capability   INTEGER NOT NULL DEFAULT 0,
+    submissions     INTEGER NOT NULL DEFAULT 0,
+    llm_cost_usd    REAL NOT NULL DEFAULT 0.0,
+    updated_at      TEXT NOT NULL
+);
+
+
