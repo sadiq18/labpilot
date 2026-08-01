@@ -24,9 +24,16 @@ Register V1 capabilities as named tools with typed I/O over artifact adapters.
 
 ## Acceptance
 
-- [ ] Registry lists stage tools
-- [ ] Handlers do not chain into the next stage
-- [ ] Tests green
+- [x] Registry lists stage tools
+- [x] Handlers do not chain into the next stage
+- [x] Tests green
+
+## Notes (implemented)
+
+- Package: `labpilot.research_engine.tools`
+- Default catalog via `build_default_tool_registry()`
+- Handlers take `Workspace` and return `ToolResult` (artifact refs + data)
+- CLI strangler deferred to plan 3
 
 ## Non-goals
 

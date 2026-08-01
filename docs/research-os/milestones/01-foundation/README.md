@@ -2,7 +2,7 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Design ready — implementation not started.  
+**Status:** Plans 1–2b implemented on branch; plan 3 (CLI strangler) next.  
 **Branch:** `research-os-m1-foundation`  
 **Design:** [01-artifacts](../../design/01-artifacts.md) · [02-tools](../../design/02-tools.md) · [03-workspace](../../design/03-workspace.md)
 

@@ -23,10 +23,16 @@ Provide a single `Workspace` handle over competition + knowledge layouts.
 
 ## Acceptance
 
-- [ ] Workspace constructs for fixture competition roots
-- [ ] At least one tool/handler can take Workspace (even if CLI not switched yet)
+- [x] Workspace constructs for fixture competition roots
+- [x] At least one tool/handler can take Workspace (even if CLI not switched yet)
+
+## Notes (implemented)
+
+- Module: `labpilot.research_engine.workspace_facade.Workspace`
+- Composes existing `CompetitionWorkspace` / `competition_workspace_path`
+- Tools in plan 2a accept `Workspace` (e.g. `submit`)
 
 ## Non-goals
 
-- Goal field driven by Conductor (stub optional)
+- Goal field driven by Conductor (stub optional — `goal` field present)
 - Git/terminal multiplexing
