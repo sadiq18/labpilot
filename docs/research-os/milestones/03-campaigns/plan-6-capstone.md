@@ -14,10 +14,10 @@ unmappable suggestion. Checklist for M4.
 
 ## M4 handoff checklist
 
-- [ ] Context engine consumes Conductor observe + artifact refs (no new tool invent)
+- [x] Context engine consumes Conductor observe + artifact refs (no new tool invent)
 - [ ] Autonomy level 2 design (budget/policy-change pauses) — not enabled in M3
-- [ ] Asyncio/AnyIO boundaries for context retrieve (see M4/M5 READMEs)
-- [ ] Keep submit family gated; do not ungated live Kaggle in M4
+- [x] Asyncio/AnyIO boundaries for context retrieve (see M4/M5 READMEs)
+- [x] Keep submit family gated; do not ungated live Kaggle in M4
 - [ ] Capability registration remains backlog until `no_capability` volume justifies it
 - [ ] Campaign metrics / suggestions feed context ranking experiments
 - [ ] Telemetry export (OTel + Phoenix/Langfuse) and S3 suggestions remain backlog

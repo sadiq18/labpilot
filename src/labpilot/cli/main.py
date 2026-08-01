@@ -20,6 +20,7 @@ from labpilot.cli.config_helpers import (
 from labpilot.cli.plan import plan_app
 from labpilot.cli.reflect import claims_app, reflect_app
 from labpilot.cli.conduct import conduct_app
+from labpilot.cli.context_cli import context_app
 from labpilot.config import (
     AppConfig,
     load_config,
@@ -113,6 +114,7 @@ app.add_typer(plan_app, name="plan")
 app.add_typer(reflect_app, name="reflect")
 app.add_typer(claims_app, name="claims")
 app.add_typer(conduct_app, name="conduct")
+app.add_typer(context_app, name="context")
 console = Console()
 
 

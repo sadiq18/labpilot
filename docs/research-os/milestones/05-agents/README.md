@@ -2,7 +2,7 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Stub.  
+**Status:** Stub (blocked on M4 — now implemented; ready to start).  
 **Branch:** `research-os-m5-agents`  
 **Depends on:** M4  
 **Design:** [08-agents](../../design/08-agents.md) · [09-parallel-and-events](../../design/09-parallel-and-events.md)
@@ -11,6 +11,8 @@ Back to [../../README.md](../../README.md) · [execution-plan](../../execution-p
 
 Specialist agents + registry routing, pub/sub event bus, parallel branches with
 Conductor merge.
+
+Handoff from M4: [../04-context/plan-6-capstone.md](../04-context/plan-6-capstone.md).
 
 ## Usable outcome
 
