@@ -29,7 +29,9 @@ User Goal + Task
 | Rank | Relevance to goal/task (scores, recency, graph distance) |
 | Compress | Summaries for long logs/notebooks/papers before prompt use |
 
-Port: `build_context(workspace, task) -> ContextBundle`.
+Port: ``build_context(request) -> ContextBundle`` in
+``labpilot.research_engine.context`` (sync facade; AnyIO gather inside).
+Existing RI retrieval is a **provider**, not rewritten.
 
 ---
 
