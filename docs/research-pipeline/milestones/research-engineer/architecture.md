@@ -201,7 +201,7 @@ Map into DB `experiments` (+ disk workspace). See [schema.md](schema.md).
 
 ## 9. Relationship to today’s Pipeline
 
-Today’s [`orchestrator/pipeline.py`](../../../src/labpilot/orchestrator/pipeline.py) is a
+Today’s [`orchestrator/pipeline.py`](../../../../src/labpilot/orchestrator/pipeline.py) is a
 linear stage DAG. After Phase B:
 
 - **Research Engineer** becomes the SoR for plan-driven runs

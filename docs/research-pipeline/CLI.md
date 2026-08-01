@@ -82,7 +82,7 @@ Creates ``~/kaggle/<slug>/`` with:
 
 ```bash
 cd ~/kaggle/<slug>
-cp .env.example .env   # set KAGGLE_API_TOKEN — see docs/SOP.md § Credentials
+cp .env.example .env   # set KAGGLE_API_TOKEN — see docs/research-pipeline/SOP.md § Credentials
 uv run --project /path/to/labpilot research analyze
 uv run --project /path/to/labpilot research plan create --baseline
 uv run --project /path/to/labpilot research run --plan P-001
@@ -636,7 +636,7 @@ research runtime register --provider kaggle_kernel --id kaggle-gpu-free
 research runtime doctor
 ```
 
-See [configs/runtimes/README.md](../configs/runtimes/README.md).
+See [configs/runtimes/README.md](../../configs/runtimes/README.md).
 
 ### `research templates`
 

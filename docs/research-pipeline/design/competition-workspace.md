@@ -114,7 +114,7 @@ paths:
 
 ### Discovery (single mechanism)
 
-Implemented in [`src/labpilot/workspace.py`](../../src/labpilot/workspace.py):
+Implemented in [`src/labpilot/workspace.py`](../../../src/labpilot/workspace.py):
 
 1. Start at CWD (or `--workspace PATH`); also try shell `PWD` when it differs (e.g. `uv run --directory`).
 2. Walk parents looking for `labpilot.yaml`.

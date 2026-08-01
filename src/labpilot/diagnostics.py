@@ -64,7 +64,7 @@ def _check_kaggle_credentials() -> CheckResult:
         )
         fix = (
             f"Create {env_path} with KAGGLE_API_TOKEN "
-            "(see docs/SOP.md § Credentials)."
+            "(see docs/research-pipeline/SOP.md § Credentials)."
         )
     return CheckResult("Kaggle credentials", ok, detail, fix)
 

@@ -30,7 +30,7 @@ This is the product bar for Autonomous Research Engineer — not a unit-test-onl
   # optional: research resume …
   ```
 
-- Capstone notes under `docs/milestones/research-engineer/` (results paths, known gaps)
+- Capstone notes under `docs/research-pipeline/milestones/research-engineer/` (results paths, known gaps)
 - Update `IN-PROGRESS.md` / `MILESTONES.md` status when green
 
 ## Out of scope

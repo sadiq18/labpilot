@@ -1911,7 +1911,7 @@ Goals (yes/no + constraints; **do not** merge a production scraper in Phase 1):
 - Download once → cache forever for re-analysis?
 - Which fields feed ForumKnowledge best?
 
-Spike output: `docs/milestones/research-intelligence/spike-kaggle-discussions.md` + go/no-go.
+Spike output: `docs/research-pipeline/milestones/research-intelligence/spike-kaggle-discussions.md` + go/no-go.
 
 If spike succeeds:
 

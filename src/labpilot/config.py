@@ -241,7 +241,7 @@ def kaggle_credentials_setup_hint() -> str:
         "\n"
         "Optional: save the same token to ~/.kaggle/access_token instead.\n"
         "Legacy: KAGGLE_USERNAME + KAGGLE_KEY in that .env also work.\n"
-        "See docs/SOP.md § Credentials."
+        "See docs/research-pipeline/SOP.md § Credentials."
     )
 
 
