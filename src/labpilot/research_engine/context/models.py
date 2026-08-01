@@ -24,6 +24,9 @@ class ContextRequest(BaseModel):
     task_id: str | None = None
     knowledge_dir: Path | None = None
     max_items: int = 32
+    kinds: list[str] | None = None
+    statuses: list[str] | None = None
+    filter_competition: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

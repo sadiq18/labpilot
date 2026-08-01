@@ -13,6 +13,6 @@ Multi-source retrieve into ranked candidate bags:
 
 ## Acceptance
 
-- [ ] BM25 scores candidates from multiple providers
-- [ ] Filters exclude out-of-scope items
-- [ ] Unit tests with fixture documents (offline)
+- [x] BM25 scores candidates from multiple providers
+- [x] Filters exclude out-of-scope items
+- [x] Unit tests with fixture documents (offline)
