@@ -22,7 +22,9 @@ def test_workspace_from_client_scaffold(tmp_path: Path) -> None:
     assert ws.artifacts_dir == client.artifacts_dir
     assert ws.goal == "beat baseline"
     assert ws.research_paths.competition == "demo-comp"
-    assert ws.research_paths.root == client.knowledge_dir / "demo-comp" / "research"
+    assert ws.research_paths.root == client.knowledge_dir / "research"
+    assert ws.research_paths.is_client_layout
+    assert ws.research_paths.db_path == client.knowledge_dir / "research" / "knowledge.db"
 
 
 def test_workspace_from_competition_client_layout(tmp_path: Path) -> None:

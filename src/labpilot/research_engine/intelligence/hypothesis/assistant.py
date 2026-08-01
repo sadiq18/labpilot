@@ -281,8 +281,10 @@ class HypothesisAssistant:
             notes.append(f"hypothesis: {new_count} new hypothesis generated (status=proposed).")
 
         if write_report:
-            report_path = (
-                Path(knowledge_dir) / competition / "research" / "reports" / "hypotheses.json"
+            from labpilot.research_engine.intelligence.paths import ResearchPaths
+
+            report_path = ResearchPaths(Path(knowledge_dir), competition).reports_dir / (
+                "hypotheses.json"
             )
             write_hypotheses_report(
                 recommendations, path=report_path, notes=notes

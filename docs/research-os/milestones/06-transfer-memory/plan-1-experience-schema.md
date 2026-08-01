@@ -2,6 +2,8 @@
 
 Back to [README.md](README.md).
 
+**Status:** Done.
+
 ## Goal
 
 Define the M6 system of record: structured **Experience Records** and a durable
@@ -28,11 +30,18 @@ are enough for Context Engine retrieval.
 
 ## Acceptance
 
-- [ ] Pydantic (or equivalent) Experience Record model documented and importable when implemented
-- [ ] SQLite DDL + store API: create, get, upsert-by-idempotency-key, list/filter by competition/tags/outcome
-- [ ] Cross-competition queries supported (not scoped to a single slug only)
-- [ ] Unit tests for upsert idempotency and basic filters
-- [ ] No wiki/category satellite tables in this plan
+- [x] Pydantic (or equivalent) Experience Record model documented and importable when implemented
+- [x] SQLite DDL + store API: create, get, upsert-by-idempotency-key, list/filter by competition/tags/outcome
+- [x] Cross-competition queries supported (not scoped to a single slug only)
+- [x] Unit tests for upsert idempotency and basic filters
+- [x] No wiki/category satellite tables in this plan
+
+## Implementation notes
+
+- Package: `labpilot.research_engine.memory`
+- Shared DB via `resolve_experience_db_path` (env → yaml → parent research root → `~/.labpilot`)
+- Unified schema v8 + `experience_records`; ids `XR-xxx`; upserts on `idempotency_key`
+- Client knowledge layout is flat (`knowledge/research/…`); do not nest under competition workspace
 
 ## Out of scope
 

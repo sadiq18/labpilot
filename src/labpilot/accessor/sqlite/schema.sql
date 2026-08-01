@@ -467,4 +467,30 @@ CREATE TABLE IF NOT EXISTS os_campaign_metrics (
     updated_at      TEXT NOT NULL
 );
 
+-- Cross-competition Experience Records (shared experiences.db SoR).
+-- Episodes: goal/hypothesis/action/result/outcome + artifact links.
+-- Column ``tags`` stores JSON list of facet objects
+-- ({facet, confidence, evidence, source}); legacy string tags still readable.
+CREATE TABLE IF NOT EXISTS experience_records (
+    id                  TEXT PRIMARY KEY,
+    source_competition  TEXT NOT NULL,
+    goal                TEXT NOT NULL DEFAULT '',
+    hypothesis          TEXT NOT NULL DEFAULT '',
+    hypothesis_id       TEXT,
+    action              TEXT NOT NULL DEFAULT '',
+    result              TEXT NOT NULL DEFAULT '',
+    outcome             TEXT NOT NULL DEFAULT 'fail',
+    artifacts           TEXT NOT NULL DEFAULT '{}',
+    tags                TEXT NOT NULL DEFAULT '[]',
+    idempotency_key     TEXT NOT NULL UNIQUE,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_experience_source
+    ON experience_records(source_competition);
+CREATE INDEX IF NOT EXISTS idx_experience_outcome
+    ON experience_records(outcome);
+CREATE INDEX IF NOT EXISTS idx_experience_idempotency
+    ON experience_records(idempotency_key);
+
 

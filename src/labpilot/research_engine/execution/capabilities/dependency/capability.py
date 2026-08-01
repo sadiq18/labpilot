@@ -17,7 +17,8 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 def _requirements_candidates(context: TaskContext) -> list[Path]:
     roots = [
         context.workspace_root,
-        context.paths.root.parent.parent,  # knowledge/<slug>
+        context.paths.base_dir,  # workspace knowledge/ or legacy knowledge/
+        context.paths.data_root,  # flat knowledge/ or knowledge/<slug>
         context.paths.root,
     ]
     names = ("requirements.txt", "requirements-lock.txt", "constraints.txt")

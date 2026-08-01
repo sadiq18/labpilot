@@ -12,6 +12,7 @@ import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 import yaml
@@ -21,6 +22,9 @@ from labpilot.config import AppConfig, load_config
 
 MARKER_NAME = "labpilot.yaml"
 SCHEMA_VERSION = 1
+EXPERIENCE_DB_ENV = "LABPILOT_EXPERIENCE_DB"
+EXPERIENCE_DB_FILENAME = "experiences.db"
+USER_EXPERIENCE_DB = Path.home() / ".labpilot" / EXPERIENCE_DB_FILENAME
 
 _WORKSPACE_DIRS = (
     "configs",
@@ -110,18 +114,34 @@ class WorkspacePaths(BaseModel):
     config: str = "configs/default.yaml"
 
 
+class ExperienceStoreConfig(BaseModel):
+    """Shared cross-competition experience DB (not under a competition workspace)."""
+
+    path: str | None = None
+
+
+class WorkspaceMemoryConfig(BaseModel):
+    experience_store: ExperienceStoreConfig = Field(default_factory=ExperienceStoreConfig)
+
+
 class CompetitionWorkspace(BaseModel):
     """Resolved competition workspace rooted at ``labpilot.yaml``."""
 
     root: Path
     competition: str
     paths: WorkspacePaths = Field(default_factory=WorkspacePaths)
+    memory: WorkspaceMemoryConfig = Field(default_factory=WorkspaceMemoryConfig)
     schema_version: int = SCHEMA_VERSION
     created_at: str | None = None
 
     @property
     def knowledge_dir(self) -> Path:
         return (self.root / self.paths.knowledge).resolve()
+
+    @property
+    def research_root_parent(self) -> Path:
+        """Client research root that may hold shared ``experiences.db`` (parent of slug)."""
+        return self.root.parent.resolve()
 
     @property
     def data_dir(self) -> Path:
@@ -208,13 +228,180 @@ def load_workspace(marker: Path) -> CompetitionWorkspace:
         raise ValueError(f"Workspace marker missing competition: {marker}")
     paths_raw = raw.get("paths") or {}
     paths = WorkspacePaths.model_validate(paths_raw if isinstance(paths_raw, dict) else {})
+    memory_raw = raw.get("memory") or {}
+    memory = WorkspaceMemoryConfig.model_validate(
+        memory_raw if isinstance(memory_raw, dict) else {}
+    )
     return CompetitionWorkspace(
         root=marker.parent.resolve(),
         competition=competition,
         paths=paths,
+        memory=memory,
         schema_version=int(raw.get("schema_version") or SCHEMA_VERSION),
         created_at=raw.get("created_at"),
     )
+
+
+def client_workspace_for_knowledge(
+    knowledge_dir: Path,
+    competition: str,
+) -> CompetitionWorkspace | None:
+    """Return the client workspace when ``knowledge_dir`` is ``<ws>/knowledge``."""
+    knowledge_dir = Path(knowledge_dir).resolve()
+    marker = knowledge_dir.parent / MARKER_NAME
+    if not marker.is_file():
+        return None
+    try:
+        workspace = load_workspace(marker)
+    except (OSError, ValueError):
+        return None
+    if workspace.competition != competition.strip():
+        return None
+    if workspace.knowledge_dir != knowledge_dir:
+        return None
+    return workspace
+
+
+def is_client_knowledge_layout(knowledge_dir: Path, competition: str) -> bool:
+    """True when knowledge lives in a ``labpilot.yaml`` competition workspace."""
+    return client_workspace_for_knowledge(knowledge_dir, competition) is not None
+
+
+def competition_data_root(knowledge_dir: Path, competition: str) -> Path:
+    """Directory holding ``research/``, hypotheses, etc. for one competition.
+
+    * Client workspace: ``<ws>/knowledge`` (flat — no nested slug).
+    * Legacy multi-slug: ``knowledge/<slug>``.
+    """
+    knowledge_dir = Path(knowledge_dir).resolve()
+    competition = competition.strip()
+    if is_client_knowledge_layout(knowledge_dir, competition):
+        return knowledge_dir
+    return knowledge_dir / competition
+
+
+def migrate_nested_client_knowledge(knowledge_dir: Path, competition: str) -> list[str]:
+    """Move ``knowledge/<slug>/…`` → ``knowledge/…`` for client workspaces.
+
+    Returns names of entries moved. No-op for legacy layouts.
+    """
+    knowledge_dir = Path(knowledge_dir).resolve()
+    competition = competition.strip()
+    if not is_client_knowledge_layout(knowledge_dir, competition):
+        return []
+    nested = knowledge_dir / competition
+    if not nested.is_dir():
+        return []
+
+    moved: list[str] = []
+    for child in sorted(nested.iterdir(), key=lambda p: p.name):
+        dest = knowledge_dir / child.name
+        if dest.exists():
+            continue
+        child.rename(dest)
+        moved.append(child.name)
+
+    try:
+        next(nested.iterdir())
+    except StopIteration:
+        nested.rmdir()
+    return moved
+
+
+def _experience_path_from_workspace(workspace: CompetitionWorkspace) -> Path | None:
+    """Configured yaml path or parent-root default; never the user-global fallback."""
+    configured = (workspace.memory.experience_store.path or "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+        if not path.is_absolute():
+            return (workspace.root / path).resolve()
+        return path.resolve()
+    return (workspace.research_root_parent / EXPERIENCE_DB_FILENAME).resolve()
+
+
+def update_workspace_experience_path(
+    workspace: CompetitionWorkspace,
+    path: Path | str,
+    *,
+    store_as: str | None = None,
+) -> CompetitionWorkspace:
+    """Persist ``memory.experience_store.path`` on ``labpilot.yaml`` and return updated ws.
+
+    ``path`` is the resolved filesystem location (used when ``store_as`` is omitted
+    to derive a workspace-relative string). Pass ``store_as`` to keep a portable
+    relative form such as ``../experiences.db``.
+    """
+    if store_as is not None:
+        stored = store_as.strip()
+    else:
+        target = Path(path).expanduser()
+        if not target.is_absolute():
+            stored = str(target).replace("\\", "/")
+        else:
+            target = target.resolve()
+            try:
+                stored = str(target.relative_to(workspace.root)).replace("\\", "/")
+            except ValueError:
+                stored = str(target)
+    updated = workspace.model_copy(
+        update={
+            "memory": WorkspaceMemoryConfig(
+                experience_store=ExperienceStoreConfig(path=stored)
+            )
+        }
+    )
+    write_workspace_marker(updated)
+    return updated
+
+
+def resolve_experience_db_path(
+    *,
+    knowledge_dir: Path | None = None,
+    workspace: CompetitionWorkspace | None = None,
+    explicit: Path | str | None = None,
+    on_user_fallback: Callable[[Path], Path] | None = None,
+) -> Path:
+    """Resolve shared ``experiences.db`` (transferable memory — not competition SoR).
+
+    Precedence:
+    1. ``explicit`` argument
+    2. ``LABPILOT_EXPERIENCE_DB``
+    3. ``labpilot.yaml`` → ``memory.experience_store.path`` (relative to workspace root)
+    4. Parent research root: ``<parent-of-slug>/experiences.db``
+    5. ``~/.labpilot/experiences.db`` — if ``on_user_fallback`` is set, ask before using it
+    """
+    if explicit is not None and str(explicit).strip():
+        return Path(explicit).expanduser().resolve()
+
+    env = os.environ.get(EXPERIENCE_DB_ENV, "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+
+    ws = workspace
+    if ws is None and knowledge_dir is not None:
+        kd = Path(knowledge_dir).resolve()
+        marker = kd.parent / MARKER_NAME
+        if marker.is_file():
+            try:
+                ws = load_workspace(marker)
+            except (OSError, ValueError):
+                ws = None
+
+    if ws is not None:
+        return _experience_path_from_workspace(ws)
+
+    # Legacy / no workspace: prefer sibling of knowledge_dir when it looks like a
+    # multi-comp research root; otherwise user-global fallback.
+    if knowledge_dir is not None:
+        kd = Path(knowledge_dir).resolve()
+        # knowledge_dir is often <cwd>/knowledge → parent is research root.
+        if kd.name == "knowledge":
+            return (kd.parent / EXPERIENCE_DB_FILENAME).resolve()
+
+    fallback = USER_EXPERIENCE_DB.resolve()
+    if on_user_fallback is not None:
+        return Path(on_user_fallback(fallback)).expanduser().resolve()
+    return fallback
 
 
 def apply_workspace_to_config(
@@ -291,6 +478,11 @@ def write_workspace_marker(workspace: CompetitionWorkspace) -> Path:
         "competition": workspace.competition,
         "created_at": workspace.created_at or datetime.now(UTC).isoformat(),
         "paths": workspace.paths.model_dump(mode="json"),
+        "memory": {
+            "experience_store": {
+                "path": workspace.memory.experience_store.path or f"../{EXPERIENCE_DB_FILENAME}",
+            }
+        },
     }
     path = workspace.marker_path
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -321,6 +513,9 @@ def scaffold_workspace(
         root=root,
         competition=competition,
         created_at=datetime.now(UTC).isoformat(),
+        memory=WorkspaceMemoryConfig(
+            experience_store=ExperienceStoreConfig(path=f"../{EXPERIENCE_DB_FILENAME}")
+        ),
     )
     write_workspace_marker(workspace)
 

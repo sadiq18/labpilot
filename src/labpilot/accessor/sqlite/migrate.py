@@ -22,8 +22,8 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 #: ``belief_updates``, ``lessons``, ``research_claims``, ``claim_evidence``).
 #: v6 adds Conductor tables (``os_sessions``, ``os_tasks``, ``os_decisions``,
 #: ``os_operator_feedback``). v7 adds Campaign Engine tables
-#: (``os_suggestions``, ``os_campaign_metrics``).
-SCHEMA_VERSION = "7"
+#: (``os_suggestions``, ``os_campaign_metrics``). v8 adds ``experience_records``.
+SCHEMA_VERSION = "8"
 
 
 def run_migration(conn: sqlite3.Connection) -> None:

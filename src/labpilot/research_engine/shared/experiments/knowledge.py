@@ -79,12 +79,14 @@ def _effect_from_delta(delta: float, *, epsilon: float = _EFFECT_EPSILON) -> Kno
 
 
 class KnowledgeBase:
-    """File-backed knowledge store at `knowledge/<slug>/knowledge_base.json`."""
+    """File-backed knowledge store at competition data root ``knowledge_base.json``."""
 
     def __init__(self, knowledge_dir: Path, competition: str) -> None:
+        from labpilot.workspace import competition_data_root
+
         self.knowledge_dir = Path(knowledge_dir)
         self.competition = competition
-        self.path = self.knowledge_dir / competition / "knowledge_base.json"
+        self.path = competition_data_root(self.knowledge_dir, competition) / "knowledge_base.json"
         self._entries: dict[tuple[str, str], KnowledgeEntry] = {}
         self._load()
 

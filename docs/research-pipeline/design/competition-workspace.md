@@ -35,8 +35,8 @@ Client picks a **root path** (e.g. `~/kaggle`). LabPilot creates **one folder pe
   configs/
     default.yaml                    ← thin overlay (paths relative to this root)
     competition.yaml                ← optional local contract (was configs/competitions/<slug>.yaml)
-  knowledge/                        ← ResearchPaths root for this slug only
-    <slug>/research/…               ← plans, executions, reports, knowledge.db
+  knowledge/                        ← flat ResearchPaths root (no nested slug)
+    research/…                      ← plans, executions, reports, knowledge.db
     hypotheses/
   pipeline/                         ← train.py, config (not under competitions/)
   data/
@@ -52,6 +52,8 @@ Client picks a **root path** (e.g. `~/kaggle`). LabPilot creates **one folder pe
 
 - Layout is **`<root>/<slug>/`**, not a shared multi-slug `knowledge/` under root.
 - Everything for that competition lives **inside** the slug folder (no sibling `competitions/` outside it).
+- **`knowledge/` is flat** — `knowledge/research/…`, not `knowledge/<slug>/research/…` (legacy multi-slug mode still nests).
+- **Transferable memory** (`experiences.db`) lives on the **parent research root** (e.g. `~/kaggle/experiences.db`), not under a competition workspace. See M6 / `resolve_experience_db_path`.
 - LabPilot **product repo** stays clean when a workspace is active.
 - **Command invocation:** `uv run --project <labpilot-clone> research …` from a shell whose CWD is the competition folder. Discovery uses **shell CWD** (and shell `PWD` when tools chdir). Prefer `--project` over `--directory` — the latter changes process CWD into the clone.
 - **Backward compat:** if no `labpilot.yaml` is found walking up from CWD/`PWD`, keep CWD-relative `knowledge/` + `competitions/` behavior.
@@ -158,11 +160,11 @@ alias research='uv run --project ~/workspace/labpilot research'
 | Legacy | Workspace mode |
 |--------|----------------|
 | `competition_workspace_path` = `knowledge_dir.parent / "competitions" / slug` | `workspace.root` (the slug folder itself) |
-| `ResearchPaths` under `knowledge/<slug>/research` | Keep `ResearchPaths(knowledge_dir=ws/knowledge, competition=slug)` → `knowledge/<slug>/…` inside the workspace |
+| `ResearchPaths` under `knowledge/<slug>/research` | Client: flat `knowledge/research/…`. Legacy multi-slug still nests `knowledge/<slug>/research/…`. |
 | `.cache/kaggle` CWD-relative | `workspace.root / ".cache" / "kaggle"` |
 | `configs/competitions/<slug>.yaml` | `workspace/configs/competition.yaml` |
 
-**Locked for v1:** collapse code workspace to the slug root (`pipeline/` / `data/` at top level). Keep `knowledge/<slug>/…` nested one level.
+**Locked:** collapse code workspace to the slug root (`pipeline/` / `data/` at top level). Client knowledge is **flat** under `knowledge/` (no nested `knowledge/<slug>/`).
 
 ---
 
