@@ -73,7 +73,12 @@ def submit_learn(
             "execution_id": execution_id,
             "submission_path": summary.submission_path,
             "public_score": lb.public_score if lb else None,
+            "prior_public_score": lb.prior_public_score if lb else None,
+            "delta_vs_prior": lb.delta_vs_prior if lb else None,
+            "overfitting": lb.overfitting if lb else None,
+            "submissions_url": lb.submissions_url if lb else None,
             "follow_up_hypothesis_id": summary.follow_up_hypothesis_id,
             "dry_run": dry_run,
+            "summary": summary,
         },
     )

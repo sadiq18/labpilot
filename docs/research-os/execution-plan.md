@@ -49,7 +49,8 @@ flowchart TB
 plan-1 artifacts → (plan-2a tools ∥ plan-2b workspace) → plan-3 CLI strangler → plan-4 capstone
 ```
 
-All on branch `research-os-m1-foundation`.
+All on branch `research-os-m1-foundation`. **Status:** plans 1–4 complete
+(see [milestones/01-foundation/](milestones/01-foundation/)).
 
 ---
 

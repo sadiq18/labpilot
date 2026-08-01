@@ -6,6 +6,8 @@ research plan create --baseline          # slug from labpilot.yaml
 research plan show <competition> <plan-id>
 research plan list <competition>
 ```
+
+``plan create`` invokes the ``generate_plan`` tool (Strangler Phase A).
 """
 
 from __future__ import annotations
@@ -16,21 +18,20 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from labpilot.cli.config_helpers import load_cli_config, resolve_competition
-from labpilot.llm.client import resolve_llm_client
-from labpilot.research_engine.artifacts.plan import PlanArtifacts
-from labpilot.research_engine.intelligence.paths import ResearchPaths
-from labpilot.research_engine.planner import (
-    BaselinePlanError,
-    compile_baseline_plan,
-    compile_research_plan,
+from labpilot.cli.config_helpers import (
+    default_tools,
+    load_cli_config,
+    resolve_competition,
+    resolve_os_workspace,
 )
+from labpilot.llm.client import resolve_llm_client
+from labpilot.research_engine.intelligence.paths import ResearchPaths
+from labpilot.research_engine.planner import BaselinePlanError
 from labpilot.research_engine.planner.schemas.models import ResearchPlan
 from labpilot.research_engine.planner.schemas.task_types import PlanStatus
 from labpilot.research_engine.planner.serializer import render_markdown
 from labpilot.research_engine.planner.store import PlanStore
 from labpilot.research_engine.planner.validator import topological_levels
-from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 
 plan_app = typer.Typer(
     help="Compile and inspect research plans (plan-only; never executes tasks).",
@@ -152,51 +153,40 @@ def plan_create(
         )
         raise typer.Exit(code=1)
 
-    config, workspace = load_cli_config(
+    config, client = load_cli_config(
         config_path=config_path,
         knowledge_dir=knowledge_dir,
         workspace_path=workspace_path,
     )
-    competition = resolve_competition(competition, workspace)
+    competition = resolve_competition(competition, client)
+    ws = resolve_os_workspace(competition=competition, config=config, client=client)
     llm = resolve_llm_client(config.llm)
-    plan_arts = PlanArtifacts(config.knowledge_dir, competition)
 
     try:
-        if baseline:
-            plan = compile_baseline_plan(
-                competition,
-                knowledge_dir=config.knowledge_dir,
-                llm_client=llm,
-                plan_store=plan_arts.store,
-                write_projections=False,
-                priority=priority,
-            )
-        else:
-            assert hypothesis_id is not None
-            hyp_store = HypothesisStore(config.knowledge_dir, competition)
-            hypothesis = hyp_store.get(hypothesis_id)
-            if hypothesis is None:
-                console.print(
-                    f"[red]Hypothesis not found:[/red] {hypothesis_id} "
-                    f"(competition={competition})."
-                )
-                raise typer.Exit(code=1)
-            plan = compile_research_plan(
-                hypothesis,
-                knowledge_dir=config.knowledge_dir,
-                competition=competition,
-                llm_client=llm,
-                plan_store=plan_arts.store,
-                write_projections=False,
-                priority=priority,
-            )
-        plan_arts.upsert(plan, write_projection_files=True)
+        result = default_tools().invoke(
+            "generate_plan",
+            ws,
+            baseline=baseline,
+            hypothesis_id=hypothesis_id,
+            llm_client=llm,
+            priority=priority,
+        )
     except BaselinePlanError as exc:
         console.print(f"[red]Baseline plan refused:[/red] {exc}")
         raise typer.Exit(code=1) from exc
-    finally:
-        plan_arts.close()
+    except ValueError as exc:
+        text = str(exc)
+        if "hypothesis not found" in text.lower():
+            console.print(
+                f"[red]Hypothesis not found:[/red] {hypothesis_id} "
+                f"(competition={competition})."
+            )
+        else:
+            console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
 
+    plan = result.data["plan"]
+    assert isinstance(plan, ResearchPlan)
     paths = ResearchPaths(config.knowledge_dir, competition)
     if output_format == "text":
         kind = plan.metadata.get("plan_kind", "hypothesis")
@@ -237,12 +227,12 @@ def plan_show(
 ) -> None:
     """Show one research plan and its task DAG."""
     output_format = _validate_format(output_format)
-    config, workspace = load_cli_config(
+    config, client = load_cli_config(
         config_path=config_path,
         knowledge_dir=knowledge_dir,
         workspace_path=workspace_path,
     )
-    competition = resolve_competition(competition, workspace)
+    competition = resolve_competition(competition, client)
     store = PlanStore(config.knowledge_dir, competition)
     try:
         plan = store.get_plan(plan_id)
@@ -281,12 +271,12 @@ def plan_list(
 ) -> None:
     """List research plans for a competition."""
     status_filter = _parse_status(status)
-    config, workspace = load_cli_config(
+    config, client = load_cli_config(
         config_path=config_path,
         knowledge_dir=knowledge_dir,
         workspace_path=workspace_path,
     )
-    competition = resolve_competition(competition, workspace)
+    competition = resolve_competition(competition, client)
     store = PlanStore(config.knowledge_dir, competition)
     try:
         plans = store.list_plans(status=status_filter)

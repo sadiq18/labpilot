@@ -2,9 +2,10 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Plans 1–2b implemented on branch; plan 3 (CLI strangler) next.  
+**Status:** Plans 1–4 complete on branch `research-os-m1-foundation` (ready to merge).  
 **Branch:** `research-os-m1-foundation`  
-**Design:** [01-artifacts](../../design/01-artifacts.md) · [02-tools](../../design/02-tools.md) · [03-workspace](../../design/03-workspace.md)
+**Design:** [01-artifacts](../../design/01-artifacts.md) · [02-tools](../../design/02-tools.md) · [03-workspace](../../design/03-workspace.md)  
+**Capstone:** [capstone-notes.md](capstone-notes.md)
 
 ## Mission
 
@@ -40,13 +41,13 @@ Do **not** pull in Conductor, Kuzu, Qdrant, Temporal, or agent frameworks here.
 
 ## Phase B plans
 
-| # | Plan | Parallel |
-|---|------|----------|
-| 1 | [plan-1-artifacts.md](plan-1-artifacts.md) | Serial |
-| 2a | [plan-2a-tools.md](plan-2a-tools.md) | ∥ 2b after 1 |
-| 2b | [plan-2b-workspace.md](plan-2b-workspace.md) | ∥ 2a after 1 |
-| 3 | [plan-3-cli-strangler.md](plan-3-cli-strangler.md) | After 2a+2b |
-| 4 | [plan-4-capstone.md](plan-4-capstone.md) | After 3 |
+| # | Plan | Parallel | Status |
+|---|------|----------|--------|
+| 1 | [plan-1-artifacts.md](plan-1-artifacts.md) | Serial | Done |
+| 2a | [plan-2a-tools.md](plan-2a-tools.md) | ∥ 2b after 1 | Done |
+| 2b | [plan-2b-workspace.md](plan-2b-workspace.md) | ∥ 2a after 1 | Done |
+| 3 | [plan-3-cli-strangler.md](plan-3-cli-strangler.md) | After 2a+2b | Done |
+| 4 | [plan-4-capstone.md](plan-4-capstone.md) | After 3 | Done |
 
 ## Non-goals
 

@@ -66,5 +66,6 @@ def generate_plan(
             "status": str(plan.status),
             "task_count": len(plan.tasks),
             "generated_by": plan.generated_by,
+            "plan": plan,
         },
     )

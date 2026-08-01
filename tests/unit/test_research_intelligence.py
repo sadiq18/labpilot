@@ -329,7 +329,7 @@ def test_analyze_help_documents_flags():
 
 
 def test_analyze_cli_writes_stub_report(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(cli_main, "build_default_registry", lambda: AnalyzerRegistry())
+    monkeypatch.setattr("labpilot.research_engine.tools.handlers.analyze.build_default_registry", lambda: AnalyzerRegistry())
     result = runner.invoke(
         cli_main.app,
         [
@@ -353,7 +353,7 @@ def test_analyze_cli_can_skip_knowledge_ingestion(tmp_path: Path, monkeypatch):
         reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")]))
         return reg
 
-    monkeypatch.setattr(cli_main, "build_default_registry", _registry)
+    monkeypatch.setattr("labpilot.research_engine.tools.handlers.analyze.build_default_registry", _registry)
     result = runner.invoke(
         cli_main.app,
         [
@@ -422,7 +422,7 @@ def test_analyze_skip_ingest_also_skips_hypotheses(tmp_path: Path, monkeypatch):
         reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")]))
         return reg
 
-    monkeypatch.setattr(cli_main, "build_default_registry", _registry)
+    monkeypatch.setattr("labpilot.research_engine.tools.handlers.analyze.build_default_registry", _registry)
     knowledge_dir = tmp_path / "knowledge"
     result = runner.invoke(
         cli_main.app,
@@ -481,7 +481,7 @@ def test_analyze_skip_brief_writes_no_markdown(tmp_path: Path, monkeypatch) -> N
         reg.register(FakeAnalyzer("papers", items=[_artifact("paper:1")]))
         return reg
 
-    monkeypatch.setattr(cli_main, "build_default_registry", _registry)
+    monkeypatch.setattr("labpilot.research_engine.tools.handlers.analyze.build_default_registry", _registry)
     knowledge_dir = tmp_path / "knowledge"
     result = runner.invoke(
         cli_main.app,
@@ -571,7 +571,7 @@ def test_analyze_cli_single_analyzer_and_json_format(tmp_path: Path, monkeypatch
         reg.register(FakeAnalyzer("dataset", items=[_artifact("dataset:1")]))
         return reg
 
-    monkeypatch.setattr(cli_main, "build_default_registry", _registry)
+    monkeypatch.setattr("labpilot.research_engine.tools.handlers.analyze.build_default_registry", _registry)
     result = runner.invoke(
         cli_main.app,
         [
@@ -593,7 +593,7 @@ def test_analyze_cli_single_analyzer_and_json_format(tmp_path: Path, monkeypatch
 
 
 def test_analyze_cli_unknown_analyzer_fails_clearly(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(cli_main, "build_default_registry", lambda: AnalyzerRegistry())
+    monkeypatch.setattr("labpilot.research_engine.tools.handlers.analyze.build_default_registry", lambda: AnalyzerRegistry())
     result = runner.invoke(
         cli_main.app,
         [
@@ -609,6 +609,6 @@ def test_analyze_cli_unknown_analyzer_fails_clearly(tmp_path: Path, monkeypatch)
 
 
 def test_analyze_cli_rejects_bad_format(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(cli_main, "build_default_registry", lambda: AnalyzerRegistry())
+    monkeypatch.setattr("labpilot.research_engine.tools.handlers.analyze.build_default_registry", lambda: AnalyzerRegistry())
     result = runner.invoke(cli_main.app, ["analyze", "birdclef-2026", "--format", "html"])
     assert result.exit_code != 0
