@@ -36,7 +36,13 @@ class RIRetrievalProvider:
             query,
             llm_client=self.llm_client,
         )
-        return research_context_to_items(ctx, source=self.name)
+        items = research_context_to_items(ctx, source=self.name)
+        stamped: list[ContextItem] = []
+        for item in items:
+            meta = dict(item.metadata)
+            meta.setdefault("competition", request.competition)
+            stamped.append(item.model_copy(update={"metadata": meta}))
+        return stamped
 
 
 def research_context_to_items(

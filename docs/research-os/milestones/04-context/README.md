@@ -2,7 +2,7 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Implementing (plan 1 done; next plan 2).  
+**Status:** Implementing (plans 1–2 done; next plan 3).  
 **Branch:** `research-os-m4-context`  
 **Depends on:** M3  
 **Design:** [07-context-engine](../../design/07-context-engine.md) · [10-memory-os](../../design/10-memory-os.md)
@@ -36,7 +36,7 @@ Task-local `ContextBundle`s for Conductor/CLI; foundation for `explain`.
 |------|------------|
 | Package | `research_engine/context/` orchestration |
 | Metadata | SQLite (existing knowledge + conductor DBs) |
-| Retrieval | Filters + **BM25** (plan 2); RI Plan 9 as a provider |
+| Retrieval | Filters + **BM25**; RI retrieval as a provider |
 | Rank / compress | Real rank + budgeted compress (plan 3) |
 | Graph | Logical SQL + `GraphPort`; **`graph_metrics`** on bundles to judge Kuzu later |
 | Vectors | **Defer** (backlog) |

@@ -12,7 +12,11 @@ from labpilot.research_engine.context.graph_metrics import GraphQueryMetrics
 from labpilot.research_engine.context.graph_sql import default_graph_port
 from labpilot.research_engine.context.models import ContextBundle, ContextItem, ContextRequest
 from labpilot.research_engine.context.ports import ContextProvider, GraphPort
+from labpilot.research_engine.context.providers.episodic import EpisodicProvider
+from labpilot.research_engine.context.providers.experiments import ExperimentProvider
 from labpilot.research_engine.context.providers.ri import RIRetrievalProvider
+from labpilot.research_engine.context.providers.workspace import WorkspaceProvider
+from labpilot.research_engine.context.retrieve import retrieve_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +26,13 @@ def default_providers(
     *,
     llm_client: Any | None = None,
 ) -> list[ContextProvider]:
-    """Default sources: RI retrieval. Additional providers register as needed."""
-    _ = request
-    return [RIRetrievalProvider(llm_client=llm_client)]
+    """Default sources: RI, workspace, experiments; episodic when knowledge is set."""
+    providers: list[ContextProvider] = [RIRetrievalProvider(llm_client=llm_client)]
+    if request.knowledge_dir is not None:
+        providers.append(WorkspaceProvider())
+        providers.append(ExperimentProvider())
+        providers.append(EpisodicProvider())
+    return providers
 
 
 async def build_context_async(
@@ -34,7 +42,7 @@ async def build_context_async(
     graph: GraphPort | None = None,
     llm_client: Any | None = None,
 ) -> ContextBundle:
-    """Gather providers concurrently and assemble a ContextBundle.
+    """Gather providers concurrently, filter, BM25-score, and assemble a bundle.
 
     On provider failure, log the error and continue with the rest.
     """
@@ -62,17 +70,17 @@ async def build_context_async(
         for provider in active:
             tg.start_soon(_run, provider)
 
-    items: list[ContextItem] = []
+    raw: list[ContextItem] = []
     for provider in active:
-        items.extend(collected.get(provider.name, []))
+        raw.extend(collected.get(provider.name, []))
 
-    if request.max_items >= 0:
-        items = items[: request.max_items]
+    items = retrieve_candidates(raw, request)
 
     graph_metrics = _graph_metrics(graph)
     notes = [
-        "identity assemble from providers",
+        "retrieve: filter + BM25",
         f"providers={[p.name for p in active]}",
+        f"raw={len(raw)} kept={len(items)}",
         (
             f"graph_neighbors={graph_metrics.neighbor_calls} "
             f"slow={graph_metrics.slow_queries} "
