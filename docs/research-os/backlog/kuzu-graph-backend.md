@@ -16,7 +16,9 @@ store.
 
 ## Signals from M4 (`ContextBundle.graph_metrics`)
 
-Collect during expand/rank; revisit Kuzu when several hold over realistic campaigns:
+Populate during rank/expand when `build_context` calls `GraphPort.neighbors`
+for top retrieve seeds. Inspect bundle notes / `LABPILOT_DEBUG_METRICS=1` output
+after realistic campaigns; revisit Kuzu when several hold:
 
 | Signal | Suggests SQL strain |
 |--------|---------------------|
@@ -27,6 +29,15 @@ Collect during expand/rank; revisit Kuzu when several hold over realistic campai
 | `errors` | Timeouts / query failures under load |
 
 Also qualitative: cannot express needed traversals without exploding SQL.
+
+### How to observe (operators)
+
+```text
+LABPILOT_DEBUG_METRICS=1  →  [context] … | graph neighbors=N returned=… empty=… slow=… latency_*
+ContextBundle.graph_metrics  →  same counters on the durable bundle (JSON via to_json())
+```
+
+Empty / high-latency rates over many builds are the decision inputs — not a single run.
 
 ## Migration path
 

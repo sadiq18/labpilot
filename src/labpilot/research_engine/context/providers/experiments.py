@@ -52,6 +52,8 @@ class ExperimentProvider:
                         "competition": competition,
                         "status": decision,
                         "card_id": card.id,
+                        "node_id": card.id,
+                        "created_at": getattr(card, "created_at", None) or "",
                     },
                 )
             )
@@ -83,6 +85,9 @@ class ExperimentProvider:
                                 "competition": competition,
                                 "status": getattr(art, "status", None) or "known",
                                 "artifact_id": art.id,
+                                "node_id": art.id,
+                                "created_at": getattr(art, "created_at", None) or "",
+                                "updated_at": getattr(art, "updated_at", None) or "",
                             },
                         )
                     )

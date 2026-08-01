@@ -9,6 +9,7 @@ Import direction::
 from __future__ import annotations
 
 from labpilot.research_engine.context.bm25 import BM25, bm25_scores, tokenize
+from labpilot.research_engine.context.compress import compress_candidates
 from labpilot.research_engine.context.engine import build_context, build_context_async
 from labpilot.research_engine.context.filters import apply_filters
 from labpilot.research_engine.context.graph_metrics import GraphQueryMetrics
@@ -21,6 +22,7 @@ from labpilot.research_engine.context.providers import (
     RIRetrievalProvider,
     WorkspaceProvider,
 )
+from labpilot.research_engine.context.rank import rank_candidates
 from labpilot.research_engine.context.retrieve import retrieve_candidates
 from labpilot.research_engine.context.retrieve_metrics import Bm25RetrieveMetrics
 
@@ -42,7 +44,9 @@ __all__ = [
     "bm25_scores",
     "build_context",
     "build_context_async",
+    "compress_candidates",
     "default_graph_port",
+    "rank_candidates",
     "retrieve_candidates",
     "tokenize",
 ]

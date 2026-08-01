@@ -8,6 +8,7 @@ from typing import Any
 
 import anyio
 
+from labpilot.research_engine.context.compress import compress_candidates
 from labpilot.research_engine.context.graph_metrics import GraphQueryMetrics
 from labpilot.research_engine.context.graph_sql import default_graph_port
 from labpilot.research_engine.context.models import ContextBundle, ContextItem, ContextRequest
@@ -16,6 +17,7 @@ from labpilot.research_engine.context.providers.episodic import EpisodicProvider
 from labpilot.research_engine.context.providers.experiments import ExperimentProvider
 from labpilot.research_engine.context.providers.ri import RIRetrievalProvider
 from labpilot.research_engine.context.providers.workspace import WorkspaceProvider
+from labpilot.research_engine.context.rank import rank_candidates
 from labpilot.research_engine.context.retrieve import retrieve_candidates
 from labpilot.research_engine.context.retrieve_metrics import Bm25RetrieveMetrics
 from labpilot.research_engine.debug_metrics import emit_debug_metrics
@@ -44,17 +46,16 @@ async def build_context_async(
     graph: GraphPort | None = None,
     llm_client: Any | None = None,
 ) -> ContextBundle:
-    """Gather providers concurrently, filter, BM25-score, and assemble a bundle.
+    """Gather providers → retrieve (BM25) → rank → compress → ContextBundle.
 
     On provider failure, log the error and continue with the rest.
+    Rank expands via ``graph.neighbors`` so ``graph_metrics`` reflect real lookups.
     """
     active = list(providers) if providers is not None else default_providers(
         request, llm_client=llm_client
     )
     if graph is None:
         graph = default_graph_port(request.knowledge_dir, request.competition)
-    # TODO(m4): use graph.neighbors for expand/rank (graph distance / related nodes).
-    # Neighbor calls should record into graph.metrics_snapshot() for SQL-vs-Kuzu signals.
 
     collected: dict[str, list[ContextItem]] = {}
     errors: list[str] = []
@@ -76,13 +77,23 @@ async def build_context_async(
     for provider in active:
         raw.extend(collected.get(provider.name, []))
 
-    items, bm25_metrics = retrieve_candidates(raw, request)
+    retrieved, bm25_metrics = retrieve_candidates(raw, request)
+    ranked = rank_candidates(retrieved, request, graph=graph)
+    items = compress_candidates(ranked, request)
 
     graph_metrics = _graph_metrics(graph)
     notes = [
-        "retrieve: filter + BM25",
+        "pipeline: retrieve(BM25) → rank(rel+rec+graph) → compress",
         f"providers={[p.name for p in active]}",
-        f"raw={len(raw)} kept={len(items)}",
+        (
+            f"raw={len(raw)} retrieved={len(retrieved)} "
+            f"ranked={len(ranked)} kept={len(items)}"
+        ),
+        (
+            f"budget max_items={request.max_items} "
+            f"max_chars={request.max_chars} "
+            f"max_item_chars={request.max_item_chars}"
+        ),
         (
             f"bm25_top={bm25_metrics.top_score:.4f} "
             f"zero={bm25_metrics.scores_zero} "

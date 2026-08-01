@@ -15,8 +15,9 @@ def retrieve_candidates(
     items: list[ContextItem],
     request: ContextRequest,
 ) -> tuple[list[ContextItem], Bm25RetrieveMetrics]:
-    """Filter by metadata, score with BM25, sort descending, apply max_items.
+    """Filter by metadata, score with BM25, sort descending.
 
+    Does **not** apply ``max_items`` / char budgets — that is the compress step.
     Returns scored items plus metrics for BM25-vs-vector decisions.
     """
     metrics = Bm25RetrieveMetrics(candidates_in=len(items))
@@ -63,9 +64,6 @@ def retrieve_candidates(
         filtered = sorted(filtered, key=lambda i: i.score, reverse=True)
         metrics.notes.append("query empty; sorted by provider score")
 
-    if request.max_items >= 0:
-        filtered = filtered[: request.max_items]
-
     metrics.candidates_out = len(filtered)
     if filtered:
         metrics.top_score = float(filtered[0].score)
@@ -76,8 +74,10 @@ def retrieve_candidates(
         metrics.low_top_score = bool(query) and metrics.top_score < LOW_TOP_SCORE
 
         if q_tokens:
+            # Coverage over a provisional top-k (compress will trim further).
+            top_k = filtered[: max(1, request.max_items if request.max_items > 0 else 32)]
             top_text = " ".join(
-                f"{i.kind} {i.text} {i.reason}" for i in filtered
+                f"{i.kind} {i.text} {i.reason}" for i in top_k
             ).lower()
             hit = sum(1 for t in set(q_tokens) if t in top_text)
             metrics.query_terms_hit_in_topk = hit
