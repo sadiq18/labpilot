@@ -9,6 +9,7 @@ from labpilot.research_engine.tools.handlers import (
     query_memory,
     reflect,
     run_plan,
+    search_papers,
     submit,
     submit_learn,
 )
@@ -16,7 +17,7 @@ from labpilot.research_engine.tools.registry import ToolRegistry
 
 
 def build_default_tool_registry() -> ToolRegistry:
-    """Return a registry with the M1 stage-capability tools registered."""
+    """Return a registry with the default Research OS tools registered."""
     registry = ToolRegistry()
     for descriptor in default_tool_descriptors():
         registry.register(descriptor)
@@ -38,6 +39,20 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["competition_analysis"],
             handler=analyze_competition,
+        ),
+        ToolDescriptor(
+            name="search_papers",
+            description="Search papers for the competition / query and write a projection.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": ["string", "null"]},
+                    "limit": {"type": "integer"},
+                    "offline": {"type": "boolean"},
+                },
+            },
+            output_artifacts=["paper_search"],
+            handler=search_papers,
         ),
         ToolDescriptor(
             name="generate_plan",

@@ -46,10 +46,10 @@ Still: strategy in Conductor; execution in tools/Engineer.
 
 ---
 
-## Goal CLI (Strangler Phase D — early)
+## Goal CLI (extends M2 `research conduct`)
 
 ```text
-research "<goal>"
+research conduct "<goal>"     # product entry (ships in M2)
 research continue
 research status
 research pause
