@@ -18,6 +18,7 @@ from labpilot.workspace import scaffold_workspace
 
 _EXPECTED_TOOLS = {
     "analyze_competition",
+    "search_papers",
     "generate_plan",
     "run_plan",
     "reflect",
@@ -29,6 +30,7 @@ _EXPECTED_TOOLS = {
 _FORBIDDEN_FROM_ENGINE = (
     "labpilot.research_engine.artifacts",
     "labpilot.research_engine.tools",
+    "labpilot.research_engine.conductor",
 )
 
 

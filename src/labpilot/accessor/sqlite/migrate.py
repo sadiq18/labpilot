@@ -20,7 +20,9 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 #: ``research_task_deps`` (Research Planner). v4 adds ``research_executions``
 #: (Research Engineer). v5 adds reflection tables (``experiment_evidence``,
 #: ``belief_updates``, ``lessons``, ``research_claims``, ``claim_evidence``).
-SCHEMA_VERSION = "5"
+#: v6 adds Conductor tables (``os_sessions``, ``os_tasks``, ``os_decisions``,
+#: ``os_operator_feedback``).
+SCHEMA_VERSION = "6"
 
 
 def run_migration(conn: sqlite3.Connection) -> None:

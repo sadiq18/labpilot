@@ -59,14 +59,16 @@ def resolve_os_workspace(
     config: AppConfig,
     client: CompetitionWorkspace | None,
     runs_dir: Path | None = None,
+    goal: str | None = None,
 ) -> Workspace:
     """Build the Research OS :class:`Workspace` facade for tool invocations."""
     effective_runs = runs_dir if runs_dir is not None else config.runs_dir
     if client is not None:
-        return Workspace.from_client(client, runs_dir=effective_runs)
+        return Workspace.from_client(client, goal=goal, runs_dir=effective_runs)
     return Workspace.from_competition(
         config.knowledge_dir,
         competition,
+        goal=goal,
         runs_dir=effective_runs,
     )
 

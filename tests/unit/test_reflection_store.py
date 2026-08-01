@@ -23,7 +23,7 @@ def test_migrate_adds_reflection_tables(tmp_path: Path) -> None:
     db = tmp_path / "knowledge.db"
     client = SqliteClient(db)
     try:
-        assert client.schema_version() == SCHEMA_VERSION == "5"
+        assert client.schema_version() == SCHEMA_VERSION == "6"
         tables = {
             row["name"]
             for row in client.conn.execute(

@@ -48,16 +48,18 @@ Details: [architecture.md](architecture.md).
 |-------|--------------|----------------|-------|--------|
 | **M0** | Research Pipeline | Analyze→Plan→Run→Reflect loop | [research-pipeline](../research-pipeline/) | — |
 | **M1** | Platform Foundation | Artifacts + Workspace + Tools (CLI unchanged) | [milestones/01-foundation/](milestones/01-foundation/) | `research-os-m1-foundation` |
-| **M2** | Research Conductor | “What next?” over a task queue (fixed sequence) | [milestones/02-conductor/](milestones/02-conductor/) | `research-os-m2-conductor` |
-| **M3** | Long-running campaigns | Goal loop, pause/continue, early `research "<goal>"` | [milestones/03-campaigns/](milestones/03-campaigns/) | `research-os-m3-campaigns` |
+| **M2** | Research Conductor | Constrained LLM + task queue + `research conduct` | [milestones/02-conductor/](milestones/02-conductor/) | `research-os-m2-conductor` |
+| **M3** | Campaign Engine | Dynamic tasks, budgets, continue/pause/resume | [milestones/03-campaigns/](milestones/03-campaigns/) | `research-os-m3-campaigns` |
 | **M4** | Memory & context | Retrieve→rank→compress; hierarchy ports | [milestones/04-context/](milestones/04-context/) | `research-os-m4-context` |
 | **M5** | Agents, events, parallel | Specialists + bus + concurrent branches | [milestones/05-agents/](milestones/05-agents/) | `research-os-m5-agents` |
 | **M6** | Self-improving memory | Cross-comp transfer + experience | [milestones/06-transfer-memory/](milestones/06-transfer-memory/) | `research-os-m6-transfer-memory` |
 
-**Critical path:** M1 → M2 → M3 (Orchestrator). M4–M6 deepen the OS.  
+**Critical path:** M1 → M2 → M3 (Orchestrator). M4–M6 deepen the OS into a research
+**manager** (better decisions → delegate/parallel → learn across campaigns).  
 **Order note:** Context (**M4**) before Agents (**M5**) — specialists without retrieval
 regress quality. Full event bus ships with M5; M2 only needs an append-only decision
-log. Long-running autonomy is **M3** (usable earlier than waiting for agents).
+log. Long-running **Campaign Engine** autonomy is **M3** (M2 ships the Conductor kernel
++ `research conduct`).
 
 Design satellites (`design/01`…`10`) hold depth; **this README is the roadmap**.
 
@@ -130,39 +132,45 @@ Depth: [design/01–03](design/01-artifacts.md) · Plans: [01-foundation](milest
 ## M2 — Research Conductor
 
 **Goal:** Pipeline becomes orchestration. System asks **“What should happen next?”**
+within a **fixed tool catalog** (constrained LLM — not a rigid stage pipeline).
 
 **Architecture that ships:**
 
 ```text
-Goal → Conductor (observe → think → plan → schedule → stop)
+Goal → Conductor (observe → think → schedule → stop)
          → Task Queue → Research Engineer / tools
+research conduct "<goal>"   # product entry
+analyze | plan | run | …    # power-user / debug
 ```
 
 | Slice | Outcome |
 |-------|---------|
-| 2.1 Conductor | Decide-only brain; fixed Analyze→Plan→Run→Reflect (Strangler B) |
+| 2.1 Conductor | Decide-only brain; LLM picks/skips among registered tools |
 | 2.2 Task queue | Pending / Running / Completed / Retry / Failed / Blocked |
-| 2.3 Scheduler | Priorities, retries, dependencies, order — **separate from execution** |
+| 2.3 Scheduler | Priorities, retries, dependencies — **separate from execution** |
+| 2.4 Approvals | Plan + submit gates; approve/reject + comments → future observe |
 
-**Usable system:** CLI can drive the same loop via Conductor; decisions + queue are durable.
+**Usable system:** `research conduct` drives the loop; decisions + queue are durable;
+stage CLIs remain stable.
 
 **Tech that ships with M2:**
 
 | Area | Technology |
 |------|------------|
 | Orchestration | **Custom** Conductor |
-| Scheduler / queue | **Custom** + asyncio; durable state in **SQLite** |
-| State machine | Explicit enums (optional `transitions` later if it helps) |
-| LLM (policy) | Isolate behind router; introduce **LiteLLM** if not already cut over |
-| Observability | Decision/task/tool structured logs (JSONL/DB) |
+| Scheduler / queue | **Custom**; durable state in **SQLite** |
+| State machine | Explicit enums |
+| LLM (policy) | Structured NextAction via router; **LiteLLM** when cutting over |
+| Observability | Decision/task/tool/approval structured logs (JSONL/DB) |
 
 Depth: [design/04–05](design/04-conductor.md) · [02-conductor](milestones/02-conductor/).
 
 ---
 
-## M3 — Long-running campaigns (Orchestrator complete)
+## M3 — Campaign Engine (Orchestrator complete)
 
-**Goal:** True autonomous research loop under budgets — without waiting for the full agent zoo.
+**Goal:** True autonomous research loop under budgets — dynamic tasks beyond the
+fixed catalog, without waiting for the full agent zoo.
 
 **Architecture that ships:**
 
@@ -172,13 +180,17 @@ while not (goal | budget | time):
 checkpoint → research continue / pause / resume
 ```
 
-Dynamic tasks (Strangler C) + thin goal CLI (Strangler D):
+Dynamic tasks (Strangler C) extend M2 `research conduct`:
 
 ```text
-research "<goal>" | continue | status | pause | resume
+research conduct "<goal>" | continue | status | pause | resume
 ```
 
-**Usable system:** Operator can leave a **goal** and return; workflow is no longer fixed.
+**Usable system:** Operator can leave a **goal** and return; workflow is no longer
+limited to the fixed tool catalog.
+
+**North star after M3:** M4 improves decide quality (context); M5 adds
+delegation/parallel/events; M6 learns across campaigns — the Research OS **manager**.
 
 **Tech that ships with M3:**
 

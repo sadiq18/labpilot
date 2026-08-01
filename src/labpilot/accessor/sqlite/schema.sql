@@ -377,3 +377,67 @@ CREATE TABLE IF NOT EXISTS claim_evidence (
     PRIMARY KEY (claim_id, evidence_id, relation)
 );
 CREATE INDEX IF NOT EXISTS idx_claim_evidence_ev ON claim_evidence(evidence_id);
+
+-- ---------------------------------------------------------------------------
+-- Research Conductor (M2) — OS session, task queue, decisions, operator feedback
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS os_sessions (
+    id              TEXT PRIMARY KEY,
+    competition     TEXT NOT NULL,
+    goal            TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'running',
+    metadata_json   TEXT NOT NULL DEFAULT '{}',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_os_sessions_comp ON os_sessions(competition);
+
+CREATE TABLE IF NOT EXISTS os_tasks (
+    id              TEXT PRIMARY KEY,
+    session_id      TEXT NOT NULL REFERENCES os_sessions(id) ON DELETE CASCADE,
+    tool_name       TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    priority        INTEGER NOT NULL DEFAULT 0,
+    retry_count     INTEGER NOT NULL DEFAULT 0,
+    max_retries     INTEGER NOT NULL DEFAULT 1,
+    args_json       TEXT NOT NULL DEFAULT '{}',
+    dependencies_json TEXT NOT NULL DEFAULT '[]',
+    artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+    error           TEXT,
+    decision_id     TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    started_at      TEXT,
+    completed_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_os_tasks_session ON os_tasks(session_id);
+CREATE INDEX IF NOT EXISTS idx_os_tasks_status ON os_tasks(status);
+
+CREATE TABLE IF NOT EXISTS os_decisions (
+    id              TEXT PRIMARY KEY,
+    session_id      TEXT NOT NULL REFERENCES os_sessions(id) ON DELETE CASCADE,
+    tool_name       TEXT,
+    rationale       TEXT NOT NULL DEFAULT '',
+    stop            INTEGER NOT NULL DEFAULT 0,
+    args_json       TEXT NOT NULL DEFAULT '{}',
+    observe_json    TEXT NOT NULL DEFAULT '{}',
+    approval_json   TEXT,
+    artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+    task_id         TEXT,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_os_decisions_session ON os_decisions(session_id);
+
+CREATE TABLE IF NOT EXISTS os_operator_feedback (
+    id              TEXT PRIMARY KEY,
+    session_id      TEXT NOT NULL REFERENCES os_sessions(id) ON DELETE CASCADE,
+    gated_tool      TEXT NOT NULL,
+    decision        TEXT NOT NULL,
+    comment         TEXT NOT NULL DEFAULT '',
+    decision_id     TEXT,
+    task_id         TEXT,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_os_feedback_session ON os_operator_feedback(session_id);
+
