@@ -25,6 +25,10 @@ class ContextRequest(BaseModel):
     task_id: str | None = None
     knowledge_dir: Path | None = None
     max_items: int = 32
+    #: Total character budget across kept item texts (compress step).
+    max_chars: int = 8000
+    #: Per-item text truncate before packing into the char budget.
+    max_item_chars: int = 1200
     kinds: list[str] | None = None
     statuses: list[str] | None = None
     filter_competition: bool = True
@@ -64,3 +68,7 @@ class ContextBundle(BaseModel):
         if len(text) > max_chars:
             return text[: max_chars - 3] + "..."
         return text
+
+    def to_json(self, *, indent: int | None = None) -> str:
+        """Serialize for observe / CLI / durable snapshots."""
+        return self.model_dump_json(indent=indent)

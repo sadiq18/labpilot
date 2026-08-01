@@ -9,9 +9,9 @@ Real **rank** step (relevance, recency, cheap SQL graph distance) and
 
 ## Acceptance
 
-- [ ] Rank reorders BM25 candidates with documented signals
-- [ ] Compress produces `ContextBundle` under budget
-- [ ] Bundle serializable for observe / CLI
-- [ ] Rank/expand calls `GraphPort.neighbors` and populate `ContextBundle.graph_metrics`
-- [ ] Document observed graph latency / empty / slow rates for Kuzu decision
+- [x] Rank reorders BM25 candidates with documented signals
+- [x] Compress produces `ContextBundle` under budget
+- [x] Bundle serializable for observe / CLI
+- [x] Rank/expand calls `GraphPort.neighbors` and populate `ContextBundle.graph_metrics`
+- [x] Document observed graph latency / empty / slow rates for Kuzu decision
   (see [kuzu backlog](../../backlog/kuzu-graph-backend.md))
