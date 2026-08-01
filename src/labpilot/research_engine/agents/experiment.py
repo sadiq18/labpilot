@@ -8,11 +8,15 @@ from typing import Any
 
 import anyio
 
-from labpilot.research_engine.agents.events import EventEmitter, noop_emit
+from labpilot.research_engine.agents.events import (
+    EXPERIMENT_COMPLETED,
+    MODEL_FAILED,
+    EventEmitter,
+    noop_emit,
+)
 from labpilot.research_engine.agents.models import as_agent_task
 from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.context.models import ContextBundle
-from labpilot.research_engine.tools.handlers.run import run_plan
 from labpilot.research_engine.workspace_facade import Workspace
 
 _EXPERIMENT_SCHEMA = "labpilot.artifact.experiment/v1"
@@ -92,6 +96,9 @@ class ExperimentSpecialist:
         # Submit stays Conductor-gated — specialist never uploads.
         submit = False
 
+        # Lazy import avoids agents ↔ tools package cycle at import time.
+        from labpilot.research_engine.tools.handlers.run import run_plan
+
         result = await anyio.to_thread.run_sync(
             lambda: run_plan(
                 workspace,
@@ -106,6 +113,7 @@ class ExperimentSpecialist:
         metrics = _load_metrics(workspace.root)
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
         status = str(result.data.get("status") or "unknown")
+        experiment_id = f"exp_{workspace.competition}_{execution_id}"
         record_path = _write_experiment_record(
             workspace,
             task_id=agent_task.id,
@@ -137,16 +145,24 @@ class ExperimentSpecialist:
                 )
             )
 
-        self._emit(
-            "ExperimentCompleted",
-            {
-                "task_id": agent_task.id,
-                "execution_id": execution_id,
-                "plan_id": plan_id,
-                "competition": workspace.competition,
-                "metrics": metrics,
-                "status": status,
-                "paths": [r.path for r in refs],
-            },
-        )
+        ref_payload = [
+            {"kind": r.kind, "id": r.id, "path": r.path, "schema_id": r.schema_id}
+            for r in refs
+        ]
+        event_payload = {
+            "task_id": agent_task.id,
+            "experiment_id": experiment_id,
+            "execution_id": execution_id,
+            "plan_id": plan_id,
+            "competition": workspace.competition,
+            "workspace_root": str(workspace.root),
+            "metrics": metrics,
+            "status": status,
+            "paths": [r.path for r in refs if r.path],
+            "refs": ref_payload,
+        }
+        if status == "failed" or result.data.get("error"):
+            event_payload["error"] = result.data.get("error")
+            self._emit(MODEL_FAILED, event_payload)
+        self._emit(EXPERIMENT_COMPLETED, event_payload)
         return refs

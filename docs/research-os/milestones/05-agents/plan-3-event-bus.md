@@ -23,8 +23,8 @@ Bus builds on the durable log — does not replace it.
 
 ## Acceptance
 
-- [ ] Blinker (or equivalent in-process) bus ships; unit tests for publish → subscribe
-- [ ] Experiment completion publishes `ExperimentCompleted` (payload includes experiment id + artifact refs)
-- [ ] At least one subscriber updates evidence or notifies Conductor without a hard call from Experiment
-- [ ] M2 decision/task log remains source of truth for resume/explain
-- [ ] No distributed NATS/Redis requirement in this plan
+- [x] Blinker (or equivalent in-process) bus ships; unit tests for publish → subscribe
+- [x] Experiment completion publishes `ExperimentCompleted` (payload includes experiment id + artifact refs)
+- [x] At least one subscriber updates evidence or notifies Conductor without a hard call from Experiment
+- [x] M2 decision/task log remains source of truth for resume/explain
+- [x] No distributed NATS/Redis requirement in this plan

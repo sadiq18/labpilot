@@ -76,6 +76,7 @@ def build_observe_bundle(
             for d in decisions[-5:]
         ],
     }
+    _attach_evidence_refresh(observe, workspace)
     if include_context:
         _attach_context(
             observe,
@@ -85,6 +86,19 @@ def build_observe_bundle(
             max_chars=max_context_chars,
         )
     return observe
+
+
+def _attach_evidence_refresh(observe: dict[str, Any], workspace: Workspace) -> None:
+    """Surface bus-written evidence refresh notes for policy (best-effort)."""
+    note = workspace.root / "artifacts" / f"evidence_refresh_{workspace.competition}.json"
+    if not note.is_file():
+        return
+    try:
+        data = json.loads(note.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if isinstance(data, dict):
+        observe["evidence_refresh"] = data
 
 
 def _attach_context(

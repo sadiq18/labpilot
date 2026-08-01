@@ -26,6 +26,7 @@ dependencies = [
     "markdown>=3.5",
     "arxiv>=4.0.0",
     "anyio>=4.0",
+    "blinker>=1.8",
 ]
 
 [project.optional-dependencies]
