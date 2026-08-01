@@ -9,8 +9,8 @@ from rich.console import Console
 
 from labpilot.cli.config_helpers import load_cli_config, resolve_competition
 from labpilot.llm.client import resolve_llm_client
+from labpilot.research_engine.artifacts.reflection import run_and_wrap
 from labpilot.research_engine.reflection.journal import JournalProjector
-from labpilot.research_engine.reflection.pipeline import run_reflection
 from labpilot.research_engine.reflection.store import ReflectionStore
 
 reflect_app = typer.Typer(
@@ -44,19 +44,20 @@ def reflect_run(
     )
     competition = resolve_competition(competition, marker_workspace)
     llm = None if offline else resolve_llm_client(config.llm)
-    result = run_reflection(
+    wrapped, _ref = run_and_wrap(
         config.knowledge_dir,
         competition,
         execution_id=execution,
         workspace_path=workspace,
         llm_client=llm,
         persist=not dry_run,
+        write_projection=not dry_run,
     )
-    evidence = result.get("evidence") or {}
+    evidence = wrapped.evidence
     console.print(
         f"[green]Reflection complete[/green] evidence={evidence.get('id')} "
         f"strength={evidence.get('strength')} "
-        f"belief={ (result.get('belief') or {}).get('belief_id') }"
+        f"belief={wrapped.belief.get('belief_id')}"
     )
 
 

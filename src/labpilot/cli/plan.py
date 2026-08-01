@@ -17,8 +17,8 @@ from rich.console import Console
 from rich.table import Table
 
 from labpilot.cli.config_helpers import load_cli_config, resolve_competition
-from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.llm.client import resolve_llm_client
+from labpilot.research_engine.artifacts.plan import PlanArtifacts
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.planner import (
     BaselinePlanError,
@@ -30,6 +30,7 @@ from labpilot.research_engine.planner.schemas.task_types import PlanStatus
 from labpilot.research_engine.planner.serializer import render_markdown
 from labpilot.research_engine.planner.store import PlanStore
 from labpilot.research_engine.planner.validator import topological_levels
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 
 plan_app = typer.Typer(
     help="Compile and inspect research plans (plan-only; never executes tasks).",
@@ -158,6 +159,7 @@ def plan_create(
     )
     competition = resolve_competition(competition, workspace)
     llm = resolve_llm_client(config.llm)
+    plan_arts = PlanArtifacts(config.knowledge_dir, competition)
 
     try:
         if baseline:
@@ -165,6 +167,8 @@ def plan_create(
                 competition,
                 knowledge_dir=config.knowledge_dir,
                 llm_client=llm,
+                plan_store=plan_arts.store,
+                write_projections=False,
                 priority=priority,
             )
         else:
@@ -182,11 +186,16 @@ def plan_create(
                 knowledge_dir=config.knowledge_dir,
                 competition=competition,
                 llm_client=llm,
+                plan_store=plan_arts.store,
+                write_projections=False,
                 priority=priority,
             )
+        plan_arts.upsert(plan, write_projection_files=True)
     except BaselinePlanError as exc:
         console.print(f"[red]Baseline plan refused:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+    finally:
+        plan_arts.close()
 
     paths = ResearchPaths(config.knowledge_dir, competition)
     if output_format == "text":
