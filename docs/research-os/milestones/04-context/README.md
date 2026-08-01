@@ -2,34 +2,51 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Stub.  
+**Status:** Implementing (plan 1 done; next plan 2).  
 **Branch:** `research-os-m4-context`  
 **Depends on:** M3  
 **Design:** [07-context-engine](../../design/07-context-engine.md) · [10-memory-os](../../design/10-memory-os.md)
 
 ## Mission
 
-Intelligence layer: memory hierarchy ports + retrieve→rank→compress. Keep Evidence
-Card / Research Graph as semantic seed.
+Intelligence layer: Context Engine (`retrieve → rank → compress → ContextBundle`).
+Wire into Conductor; CLI for trust/debug. Keep Evidence Card / Research Graph as
+semantic seed. Memory hierarchy stays **internal** (public ports = backlog).
 
 ## Usable outcome
 
-Task-local context bundles; better prompts; foundation for `explain`.
+Task-local `ContextBundle`s for Conductor/CLI; foundation for `explain`.
+
+## Phase plans
+
+| # | Plan | Focus |
+|---|------|--------|
+| 1 | [plan-1-context-skeleton.md](plan-1-context-skeleton.md) | `context/` package, ports, AnyIO facade, RI provider |
+| 2 | [plan-2-retrieve-bm25.md](plan-2-retrieve-bm25.md) | Multi-source retrieve + BM25 + filters |
+| 3 | [plan-3-rank-compress.md](plan-3-rank-compress.md) | Real rank + compress → ContextBundle |
+| 4 | [plan-4-conductor-wire.md](plan-4-conductor-wire.md) | Conductor observe/policy consumes ContextBundle |
+| 5 | [plan-5-cli-explain.md](plan-5-cli-explain.md) | retrieve/explain CLI for trust/debug |
+| 6 | [plan-6-capstone.md](plan-6-capstone.md) | Integration tests + M5 handoff |
+
+**Order:** plan-1 → … → plan-6.
 
 ## Tech that ships with M4
 
 | Area | Technology |
 |------|------------|
-| Metadata | SQLite |
-| Retrieval | Hybrid: filters + BM25 + graph walk |
-| Graph | Logical SQL graph → **Kuzu** only if needed |
-| Vectors | **Defer** → Qdrant when ANN required |
-| Embeddings | Chosen at impl via LLM router / provider |
-| Runtime (prep) | Introduce **asyncio / AnyIO** boundaries when context assembly or background retrieve needs concurrency (full parallel workers land in M5) |
+| Package | `research_engine/context/` orchestration |
+| Metadata | SQLite (existing knowledge + conductor DBs) |
+| Retrieval | Filters + **BM25** (plan 2); RI Plan 9 as a provider |
+| Rank / compress | Real rank + budgeted compress (plan 3) |
+| Graph | Logical SQL + `GraphPort`; **`graph_metrics`** on bundles to judge Kuzu later |
+| Vectors | **Defer** (backlog) |
+| Runtime | **AnyIO** inside context retrieve; Conductor stays **sync** |
 
 ## Non-goals
 
-- Agent registry (M5)
-- Experience transfer DB (M6)
-- Shipping Qdrant on day one by default
-- Full parallel experiment fan-out (M5)
+- Public memory-hierarchy API ([backlog](../../backlog/memory-hierarchy-ports.md))
+- Embeddings / Qdrant / hybrid ANN ([backlog](../../backlog/hybrid-semantic-retrieval.md))
+- Kuzu migration ([backlog](../../backlog/kuzu-graph-backend.md))
+- Agent registry / parallel fan-out (M5)
+- Rewriting Plan 9 RI retrieval
+- Making Conductor async

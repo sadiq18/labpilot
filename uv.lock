@@ -900,6 +900,7 @@ name = "labpilot"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "arxiv" },
     { name = "beautifulsoup4" },
     { name = "httpx" },
@@ -942,6 +943,7 @@ llm = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.0" },
     { name = "arxiv", specifier = ">=4.0.0" },
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "google-genai", marker = "extra == 'llm'", specifier = ">=1.0" },
