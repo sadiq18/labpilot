@@ -33,13 +33,22 @@ def build_observe_bundle(
     store: ConductorStore,
     workspace: Workspace,
     session_id: str,
+    *,
+    include_context: bool = True,
+    max_context_items: int = 16,
+    max_context_chars: int = 4000,
 ) -> dict[str, Any]:
-    """Gather durable state for policy input (no full context engine)."""
+    """Gather durable state for policy input.
+
+    When ``include_context`` is true (online path), attach a best-effort
+    Context Engine summary and ranked refs. Failures never raise — observe
+    always remains usable for offline / LLM policy.
+    """
     session = store.get_session(session_id)
     tasks = store.list_tasks(session_id)
     feedback = store.list_feedback(session_id, limit=10)
     decisions = store.list_decisions(session_id)
-    return {
+    observe: dict[str, Any] = {
         "competition": workspace.competition,
         "goal": session.goal if session else "",
         "session_status": session.status if session else None,
@@ -67,6 +76,58 @@ def build_observe_bundle(
             for d in decisions[-5:]
         ],
     }
+    if include_context:
+        _attach_context(
+            observe,
+            workspace,
+            session_id,
+            max_items=max_context_items,
+            max_chars=max_context_chars,
+        )
+    return observe
+
+
+def _attach_context(
+    observe: dict[str, Any],
+    workspace: Workspace,
+    session_id: str,
+    *,
+    max_items: int = 16,
+    max_chars: int = 4000,
+) -> None:
+    """Best-effort Context Engine attach; never raises. Mutates ``observe``."""
+    try:
+        from labpilot.research_engine.context import ContextRequest, build_context
+
+        goal = str(observe.get("goal") or "")
+        request = ContextRequest(
+            competition=workspace.competition,
+            goal=goal,
+            query=goal,
+            session_id=session_id,
+            knowledge_dir=workspace.knowledge_dir,
+            max_items=max_items,
+            max_chars=max_chars,
+        )
+        bundle = build_context(request)
+        observe["context_summary"] = bundle.summary(max_chars=2000)
+        observe["context_refs"] = [
+            {
+                "id": item.id,
+                "source": item.source,
+                "kind": item.kind,
+                "score": item.score,
+                "reason": item.reason,
+            }
+            for item in bundle.items
+        ]
+        if bundle.provider_errors:
+            observe["context_provider_errors"] = list(bundle.provider_errors)
+    except Exception as exc:  # noqa: BLE001 — observe must stay usable
+        logger.warning("Context Engine unavailable for observe: %s", exc)
+        observe.setdefault("context_summary", "")
+        observe.setdefault("context_refs", [])
+        observe["context_provider_errors"] = [f"build_context: {exc}"]
 
 
 def offline_next_action(
@@ -134,7 +195,8 @@ def _invoke_llm_next_action(
     system = (
         "You are the LabPilot Research Conductor. Choose the single next tool "
         "from the allowlist, or stop. Never invent tools. Prefer operator_feedback "
-        "comments when deciding. Respond with JSON only: "
+        "comments when deciding. Use context_summary and context_refs as ranked "
+        "evidence (higher score is stronger). Respond with JSON only: "
         '{"tool": "<name>|null", "args": {}, "rationale": "...", "stop": false}'
     )
     user = json.dumps(
@@ -226,9 +288,18 @@ def decide_next(
     auto_offline_fallback: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
 ) -> tuple[NextAction, dict[str, Any]]:
-    """Observe + think; return validated NextAction and observe bundle."""
+    """Observe + think; return validated NextAction and observe bundle.
+
+    Online path attaches Context Engine evidence to observe. ``prefer_offline``
+    skips retrieve entirely (no forced Context Engine success).
+    """
     allowlist = set(registry.names())
-    observe = build_observe_bundle(store, workspace, session_id)
+    observe = build_observe_bundle(
+        store,
+        workspace,
+        session_id,
+        include_context=not prefer_offline,
+    )
     action = llm_next_action(
         observe,
         allowlist,

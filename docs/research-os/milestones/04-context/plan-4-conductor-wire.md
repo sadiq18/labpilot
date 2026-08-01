@@ -9,6 +9,6 @@ Online Conductor observe/policy consumes `ContextBundle` via sync
 
 ## Acceptance
 
-- [ ] `build_observe_bundle` includes context summary / refs
-- [ ] LLM policy prompt sees ranked evidence
-- [ ] `--offline` / `prefer_offline` does not require Context Engine success
+- [x] `build_observe_bundle` includes context summary / refs
+- [x] LLM policy prompt sees ranked evidence
+- [x] `--offline` / `prefer_offline` does not require Context Engine success

@@ -296,3 +296,147 @@ def test_search_papers_offline(tmp_path: Path) -> None:
     result = search_papers(ws, query="audio", offline=True)
     assert result.data["source"] == "offline"
     assert Path(result.refs[0].path or "").is_file()
+
+
+def test_build_observe_bundle_includes_context_online(tmp_path: Path) -> None:
+    from labpilot.research_engine.conductor.policy import build_observe_bundle
+
+    ws = _ws(tmp_path, "ctxobs")
+    reports = ws.research_paths.reports_dir
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "note.md").write_text(
+        "mixup helps minority classes on audio", encoding="utf-8"
+    )
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        session = store.create_session("use mixup for imbalance")
+        observe = build_observe_bundle(
+            store, ws, session.id, include_context=True
+        )
+        assert "context_summary" in observe
+        assert isinstance(observe["context_refs"], list)
+        blob = (observe.get("context_summary") or "") + str(observe.get("context_refs"))
+        assert "mixup" in blob.lower()
+    finally:
+        store.close()
+
+
+def test_build_observe_bundle_skips_context_when_disabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from labpilot.research_engine.conductor import policy as policy_mod
+    import labpilot.research_engine.context as ctx_mod
+
+    calls: list[str] = []
+
+    def boom(*_a: object, **_k: object) -> object:
+        calls.append("build_context")
+        raise AssertionError("build_context must not be called")
+
+    monkeypatch.setattr(ctx_mod, "build_context", boom)
+
+    ws = _ws(tmp_path, "ctxskip")
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        session = store.create_session("goal")
+        observe = policy_mod.build_observe_bundle(
+            store, ws, session.id, include_context=False
+        )
+        assert "context_summary" not in observe
+        assert "context_refs" not in observe
+        assert calls == []
+    finally:
+        store.close()
+
+
+def test_decide_next_prefer_offline_does_not_require_context(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from labpilot.research_engine.conductor.policy import decide_next
+    import labpilot.research_engine.context as ctx_mod
+
+    def boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError("context must not run offline")
+
+    monkeypatch.setattr(ctx_mod, "build_context", boom)
+
+    ws = _ws(tmp_path, "ctxoff")
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    reg = _echo_registry()
+    try:
+        session = store.create_session("goal")
+        action, observe = decide_next(
+            store,
+            ws,
+            session.id,
+            reg,
+            prefer_offline=True,
+        )
+        assert action.tool == "analyze_competition"
+        assert "context_summary" not in observe
+    finally:
+        store.close()
+
+
+def test_observe_survives_build_context_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from labpilot.research_engine.conductor.policy import build_observe_bundle
+    import labpilot.research_engine.context as ctx_mod
+
+    def boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError("retrieve down")
+
+    monkeypatch.setattr(ctx_mod, "build_context", boom)
+
+    ws = _ws(tmp_path, "ctxfail")
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        session = store.create_session("still decide")
+        observe = build_observe_bundle(
+            store, ws, session.id, include_context=True
+        )
+        assert observe["goal"] == "still decide"
+        assert observe["context_summary"] == ""
+        assert observe["context_refs"] == []
+        assert any("retrieve down" in e for e in observe["context_provider_errors"])
+    finally:
+        store.close()
+
+
+def test_llm_policy_prompt_sees_ranked_evidence() -> None:
+    from labpilot.research_engine.conductor.policy import _invoke_llm_next_action
+
+    captured: dict[str, str] = {}
+
+    class FakeLLM:
+        def complete(self, system: str, user: str) -> str:
+            captured["system"] = system
+            captured["user"] = user
+            return (
+                '{"tool": "analyze_competition", "args": {}, '
+                '"rationale": "use mixup evidence", "stop": false}'
+            )
+
+    observe = {
+        "completed_tools": [],
+        "operator_feedback": [],
+        "context_summary": "[workspace/note] mixup helps minority classes",
+        "context_refs": [
+            {
+                "id": "workspace:note:1",
+                "source": "workspace",
+                "kind": "note",
+                "score": 0.91,
+                "reason": "bm25=2.1 | rank=rel=1.000",
+            }
+        ],
+    }
+    action = _invoke_llm_next_action(
+        observe, {"analyze_competition", "search_papers"}, FakeLLM()
+    )
+    assert action.tool == "analyze_competition"
+    assert "context_refs" in captured["user"]
+    assert "0.91" in captured["user"]
+    assert "mixup" in captured["user"].lower()
+    assert "context_summary" in captured["system"] or "context_refs" in captured["system"]
