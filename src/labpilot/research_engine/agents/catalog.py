@@ -10,7 +10,7 @@ from labpilot.research_engine.agents.experiment import ExperimentSpecialist
 from labpilot.research_engine.agents.implementation import ImplementationSpecialist
 from labpilot.research_engine.agents.models import SpecialistDescriptor
 from labpilot.research_engine.agents.registry import SpecialistRegistry
-from labpilot.research_engine.agents.subscribers import install_evidence_refresh_subscriber
+from labpilot.research_engine.agents.subscribers import install_default_subscribers
 
 
 def build_default_specialist_registry(
@@ -29,7 +29,7 @@ def build_default_specialist_registry(
     if on_event is None:
         active_bus = bus or default_event_bus()
         if install_subscribers:
-            install_evidence_refresh_subscriber(active_bus)
+            install_default_subscribers(active_bus)
         emitter: EventEmitter = active_bus.publish
     else:
         emitter = on_event

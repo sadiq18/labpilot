@@ -2,7 +2,7 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Implementing (plans 1–4 done; next plan 5).  
+**Status:** Done (plans 1–6).  
 **Branch:** `research-os-m6-transfer-memory`  
 **Depends on:** M4 **hard** (Context Engine); M5 **preferred** (`git_commit` on
 artifacts, event hooks for write path)  
@@ -44,8 +44,8 @@ Memory influences decisions; never silently controls them.
 | 2 | [plan-2-experience-extractor.md](plan-2-experience-extractor.md) | Deterministic extract: experiment/reflection → record | Done |
 | 3 | [plan-3-context-provider.md](plan-3-context-provider.md) | Context Engine experience provider → ContextBundle | Done |
 | 4 | [plan-4-memory-cli.md](plan-4-memory-cli.md) | `research memory seed` / `inspect` (+ list/show) | Done |
-| 5 | [plan-5-write-hooks.md](plan-5-write-hooks.md) | Persist on completion; idempotent upsert | |
-| 6 | [plan-6-capstone.md](plan-6-capstone.md) | Integration smoke + backlog handoff | |
+| 5 | [plan-5-write-hooks.md](plan-5-write-hooks.md) | Persist on completion; idempotent upsert | Done |
+| 6 | [plan-6-capstone.md](plan-6-capstone.md) | Integration smoke + backlog handoff | Done |
 
 **Order:** plan-1 → … → plan-6.
 

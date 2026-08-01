@@ -27,11 +27,11 @@ Rules:
 
 ## Acceptance
 
-- [ ] Completion of an experiment produces/updates an Experience Record
-- [ ] Re-running completion path does not duplicate rows (idempotent)
-- [ ] Event subscriber (or documented fallback) does not schedule Conductor work
-- [ ] Records include artifact links; `git_commit` when present on experiment
-- [ ] Unit/integration test: complete fixture experiment → store has one record
+- [x] Completion of an experiment produces/updates an Experience Record
+- [x] Re-running completion path does not duplicate rows (idempotent)
+- [x] Event subscriber (or documented fallback) does not schedule Conductor work
+- [x] Records include artifact links; `git_commit` when present on experiment
+- [x] Unit/integration test: complete fixture experiment → store has one record
 
 ## Out of scope
 

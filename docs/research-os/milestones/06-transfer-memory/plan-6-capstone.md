@@ -10,25 +10,25 @@ notes.
 
 ## Acceptance
 
-- [ ] Integration tests green: records from competition A surface for similar query on B
-- [ ] `research memory inspect --similar-to B` shows A-derived experiences when similar
-- [ ] `research memory seed --from A` (target B) is explicit and auditable
-- [ ] ContextBundle for B conduct/retrieve includes experience refs without auto-seeding campaign
-- [ ] Experience artifacts can key off `git_commit` when present (M5 handoff)
-- [ ] Warm-start reads durable experience store (+ graph/artifact links) — not git history alone
-- [ ] Backlog entries linked from M6 README
-- [ ] No silent auto-transfer; no Conductor bypass from memory subscribers
+- [x] Integration tests green: records from competition A surface for similar query on B
+- [x] `research memory inspect --similar-to B` shows A-derived experiences when similar
+- [x] `research memory seed --from A` (target B) is explicit and auditable
+- [x] ContextBundle for B conduct/retrieve includes experience refs without auto-seeding campaign
+- [x] Experience artifacts can key off `git_commit` when present (M5 handoff)
+- [x] Warm-start reads durable experience store (+ graph/artifact links) — not git history alone
+- [x] Backlog entries linked from M6 README
+- [x] No silent auto-transfer; no Conductor bypass from memory subscribers
 
 ## Post-M6 handoff checklist
 
-- [ ] Automatic transfer with confidence scoring tracked in
+- [x] Automatic transfer with confidence scoring tracked in
       [automatic-transfer-confidence](../../backlog/automatic-transfer-confidence.md)
-- [ ] Emergent pattern extraction tracked in
+- [x] Emergent pattern extraction tracked in
       [experience-pattern-extraction](../../backlog/experience-pattern-extraction.md)
-- [ ] Shared/multi-tenant experience tables remain
+- [x] Shared/multi-tenant experience tables remain
       [shared-multi-tenant-store](../../backlog/shared-multi-tenant-store.md)
-- [ ] Hybrid ANN / Kuzu only when M4 metric signals justify
+- [x] Hybrid ANN / Kuzu only when M4 metric signals justify
       ([hybrid-semantic-retrieval](../../backlog/hybrid-semantic-retrieval.md),
       [kuzu-graph-backend](../../backlog/kuzu-graph-backend.md))
-- [ ] Public memory-hierarchy ports still backlog
+- [x] Public memory-hierarchy ports still backlog
       ([memory-hierarchy-ports](../../backlog/memory-hierarchy-ports.md))
