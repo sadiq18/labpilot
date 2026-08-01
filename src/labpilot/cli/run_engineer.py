@@ -9,13 +9,13 @@ from rich.console import Console
 
 from labpilot.cli.config_helpers import load_cli_config, resolve_competition
 from labpilot.llm.client import resolve_llm_client
+from labpilot.research_engine.artifacts.execution import ExecutionArtifacts
+from labpilot.research_engine.artifacts.plan import PlanArtifacts
 from labpilot.research_engine.execution import (
     EngineerError,
     ResearchEngineer,
     default_capability_registry,
 )
-from labpilot.research_engine.execution.store import ExecutionStore
-from labpilot.research_engine.planner.store import PlanStore
 
 console = Console()
 
@@ -62,11 +62,11 @@ def run_plan_command(
         workspace_path=workspace_path,
     )
     competition = resolve_competition(competition, workspace)
-    store = PlanStore(config.knowledge_dir, competition)
+    plan_arts = PlanArtifacts(config.knowledge_dir, competition)
     try:
-        plan = store.get_plan(plan_id)
+        plan = plan_arts.get(plan_id)
     finally:
-        store.close()
+        plan_arts.close()
 
     if plan is None:
         console.print(
@@ -81,10 +81,12 @@ def run_plan_command(
         install_packages=install_packages and not dry_run,
         llm_client=llm,
     )
+    exec_arts = ExecutionArtifacts(config.knowledge_dir, competition)
     engineer = ResearchEngineer(
         knowledge_dir=config.knowledge_dir,
         competition=competition,
         registry=registry,
+        execution_store=exec_arts.store,
         constraints=_engineer_constraints(
             config=config,
             workspace=workspace,
@@ -99,12 +101,14 @@ def run_plan_command(
             f"[cyan]{plan_id}[/cyan] for [cyan]{competition}[/cyan]"
             + (" [yellow](dry-run)[/yellow]" if dry_run else "")
         )
-        execution = engineer.run_plan(plan_id)
+        execution, _ref = exec_arts.create(plan_id)
+        execution = engineer.run_plan(plan_id, execution=execution)
     except EngineerError as exc:
         console.print(f"[red]Engineer error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
     finally:
         engineer.close()
+        exec_arts.close()
 
     color = "green" if execution.status == "succeeded" else "red"
     console.print(
@@ -133,11 +137,11 @@ def resume_execution_command(
         workspace_path=workspace_path,
     )
     competition = resolve_competition(competition, workspace)
-    exec_store = ExecutionStore(config.knowledge_dir, competition)
+    exec_arts = ExecutionArtifacts(config.knowledge_dir, competition)
     try:
-        existing = exec_store.get_execution(execution_id)
+        existing = exec_arts.get(execution_id)
     finally:
-        exec_store.close()
+        exec_arts.close()
     if existing is None:
         console.print(
             f"[red]Execution not found:[/red] {execution_id} "

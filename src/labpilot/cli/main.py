@@ -57,7 +57,8 @@ from labpilot.research_engine.intelligence.registry import (
     UnknownAnalyzerError,
     build_default_registry,
 )
-from labpilot.research_engine.intelligence.renderers.json import to_json, write_report
+from labpilot.research_engine.artifacts.analysis import write_analysis
+from labpilot.research_engine.intelligence.renderers.json import to_json
 from labpilot.research_engine.intelligence.renderers.terminal import render_terminal
 from labpilot.research_engine.intelligence.retrieval import (
     ContextBuilder,
@@ -712,7 +713,13 @@ def analyze(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from None
 
-    path = write_report(report, context.report_path)
+    ref = write_analysis(
+        report,
+        context.knowledge_dir,
+        context.competition,
+        path=context.report_path,
+    )
+    path = Path(ref.path) if ref.path else context.report_path
     brief_path = None
     if report.research_brief:
         from labpilot.research_engine.intelligence.brief.models import ResearchBrief

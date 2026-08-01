@@ -61,10 +61,21 @@ class ResearchEngineer:
         if self._owns_exec_store:
             self._exec_store.close()
 
-    def run_plan(self, plan_id: str) -> ResearchExecution:
-        """Create an execution and run all pending tasks to completion."""
+    def run_plan(
+        self,
+        plan_id: str,
+        *,
+        execution: ResearchExecution | None = None,
+    ) -> ResearchExecution:
+        """Create an execution (unless provided) and run all pending tasks."""
         plan = self._load_runnable_plan(plan_id)
-        execution = self._exec_store.create_execution(plan_id)
+        if execution is None:
+            execution = self._exec_store.create_execution(plan_id)
+        elif execution.plan_id != plan_id:
+            raise EngineerError(
+                f"execution {execution.id} plan_id={execution.plan_id} "
+                f"does not match requested plan_id={plan_id}"
+            )
         self._plan_store.update_plan_status(plan_id, PlanStatus.IN_PROGRESS)
         self._exec_store.update_status(execution.id, "running")
         if plan.hypothesis_id:

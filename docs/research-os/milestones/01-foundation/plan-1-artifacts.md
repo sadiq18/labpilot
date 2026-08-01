@@ -22,12 +22,21 @@ on each other’s implementations to sequence work.
 
 ## Acceptance
 
-- [ ] Adapters documented and importable
-- [ ] Round-trip unit tests for ≥3 artifacts
-- [ ] Analyze/plan/run/reflect paths use adapters for primary outputs
+- [x] Adapters documented and importable
+- [x] Round-trip unit tests for ≥3 artifacts
+- [x] Analyze/plan/run/reflect paths use adapters for primary outputs
+
+## Notes (implemented)
+
+- Package: `labpilot.research_engine.artifacts`
+- CLI wires primary outputs through adapters; engine packages must not import
+  `artifacts` (enforced by unit test).
+- Engineer `run_plan` accepts an optional pre-created `execution` so CLI can
+  allocate via `ExecutionArtifacts.create`.
 
 ## Non-goals
 
 - OS Task queue (M2)
 - Tool registry (plan 2a)
 - CLI rewrite (plan 3)
+
