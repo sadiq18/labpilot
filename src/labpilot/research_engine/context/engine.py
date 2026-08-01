@@ -17,6 +17,8 @@ from labpilot.research_engine.context.providers.experiments import ExperimentPro
 from labpilot.research_engine.context.providers.ri import RIRetrievalProvider
 from labpilot.research_engine.context.providers.workspace import WorkspaceProvider
 from labpilot.research_engine.context.retrieve import retrieve_candidates
+from labpilot.research_engine.context.retrieve_metrics import Bm25RetrieveMetrics
+from labpilot.research_engine.debug_metrics import emit_debug_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +76,7 @@ async def build_context_async(
     for provider in active:
         raw.extend(collected.get(provider.name, []))
 
-    items = retrieve_candidates(raw, request)
+    items, bm25_metrics = retrieve_candidates(raw, request)
 
     graph_metrics = _graph_metrics(graph)
     notes = [
@@ -82,18 +84,75 @@ async def build_context_async(
         f"providers={[p.name for p in active]}",
         f"raw={len(raw)} kept={len(items)}",
         (
-            f"graph_neighbors={graph_metrics.neighbor_calls} "
+            f"bm25_top={bm25_metrics.top_score:.4f} "
+            f"zero={bm25_metrics.scores_zero} "
+            f"coverage={bm25_metrics.query_term_coverage:.2f} "
+            f"low_top={bm25_metrics.low_top_score} "
+            f"no_match={bm25_metrics.no_positive_match}"
+        ),
+        (
+            f"graph neighbors={graph_metrics.neighbor_calls} "
+            f"returned={graph_metrics.neighbor_nodes_returned} "
+            f"empty={graph_metrics.neighbor_empty_results} "
             f"slow={graph_metrics.slow_queries} "
-            f"empty={graph_metrics.neighbor_empty_results}"
+            f"errors={graph_metrics.errors} "
+            f"latency_avg_ms={graph_metrics.neighbor_latency_ms_avg:.2f} "
+            f"latency_max_ms={graph_metrics.neighbor_latency_ms_max:.2f}"
         ),
     ]
+    _log_retrieve_metrics(
+        competition=request.competition,
+        providers=[p.name for p in active],
+        raw_count=len(raw),
+        kept=len(items),
+        bm25=bm25_metrics,
+        graph=graph_metrics,
+    )
     return ContextBundle(
         request=request,
         items=items,
         provider_errors=errors,
         notes=notes,
         graph_metrics=graph_metrics,
+        bm25_metrics=bm25_metrics,
     )
+
+
+def _log_retrieve_metrics(
+    *,
+    competition: str,
+    providers: list[str],
+    raw_count: int,
+    kept: int,
+    bm25: Bm25RetrieveMetrics,
+    graph: GraphQueryMetrics,
+) -> None:
+    """Emit retrieve metrics at debug; stdout only when LABPILOT_DEBUG_METRICS=1."""
+    bm25_denom = bm25.scores_zero + bm25.scores_positive
+    bm25_line = (
+        f"bm25 top={bm25.top_score:.4f} second={bm25.second_score:.4f} "
+        f"gap={bm25.score_gap:.4f} mean_kept={bm25.mean_kept_score:.4f} "
+        f"zero={bm25.scores_zero}/{bm25_denom} "
+        f"coverage={bm25.query_term_coverage:.2f} "
+        f"tokens={bm25.query_token_count} "
+        f"low_top={bm25.low_top_score} no_match={bm25.no_positive_match} "
+        f"after_filter={bm25.candidates_after_filter}"
+    )
+    graph_line = (
+        f"graph neighbors={graph.neighbor_calls} "
+        f"returned={graph.neighbor_nodes_returned} "
+        f"empty={graph.neighbor_empty_results} "
+        f"slow={graph.slow_queries} errors={graph.errors} "
+        f"latency_avg_ms={graph.neighbor_latency_ms_avg:.2f} "
+        f"latency_max_ms={graph.neighbor_latency_ms_max:.2f} "
+        f"hop_max={graph.hop_depth_requested_max}"
+    )
+    line = (
+        f"[context] competition={competition} "
+        f"providers={providers} raw={raw_count} kept={kept} | "
+        f"{bm25_line} | {graph_line}"
+    )
+    emit_debug_metrics(logger, line)
 
 
 def _graph_metrics(graph: GraphPort) -> GraphQueryMetrics:

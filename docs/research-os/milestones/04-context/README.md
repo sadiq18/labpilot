@@ -36,7 +36,7 @@ Task-local `ContextBundle`s for Conductor/CLI; foundation for `explain`.
 |------|------------|
 | Package | `research_engine/context/` orchestration |
 | Metadata | SQLite (existing knowledge + conductor DBs) |
-| Retrieval | Filters + **BM25**; RI retrieval as a provider |
+| Retrieval | Filters + **BM25**; **`bm25_metrics`** on bundles to judge vector/hybrid later |
 | Rank / compress | Real rank + budgeted compress (plan 3) |
 | Graph | Logical SQL + `GraphPort`; **`graph_metrics`** on bundles to judge Kuzu later |
 | Vectors | **Defer** (backlog) |

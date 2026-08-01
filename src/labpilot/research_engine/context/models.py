@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from labpilot.research_engine.context.graph_metrics import GraphQueryMetrics
+from labpilot.research_engine.context.retrieve_metrics import Bm25RetrieveMetrics
 from pydantic import BaseModel, Field
 
 
@@ -50,6 +51,7 @@ class ContextBundle(BaseModel):
     provider_errors: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     graph_metrics: GraphQueryMetrics = Field(default_factory=GraphQueryMetrics)
+    bm25_metrics: Bm25RetrieveMetrics = Field(default_factory=Bm25RetrieveMetrics)
     built_at: str = Field(default_factory=_now)
 
     def summary(self, *, max_chars: int = 2000) -> str:

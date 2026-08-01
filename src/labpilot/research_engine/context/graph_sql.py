@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from labpilot.research_engine.context.graph_metrics import (
@@ -49,6 +50,22 @@ class SqlGraphPort:
 
     def metrics_snapshot(self) -> GraphQueryMetrics:
         return self.metrics.copy()
+
+    def log_metrics(self, *, prefix: str = "[graph]") -> None:
+        """Emit neighbor metrics at debug (or stdout when LABPILOT_DEBUG_METRICS=1)."""
+        from labpilot.research_engine.debug_metrics import emit_debug_metrics
+
+        snap = self.metrics_snapshot()
+        line = (
+            f"{prefix} competition={self.competition} "
+            f"neighbors={snap.neighbor_calls} returned={snap.neighbor_nodes_returned} "
+            f"empty={snap.neighbor_empty_results} slow={snap.slow_queries} "
+            f"errors={snap.errors} "
+            f"latency_avg_ms={snap.neighbor_latency_ms_avg:.2f} "
+            f"latency_max_ms={snap.neighbor_latency_ms_max:.2f} "
+            f"hop_max={snap.hop_depth_requested_max}"
+        )
+        emit_debug_metrics(logging.getLogger(__name__), line)
 
 
 def default_graph_port(

@@ -109,7 +109,8 @@ def test_sql_graph_port_neighbors_records_metrics() -> None:
 def test_build_context_includes_graph_metrics() -> None:
     bundle = build_context(ContextRequest(competition="demo", goal="g"))
     assert bundle.graph_metrics.neighbor_calls == 0
-    assert any("graph_neighbors=" in n for n in bundle.notes)
+    assert any("graph neighbors=" in n for n in bundle.notes)
+    assert bundle.bm25_metrics.query_empty or bundle.bm25_metrics.candidates_in == 0
 
 
 def test_bm25_ranks_relevant_document_higher() -> None:
@@ -193,10 +194,30 @@ def test_retrieve_candidates_bm25_and_max_items() -> None:
         query="mixup imbalance",
         max_items=2,
     )
-    got = retrieve_candidates(items, request)
+    got, metrics = retrieve_candidates(items, request)
     assert len(got) == 2
     assert got[0].id == "2"
     assert "bm25=" in got[0].reason
+    assert metrics.bm25_applied
+    assert metrics.scores_positive >= 1
+    assert metrics.top_score > 0
+
+
+def test_bm25_metrics_no_positive_match() -> None:
+    items = [
+        ContextItem(
+            id="1",
+            source="t",
+            kind="note",
+            text="completely unrelated cooking",
+            metadata={"competition": "demo"},
+        )
+    ]
+    request = ContextRequest(competition="demo", query="mixup augmentation")
+    got, metrics = retrieve_candidates(items, request)
+    assert len(got) == 1
+    assert metrics.no_positive_match
+    assert metrics.scores_zero == 1
 
 
 def test_workspace_provider_reads_report(tmp_path: Path) -> None:
