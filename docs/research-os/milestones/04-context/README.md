@@ -2,7 +2,7 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Implementing (plans 1–4 done; next plan 5).  
+**Status:** Implementing (plans 1–5 done; next plan 6).  
 **Branch:** `research-os-m4-context`  
 **Depends on:** M3  
 **Design:** [07-context-engine](../../design/07-context-engine.md) · [10-memory-os](../../design/10-memory-os.md)

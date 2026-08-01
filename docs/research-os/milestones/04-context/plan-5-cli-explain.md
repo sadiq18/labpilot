@@ -9,6 +9,15 @@ Secondary to Conductor quality — not the primary M4 deliverable.
 
 ## Acceptance
 
-- [ ] CLI builds `ContextBundle` (not only RI `ResearchContext`)
-- [ ] Explain-oriented view shows inclusion reasons / scores
-- [ ] Works offline against fixture knowledge DB
+- [x] CLI builds `ContextBundle` (not only RI `ResearchContext`)
+- [x] Explain-oriented view shows inclusion reasons / scores
+- [x] Works offline against fixture knowledge DB
+
+## Commands
+
+```text
+research context retrieve <slug> -q "…" [--format text|json]
+research context explain  <slug> -q "…"
+```
+
+Legacy ``research retrieve`` remains the Plan 9 RI ``ResearchContext`` path.
