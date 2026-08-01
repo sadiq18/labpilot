@@ -2,7 +2,8 @@
 
 ## Overview
 
-LabPilot is a **plan-driven research OS**. System of record for execution:
+LabPilot is a **plan-driven research OS** (Version 1 kernel). System of record for
+execution:
 
 ```bash
 research analyze <slug>
@@ -10,6 +11,13 @@ research plan create <slug> --baseline   # or --hypothesis H-xxx
 research run --plan P-001 --competition <slug>
 research resume --execution E-001 --competition <slug>
 ```
+
+**Docs split:** this file lives under the **research-pipeline** tree. Evolution toward
+a Conductor-led Research OS is designed in
+[../research-os/](../research-os/) ([architecture](../research-os/architecture.md),
+[execution plan](../research-os/execution-plan.md)). V1 stays the kernel; OS milestones
+change orchestration via Strangler Fig — they do not discard Analyzer / Planner /
+Engineer / Reflection.
 
 Prefer a **client-owned competition workspace** (`research init` → `cd ~/kaggle/<slug>`)
 so artifacts stay out of the LabPilot clone. Design:
@@ -657,7 +665,7 @@ Templates are executed as a subprocess with `cwd=pipeline/`. Paths to `data/raw/
 ### Optional dependency extras
 
 Defined in `pyproject.toml` — not required for tabular-only runs. Install with
-`uv sync --extra <name>` (see [README.md](../README.md#optional-installs) for full details).
+`uv sync --extra <name>` (see [README.md](../../README.md#optional-installs) for full details).
 
 | Extra | Packages | Purpose |
 |-------|----------|---------|

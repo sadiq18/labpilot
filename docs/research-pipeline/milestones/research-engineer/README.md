@@ -85,6 +85,12 @@ Roles are **not** agents. There is no Planner Agent → Coder Agent → Executor
 There is one deterministic **Research Engineer** orchestrator that dispatches to stable
 **capabilities**.
 
+**Research OS remap:** In the Conductor-led OS
+([../../../research-os/](../../../research-os/)), this Engineer remains the
+**deterministic execution consumer** of approved plans/tasks. The Conductor (not the
+Engineer) chooses research strategy. Cross-experiment “what next?” moves to the Conductor;
+the Engineer non-goal of an Analyze→Run auto-loop stays — that loop is OS M2+.
+
 ---
 
 ## 3. Success criteria (MVP gate)

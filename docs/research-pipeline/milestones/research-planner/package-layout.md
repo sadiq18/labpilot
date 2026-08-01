@@ -23,7 +23,7 @@ src/labpilot/research_engine/
 | Sibling `planner/` | **Choose** — matches Research OS: analyze → knowledge → **planner** → executor |
 
 There is no separate `execution_engine` package; the service boundary is
-`labpilot.research_engine` ([`__init__.py`](../../../src/labpilot/research_engine/__init__.py)).
+`labpilot.research_engine` ([`__init__.py`](../../../../src/labpilot/research_engine/__init__.py)).
 When code lands, update that docstring to name three pillars: intelligence, planner, execution.
 
 ---

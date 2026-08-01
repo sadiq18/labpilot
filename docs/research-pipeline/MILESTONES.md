@@ -26,15 +26,20 @@ have:
 
 Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 
+**Next product arc (Research OS):** Single roadmap — architecture and tech co-evolve
+per milestone — [../research-os/README.md](../research-os/README.md). Design branch:
+`research-os-design`; implementation uses one branch per OS milestone.
+
 ---
 
 ## Status at a glance
 
 | Track | Document | Summary |
 |-------|----------|---------|
+| **Research OS (design)** | [../research-os/](../research-os/) | M0–M6 roadmap; M1 Foundation next to implement |
 | **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P2 + P3 + P4 shipped |
-| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Research Reflection Design A; Engineer Plans 1–11 done; Planner MVP; RI Phase 1 |
-| **TODO** | [milestones/TODO.md](milestones/TODO.md) | Reflection Phase B; post-1.0 items |
+| **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Evidence Card/Graph; Engineer/Reflection/Planner shipped tracks |
+| **TODO** | [milestones/TODO.md](milestones/TODO.md) | post-1.0 items |
 | **Backlog** | [milestones/backlog.md](milestones/backlog.md) | Unscheduled extensions (async kernel watcher, webhooks) |
 
 ---
@@ -54,6 +59,7 @@ Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 | **Research Planner** | — | **MVP shipped** | Hypothesis → planning compiler → executable DAG (`research plan`); Plans 1–6 |
 | **Research Engineer** | — | **Phase B complete (dry-run SoR)** | Approved plan → implemented, verified experiment (`research run --plan`) |
 | **Research Reflection** | — | **Phase B complete** | Outcomes → durable knowledge (`research reflect` / `journal`) |
+| **Research OS** | — | **Design** | Conductor-led evolution — [../research-os/](../research-os/); M1 Foundation next |
 
 Details for each track live in the linked documents above:
 
@@ -62,9 +68,11 @@ Details for each track live in the linked documents above:
 - Research Planner (MVP shipped): [milestones/research-planner/README.md](milestones/research-planner/README.md)
 - Research Engineer (design): [milestones/research-engineer/README.md](milestones/research-engineer/README.md)
 - Research Reflection (design): [milestones/research-reflection/README.md](milestones/research-reflection/README.md)
+- Research OS (design): [../research-os/README.md](../research-os/README.md) · [execution-plan](../research-os/execution-plan.md)
 
 ---
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for module layout, pipeline stages, and artifact contracts.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the V1 kernel. Research OS layering:
+[../research-os/architecture.md](../research-os/architecture.md).

@@ -75,6 +75,10 @@ analyze → knowledge / beliefs / hypotheses
          next plan (human or Planner)
 ```
 
+**Research OS remap:** Reflection becomes the `reflect` / Critic **tool** feeding **memory**.
+It does not auto-execute the next plan — the Conductor (with approval policy) does. See
+[../../../research-os/](../../../research-os/).
+
 ---
 
 ## 3. Loop (SoR)

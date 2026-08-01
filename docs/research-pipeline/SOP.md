@@ -20,7 +20,7 @@ Command flags and every subcommand live in [CLI.md](CLI.md). This doc is the
 3. On macOS, LightGBM often needs: `brew install libomp`.
 
 Tabular competitions need only the core install. Image/deep baselines need
-`--extra image` / `--extra deep` — see the root [README](../README.md).
+`--extra image` / `--extra deep` — see the root [README](../../README.md).
 
 ### Credentials (per competition workspace)
 

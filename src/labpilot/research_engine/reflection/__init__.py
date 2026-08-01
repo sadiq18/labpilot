@@ -1,7 +1,7 @@
 """Research Reflection — durable knowledge after experiments.
 
 Evidence → Critic → Beliefs / Hypotheses → Lessons / Claims → Journal.
-See ``docs/milestones/research-reflection/``.
+See ``docs/research-pipeline/milestones/research-reflection/``.
 """
 
 from __future__ import annotations

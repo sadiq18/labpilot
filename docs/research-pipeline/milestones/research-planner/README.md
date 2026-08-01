@@ -116,6 +116,10 @@ Notice: **no code yet. Only planning.**
 Still **no "agent" as the product noun** — only capabilities. Analyze / knowledge / planner /
 executor are stages of a Research Operating System for ML experiments.
 
+**Research OS remap:** Planner becomes the `generate_plan` **tool** (and later a Planning
+specialist under the Conductor). See [../../../research-os/](../../../research-os/). Artifact
+contracts and tool wrappers are OS **M1**; Conductor scheduling is **M2+**.
+
 ### Event-driven entity chain
 
 ```

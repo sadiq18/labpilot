@@ -11,7 +11,7 @@ Back to [README.md](README.md) · [capabilities.md](capabilities.md) ·
 
 A research engineer spends real time on environments, GPUs, and failures. The Runtime
 capability and Recovery Controller make that **observable and resumable**. Today’s
-[`execution/runtimes/`](../../../src/labpilot/research_engine/execution/runtimes/)
+[`execution/runtimes/`](../../../../src/labpilot/research_engine/execution/runtimes/)
 package is **config-only**; this milestone adds dispatch, polling, artifact pull,
 and health evidence (Runtime **capability** is separate).
 

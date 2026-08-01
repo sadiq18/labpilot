@@ -102,7 +102,7 @@ elif target is numeric:
 `text_classification_deep`, `image_classification_deep`.
 
 **Optional extras:** `uv sync --extra llm` (briefs), `--extra image` (image baseline),
-`--extra deep` (transfer-learning baselines). See [README.md](../../README.md#optional-installs).
+`--extra deep` (transfer-learning baselines). See [README.md](../../../README.md#optional-installs).
 
 ### Architecture changes (P1)
 
@@ -117,7 +117,7 @@ elif target is numeric:
 | `templates/*_deep/` | Fine-tuned DistilBERT / ResNet18 | Opt-in transfer learning (optional `deep` extra) |
 
 Remote runtime **configuration** shipped in P2 v0.3 / P4 v1.0 — see `runtimes/` and
-[configs/runtimes/README.md](../../configs/runtimes/README.md). Remote **execution**
+[configs/runtimes/README.md](../../../configs/runtimes/README.md). Remote **execution**
 (`--remote-train`, scheduler, artifact sync) is deferred — see [TODO.md](TODO.md).
 
 ---

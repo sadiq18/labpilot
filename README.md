@@ -108,8 +108,9 @@ See [configs/competitions/README.md](configs/competitions/README.md) for the ful
 
 ## Commands
 
-Full flag tables: **[docs/CLI.md](docs/CLI.md)**.  
-Day-to-day procedure: **[docs/SOP.md](docs/SOP.md)**.
+Full flag tables: **[docs/research-pipeline/CLI.md](docs/research-pipeline/CLI.md)**.  
+Day-to-day procedure: **[docs/research-pipeline/SOP.md](docs/research-pipeline/SOP.md)**.  
+Docs index: **[docs/README.md](docs/README.md)** (pipeline vs Research OS).
 
 | I want to… | Command |
 |------------|---------|
@@ -119,7 +120,7 @@ Day-to-day procedure: **[docs/SOP.md](docs/SOP.md)**.
 | Execute an approved plan | `research run --plan P-001 --competition <slug>` |
 | Resume an execution | `research resume --execution E-001 --competition <slug>` |
 | Environment check | `research doctor` |
-| Lineage / compare / KB / rank | `research experiments …` — [CLI.md](docs/CLI.md#4-experiments) |
+| Lineage / compare / KB / rank | `research experiments …` — [CLI.md](docs/research-pipeline/CLI.md#4-experiments) |
 | Hypotheses | `research hypothesize <slug>` / `list` / `show` / `update` |
 | Inspect legacy `runs/` HTML | `research report --run-id <id>` (historical artifacts) |
 | Competition HTML | `research experiments dashboard --competition <slug>` |
@@ -131,7 +132,7 @@ Default policy: **do not pass `--submit`** until you have inspected local metric
 
 Legacy linear Pipeline (`init` / `build` / `improve` / plan-less `run`) has been
 **removed**. Tracker:
-[docs/milestones/research-engineer/pipeline-deprecation.md](docs/milestones/research-engineer/pipeline-deprecation.md).
+[docs/research-pipeline/milestones/research-engineer/pipeline-deprecation.md](docs/research-pipeline/milestones/research-engineer/pipeline-deprecation.md).
 
 ## Repository Layout
 
@@ -148,7 +149,9 @@ configs/              # default.yaml, competitions/, runtimes/
 competitions/         # per-slug workspace (gitignored when generated)
 knowledge/            # research DB, plans, executions, hypotheses (gitignored)
 runs/                 # legacy run artifacts still readable for inspect (gitignored)
-docs/                 # Architecture, CLI, SOP, milestones
+docs/
+  research-pipeline/  # V1 operator docs + shipped milestones
+  research-os/        # Research OS design (Conductor roadmap)
 tests/                # Unit tests
 ```
 
@@ -156,11 +159,13 @@ tests/                # Unit tests
 
 | Doc | Contents |
 |-----|----------|
-| [docs/SOP.md](docs/SOP.md) | How to use LabPilot (procedure) |
-| [docs/CLI.md](docs/CLI.md) | All `research` commands + examples |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Modules, execution flow, artifact contracts |
-| [docs/MILESTONES.md](docs/MILESTONES.md) | Roadmap / completed / backlog |
-| [docs/milestones/research-engineer/](docs/milestones/research-engineer/) | Engineer design + deprecation notes |
+| [docs/README.md](docs/README.md) | Docs router (pipeline vs Research OS) |
+| [docs/research-pipeline/SOP.md](docs/research-pipeline/SOP.md) | How to use LabPilot (procedure) |
+| [docs/research-pipeline/CLI.md](docs/research-pipeline/CLI.md) | All `research` commands + examples |
+| [docs/research-pipeline/ARCHITECTURE.md](docs/research-pipeline/ARCHITECTURE.md) | Modules, execution flow, artifact contracts |
+| [docs/research-pipeline/MILESTONES.md](docs/research-pipeline/MILESTONES.md) | V1 roadmap / completed / backlog |
+| [docs/research-os/](docs/research-os/) | Research OS north star + execution plan |
+| [docs/research-pipeline/milestones/research-engineer/](docs/research-pipeline/milestones/research-engineer/) | Engineer design + deprecation notes |
 
 ## License
 

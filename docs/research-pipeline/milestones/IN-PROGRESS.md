@@ -4,6 +4,17 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
+## Research OS — design
+
+**Status:** Design on branch `research-os-design`.  
+**Roadmap (architecture + tech co-evolve):** [../../research-os/README.md](../../research-os/README.md) ·
+[execution-plan](../../research-os/execution-plan.md).
+
+V1 pipeline remains the kernel. Next **implementation** is **M1 Platform Foundation**
+(`research-os-m1-foundation`). One git branch per OS milestone thereafter.
+
+---
+
 ## Evidence Card + Research Graph (causal learning)
 
 **Status:** In progress on `research-execution`.

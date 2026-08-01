@@ -114,10 +114,10 @@ flowchart TD
 
 ### Implementation notes
 
-- Reuse [`KaggleClient._poll_public_score`](../src/labpilot/kaggle/client.py) patterns for kernel session polling; separate timeouts: `kernel_poll_timeout` (short, P1.5b) vs `kernel_watch_max_age` (days, backlog).
+- Reuse [`KaggleClient._poll_public_score`](../../../src/labpilot/kaggle/client.py) patterns for kernel session polling; separate timeouts: `kernel_poll_timeout` (short, P1.5b) vs `kernel_watch_max_age` (days, backlog).
 - `upload_submission` stage splits: **sync path** (current plan) vs **async path** (sets `awaiting_kernel`, skips blocking poll).
 - `research resume` already re-enters incomplete stages — extend manifest `StageStatus` or add substates for `upload_submission`.
-- Reflection [`links.py`](../src/labpilot/reflection/links.py) footer updated when `submission.scored` fires (idempotent append).
+- Reflection [`links.py`](../../../src/labpilot/reflection/links.py) footer updated when `submission.scored` fires (idempotent append).
 - Tests: fake event bus + mock gateway; no live multi-day test required.
 
 ### Dependencies

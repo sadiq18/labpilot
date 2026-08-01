@@ -47,7 +47,7 @@ This is the user-facing heart of the Research Planner. Same thin-CLI pattern as
 | Path | Work |
 |------|------|
 | `cli/main.py` (or `cli/plan.py`) | Subcommands |
-| Docs: `docs/CLI.md`, `docs/SOP.md` | Document commands + weekly loop step |
+| Docs: `docs/research-pipeline/CLI.md`, `docs/research-pipeline/SOP.md` | Document commands + weekly loop step |
 | Tests | Typer runner: create/show/list on temp knowledge dir |
 
 ## Acceptance criteria
