@@ -469,11 +469,24 @@ def init_cmd(
         "--force",
         help="Allow scaffolding into a non-empty directory",
     ),
+    experience_db: Path | None = typer.Option(
+        None,
+        "--experience-db",
+        help="Shared experiences.db path (sets labpilot.yaml memory.experience_store.path)",
+    ),
+    experience_db_fallback: bool = typer.Option(
+        False,
+        "--experience-db-fallback",
+        help="Use ~/.labpilot/experiences.db (still confirms when interactive)",
+    ),
 ) -> None:
     """Scaffold a client-owned competition workspace under ``<path>/<slug>/``.
 
     Writes ``labpilot.yaml``, dirs (knowledge, pipeline, data, …), ``.gitignore``,
     and an optional git commit. Does **not** download data or run analyze.
+
+    Experience memory is shared outside the workspace (parent research root by
+    default). Interactive init asks before falling back to ``~/.labpilot``.
 
     After init, ``cd`` into the workspace and run commands with CWD discovery::
 
@@ -491,6 +504,10 @@ def init_cmd(
         git_choice = False
     else:
         git_choice = None
+    if experience_db is not None and experience_db_fallback:
+        raise typer.BadParameter(
+            "Use either --experience-db or --experience-db-fallback, not both."
+        )
 
     init_workspace_command(
         competition=competition,
@@ -498,6 +515,8 @@ def init_cmd(
         git=git_choice,
         force=force,
         labpilot_hint=Path.cwd(),
+        experience_db=experience_db,
+        experience_db_fallback=experience_db_fallback,
     )
 
 

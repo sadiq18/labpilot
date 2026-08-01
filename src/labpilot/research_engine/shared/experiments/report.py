@@ -135,9 +135,11 @@ def write_dashboard(
     knowledge_dir: Path,
     runs_dir: Path,
 ) -> Path:
-    """Render HTML dashboard under knowledge/<slug>/dashboard.html."""
+    """Render HTML dashboard under the competition data root."""
+    from labpilot.workspace import competition_data_root
+
     html = render_dashboard_html(report, graph, runs_dir=runs_dir)
-    out_dir = knowledge_dir / report.competition
+    out_dir = competition_data_root(knowledge_dir, report.competition)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "dashboard.html"
     path.write_text(html, encoding="utf-8")

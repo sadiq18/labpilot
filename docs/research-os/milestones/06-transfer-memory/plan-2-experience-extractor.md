@@ -2,6 +2,8 @@
 
 Back to [README.md](README.md).
 
+**Status:** Done.
+
 ## Goal
 
 Deterministic **ExperienceExtractor**: map a completed experiment (+ reflection when
@@ -19,12 +21,20 @@ optional fields stay empty rather than inventing category wikis.
 
 ## Acceptance
 
-- [ ] Given experiment (+ optional reflection), extractor produces a valid Experience Record
-- [ ] Idempotent: re-extract same experiment upserts the same record
-- [ ] `git_commit` copied into artifacts when present on experiment
-- [ ] Tags populated from available signals without requiring LLM
-- [ ] Unit tests with fixture experiment/reflection payloads
-- [ ] No first-class prompt/HP/paper pattern tables
+- [x] Given experiment (+ optional reflection), extractor produces a valid Experience Record
+- [x] Idempotent: re-extract same experiment upserts the same record
+- [x] `git_commit` copied into artifacts when present on experiment
+- [x] Tags populated from available signals without requiring LLM
+- [x] Unit tests with fixture experiment/reflection payloads
+- [x] No first-class prompt/HP/paper pattern tables
+
+## Implementation notes
+
+- `ExperienceExtractor.extract(...)` — callable for Plan 5 write hooks
+- Sources: `Experiment` model, agent `experiment/record.json`, optional reflection/plan/hypothesis
+- Outcome from comparison verdict / metric delta / status (rule-based)
+- Facets are **rule hints with confidence + evidence** (Stage 1). Further stages:
+  [experience-facet-extraction backlog](../../../backlog/experience-facet-extraction.md)
 
 ## Out of scope
 
@@ -32,3 +42,4 @@ optional fields stay empty rather than inventing category wikis.
 - CLI (plan 4)
 - Automatic subscription to event bus (plan 5 — this plan may expose a callable)
 - LLM-based narrative rewriting as a hard dependency
+- Artifact-aware / embedding / LLM / facet-graph extraction (backlog stages 2–5)

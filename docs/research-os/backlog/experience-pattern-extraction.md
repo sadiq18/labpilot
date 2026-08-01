@@ -23,6 +23,10 @@ retrieval and usage statistics once enough experiences exist.
 - Feed pattern summaries back into Context Engine as an additional provider
 - Keep Experience Records as the durable episode log
 
+## Related
+
+Facet quality feeding patterns: [experience-facet-extraction](experience-facet-extraction.md).
+
 ## Out of scope here
 
 M6 Experience Record schema, extractor, context provider, CLI

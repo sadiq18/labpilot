@@ -64,8 +64,19 @@ needs them — see [README roadmap](../README.md).
 | Vectors | ANN for Context Engine | Only if BM25+graph insufficient → Qdrant ([backlog](../backlog/hybrid-semantic-retrieval.md)) |
 | Analytics | Offline experience analysis | **Defer** DuckDB ([pattern extraction backlog](../backlog/experience-pattern-extraction.md)) |
 
-Shared tables across competitions: start with SQLite experience store; multi-tenant
-scale is [shared-multi-tenant-store](../backlog/shared-multi-tenant-store.md).
+**Separation:** `knowledge.db` = competition-specific knowledge (under the workspace).
+`experiences.db` = transferable research memory (**outside** any competition workspace).
+
+Path resolution for `experiences.db`:
+
+1. `LABPILOT_EXPERIENCE_DB`
+2. `labpilot.yaml` → `memory.experience_store.path` (e.g. `../experiences.db`)
+3. Parent research root: `~/kaggle/experiences.db`
+4. `~/.labpilot/experiences.db` — **only after explicit agreement** during
+   `research init` (or `--experience-db-fallback` / custom `--experience-db`).
+   Setup also prints `export LABPILOT_EXPERIENCE_DB=…` when the client picks a path.
+
+Multi-tenant scale later: [shared-multi-tenant-store](../backlog/shared-multi-tenant-store.md).
 
 ---
 

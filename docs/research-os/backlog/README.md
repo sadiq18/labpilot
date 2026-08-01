@@ -19,3 +19,4 @@ milestone or explicit pickup.
 | [git-worktrees-patches.md](git-worktrees-patches.md) | Parallel experiment worktrees + PatchManager for review |
 | [automatic-transfer-confidence.md](automatic-transfer-confidence.md) | Auto warm-start with confidence scoring (M7+; M6 is human-visible seed only) |
 | [experience-pattern-extraction.md](experience-pattern-extraction.md) | Emergent prompt/model/feature/paper patterns from experience usage (post-M6) |
+| [experience-facet-extraction.md](experience-facet-extraction.md) | Evidence-backed facets (confidence → artifact extractors → embeddings → LLM → facet graph) |

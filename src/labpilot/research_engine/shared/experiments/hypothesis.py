@@ -32,9 +32,11 @@ class HypothesisStore:
     """File-backed CRUD for per-competition hypotheses under `knowledge/`."""
 
     def __init__(self, knowledge_dir: Path, competition: str) -> None:
+        from labpilot.workspace import competition_data_root
+
         self.knowledge_dir = Path(knowledge_dir)
         self.competition = competition
-        self.hypotheses_dir = self.knowledge_dir / competition / "hypotheses"
+        self.hypotheses_dir = competition_data_root(self.knowledge_dir, competition) / "hypotheses"
 
     def _path_for(self, hypothesis_id: str) -> Path:
         return self.hypotheses_dir / f"{hypothesis_id}.json"

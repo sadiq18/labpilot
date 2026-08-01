@@ -4,14 +4,24 @@
 module is the single source of truth for those paths; both ``AnalyzeContext``
 and the ``KnowledgeStore`` build on it so they can never drift apart.
 
-Everything here lives under ``knowledge/<slug>/research/`` and is **local only /
-gitignored** — never committed.
+**Client workspace** (``labpilot.yaml``): ``<ws>/knowledge/research/…`` (flat).  
+**Legacy multi-slug:** ``knowledge/<slug>/research/…``.
+
+Competition-local only / gitignored — never commit ``knowledge.db``. Shared
+transferable memory lives in ``experiences.db`` outside the workspace
+(:func:`labpilot.workspace.resolve_experience_db_path`).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
+from labpilot.workspace import (
+    competition_data_root,
+    is_client_knowledge_layout,
+    migrate_nested_client_knowledge,
+)
 
 RAW_SUBDIRS = ("papers", "repositories", "kernels", "discussions", "competitions")
 EXTRACTED_SUBDIRS = ("papers", "repositories", "forums")
@@ -22,16 +32,25 @@ KNOWLEDGE_SUBDIRS = ("techniques", "datasets", "architectures", "tasks")
 class ResearchPaths:
     """Resolve the research tree for one competition.
 
-    ``base_dir`` is the repo-level knowledge directory (``config.knowledge_dir``,
-    e.g. ``knowledge/``); ``competition`` is the normalized slug.
+    ``base_dir`` is the knowledge directory (``config.knowledge_dir``, e.g.
+    ``<ws>/knowledge`` or legacy ``knowledge/``); ``competition`` is the slug.
     """
 
     base_dir: Path
     competition: str
 
     @property
+    def data_root(self) -> Path:
+        """Competition data root (flat ``knowledge/`` or legacy ``knowledge/<slug>``)."""
+        return competition_data_root(self.base_dir, self.competition)
+
+    @property
+    def is_client_layout(self) -> bool:
+        return is_client_knowledge_layout(self.base_dir, self.competition)
+
+    @property
     def root(self) -> Path:
-        return self.base_dir / self.competition / "research"
+        return self.data_root / "research"
 
     @property
     def raw_dir(self) -> Path:
@@ -99,7 +118,8 @@ class ResearchPaths:
         return dirs
 
     def ensure(self) -> ResearchPaths:
-        """Create the full locked tree (idempotent) and return self."""
+        """Migrate nested client layout if needed, create tree, return self."""
+        migrate_nested_client_knowledge(self.base_dir, self.competition)
         for directory in self.all_dirs():
             directory.mkdir(parents=True, exist_ok=True)
         return self
