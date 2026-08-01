@@ -8,13 +8,16 @@ from labpilot.research_engine.tools.handlers.papers import search_papers
 from labpilot.research_engine.tools.handlers.plan import generate_plan
 from labpilot.research_engine.tools.handlers.reflect import reflect
 from labpilot.research_engine.tools.handlers.run import run_plan
+from labpilot.research_engine.tools.handlers.specialists import implement, run_experiment
 from labpilot.research_engine.tools.handlers.submit import submit, submit_learn
 
 __all__ = [
     "analyze_competition",
     "generate_plan",
+    "implement",
     "query_memory",
     "reflect",
+    "run_experiment",
     "run_plan",
     "search_papers",
     "submit",

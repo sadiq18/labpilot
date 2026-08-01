@@ -18,6 +18,30 @@ class AgentTask(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+def as_agent_task(task: object) -> AgentTask:
+    """Normalize OsTask / dict / AgentTask into :class:`AgentTask`."""
+    if isinstance(task, AgentTask):
+        return task
+    if isinstance(task, dict):
+        return AgentTask.model_validate(task)
+    task_id = str(getattr(task, "id", None) or getattr(task, "task_id", None) or "T-agent")
+    capability = str(
+        getattr(task, "capability", None)
+        or getattr(task, "tool_name", None)
+        or "implement"
+    )
+    description = str(getattr(task, "description", None) or getattr(task, "goal", None) or "")
+    metadata = getattr(task, "metadata", None) or getattr(task, "args", None) or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return AgentTask(
+        id=task_id,
+        capability=capability,
+        description=description,
+        metadata=dict(metadata),
+    )
+
+
 class SpecialistDescriptor(BaseModel):
     """Advertisement for registry routing — capability + cost/duration hints."""
 

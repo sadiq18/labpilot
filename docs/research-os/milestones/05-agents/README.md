@@ -2,7 +2,7 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Implementing (plan 1 done; next plan 2).  
+**Status:** Implementing (plans 1–2 done; next plan 3).  
 **Branch:** `research-os-m5-agents`  
 **Depends on:** M4  
 **Design:** [08-agents](../../design/08-agents.md) · [09-parallel-and-events](../../design/09-parallel-and-events.md)

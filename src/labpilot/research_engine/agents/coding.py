@@ -7,7 +7,7 @@ from typing import Any
 
 import anyio
 
-from labpilot.research_engine.agents.models import AgentTask
+from labpilot.research_engine.agents.models import AgentTask, as_agent_task
 from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.context.models import ContextBundle
 from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
@@ -32,29 +32,6 @@ _CAPABILITY_TO_TASK_TYPE: dict[str, TaskType] = {
 }
 
 
-def _as_agent_task(task: object) -> AgentTask:
-    if isinstance(task, AgentTask):
-        return task
-    if isinstance(task, dict):
-        return AgentTask.model_validate(task)
-    task_id = str(getattr(task, "id", None) or getattr(task, "task_id", None) or "T-coding")
-    capability = str(
-        getattr(task, "capability", None)
-        or getattr(task, "tool_name", None)
-        or "implement"
-    )
-    description = str(getattr(task, "description", None) or getattr(task, "goal", None) or "")
-    metadata = getattr(task, "metadata", None) or getattr(task, "args", None) or {}
-    if not isinstance(metadata, dict):
-        metadata = {}
-    return AgentTask(
-        id=task_id,
-        capability=capability,
-        description=description,
-        metadata=dict(metadata),
-    )
-
-
 def _task_type_for(agent_task: AgentTask) -> TaskType:
     raw = str(agent_task.metadata.get("task_type") or agent_task.capability).strip().lower()
     if raw in _CAPABILITY_TO_TASK_TYPE:
@@ -75,11 +52,17 @@ def build_v1_task_context(
     paths = ResearchPaths(workspace.knowledge_dir, competition).ensure()
     now = datetime.now(UTC)
     task_type = _task_type_for(agent_task)
+    goal = agent_task.description or context.request.goal or "implement"
+    if agent_task.metadata.get("prefer_separate_inference"):
+        goal = (
+            f"{goal} Prefer separable layout: pipeline/train.py for training and "
+            "pipeline/infer.py for prediction helpers under ALLOWED_ROOTS."
+        )
     plan = ResearchPlan(
         id=f"P-agent-{agent_task.id}",
         competition=competition,
         hypothesis_id="",
-        goal=agent_task.description or context.request.goal or "implement",
+        goal=goal,
         status=PlanStatus.READY,
         tasks=[
             ResearchTask(
@@ -106,6 +89,9 @@ def build_v1_task_context(
     if context.summary():
         constraints["context_summary"] = context.summary(max_chars=2000)
     constraints.update(dict(agent_task.metadata.get("constraints") or {}))
+    for key in ("prefer_patch", "prefer_separate_inference", "force_rewrite"):
+        if key in agent_task.metadata:
+            constraints[key] = agent_task.metadata[key]
     return TaskContext(
         plan=plan,
         task=plan.tasks[0],
@@ -149,7 +135,7 @@ class V1CodeEngineeringCodingTool:
         workspace: Workspace,
         context: ContextBundle,
     ) -> list[ArtifactRef]:
-        agent_task = _as_agent_task(task)
+        agent_task = as_agent_task(task)
         task_ctx = build_v1_task_context(workspace, agent_task, context)
         evidence = await anyio.to_thread.run_sync(self._capability.execute, task_ctx)
         if not evidence.passed:

@@ -6,8 +6,10 @@ from labpilot.research_engine.tools.descriptors import ToolDescriptor
 from labpilot.research_engine.tools.handlers import (
     analyze_competition,
     generate_plan,
+    implement,
     query_memory,
     reflect,
+    run_experiment,
     run_plan,
     search_papers,
     submit,
@@ -69,6 +71,23 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             handler=generate_plan,
         ),
         ToolDescriptor(
+            name="implement",
+            description=(
+                "Implementation specialist: write/update code via CodingTool "
+                "(EDA/features as code tasks)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "capability": {"type": "string"},
+                    "force_rewrite": {"type": "boolean"},
+                },
+            },
+            output_artifacts=["code"],
+            handler=implement,
+        ),
+        ToolDescriptor(
             name="run_plan",
             description="Execute an approved ResearchPlan via the Research Engineer.",
             input_schema={
@@ -82,6 +101,24 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["execution"],
             handler=run_plan,
+        ),
+        ToolDescriptor(
+            name="run_experiment",
+            description=(
+                "Experiment specialist: run a plan, collect metrics, write experiment "
+                "record (never live-submits)."
+            ),
+            input_schema={
+                "type": "object",
+                "required": ["plan_id"],
+                "properties": {
+                    "plan_id": {"type": "string"},
+                    "dry_run": {"type": "boolean"},
+                    "description": {"type": "string"},
+                },
+            },
+            output_artifacts=["execution", "experiment", "metrics"],
+            handler=run_experiment,
         ),
         ToolDescriptor(
             name="reflect",
