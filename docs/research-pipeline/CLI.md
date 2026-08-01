@@ -27,6 +27,7 @@ research <command> ...
 8. [Research Planner](#8-research-planner) — `plan create` / `show` / `list`
 9. [Environment](#9-environment) — doctor, runtime, templates
 10. [Common option patterns](#10-common-option-patterns)
+11. [Experience memory](#11-experience-memory) — `memory seed` / `inspect` / `list` / `show`
 
 ---
 
@@ -675,6 +676,26 @@ Other tasks inherit `llm.provider` (default Gemini). Callers use
 
 ---
 
+## 11. Experience memory
+
+Shared cross-competition experience memory (`experiences.db`). Influences Conductor
+via ContextBundle retrieve; **seed is operator-driven** (never auto-run on campaign start).
+
+```bash
+research memory seed --from birdclef-2026 --competition whale-sound
+research memory inspect --similar-to birdclef-2026 -q "specaugment audio"
+research memory list [--competition <slug>] [--outcome success|fail] [--tag audio]
+research memory show XR-001
+```
+
+| Command | Purpose |
+|---------|---------|
+| `seed --from` | Write auditable priors from source slug into the target workspace |
+| `inspect` | Show what Context Engine would surface from experience memory |
+| `list` / `show` | Browse the shared ExperienceStore |
+
+---
+
 ## Quick lookup
 
 | I want to… | Command |
@@ -696,5 +717,7 @@ Other tasks inherit `llm.provider` (default Gemini). Callers use
 | Compile baseline plan P-001 | `research plan create <slug> --baseline` |
 | Inspect / list plans | `research plan show` / `list` |
 | Pull Kaggle kernels / discussions | `research fetch <slug>` or `analyze --fetch-kaggle`
+| Warm-start from another competition | `research memory seed --from <slug>` |
+| Debug experience retrieve | `research memory inspect --similar-to <slug>` |
 
 Workflow narrative: [SOP.md](SOP.md).

@@ -2,6 +2,8 @@
 
 Back to [README.md](README.md).
 
+**Status:** Done.
+
 ## Goal
 
 Human-visible warm-start and debug surface:
@@ -23,12 +25,17 @@ Retrieve-always (plan 3) remains the architectural default; CLI does not replace
 
 ## Acceptance
 
-- [ ] `seed` and `inspect` implemented and documented in CLI docs
-- [ ] `seed` is explicit (no side effect from `conduct` / campaign start alone)
-- [ ] `inspect` output shows experience ids, outcomes, tags, artifact refs
-- [ ] `list` / `show` work against ExperienceStore
-- [ ] Smoke tests or CLI tests for seed + inspect happy paths
-- [ ] Help text states: memory influences via ContextBundle; seed is operator-driven
+- [x] `seed` and `inspect` implemented and documented in CLI docs
+- [x] `seed` is explicit (no side effect from `conduct` / campaign start alone)
+- [x] `inspect` output shows experience ids, outcomes, tags, artifact refs
+- [x] `list` / `show` work against ExperienceStore
+- [x] Smoke tests or CLI tests for seed + inspect happy paths
+- [x] Help text states: memory influences via ContextBundle; seed is operator-driven
+
+## Implementation notes
+
+- CLI: `labpilot.cli.memory_cli` → `research memory …`
+- Seed writes `knowledge/memory/seeds/<source>.json` (auditable); provider may boost those ids
 
 ## Out of scope
 

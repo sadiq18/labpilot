@@ -14,6 +14,7 @@ from labpilot.research_engine.context.graph_sql import default_graph_port
 from labpilot.research_engine.context.models import ContextBundle, ContextItem, ContextRequest
 from labpilot.research_engine.context.ports import ContextProvider, GraphPort
 from labpilot.research_engine.context.providers.episodic import EpisodicProvider
+from labpilot.research_engine.context.providers.experience import ExperienceProvider
 from labpilot.research_engine.context.providers.experiments import ExperimentProvider
 from labpilot.research_engine.context.providers.ri import RIRetrievalProvider
 from labpilot.research_engine.context.providers.workspace import WorkspaceProvider
@@ -30,11 +31,12 @@ def default_providers(
     *,
     llm_client: Any | None = None,
 ) -> list[ContextProvider]:
-    """Default sources: RI, workspace, experiments; episodic when knowledge is set."""
+    """Default sources: RI, workspace, experiments, experience, episodic."""
     providers: list[ContextProvider] = [RIRetrievalProvider(llm_client=llm_client)]
     if request.knowledge_dir is not None:
         providers.append(WorkspaceProvider())
         providers.append(ExperimentProvider())
+        providers.append(ExperienceProvider())
         providers.append(EpisodicProvider())
     return providers
 

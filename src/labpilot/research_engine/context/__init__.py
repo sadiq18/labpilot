@@ -18,6 +18,7 @@ from labpilot.research_engine.context.models import ContextBundle, ContextItem, 
 from labpilot.research_engine.context.ports import ContextProvider, GraphPort
 from labpilot.research_engine.context.providers import (
     EpisodicProvider,
+    ExperienceProvider,
     ExperimentProvider,
     RIRetrievalProvider,
     WorkspaceProvider,
@@ -34,6 +35,7 @@ __all__ = [
     "ContextProvider",
     "ContextRequest",
     "EpisodicProvider",
+    "ExperienceProvider",
     "ExperimentProvider",
     "GraphPort",
     "GraphQueryMetrics",
