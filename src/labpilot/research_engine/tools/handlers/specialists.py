@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from labpilot.research_engine.agents import (
-    AgentTask,
-    build_default_specialist_registry,
-    execute_agent_sync,
-)
+from labpilot.research_engine.agents.catalog import build_default_specialist_registry
+from labpilot.research_engine.agents.facade import execute_agent_sync
+from labpilot.research_engine.agents.models import AgentTask
 from labpilot.research_engine.context.models import ContextBundle, ContextRequest
 from labpilot.research_engine.tools.descriptors import ToolResult
 from labpilot.research_engine.workspace_facade import Workspace

@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from labpilot.research_engine.agents.events import EventEmitter, noop_emit
+from labpilot.research_engine.agents.events import (
+    IMPLEMENTATION_FINISHED,
+    EventEmitter,
+    noop_emit,
+)
 from labpilot.research_engine.agents.models import AgentTask, as_agent_task
 from labpilot.research_engine.agents.ports import CodingTool
 from labpilot.research_engine.artifacts.base import ArtifactRef
@@ -144,11 +148,15 @@ class ImplementationSpecialist:
                     refs.append(ref)
 
         self._emit(
-            "ImplementationFinished",
+            IMPLEMENTATION_FINISHED,
             {
                 "task_id": agent_task.id,
                 "competition": workspace.competition,
-                "paths": [r.path for r in refs],
+                "paths": [r.path for r in refs if r.path],
+                "refs": [
+                    {"kind": r.kind, "id": r.id, "path": r.path, "schema_id": r.schema_id}
+                    for r in refs
+                ],
                 "patched_existing": bool(existing and prefer_patch),
             },
         )
