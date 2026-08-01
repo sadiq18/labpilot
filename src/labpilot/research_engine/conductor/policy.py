@@ -6,6 +6,10 @@ import json
 import logging
 from typing import Any
 
+from labpilot.research_engine.conductor.approvals import (
+    OfflineFallbackPrompt,
+    resolve_offline_fallback,
+)
 from labpilot.research_engine.conductor.models import NextAction
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.tools.registry import ToolRegistry
@@ -121,15 +125,11 @@ def validate_next_action(action: NextAction, allowlist: set[str]) -> NextAction:
     return action
 
 
-def llm_next_action(
+def _invoke_llm_next_action(
     observe: dict[str, Any],
     allowlist: set[str],
-    llm_client: Any | None,
+    llm_client: Any,
 ) -> NextAction:
-    """Ask the LLM for a structured NextAction; fall back to offline on failure."""
-    if llm_client is None:
-        return offline_next_action(observe, allowlist)
-
     catalog = sorted(allowlist)
     system = (
         "You are the LabPilot Research Conductor. Choose the single next tool "
@@ -142,19 +142,77 @@ def llm_next_action(
         indent=2,
         default=str,
     )
-    try:
-        if hasattr(llm_client, "complete"):
-            text = llm_client.complete(system, user)
-        elif hasattr(llm_client, "generate"):
-            text = str(llm_client.generate(task="planning", prompt=user))
-        else:
-            return offline_next_action(observe, allowlist)
-        data = _parse_json(text)
-        action = NextAction.model_validate(data)
-        return validate_next_action(action, allowlist)
-    except Exception as exc:
-        logger.warning("Conductor policy LLM failed (%s); using offline fallback", exc)
+    if hasattr(llm_client, "complete"):
+        text = llm_client.complete(system, user)
+    elif hasattr(llm_client, "generate"):
+        text = str(llm_client.generate(task="planning", prompt=user))
+    else:
+        raise TypeError("llm_client has no complete/generate method")
+    data = _parse_json(text)
+    action = NextAction.model_validate(data)
+    return validate_next_action(action, allowlist)
+
+
+def llm_next_action(
+    observe: dict[str, Any],
+    allowlist: set[str],
+    llm_client: Any | None,
+    *,
+    prefer_offline: bool = False,
+    auto_offline_fallback: bool = False,
+    offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+    max_llm_retries: int = 5,
+) -> NextAction:
+    """Ask the LLM for a structured NextAction.
+
+    On LLM failure (or missing client in online mode), ask the operator before
+    using the deterministic offline order: allow, deny, or retry.
+    Intentional ``prefer_offline`` skips the prompt.
+    """
+    if prefer_offline:
         return offline_next_action(observe, allowlist)
+
+    retries = 0
+    while True:
+        if llm_client is None:
+            reason = "No LLM client available"
+        else:
+            try:
+                return _invoke_llm_next_action(observe, allowlist, llm_client)
+            except Exception as exc:
+                reason = f"LLM policy failed: {exc}"
+                logger.warning("Conductor policy LLM failed (%s)", exc)
+
+        decision = resolve_offline_fallback(
+            reason,
+            auto=auto_offline_fallback,
+            prompt=offline_fallback_prompt,
+        )
+        if decision == "allow":
+            logger.info("Operator allowed offline policy fallback (%s)", reason)
+            return offline_next_action(observe, allowlist)
+        if decision == "deny":
+            logger.info("Operator denied offline policy fallback (%s)", reason)
+            return NextAction(
+                tool=None,
+                rationale=f"operator denied offline policy fallback ({reason})",
+                stop=True,
+            )
+        # retry
+        retries += 1
+        if retries > max_llm_retries:
+            logger.warning(
+                "Exceeded max LLM retries (%s); treating as deny", max_llm_retries
+            )
+            return NextAction(
+                tool=None,
+                rationale=(
+                    f"operator retry exhausted after {max_llm_retries} attempts "
+                    f"({reason})"
+                ),
+                stop=True,
+            )
+        logger.info("Operator requested LLM policy retry (%d/%d)", retries, max_llm_retries)
 
 
 def decide_next(
@@ -164,11 +222,21 @@ def decide_next(
     registry: ToolRegistry,
     *,
     llm_client: Any | None = None,
+    prefer_offline: bool = False,
+    auto_offline_fallback: bool = False,
+    offline_fallback_prompt: OfflineFallbackPrompt | None = None,
 ) -> tuple[NextAction, dict[str, Any]]:
     """Observe + think; return validated NextAction and observe bundle."""
     allowlist = set(registry.names())
     observe = build_observe_bundle(store, workspace, session_id)
-    action = llm_next_action(observe, allowlist, llm_client)
+    action = llm_next_action(
+        observe,
+        allowlist,
+        llm_client,
+        prefer_offline=prefer_offline,
+        auto_offline_fallback=auto_offline_fallback,
+        offline_fallback_prompt=offline_fallback_prompt,
+    )
     return action, observe
 
 

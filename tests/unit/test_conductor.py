@@ -148,6 +148,67 @@ def test_policy_allowlist_and_offline_order() -> None:
     assert action2.tool == "search_papers"
 
 
+def test_llm_fallback_allow_deny_retry() -> None:
+    from labpilot.research_engine.conductor.policy import llm_next_action
+
+    allow = {"analyze_competition", "search_papers"}
+    observe = {"completed_tools": [], "operator_feedback": []}
+
+    class Boom:
+        def complete(self, system: str, user: str) -> str:
+            raise RuntimeError("boom")
+
+    class Flaky:
+        def __init__(self) -> None:
+            self.n = 0
+
+        def complete(self, system: str, user: str) -> str:
+            self.n += 1
+            if self.n < 2:
+                raise RuntimeError("transient")
+            return (
+                '{"tool": "analyze_competition", "args": {}, '
+                '"rationale": "ok", "stop": false}'
+            )
+
+    allowed = llm_next_action(
+        observe,
+        allow,
+        Boom(),
+        offline_fallback_prompt=lambda _r: "allow",
+    )
+    assert allowed.tool == "analyze_competition"
+    assert "offline policy" in allowed.rationale
+
+    denied = llm_next_action(
+        observe,
+        allow,
+        Boom(),
+        offline_fallback_prompt=lambda _r: "deny",
+    )
+    assert denied.stop and denied.tool is None
+    assert "denied" in denied.rationale
+
+    decisions = iter(["retry", "allow"])
+    retried_then_allow = llm_next_action(
+        observe,
+        allow,
+        Boom(),
+        offline_fallback_prompt=lambda _r: next(decisions),
+    )
+    assert retried_then_allow.tool == "analyze_competition"
+
+    flaky = Flaky()
+    recovered = llm_next_action(
+        observe,
+        allow,
+        flaky,
+        offline_fallback_prompt=lambda _r: "retry",
+    )
+    assert recovered.tool == "analyze_competition"
+    assert flaky.n == 2
+
+
 def test_approval_reject_persists_feedback(tmp_path: Path) -> None:
     ws = _ws(tmp_path, "appr")
     store = ConductorStore(ws.knowledge_dir, ws.competition)
@@ -190,6 +251,7 @@ def test_offline_loop_runs_multiple_tools(tmp_path: Path) -> None:
             llm_client=None,
             max_steps=5,
             auto_approve=True,
+            prefer_offline=True,
         )
         assert len(decisions) >= 2
         tools_run = [d.tool_name for d in decisions if d.tool_name and not d.stop]

@@ -25,9 +25,11 @@ Task-local context bundles; better prompts; foundation for `explain`.
 | Graph | Logical SQL graph → **Kuzu** only if needed |
 | Vectors | **Defer** → Qdrant when ANN required |
 | Embeddings | Chosen at impl via LLM router / provider |
+| Runtime (prep) | Introduce **asyncio / AnyIO** boundaries when context assembly or background retrieve needs concurrency (full parallel workers land in M5) |
 
 ## Non-goals
 
 - Agent registry (M5)
 - Experience transfer DB (M6)
 - Shipping Qdrant on day one by default
+- Full parallel experiment fan-out (M5)

@@ -8,63 +8,70 @@ Back to [../README.md](../README.md) · Milestone: [../milestones/03-campaigns/]
 
 ## Goal
 
-Turn the Conductor kernel into **goal-driven campaigns**: dynamic tasks, approval
-ladder, stop conditions, and a thin goal-oriented CLI.
+Turn the Conductor kernel into **goal-driven campaigns**: research actions that
+map onto existing tools, approval ladder (0/1), stop conditions, and checkpoint CLI.
 
 ---
 
-## Dynamic scheduling (Strangler Phase C)
+## Dynamic research actions (compose onto tools)
 
-Conductor may insert tasks beyond the fixed V1 sequence when useful, e.g.:
+Conductor proposes a **research action** (intent). A mapper expands it to a chain
+of **registered** tools only, e.g.:
 
-- `fetch` / paper search
-- hypothesize / rank
-- extra validation experiment
-- reflect before next plan
+```text
+"Investigate augmentation for minority classes"
+  → search_papers → generate_plan → run_plan → reflect
+```
 
-Still: strategy in Conductor; execution in tools/Engineer.
+Not allowed: inventing tools; orphan tasks with no execution path.
+
+Missing capabilities → suggestion log + `no_capability` metrics
+([capability backlog](../backlog/capability-registration.md)).
+Later: metrics → OTel/Phoenix/Langfuse and suggestions → S3
+([telemetry backlog](../backlog/telemetry-suggestions-export.md));
+shared org/team/user tables
+([tenancy backlog](../backlog/shared-multi-tenant-store.md)).
 
 ---
 
-## Autonomy ladder
+## Autonomy ladder (M3 ships 0–1 only)
 
 | Level | Gates |
 |-------|-------|
-| 0 (default early) | Pause before new plan batch + LB submit |
-| 1 | Pause before submit only |
-| 2 | Pause only on budget/policy changes |
-| 3 | No pauses (hard budgets still stop the loop) |
+| 0 (default) | Pause before `generate_plan` + submit family |
+| 1 | Pause before submit family only |
+| 2 | Deferred (M4/M5) — budget/policy-change pauses |
+| 3 | Deferred (M6+) — trusted full autonomy |
+
+Submit/submit_learn are **always** gated (even at level 1).
 
 ---
 
 ## Stop conditions
 
 - Goal metric reached (e.g. LB ≥ target)
-- Submission / time / $ budget exhausted
-- Plateau policy (optional)
-- Operator pause / cancel
+- Submission / wall-time / $ budget exhausted
+- Plateau policy (N experiments, no gain)
+- Operator pause / cancel (manual)
 
 ---
 
-## Goal CLI (extends M2 `research conduct`)
+## Goal CLI
 
 ```text
-research conduct "<goal>"     # product entry (ships in M2)
-research continue
-research status
-research pause
-research resume
+research conduct run "<goal>" [--autonomy 0|1] …
+research conduct continue | pause | resume | status [--session S-xxx]
 ```
 
-`continue` / `resume` **restore checkpoints** (queue, objective, workspace refs) —
-not a new chat transcript. Legacy `analyze` / `plan` / `run` / `reflect` remain for
-debug and power users. Future IDE clients call the same runtime APIs.
+`resume` defaults to the latest active session for the competition.
+
+Runtime remains **sync** in M3; asyncio workers are M4/M5 scope.
 
 ---
 
 ## Non-goals
 
-- Full `explain` / `benchmark` / `replay` suite (can follow as small CLI polish;
-  replay reads episodic memory — [10-memory-os](10-memory-os.md))
+- New tool registration (backlog)
 - Parallel multi-agent trees (M5)
 - Cross-competition transfer (M6)
+- Full context engine (M4)

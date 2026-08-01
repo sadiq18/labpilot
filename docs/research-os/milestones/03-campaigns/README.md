@@ -2,7 +2,7 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Stub.  
+**Status:** Implemented (phase plans 1–6).  
 **Branch:** `research-os-m3-campaigns`  
 **Depends on:** M2  
 **Design:** [06-campaigns](../../design/06-campaigns.md)
@@ -10,27 +10,43 @@ Back to [../../README.md](../../README.md) · [execution-plan](../../execution-p
 ## Mission
 
 Turn the M2 Conductor kernel into the **Campaign Engine**: dynamic research
-tasks beyond the fixed tool catalog, budgets, autonomy ladder, and checkpoint
-restore. Completes the **Orchestrator** product stage.
-
-Extends `research conduct` (from M2) with `continue` / `pause` / `resume` /
-`status` — not a second product entrypoint.
+actions that map onto **existing** tools, budgets, stop conditions, autonomy 0/1,
+and checkpoint restore. Completes the **Orchestrator** product stage.
 
 ## Usable outcome
 
-Operator drives by goal; workflow is no longer limited to the fixed catalog;
-resume from checkpoint after leaving the machine.
+```text
+research conduct run "Win Rogii" --autonomy 0
+research conduct continue | pause | resume | status
+```
 
-## Tech that ships with M3
+Operator drives by goal; workflow is not limited to single-tool picks; resume
+after leaving the machine.
+
+## Phase plans
+
+| # | Plan | Focus |
+|---|------|--------|
+| 1 | [plan-1-checkpoint-cli.md](plan-1-checkpoint-cli.md) | Checkpoint + continue/pause/resume/status |
+| 2 | [plan-2-budgets-stops.md](plan-2-budgets-stops.md) | Budgets + automatic stop conditions |
+| 3 | [plan-3-autonomy.md](plan-3-autonomy.md) | Autonomy 0/1; submit always gated |
+| 4 | [plan-4-actions-compose.md](plan-4-actions-compose.md) | ResearchAction → existing tools |
+| 5 | [plan-5-metrics-suggestions.md](plan-5-metrics-suggestions.md) | Gap metrics + suggestions |
+| 6 | [plan-6-capstone.md](plan-6-capstone.md) | Integration + M4 handoff |
+
+## Tech
 
 | Area | Technology |
 |------|------------|
-| Runtime | asyncio (+ AnyIO) |
-| Checkpoint | SQLite + workspace refs |
-| Distributed jobs | Deferred (Temporal only if multi-machine later) |
+| Loop | Sync Conductor (extend M2) |
+| Checkpoint | SQLite + session metadata |
+| Runtime | Sync only — asyncio deferred to M4/M5 |
 
 ## Non-goals
 
-- Context engine (M4) — improves decide quality
-- Agent zoo / parallel trees / event bus (M5) — delegate + concurrent branches
-- Cross-comp transfer (M6) — learn across campaigns
+- New tools / capability registration (see [backlog](../../backlog/capability-registration.md))
+- Remote telemetry / S3 suggestions (see [telemetry backlog](../../backlog/telemetry-suggestions-export.md))
+- Shared multi-tenant store across competitions (see [tenancy backlog](../../backlog/shared-multi-tenant-store.md))
+- Agent runtime, UI, ungated live submit
+- Context engine (M4), multi-agent/parallel (M5), transfer (M6)
+- Autonomy levels 2–3
