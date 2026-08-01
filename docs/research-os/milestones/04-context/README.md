@@ -2,7 +2,7 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Implementing (plans 1–5 done; next plan 6).  
+**Status:** Implemented (phase plans 1–6).  
 **Branch:** `research-os-m4-context`  
 **Depends on:** M3  
 **Design:** [07-context-engine](../../design/07-context-engine.md) · [10-memory-os](../../design/10-memory-os.md)
@@ -16,6 +16,12 @@ semantic seed. Memory hierarchy stays **internal** (public ports = backlog).
 ## Usable outcome
 
 Task-local `ContextBundle`s for Conductor/CLI; foundation for `explain`.
+
+```text
+research context retrieve <slug> -q "…"
+research context explain  <slug> -q "…"
+# online conduct attaches context_summary / context_refs to LLM policy observe
+```
 
 ## Phase plans
 
@@ -42,11 +48,25 @@ Task-local `ContextBundle`s for Conductor/CLI; foundation for `explain`.
 | Vectors | **Defer** (backlog) |
 | Runtime | **AnyIO** inside context retrieve; Conductor stays **sync** |
 
+## Backlog (deferred from M4)
+
+| Item | Why deferred |
+|------|----------------|
+| [memory-hierarchy-ports.md](../../backlog/memory-hierarchy-ports.md) | Hierarchy stays internal; public ports later |
+| [hybrid-semantic-retrieval.md](../../backlog/hybrid-semantic-retrieval.md) | Wait on `bm25_metrics` lexical-gap signals |
+| [kuzu-graph-backend.md](../../backlog/kuzu-graph-backend.md) | Wait on `graph_metrics` latency/empty/slow signals |
+
+Also still deferred from earlier milestones: [capability-registration](../../backlog/capability-registration.md),
+[telemetry-suggestions-export](../../backlog/telemetry-suggestions-export.md),
+[shared-multi-tenant-store](../../backlog/shared-multi-tenant-store.md).
+
+Index: [../../backlog/README.md](../../backlog/README.md).
+
 ## Non-goals
 
-- Public memory-hierarchy API ([backlog](../../backlog/memory-hierarchy-ports.md))
-- Embeddings / Qdrant / hybrid ANN ([backlog](../../backlog/hybrid-semantic-retrieval.md))
-- Kuzu migration ([backlog](../../backlog/kuzu-graph-backend.md))
+- Public memory-hierarchy API (see backlog above)
+- Embeddings / Qdrant / hybrid ANN (see backlog above)
+- Kuzu migration (see backlog above)
 - Agent registry / parallel fan-out (M5)
 - Rewriting Plan 9 RI retrieval
 - Making Conductor async
