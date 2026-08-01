@@ -40,6 +40,7 @@ flowchart TB
 | M4 after M3 | **Hard** for impl; context needs task/campaign APIs |
 | M5 after M4 | **Hard** — agents need context builder |
 | M6 after M5 | Prefer after events/agents; narrow transfer can start after M4 |
+| M6 SoR | Structured **Experience Records** (not prompt/HP/paper wiki tables); retrieve via Context Engine + optional `research memory seed\|inspect` |
 
 ---
 
