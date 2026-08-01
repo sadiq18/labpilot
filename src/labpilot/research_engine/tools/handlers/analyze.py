@@ -24,10 +24,12 @@ def analyze_competition(
     brief: bool = True,
     fetch_kaggle: bool = False,
     refresh: bool = False,
+    url: str | None = None,
 ) -> ToolResult:
     """Run competition analysis and persist ``analyze.json`` via the artifact adapter."""
+    competition_ref = url or workspace.competition
     context = build_context(
-        workspace.competition,
+        competition_ref,
         runs_dir=workspace.effective_runs_dir,
         knowledge_dir=workspace.knowledge_dir,
         refresh=refresh,
@@ -55,5 +57,7 @@ def analyze_competition(
             "competition": workspace.competition,
             "analyzers": list(report.analyzers),
             "path": ref.path,
+            "brief_path": str(context.paths.brief_path),
+            "report": report,
         },
     )

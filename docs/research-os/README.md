@@ -3,8 +3,9 @@
 Back to [docs index](../README.md). V1 pipeline docs:
 [../research-pipeline/](../research-pipeline/).
 
-**Status:** Design — no OS product code yet.  
-**Branch:** `research-os-design`  
+**Status:** M1 Platform Foundation implemented on `research-os-m1-foundation`
+(artifacts + workspace + tools + CLI strangler). Next: M2 Conductor.  
+**Branch (impl):** `research-os-m1-foundation` · **Design:** historically `research-os-design`  
 **Ops / parallel schedule:** [execution-plan.md](execution-plan.md)  
 **Principles:** [architecture.md](architecture.md)
 

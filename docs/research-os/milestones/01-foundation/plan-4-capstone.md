@@ -19,9 +19,15 @@ Close M1: docs consistency, goldens, and a short “same UX, new internals” no
 
 ## Acceptance
 
-- [ ] Capstone notes checked in under this folder
-- [ ] No open P0 gaps blocking M2
-- [ ] Branch `research-os-m1-foundation` ready to merge
+- [x] Capstone notes checked in under this folder
+- [x] No open P0 gaps blocking M2
+- [x] Branch `research-os-m1-foundation` ready to merge
+
+## Notes (implemented)
+
+- Capstone notes: [capstone-notes.md](capstone-notes.md)
+- Offline dry-run story: `tests/unit/test_foundation_capstone.py`
+- M2 starts on a new branch (`research-os-m2-conductor`); do not land Conductor here
 
 ## Non-goals
 

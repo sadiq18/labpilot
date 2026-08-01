@@ -1,4 +1,7 @@
-"""CLI for Research Reflection — reflect / journal / claims."""
+"""CLI for Research Reflection — reflect / journal / claims.
+
+``reflect run`` invokes the ``reflect`` tool (Strangler Phase A).
+"""
 
 from __future__ import annotations
 
@@ -7,9 +10,13 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from labpilot.cli.config_helpers import load_cli_config, resolve_competition
+from labpilot.cli.config_helpers import (
+    default_tools,
+    load_cli_config,
+    resolve_competition,
+    resolve_os_workspace,
+)
 from labpilot.llm.client import resolve_llm_client
-from labpilot.research_engine.artifacts.reflection import run_and_wrap
 from labpilot.research_engine.reflection.journal import JournalProjector
 from labpilot.research_engine.reflection.store import ReflectionStore
 
@@ -38,26 +45,25 @@ def reflect_run(
     """Run Evidence → Critic → Belief / Hypothesis updates for an execution."""
     if not execution and not workspace:
         raise typer.BadParameter("Provide --execution and/or --workspace")
-    config, marker_workspace = load_cli_config(
+    config, client = load_cli_config(
         config_path=config_path,
         knowledge_dir=knowledge_dir,
     )
-    competition = resolve_competition(competition, marker_workspace)
+    competition = resolve_competition(competition, client)
+    ws = resolve_os_workspace(competition=competition, config=config, client=client)
     llm = None if offline else resolve_llm_client(config.llm)
-    wrapped, _ref = run_and_wrap(
-        config.knowledge_dir,
-        competition,
+    result = default_tools().invoke(
+        "reflect",
+        ws,
         execution_id=execution,
-        workspace_path=workspace,
+        workspace_path=str(workspace) if workspace is not None else None,
         llm_client=llm,
         persist=not dry_run,
-        write_projection=not dry_run,
     )
-    evidence = wrapped.evidence
     console.print(
-        f"[green]Reflection complete[/green] evidence={evidence.get('id')} "
-        f"strength={evidence.get('strength')} "
-        f"belief={wrapped.belief.get('belief_id')}"
+        f"[green]Reflection complete[/green] evidence={result.data.get('evidence_id')} "
+        f"strength={result.data.get('evidence_strength')} "
+        f"belief={result.data.get('belief_id')}"
     )
 
 
@@ -69,11 +75,11 @@ def journal_cmd(
     knowledge_dir: Path | None = typer.Option(None, "--knowledge-dir"),
 ) -> None:
     """Print the research journal projection for a competition."""
-    config, workspace = load_cli_config(
+    config, client = load_cli_config(
         config_path=config_path,
         knowledge_dir=knowledge_dir,
     )
-    competition = resolve_competition(competition, workspace)
+    competition = resolve_competition(competition, client)
     projector = JournalProjector(config.knowledge_dir, competition)
     try:
         if output_json:
@@ -90,11 +96,11 @@ def claims_list(
     config_path: Path = typer.Option(Path("configs/default.yaml"), "--config"),
     knowledge_dir: Path | None = typer.Option(None, "--knowledge-dir"),
 ) -> None:
-    config, workspace = load_cli_config(
+    config, client = load_cli_config(
         config_path=config_path,
         knowledge_dir=knowledge_dir,
     )
-    competition = resolve_competition(competition, workspace)
+    competition = resolve_competition(competition, client)
     store = ReflectionStore(config.knowledge_dir, competition)
     try:
         claims = store.list_claims()
@@ -117,11 +123,11 @@ def claims_show(
     config_path: Path = typer.Option(Path("configs/default.yaml"), "--config"),
     knowledge_dir: Path | None = typer.Option(None, "--knowledge-dir"),
 ) -> None:
-    config, workspace = load_cli_config(
+    config, client = load_cli_config(
         config_path=config_path,
         knowledge_dir=knowledge_dir,
     )
-    competition = resolve_competition(competition, workspace)
+    competition = resolve_competition(competition, client)
     store = ReflectionStore(config.knowledge_dir, competition)
     try:
         claim = store.get_claim(claim_id)

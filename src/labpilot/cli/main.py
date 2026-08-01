@@ -11,7 +11,12 @@ from rich.table import Table
 from typer.core import TyperGroup
 
 from labpilot.research_engine.execution.baseline.registry import list_templates
-from labpilot.cli.config_helpers import load_cli_config, resolve_competition
+from labpilot.cli.config_helpers import (
+    default_tools,
+    load_cli_config,
+    resolve_competition,
+    resolve_os_workspace,
+)
 from labpilot.cli.plan import plan_app
 from labpilot.cli.reflect import claims_app, reflect_app
 from labpilot.config import (
@@ -48,16 +53,10 @@ from labpilot.research_engine.shared.experiments.search import (
 from labpilot.accessor.kaggle.client import SubmissionResult
 from labpilot.llm.client import LLMClient, llm_setup_hints, resolve_llm_client
 from labpilot.research_engine.shared.experiments.manifest import StageStatus, find_manifest, load_manifest
-from labpilot.research_engine.intelligence.context import build_context
 from labpilot.research_engine.intelligence.fetch import KaggleFetchService
 from labpilot.research_engine.intelligence.hypothesis import HypothesisAssistant
 from labpilot.research_engine.intelligence.knowledge import KnowledgeHub, KnowledgeStore
-from labpilot.research_engine.intelligence.orchestrator import AnalyzeOrchestrator
-from labpilot.research_engine.intelligence.registry import (
-    UnknownAnalyzerError,
-    build_default_registry,
-)
-from labpilot.research_engine.artifacts.analysis import write_analysis
+from labpilot.research_engine.intelligence.registry import UnknownAnalyzerError
 from labpilot.research_engine.intelligence.renderers.json import to_json
 from labpilot.research_engine.intelligence.renderers.terminal import render_terminal
 from labpilot.research_engine.intelligence.retrieval import (
@@ -653,7 +652,7 @@ def analyze(
     if output_format not in {"text", "json"}:
         raise typer.BadParameter("--format must be 'text' or 'json'.")
 
-    config, workspace = load_cli_config(
+    config, client = load_cli_config(
         config_path=config_path,
         knowledge_dir=knowledge_dir,
         runs_dir=runs_dir,
@@ -669,16 +668,17 @@ def analyze(
         slug_or_url = target
     else:
         only = None
-        slug_or_url = resolve_competition(None, workspace)
+        slug_or_url = resolve_competition(None, client)
 
-    if workspace is not None and (competition is not None or target is not None):
-        from labpilot.research_engine.intelligence.context import normalize_competition
+    from labpilot.research_engine.intelligence.context import normalize_competition
 
-        try:
-            slug, _ = normalize_competition(slug_or_url)
-        except ValueError:
-            slug = slug_or_url
-        resolve_competition(slug, workspace, required=False)
+    try:
+        slug, competition_url = normalize_competition(slug_or_url)
+    except ValueError:
+        slug, competition_url = slug_or_url, None
+
+    if client is not None and (competition is not None or target is not None):
+        resolve_competition(slug, client, required=False)
 
     include_set = _parse_analyzer_csv(include)
     exclude_set = _parse_analyzer_csv(exclude)
@@ -687,47 +687,44 @@ def analyze(
             "A single analyzer argument cannot be combined with --include/--exclude."
         )
 
-    context = build_context(
-        slug_or_url,
-        runs_dir=config.runs_dir,
-        knowledge_dir=config.knowledge_dir,
-        refresh=refresh,
+    ws = resolve_os_workspace(
+        competition=slug,
+        config=config,
+        client=client,
+        runs_dir=runs_dir,
     )
-
     do_ingest = not skip_ingest
     do_hypothesize = not skip_hypothesize and do_ingest
     do_brief = not skip_brief and do_ingest and do_hypothesize
-    orchestrator = AnalyzeOrchestrator(
-        build_default_registry(),
-        llm_client=resolve_llm_client(config.llm),
-        ingest_knowledge=do_ingest,
-        hypothesize=do_hypothesize,
-        brief=do_brief,
-        fetch_kaggle=fetch_kaggle,
-    )
     try:
-        report = orchestrator.analyze(
-            context, only=only, include=include_set, exclude=exclude_set
+        result = default_tools().invoke(
+            "analyze_competition",
+            ws,
+            only=only,
+            include=include_set,
+            exclude=exclude_set,
+            llm_client=resolve_llm_client(config.llm),
+            ingest_knowledge=do_ingest,
+            hypothesize=do_hypothesize,
+            brief=do_brief,
+            fetch_kaggle=fetch_kaggle,
+            refresh=refresh,
+            url=competition_url or slug_or_url,
         )
     except UnknownAnalyzerError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from None
 
-    ref = write_analysis(
-        report,
-        context.knowledge_dir,
-        context.competition,
-        path=context.report_path,
-    )
-    path = Path(ref.path) if ref.path else context.report_path
+    report = result.data["report"]
+    path = Path(result.data["path"]) if result.data.get("path") else None
     brief_path = None
-    if report.research_brief:
+    if do_brief and getattr(report, "research_brief", None):
         from labpilot.research_engine.intelligence.brief.models import ResearchBrief
         from labpilot.research_engine.intelligence.renderers.markdown import write_brief
 
         brief_path = write_brief(
             ResearchBrief.model_validate(report.research_brief),
-            context.paths.brief_path,
+            Path(result.data["brief_path"]),
         )
 
     if output_format == "json":
@@ -735,7 +732,8 @@ def analyze(
         print(to_json(report))
     else:
         render_terminal(report, console=console)
-        console.print(f"\n[green]Wrote:[/green] {path}")
+        if path is not None:
+            console.print(f"\n[green]Wrote:[/green] {path}")
         if brief_path is not None:
             console.print(f"[green]Research Brief:[/green] {brief_path}")
 

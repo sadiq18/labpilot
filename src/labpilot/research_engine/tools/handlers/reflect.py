@@ -24,7 +24,7 @@ def reflect(
         workspace.knowledge_dir,
         workspace.competition,
         execution_id=execution_id,
-        workspace_path=workspace_path or workspace.root,
+        workspace_path=workspace_path,
         plan_id=plan_id,
         hypothesis_id=hypothesis_id,
         llm_client=llm_client,
@@ -36,6 +36,7 @@ def reflect(
         data={
             "execution_id": result.execution_id,
             "evidence_id": result.evidence.get("id"),
+            "evidence_strength": result.evidence.get("strength"),
             "belief_id": result.belief.get("belief_id"),
         },
     )

@@ -6,7 +6,9 @@ from typing import Any
 
 from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.artifacts.execution import ExecutionArtifacts
+from labpilot.research_engine.artifacts.plan import PlanArtifacts
 from labpilot.research_engine.execution import (
+    EngineerError,
     ResearchEngineer,
     default_capability_registry,
 )
@@ -25,8 +27,20 @@ def run_plan(
     constraints: dict[str, Any] | None = None,
 ) -> ToolResult:
     """Create an execution via adapters and run the Engineer for ``plan_id``."""
+    plan_arts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    try:
+        plan = plan_arts.get(plan_id)
+    finally:
+        plan_arts.close()
+    if plan is None:
+        raise EngineerError(
+            f"Plan not found: {plan_id} (competition={workspace.competition}). "
+            "Create one with `research plan create --baseline` "
+            "or `--hypothesis H-xxx`."
+        )
+
     exec_arts = ExecutionArtifacts(workspace.knowledge_dir, workspace.competition)
-    merged = {
+    merged: dict[str, Any] = {
         "dry_run": dry_run,
         "allow_upload": submit,
         "smoke_syntax_only": dry_run,
@@ -36,6 +50,10 @@ def run_plan(
         "llm_client": llm_client,
         **(constraints or {}),
     }
+    configs_dir = workspace.root / "configs"
+    if configs_dir.is_dir():
+        merged.setdefault("competitions_dir", configs_dir)
+
     registry = default_capability_registry(
         install_packages=install_packages and not dry_run,
         llm_client=llm_client,
