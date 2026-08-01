@@ -26,6 +26,14 @@ from labpilot.research_engine.agents.experiment import ExperimentSpecialist
 from labpilot.research_engine.agents.facade import execute_agent_sync
 from labpilot.research_engine.agents.implementation import ImplementationSpecialist
 from labpilot.research_engine.agents.models import AgentTask, SpecialistDescriptor, as_agent_task
+from labpilot.research_engine.agents.parallel import (
+    ParallelBudget,
+    ParallelResult,
+    ParallelWorkItem,
+    parallel_summary,
+    run_parallel_async,
+    run_parallel_sync,
+)
 from labpilot.research_engine.agents.ports import Agent, CodingTool
 from labpilot.research_engine.agents.registry import SpecialistRegistry
 from labpilot.research_engine.agents.subscribers import install_evidence_refresh_subscriber
@@ -42,6 +50,9 @@ __all__ = [
     "EventEmitter",
     "ExperimentSpecialist",
     "ImplementationSpecialist",
+    "ParallelBudget",
+    "ParallelResult",
+    "ParallelWorkItem",
     "SpecialistDescriptor",
     "SpecialistRegistry",
     "V1CodeEngineeringCodingTool",
@@ -51,4 +62,7 @@ __all__ = [
     "execute_agent_sync",
     "install_evidence_refresh_subscriber",
     "noop_emit",
+    "parallel_summary",
+    "run_parallel_async",
+    "run_parallel_sync",
 ]

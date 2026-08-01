@@ -28,8 +28,8 @@ campaigns, conflict resolution — see
 
 ## Acceptance
 
-- [ ] Conductor remains sync; workers run under AnyIO/asyncio from a sync facade
-- [ ] Concurrent experiment tasks respect max-workers and shared budget
-- [ ] Results collected; per-task failure does not silently drop siblings’ outcomes
-- [ ] No branch-merge / campaign-tree APIs
-- [ ] Unit or integration test covers ≥2 concurrent fake experiment tasks
+- [x] Conductor remains sync; workers run under AnyIO/asyncio from a sync facade
+- [x] Concurrent experiment tasks respect max-workers and shared budget
+- [x] Results collected; per-task failure does not silently drop siblings’ outcomes
+- [x] No branch-merge / campaign-tree APIs
+- [x] Unit or integration test covers ≥2 concurrent fake experiment tasks
