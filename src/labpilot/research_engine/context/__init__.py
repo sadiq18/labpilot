@@ -22,9 +22,11 @@ from labpilot.research_engine.context.providers import (
     WorkspaceProvider,
 )
 from labpilot.research_engine.context.retrieve import retrieve_candidates
+from labpilot.research_engine.context.retrieve_metrics import Bm25RetrieveMetrics
 
 __all__ = [
     "BM25",
+    "Bm25RetrieveMetrics",
     "ContextBundle",
     "ContextItem",
     "ContextProvider",

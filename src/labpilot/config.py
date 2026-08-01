@@ -170,6 +170,8 @@ class Settings(BaseSettings):
     ollama_host: str = ""
     labpilot_runtimes_dir: str = ""
     labpilot_default_runtime: str = ""
+    #: When true (env ``LABPILOT_DEBUG_METRICS=1``), print internal BM25/graph/campaign metrics.
+    labpilot_debug_metrics: bool = False
 
     def __init__(self, **values: Any) -> None:
         # Prefer an explicit ``_env_file``; otherwise use workspace-local ``.env``

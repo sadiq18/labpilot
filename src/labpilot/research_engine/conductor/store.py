@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,9 @@ from labpilot.research_engine.conductor.models import (
     _now,
 )
 from labpilot.research_engine.intelligence.paths import ResearchPaths
+from labpilot.research_engine.debug_metrics import emit_debug_metrics
+
+logger = logging.getLogger(__name__)
 
 _SESSION_PREFIX = "S"
 _TASK_PREFIX = "T"
@@ -425,6 +429,18 @@ class ConductorStore:
             (amount, now, session_id),
         )
         self._conn.commit()
+        snap = self.get_metrics(session_id)
+        line = (
+            f"[campaign] session={session_id} +{field}={amount} | "
+            f"failed={getattr(snap, 'tasks_failed', 0)} "
+            f"blocked={getattr(snap, 'tasks_blocked', 0)} "
+            f"unmet={getattr(snap, 'unmet_goal', 0)} "
+            f"interventions={getattr(snap, 'human_interventions', 0)} "
+            f"no_capability={getattr(snap, 'no_capability', 0)} "
+            f"submissions={getattr(snap, 'submissions', 0)} "
+            f"llm_cost_usd={getattr(snap, 'llm_cost_usd', 0.0)}"
+        )
+        emit_debug_metrics(logger, line)
 
     # -- helpers -----------------------------------------------------------
 
