@@ -9,26 +9,28 @@ Simple, code-only commits tied to experiments.
 
 Ship:
 
-1. **Branch per research session/experiment** — e.g. `research/S-001/E-042`
-2. **Auto-commit before execution** — message like `experiment: baseline + specaugment`
-3. **Store commit hash on Experiment Artifact**
+1. **`GitTool` abstraction** with **GitPython** backend (CLI `execute` escape hatch)
+2. **Branch per research session/experiment** — e.g. `research/S-001/E-042`
+3. **Auto-commit before execution** — structured `CommitSnapshot` for agents
+4. **Store commit hash on Experiment Artifact**
 
 ```json
 {
   "experiment_id": "E-042",
   "git_commit": "a81f2c",
-  "metrics": { "score": 0.91 }
+  "files_changed": ["pipeline/train.py"],
+  "message": "experiment: add specaugment"
 }
 ```
 
-4. **Rollback CLI** — `research revert E-042` (checks out / restores code to that commit)
+5. **Rollback CLI** — `research revert E-042` via GitTool checkout of code paths
 
 Commit **code changes only** — not knowledge DB, artifacts store, or Research Graph.
 
 ## Acceptance
 
-- [ ] Creating/running an experiment can create `research/<session>/<experiment>` branch
-- [ ] Code changes are committed before/at experiment boundary; hash recorded on artifact
-- [ ] `research revert <experiment_id>` restores workspace code to that commit
-- [ ] Knowledge / artifact stores are not committed by this path
-- [ ] Tests cover commit hash persistence + revert smoke (temp git repo fixture)
+- [x] Creating/running an experiment can create `research/<session>/<experiment>` branch
+- [x] Code changes are committed before/at experiment boundary; hash recorded on artifact
+- [x] `research revert <experiment_id>` restores workspace code to that commit
+- [x] Knowledge / artifact stores are not committed by this path
+- [x] Tests cover commit hash persistence + revert smoke (temp git repo fixture)

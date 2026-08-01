@@ -2,7 +2,7 @@
 
 Back to [../../README.md](../../README.md) · [execution-plan](../../execution-plan.md).
 
-**Status:** Implementing (plans 1–4 done; next plan 5).  
+**Status:** Implemented (phase plans 1–6).  
 **Branch:** `research-os-m5-agents`  
 **Depends on:** M4  
 **Design:** [08-agents](../../design/08-agents.md) · [09-parallel-and-events](../../design/09-parallel-and-events.md)
@@ -69,7 +69,7 @@ as separate agents — see [future specialists backlog](../../backlog/future-spe
 | Event bus | **Blinker** in-process on M2 log → NATS/Redis later |
 | Parallel | **asyncio** / AnyIO workers from sync Conductor facade |
 | Sandbox | Existing Docker / execute_python paths |
-| Code memory | **Git** branch + commit per experiment (code only) |
+| Code memory | **GitTool** → GitPython (branch + commit per experiment; code only) |
 
 ## Non-goals
 
@@ -79,6 +79,7 @@ as separate agents — see [future specialists backlog](../../backlog/future-spe
 - Full research branch-merge tree ([backlog](../../backlog/parallel-research-branches.md))
 - Claude Code / Aider / OpenHands adapters ([backlog](../../backlog/coding-tool-adapters.md))
 - Async Conductor / distributed scheduler ([backlog](../../backlog/async-conductor.md))
+- GitHub/GitLab remotes / worktrees / PatchManager ([backlog](../../backlog/git-remote-adapters.md), [worktrees](../../backlog/git-worktrees-patches.md))
 - Separate EDA / Feature Engineering / Paper / Critic / Submit agents ([backlog](../../backlog/future-specialists.md))
 - Ungated live Kaggle submit
 - Committing knowledge artifacts / Research Graph into git (git = code evolution only)

@@ -501,6 +501,39 @@ def init_cmd(
     )
 
 
+@app.command("revert")
+def revert_cmd(
+    experiment_id: str = typer.Argument(
+        ...,
+        help="Execution id (E-001), experiment id, or indexed record key",
+    ),
+    competition: str | None = typer.Option(
+        None, "--competition", "-c", help="Competition slug (workspace default)"
+    ),
+    config_path: Path | None = typer.Option(
+        None, "--config", help="Path to config file"
+    ),
+    knowledge_dir: Path | None = typer.Option(
+        None, "--knowledge-dir", help="Override knowledge directory"
+    ),
+    runs_dir: Path | None = typer.Option(None, "--runs-dir", help="Override runs directory"),
+    workspace_path: Path | None = typer.Option(
+        None, "--workspace", help="Competition workspace root"
+    ),
+) -> None:
+    """Restore workspace code to the git commit recorded for an experiment."""
+    from labpilot.cli.revert import revert_command
+
+    revert_command(
+        experiment_id,
+        config_path=config_path,
+        knowledge_dir=knowledge_dir,
+        runs_dir=runs_dir,
+        workspace_path=workspace_path,
+        competition=competition,
+    )
+
+
 def _fail_fast_on_bad_environment(skip_lightgbm: bool = False) -> None:
     # `research init` never touches LightGBM (no baseline is trained), so a
     # broken/missing install on this machine shouldn't block it — only
