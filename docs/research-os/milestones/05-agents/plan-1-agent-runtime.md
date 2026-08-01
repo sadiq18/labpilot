@@ -16,8 +16,8 @@ No Impl/Experiment specialist behavior, event bus, or parallel workers yet.
 
 ## Acceptance
 
-- [ ] Package importable; unit tests for registry register/lookup + CodingTool V1 smoke
-- [ ] Agents do not import peer agents; only Conductor / registry / tools / workspace
-- [ ] CodingTool is a swappable port; V1 is the only backend in this plan
-- [ ] Sync Conductor callers can invoke agent execute via AnyIO facade (no event loop required at call site)
-- [ ] ContextBundle is required input type for execute (M4 handoff)
+- [x] Package importable; unit tests for registry register/lookup + CodingTool V1 smoke
+- [x] Agents do not import peer agents; only Conductor / registry / tools / workspace
+- [x] CodingTool is a swappable port; V1 is the only backend in this plan
+- [x] Sync Conductor callers can invoke agent execute via AnyIO facade (no event loop required at call site)
+- [x] ContextBundle is required input type for execute (M4 handoff)

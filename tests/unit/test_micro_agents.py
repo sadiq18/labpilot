@@ -264,7 +264,11 @@ def test_coerce_str_list() -> None:
 
 
 def test_no_autonomous_agents_package() -> None:
-    """Design forbids an autonomous ``agents/`` package (§2.4)."""
+    """§2.4 forbids peer-autonomous agent packages under intelligence.
+
+    OS specialists live in ``research_engine/agents/`` (Conductor-scheduled);
+    that package is allowed. Intelligence must not grow a peer agents tree.
+    """
     root = Path(__file__).resolve().parents[2] / "src" / "labpilot" / "research_engine"
-    assert not (root / "agents").exists()
+    assert (root / "agents").is_dir()
     assert not (root / "intelligence" / "agents").exists()
