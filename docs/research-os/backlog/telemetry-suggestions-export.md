@@ -3,6 +3,11 @@
 **Status:** Backlog (post-M3). M3 keeps counters in SQLite (`os_campaign_metrics`)
 and suggestions in SQLite (`os_suggestions`) for durable local campaigns.
 
+**Also required by:** [capability-registration](capability-registration.md) /
+[design/11](../design/11-capability-registration.md) — maintainers cannot read
+user-local `os_suggestions`; a redacted export/telemetry bridge is the product
+gap feed (file export first, OTel later).
+
 ## Problem
 
 SQLite is fine for single-machine Conductor loops, but campaign **metrics** and
@@ -11,6 +16,7 @@ SQLite is fine for single-machine Conductor loops, but campaign **metrics** and
 - Metrics need dashboards, traces, and correlation with LLM/tool spans
 - Suggestions are append-heavy and useful across machines / teams (not just
   local `knowledge.db`)
+- LabPilot maintainers need aggregated gaps **without** access to user DBs
 
 ## Proposed later work
 
