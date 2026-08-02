@@ -61,6 +61,14 @@ def implement(
     )
 
 
+class ExperimentProducedNoMetricsError(RuntimeError):
+    """A non-dry experiment finished without producing metrics.
+
+    Raised rather than returned so the Conductor records a failed task instead
+    of a successful one, which is what let a silent no-op repeat indefinitely.
+    """
+
+
 def run_experiment(
     workspace: Workspace,
     *,
@@ -95,6 +103,14 @@ def run_experiment(
     )
     metrics_ref = next((r for r in refs if r.kind == "metrics"), None)
     experiment_ref = next((r for r in refs if r.kind == "experiment"), None)
+    # A real experiment that produced no metrics did not happen. Reporting
+    # success here is how a dry run masqueraded as training for an entire
+    # campaign: the policy saw "completed", chose it again, and looped.
+    if not dry_run and metrics_ref is None:
+        raise ExperimentProducedNoMetricsError(
+            f"run_experiment for {plan_id} completed without writing metrics. "
+            "The plan may have been a no-op (already done, or nothing to train)."
+        )
     return ToolResult(
         refs=refs,
         data={

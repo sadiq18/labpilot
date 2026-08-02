@@ -829,3 +829,32 @@ def test_campaign_runs_are_not_dry_runs():
         for step in steps:
             if step.tool in {"run_plan", "run_experiment"}:
                 assert step.args.get("dry_run") is False, step.tool
+
+
+def test_non_dry_experiment_without_metrics_is_a_failure(monkeypatch):
+    """Silent no-op protection: 'completed' with no metrics is not success."""
+    import pytest
+
+    from labpilot.research_engine.tools.handlers import specialists
+
+    monkeypatch.setattr(specialists, "execute_agent_sync", lambda *a, **k: [])
+    monkeypatch.setattr(specialists, "_bundle", lambda *a, **k: None)
+
+    class _Cand:
+        name = "experiment"
+        agent = object()
+
+    class _Reg:
+        def candidates(self, capability):
+            return [_Cand()]
+
+    monkeypatch.setattr(
+        specialists, "build_default_specialist_registry", lambda **k: _Reg()
+    )
+
+    with pytest.raises(specialists.ExperimentProducedNoMetricsError):
+        specialists.run_experiment(object(), plan_id="P-009", dry_run=False)
+
+    # A dry run legitimately produces nothing and must stay allowed.
+    result = specialists.run_experiment(object(), plan_id="P-009", dry_run=True)
+    assert result.data["dry_run"] is True
