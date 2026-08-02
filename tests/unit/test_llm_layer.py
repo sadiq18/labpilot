@@ -299,3 +299,57 @@ def test_create_llm_client_ollama_without_api_key():
     )
     assert isinstance(client, OllamaClient)
     assert client.model == _OLLAMA_DEFAULT
+
+
+# --- JSON extraction robustness (local models are messy) --------------------
+
+
+def test_parse_json_object_plain():
+    from labpilot.llm.json_utils import parse_json_object
+
+    assert parse_json_object('{"a": 1}') == {"a": 1}
+
+
+def test_parse_json_object_markdown_fence_with_prose():
+    from labpilot.llm.json_utils import parse_json_object
+
+    text = 'Sure! Here is the result:\n```json\n{"tool": "run_plan"}\n```\nHope that helps.'
+    assert parse_json_object(text) == {"tool": "run_plan"}
+
+
+def test_parse_json_object_survives_prose_containing_braces():
+    """Naive first-brace/last-brace slicing spans the prose and parses as neither."""
+    from labpilot.llm.json_utils import parse_json_object
+
+    text = 'Use the {placeholder} format. Answer: {"decision": "approve"} done.'
+    assert parse_json_object(text) == {"decision": "approve"}
+
+
+def test_parse_json_object_picks_an_object_when_several_are_emitted():
+    from labpilot.llm.json_utils import parse_json_object
+
+    text = '{"first": 1}\n{"second": 2, "extra": "longer object wins"}'
+    assert parse_json_object(text)["second"] == 2
+
+
+def test_parse_json_object_tolerates_trailing_comma():
+    from labpilot.llm.json_utils import parse_json_object
+
+    assert parse_json_object('{"a": 1, "b": [1, 2,],}') == {"a": 1, "b": [1, 2]}
+
+
+def test_parse_json_object_keeps_nested_braces_in_strings():
+    from labpilot.llm.json_utils import parse_json_object
+
+    assert parse_json_object('{"note": "a } brace in a string"}') == {
+        "note": "a } brace in a string"
+    }
+
+
+def test_parse_json_object_error_includes_the_response():
+    import pytest
+
+    from labpilot.llm.json_utils import parse_json_object
+
+    with pytest.raises(ValueError, match="I cannot help"):
+        parse_json_object("I cannot help with that request.")

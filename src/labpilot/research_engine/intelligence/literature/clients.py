@@ -20,6 +20,12 @@ _DEFAULT_TIMEOUT = 60.0
 _HTTP_MIN_WAIT_S = 6.0
 _S2_MIN_INTERVAL_S = _HTTP_MIN_WAIT_S
 _HTTP_MAX_ATTEMPTS = 7
+# Unauthenticated Semantic Scholar traffic is rate-limited as a standing quota,
+# not a transient blip: retrying seven times with exponential backoff burns
+# minutes per query and still ends in 429. Fail fast and let the analyzer
+# degrade, rather than stalling the whole research loop on a source we cannot
+# access anyway.
+_HTTP_MAX_ATTEMPTS_UNAUTHENTICATED = 2
 _HTTP_BASE_BACKOFF_S = 2
 _HTTP_BACKOFF_CAP_S = 60.0
 
@@ -218,6 +224,11 @@ class SemanticScholarClient:
             data = _get_json(
                 f"{self.BASE}/paper/search",
                 headers=headers,
+                max_attempts=(
+                    _HTTP_MAX_ATTEMPTS
+                    if self.api_key
+                    else _HTTP_MAX_ATTEMPTS_UNAUTHENTICATED
+                ),
                 params={
                     "query": query,
                     "limit": max(1, min(limit, 100)),
