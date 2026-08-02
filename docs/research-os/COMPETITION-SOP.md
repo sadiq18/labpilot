@@ -214,6 +214,9 @@ submit. Keep them on until you trust the campaign.
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| `metrics.json` shows `status: last_resort_scaffold` | Codegen produced nothing and no template matched | Now fails the run loudly instead of continuing. Check `research doctor`, and confirm the problem type is inferable (a competition contract fixes `unknown`) |
+| `submission.csv` header is `id,prediction` | Emergency stub wrote a placeholder | Same cause as above — the run should no longer reach submission in this state |
+| Plan will not re-run (`status=done`) | Plans are single-use | Create a new plan (`plan create` is idempotent for the baseline; use a hypothesis plan to iterate) |
 | Profile shows `0 rows / 0 columns` | Profiler could not resolve train/test roles | Check the layout is `train/` + `test/`; add a competition contract under `configs/competitions/<slug>.yaml` |
 | `llm_unavailable` in analyzer notes | Provider unreachable or model not pulled | `research doctor` now names the exact cause |
 | Command appears hung | Long analyzer or model call with no output | Progress lines with elapsed time are on stderr; narrow with `--include` |
@@ -230,8 +233,12 @@ submit. Keep them on until you trust the campaign.
   naive anchor required anchoring and partition-aware features, and beating the
   *leaderboard* additionally requires correlating the horizontal well's gamma-ray
   log against the reference type well, which no generic template infers.
-- **Local models are slow.** A 14B model spends minutes per analyzer. Narrow the
-  analyzer set while iterating.
+- **Local models are slow, and codegen is the weakest link.** A 14B model spends
+  minutes per analyzer, and on `rogii` it produced no usable training code at
+  all. The run now falls back to the deterministic baseline template rather
+  than a placeholder, so a weak local model degrades to "solid baseline"
+  instead of "silent garbage" — but the LLM path is where a stronger model buys
+  the most.
 - **The Conductor's action mapping is keyword-based.** It routes intents to tool
   chains by matching words, so novel intents fall through as "no capability"
   (recorded as a suggestion rather than silently dropped).
