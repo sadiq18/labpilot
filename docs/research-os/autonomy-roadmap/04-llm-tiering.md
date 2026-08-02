@@ -1,6 +1,7 @@
 # M10 — LLM tiering and free-tier routing
 
-**Status:** core built and tested · **Blocks:** M7 in practice
+**Status:** decision layer built and tested, **not wired into the live path** ·
+**Blocks:** M7 in practice
 
 ---
 
@@ -79,7 +80,12 @@ Only ~40 calls need a frontier model. At 10 RPM that is four minutes of quota.
 **RPM is not the binding constraint** — a campaign is asynchronous and absorbs
 pacing. Daily *tokens* bind first.
 
-## Built (commit `6d4e930`)
+## Built (commit `6d4e930`) — decision layer only
+
+> `select_route` has **no call sites under `src/`**. Production LLM resolution
+> still goes through `resolve_route`, so the guarantees below hold for the
+> function, not yet for the running system. Treat M10 as unfinished until the
+> remaining items land.
 
 - `llm/catalog.py` — `ProviderSpec`, `RoleSpec`, `RoutingConfig`, plan
   entitlement, `eligible_providers`

@@ -272,9 +272,17 @@ def run_until_stop(
                         f"{research.rationale}",
                         context={"step": step},
                     )
+                    # Name the tool explicitly. Routing this by intent text let
+                    # keyword matching hijack it: the phrase contains
+                    # "hypothesis", which matches the ("plan", "baseline",
+                    # "hypothesis") template before anything else, so the
+                    # override dispatched generate_plan(baseline=True) instead
+                    # of reflecting on the result it was reacting to.
+                    override_tool = "reflect" if "reflect" in allowlist else "generate_plan"
                     research = ResearchAction(
-                        intent="reflect on the last experiment and try the next hypothesis",
+                        intent=f"objective unmet — {override_tool} and continue",
                         rationale="objective still unmet; continuing",
+                        suggested_tools=[override_tool],
                     )
                     plan = map_research_action(research, allowlist)
             else:

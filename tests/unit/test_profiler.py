@@ -386,3 +386,53 @@ def test_partitioned_template_is_registered():
     assert (template.template_dir / "train.py.j2").is_file()
     # default for the problem type must stay the plain template
     assert get_template("tabular_regression").name == "tabular_regression"
+
+
+def test_flat_multi_file_dataset_is_not_treated_as_partitioned(tmp_path):
+    """Regression: `len(train_files) > 1` matched train.csv + train_extra.csv by
+    filename prefix, so an ordinary multi-file dataset took the partitioned
+    path and would have been given group splits and a partition-aware template."""
+    root = tmp_path / "flat"
+    root.mkdir()
+    for name in ("train.csv", "train_extra.csv", "test.csv"):
+        pd.DataFrame({"id": [1, 2, 3], "x": [1.0, 2.0, 3.0], "y": [1, 0, 1]}).to_csv(
+            root / name, index=False
+        )
+    pd.DataFrame({"id": [1], "y": [0]}).to_csv(root / "sample_submission.csv", index=False)
+
+    # Two ambiguous train CSVs is a genuine error, not a partitioned dataset.
+    with pytest.raises(ValueError):
+        _profiler().profile_directory(root, "flat")
+
+
+def test_two_partitions_are_too_few_to_infer_a_partitioned_layout(tmp_path):
+    """A directory with a couple of files is not evidence of one-file-per-entity."""
+    root = tmp_path / "thin"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in range(2):
+        pd.DataFrame({"MD": [1, 2], "GR": [1.0, 2.0], "LABEL": [1.0, 2.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+    pd.DataFrame({"MD": [1, 2], "GR": [1.0, 2.0]}).to_csv(
+        root / "test" / "t0__main.csv", index=False
+    )
+    pd.DataFrame({"id": ["t0_1"], "label": [0.0]}).to_csv(
+        root / "sample_submission.csv", index=False
+    )
+    profile = _profiler()._try_profile_partitioned(
+        root,
+        "thin",
+        sorted(root.rglob("*.csv")),
+        train_pattern="train",
+        test_pattern="test",
+        submission_pattern="submission",
+    )
+    assert profile is None
+
+
+def test_real_partitioned_layout_still_detected(partitioned_data_dir):
+    """The strengthened gate must not break the case it was built for."""
+    profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
+    assert profile.partitioned is True
+    assert profile.train_partition_count == 6

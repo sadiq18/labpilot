@@ -120,6 +120,12 @@ def select_route(
 ) -> RouteDecision:
     """Pick a provider for ``role`` within entitlement, policy and budget.
 
+    NOT YET ON THE LIVE PATH. Production resolution still goes through
+    ``resolve_route``; this is the decision layer for tiered routing and is
+    exercised only by tests until an OpenAI-compatible adapter lands and call
+    sites pass a role. Until then the wait-rather-than-degrade guarantee below
+    is a property of this function, not of the running system.
+
     Exhaustion is handled per role rather than globally. Downgrading a codegen
     or hypothesis call to a weak model is worse than waiting: the weak output
     gets recorded as "this technique did not help", a false negative that is

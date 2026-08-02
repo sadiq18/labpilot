@@ -858,3 +858,38 @@ def test_non_dry_experiment_without_metrics_is_a_failure(monkeypatch):
     # A dry run legitimately produces nothing and must stay allowed.
     result = specialists.run_experiment(object(), plan_id="P-009", dry_run=True)
     assert result.data["dry_run"] is True
+
+
+def test_goal_persistence_override_dispatches_reflect_not_generate_plan():
+    """Regression: routing the override by intent text let keyword matching
+    hijack it — the phrase contained "hypothesis", which matches the
+    ("plan", "baseline", "hypothesis") template, so it dispatched
+    generate_plan(baseline=True) instead of reflecting on the result."""
+    from labpilot.research_engine.conductor.actions import (
+        ResearchAction,
+        map_research_action,
+    )
+
+    catalog = {"reflect", "generate_plan", "run_experiment", "analyze_competition"}
+    action = ResearchAction(
+        intent="objective unmet — reflect and continue",
+        rationale="objective still unmet; continuing",
+        suggested_tools=["reflect"],
+    )
+    plan = map_research_action(action, catalog)
+    assert [s.tool for s in plan.steps] == ["reflect"]
+
+
+def test_intent_text_alone_would_still_be_hijacked():
+    """Documents *why* the override names its tool explicitly."""
+    from labpilot.research_engine.conductor.actions import (
+        ResearchAction,
+        map_research_action,
+    )
+
+    catalog = {"reflect", "generate_plan", "run_experiment"}
+    hijacked = map_research_action(
+        ResearchAction(intent="reflect on the last experiment and try the next hypothesis"),
+        catalog,
+    )
+    assert [s.tool for s in hijacked.steps] != ["reflect"]

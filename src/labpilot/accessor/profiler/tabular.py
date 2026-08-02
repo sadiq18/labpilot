@@ -61,6 +61,12 @@ class DatasetProfile(BaseModel):
     train_only_columns: list[str] = Field(default_factory=list)
 
 
+# Below this many per-entity train files, treat the dataset as ordinary
+# multi-file rather than partitioned. Group-aware splits and the partitioned
+# template are expensive to get wrong on a normal competition.
+_MIN_PARTITIONS = 3
+
+
 class TabularProfiler:
     """Profile tabular competition datasets."""
 
@@ -244,14 +250,30 @@ class TabularProfiler:
         )
         return profile
 
-    def _role_of(self, path: Path, data_dir: Path, train_pattern: str, test_pattern: str) -> str:
-        """Classify a CSV as train/test by directory, falling back to filename."""
+    def _role_of(
+        self,
+        path: Path,
+        data_dir: Path,
+        train_pattern: str,
+        test_pattern: str,
+        *,
+        by_directory_only: bool = False,
+    ) -> str:
+        """Classify a CSV as train/test by directory, falling back to filename.
+
+        ``by_directory_only`` skips the filename fallback. Partitioned-layout
+        detection uses it because a filename prefix is far too weak a signal
+        there: ``train.csv`` + ``train_extra.csv`` both match "train" and would
+        otherwise be read as two partitions of a partitioned dataset.
+        """
         parts = [p.lower() for p in path.relative_to(data_dir).parts[:-1]]
         for part in parts:
             if part.startswith(train_pattern.lower()):
                 return "train"
             if part.startswith(test_pattern.lower()):
                 return "test"
+        if by_directory_only:
+            return "other"
         name = path.name.lower()
         if name.startswith(train_pattern.lower()):
             return "train"
@@ -281,10 +303,18 @@ class TabularProfiler:
         """Profile one-file-per-entity datasets, or return None if not that shape."""
         by_role: dict[str, list[Path]] = {"train": [], "test": [], "other": []}
         for path in csv_files:
-            by_role[self._role_of(path, data_dir, train_pattern, test_pattern)].append(path)
+            role = self._role_of(
+                path, data_dir, train_pattern, test_pattern, by_directory_only=True
+            )
+            by_role[role].append(path)
         train_files, test_files = by_role["train"], by_role["test"]
-        if len(train_files) <= 1:
-            return None  # ordinary single-train-file dataset
+        # Require a real per-entity layout: files grouped under a train/
+        # directory, and enough of them that "one table per entity" is the only
+        # sensible reading. A flat `train.csv` + `train_extra.csv` is an
+        # ordinary multi-file dataset and must not take the partitioned path,
+        # which would impose group splits and a partition-aware template on it.
+        if len(train_files) < _MIN_PARTITIONS:
+            return None
 
         sample_paths = [
             p for p in by_role["other"] if submission_pattern.lower() in p.name.lower()

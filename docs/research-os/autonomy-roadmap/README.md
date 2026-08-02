@@ -37,7 +37,7 @@ Do not reorder. Each is dead without the previous.
 | **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | Not started |
 | **M8** | [Objective feedback loop](02-objective-loop.md) | The system noticing it is making no progress | Not started |
 | **M9** | [Verification-first execution](03-verification-first.md) | Trusting any result | Partly done |
-| **M10** | [LLM tiering & free-tier routing](04-llm-tiering.md) | A model capable enough for M7 | Core built |
+| **M10** | [LLM tiering & free-tier routing](04-llm-tiering.md) | A model capable enough for M7 | Decision layer only — not wired |
 | **M11** | [Parallel branches](05-parallel-branches.md) | Iteration speed | Not started |
 | **M12** | [Beyond Kaggle](06-beyond-kaggle.md) | The actual product thesis | Not started |
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
