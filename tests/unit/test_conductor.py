@@ -639,3 +639,43 @@ def test_no_target_means_policy_stop_is_honoured():
     from labpilot.research_engine.conductor.loop import _objective_unmet
 
     assert _objective_unmet(_Cfg(metric=None, value=None), _State(1.0)) is False
+
+
+# --- backlog-aware scheduling -------------------------------------------------
+
+
+def _available_with_backlog(monkeypatch, backlog, *, has_plan=True, has_execution=True):
+    import labpilot.research_engine.conductor.loop as loop_mod
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-001" if has_plan else None)
+    monkeypatch.setattr(
+        loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
+    )
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: backlog)
+    catalog = {
+        "analyze_competition", "search_papers", "query_memory", "generate_plan",
+        "implement", "run_plan", "run_experiment", "reflect", "submit",
+    }
+    return policy_mod.available_tools(_FakeWorkspace(), catalog)
+
+
+def test_full_backlog_blocks_re_gathering_evidence(monkeypatch):
+    """Re-analysing with work already queued makes no progress and costs minutes."""
+    tools = _available_with_backlog(monkeypatch, backlog=10)
+    assert "analyze_competition" not in tools
+    assert "search_papers" not in tools
+    # Testing what is queued stays available.
+    assert {"generate_plan", "run_plan", "reflect"} <= tools
+
+
+def test_empty_backlog_reopens_evidence_gathering(monkeypatch):
+    tools = _available_with_backlog(monkeypatch, backlog=0)
+    assert "analyze_competition" in tools
+    assert "search_papers" in tools
+
+
+def test_backlog_below_target_still_gathers(monkeypatch):
+    """A thin queue is worth topping up before it runs dry."""
+    tools = _available_with_backlog(monkeypatch, backlog=2)
+    assert "analyze_competition" in tools

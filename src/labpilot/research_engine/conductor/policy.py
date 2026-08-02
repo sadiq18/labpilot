@@ -76,6 +76,9 @@ def build_observe_bundle(
             for d in decisions[-5:]
         ],
     }
+    # Backlog is the campaign's core scheduling signal: test what is queued,
+    # gather more evidence only when the queue runs dry.
+    observe["untested_hypotheses"] = untested_hypothesis_count(workspace)
     _attach_evidence_refresh(observe, workspace)
     if include_context:
         _attach_context(
@@ -291,6 +294,12 @@ def llm_next_action(
         logger.info("Operator requested LLM policy retry (%d/%d)", retries, max_llm_retries)
 
 
+# A campaign only needs a handful of untested ideas in front of it. Below this
+# it is worth spending minutes gathering more evidence; at or above it, that
+# time is better spent testing what is already queued.
+_HYPOTHESIS_BACKLOG_TARGET = 3
+
+
 def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
     """Drop tools whose preconditions the workspace does not yet satisfy.
 
@@ -307,6 +316,12 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
     has_plan = _latest_plan_id(workspace) is not None
     has_execution = _latest_execution_id(workspace) is not None
 
+    # Evidence gathering is expensive (kernels, discussions, papers, repos —
+    # minutes of network and LLM work). Once there is a backlog of untested
+    # hypotheses, the useful move is to *test* one, not to re-derive the same
+    # techniques and beliefs again. Gathering reopens when the backlog runs dry.
+    backlog = untested_hypothesis_count(workspace)
+
     requires: dict[str, bool] = {
         # Nothing to reflect on until an experiment has produced evidence.
         "reflect": has_execution,
@@ -315,8 +330,24 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
         "run_experiment": has_plan,
         "submit": has_execution,
         "submit_learn": has_execution,
+        # Re-analysing with work already queued is the single most expensive
+        # way for a campaign to make no progress.
+        "analyze_competition": backlog < _HYPOTHESIS_BACKLOG_TARGET,
+        "search_papers": backlog < _HYPOTHESIS_BACKLOG_TARGET,
     }
     return {name for name in allowlist if requires.get(name, True)}
+
+
+def untested_hypothesis_count(workspace: Workspace) -> int:
+    """How many proposed hypotheses are waiting to be tested."""
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+    from labpilot.research_engine.shared.experiments.models import HypothesisStatus
+
+    try:
+        store = HypothesisStore(workspace.knowledge_dir, workspace.competition)
+        return len(store.list(status=HypothesisStatus.PROPOSED))
+    except Exception:  # noqa: BLE001 — absent store means nothing queued
+        return 0
 
 
 def decide_next(
