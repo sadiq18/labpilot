@@ -48,6 +48,35 @@ which is what made it valuable. A Titanic-shaped competition would have passed.
 | 17 | Per-workspace dataset cache | New workspace re-downloaded 1.2 GB it already had | `LABPILOT_KAGGLE_CACHE_DIR` |
 | 18 | LLM health undiagnosable | `llm_unavailable` in a profile with no way to tell why | `doctor` checks reachability + model pulled |
 
+## Open issues found but not fixed
+
+Recorded here because they were observed directly and would otherwise be lost.
+
+- **Circular import in the reporting capability.** Importing
+  `execution/capabilities/reporting/capability.py` standalone raises
+  `cannot import name 'ExperienceExtractor' from partially initialized module
+  labpilot.research_engine.memory.extractor`. It works in the normal path only
+  because `engineer.py` imports in an order that resolves it — so it is latent
+  and will bite the first test or entry point that imports it directly.
+- **Metric-key inconsistency.** The selector defaults `tabular_regression` to
+  `rmse` while the competition scores `mse`; `metrics.json` carried `cv_rmse`
+  and `mse` in the same file. Harmless for ranking, fatal for a score *series*
+  (see [M8](02-objective-loop.md)).
+- **`record_suggestion` output is never read.** When an intent maps to no tool
+  the Conductor records "Need capability/tool X" — the system naming the
+  capability it lacks. Nothing surfaces it. Nearly free to expose in
+  `conduct status`, and it turns the loop into a roadmap generator.
+- **Two meanings of "capability".** The execution `Capability` classes (10 of
+  them, covering all 18 task types) and the Conductor's tool catalog are
+  different layers sharing one word. Guarantees confusion in design discussion.
+- **`query_memory` is unverified.** The policy selected it during campaign 7; it
+  was never confirmed to change any subsequent decision.
+- **Hypothesis quality depends on the rule engine.** With the LLM path failing,
+  `generate_candidates` produced `vit`, `cnn`, `Mixed` and `test` as techniques
+  for a tabular regression. Cross-modality rejection now filters the worst, but
+  the generator itself is only as good as the model behind it →
+  [M14](09-llm-required.md).
+
 ## Two mistakes I made, and what they teach
 
 **A test that encoded an assumption instead of a behaviour.** For defect 14 the

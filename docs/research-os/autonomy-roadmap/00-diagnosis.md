@@ -61,9 +61,38 @@ nothing:
 Every layer above these reported success. The system was structurally incapable
 of telling the operator it was broken.
 
-→ [03-verification-first.md](03-verification-first.md)
+The **mechanism** is a design decision, not an accident: 20 micro agents each
+carry a `_run_rule_engine` fallback, and `BaseMicroAgent` catches any LLM or
+parse failure and quietly uses it. The system runs deterministic rules while
+looking like it is reasoning.
 
-## Root cause 4 — the substrate cannot deliver the reasoning
+→ [03-verification-first.md](03-verification-first.md) ·
+[09-llm-required.md](09-llm-required.md)
+
+## Root cause 4 — the policy matches keywords, it does not reason
+
+The Conductor is described as continuously deciding what happens next. In
+practice an LLM picks one tool *name*, and `map_research_action` then matches the
+intent string against keyword tuples to select a hardcoded chain. There is no
+model of where the research is or which transition is worth making.
+
+That is why it chose `generate_plan` on five consecutive steps without running
+any of them, and why "have I used each tool once?" reads to it as success.
+
+→ [08-policy-reasoning.md](08-policy-reasoning.md)
+
+## Root cause 5 — the capability layer is hollow
+
+Of ten catalog tools, **one** (`run_plan`) can move the score, and it has exactly
+one reachable configuration. `implement()` is named like an action and renders a
+fixed template. `reflect()` is real but nothing it writes feeds a later decision.
+
+A named tool implies a capability. The control plane grew rich enough to decide
+"try a CNN" while nothing underneath could produce one.
+
+→ [10-capability-audit.md](10-capability-audit.md)
+
+## Root cause 6 — the substrate cannot deliver the reasoning
 
 The architecture assumes Claude-Code-grade reasoning at three points: conductor
 policy, hypothesis generation, code generation. The local `qwen2.5-coder:14b`

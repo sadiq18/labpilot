@@ -40,10 +40,23 @@ Do not reorder. Each is dead without the previous.
 | **M10** | [LLM tiering & free-tier routing](04-llm-tiering.md) | A model capable enough for M7 | Core built |
 | **M11** | [Parallel branches](05-parallel-branches.md) | Iteration speed | Not started |
 | **M12** | [Beyond Kaggle](06-beyond-kaggle.md) | The actual product thesis | Not started |
+| **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
+| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | Decided |
+| **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
 | — | [Interaction modes](07-interaction-modes.md) | Auto / accept-edits / plan UX | Not started |
 
-**M10 before M7 in practice.** M7 needs a model that can write code; the local
-14B produced none. Do M10's remaining wiring first, then M7.
+### Ordering notes
+
+- **M10 before M7 in practice.** M7 needs a model that can write code; the local
+  14B produced none. Do M10's remaining wiring first, then M7.
+- **M14 phase 1 is nearly free and should go early.** Merely *stamping*
+  rule-engine results as degraded would have made the entire silent-failure
+  class visible on day one. Phases 2–3 need a test migration (see the plan).
+- **M13 requires M7 and M8.** "Plateaued" cannot be detected while every
+  experiment returns the same score.
+- **M15 is a standing practice, not a one-off.** Its contract test — *different
+  input must produce a different artifact* — is the generalisation of M7's exit
+  criterion and the check that would have caught the hollow layer immediately.
 
 ---
 
