@@ -208,6 +208,51 @@ want to debug *why* it chose something; use `conduct` when the loop is trusted.
 Approvals default to on before a new plan batch and before any leaderboard
 submit. Keep them on until you trust the campaign.
 
+### How it decides — collect once, test many
+
+The orchestrator shape is: gather evidence → ingest → techniques and beliefs →
+hypotheses → plan → run → reflect, **looping on the tail rather than the head**.
+
+Tools are filtered by precondition before the policy ever sees them, so the
+campaign cannot spend a step on impossible or wasteful work:
+
+| Tool | Withheld when |
+|---|---|
+| `reflect`, `submit` | nothing has run yet |
+| `run_plan`, `run_experiment` | no plan exists |
+| `generate_plan` | a plan is still unrun |
+| `analyze_competition`, `search_papers` | ≥3 untested hypotheses queued, **or** evidence gathered <6h ago |
+
+The two brakes on evidence gathering exist for different reasons: a full
+hypothesis queue means the bottleneck is *testing*, and a recent sweep means
+another one mostly re-ingests the same kernels under new artifact ids —
+growing the store without adding information. Both signals appear in the
+observe bundle (`untested_hypotheses`, `hours_since_last_artifact`), and the
+skip reason is logged:
+
+```
+Skipping evidence gathering: 12 untested hypotheses already queued
+```
+
+**Goal persistence.** A policy that has used each tool once tends to declare
+victory. While a `--target-metric` is set and unmet, an advisory stop is
+overridden (up to twice) and redirected to reflect-and-try-the-next-hypothesis.
+Budgets, `--max-steps`, and the real stop conditions are unaffected.
+
+### Reading a campaign
+
+Progress lines carry elapsed time, so a slow step is distinguishable from a
+hung one:
+
+```
+step 2/14: observing + deciding …
+step 2/14: chose run_experiment (26.1s)
+```
+
+Early stops with the objective unmet are recorded as suggestions — check
+`research conduct status` for them; they are the system telling you which
+capability it lacked.
+
 ---
 
 ## Troubleshooting
@@ -242,6 +287,16 @@ submit. Keep them on until you trust the campaign.
 - **The Conductor's action mapping is keyword-based.** It routes intents to tool
   chains by matching words, so novel intents fall through as "no capability"
   (recorded as a suggestion rather than silently dropped).
+- **Hypotheses come from other people's work, not the system's own.** Candidates
+  are mined from kernels, papers and repositories. Cross-modality suggestions
+  are rejected (no ViT on a tabular task), but there is no
+  reflection → hypothesis edge yet: the system does not turn *its own* failed
+  experiments into new ideas. That, plus running evidence gathering as a
+  background producer alongside a testing consumer, is the next real step.
+- **"Good enough" is currently a count, not a judgement.** A backlog of three
+  weak hypotheses blocks gathering exactly as well as three strong ones. The
+  honest fix needs reflection outcomes: if the last N tested hypotheses all came
+  back inconclusive or rejected, the queue is bad regardless of its size.
 - **`metric_name` may not match the competition metric exactly** (e.g. `rmse`
   reported where the leaderboard uses `mse`). They rank identically for
   selection, but read the number with that in mind.
