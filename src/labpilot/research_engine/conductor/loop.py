@@ -10,6 +10,7 @@ from labpilot.research_engine.conductor.actions import (
     ResearchAction,
     map_research_action,
     offline_next_research_action,
+    resolve_step_args,
 )
 from labpilot.research_engine.conductor.approvals import (
     ApprovalPrompt,
@@ -34,6 +35,37 @@ from labpilot.research_engine.workspace_facade import Workspace
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], None]
+
+
+def _latest_plan_id(workspace: Workspace) -> str | None:
+    """Highest-numbered plan for this competition, or None when none exist."""
+    from labpilot.research_engine.artifacts.plan import PlanArtifacts
+
+    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    try:
+        plans = artifacts.list()
+    except Exception:  # noqa: BLE001 — absent store simply means "no plans yet"
+        return None
+    finally:
+        artifacts.close()
+    ids = sorted(p.id for p in plans)
+    return ids[-1] if ids else None
+
+
+def _latest_execution_id(workspace: Workspace) -> str | None:
+    """Most recent execution id, or None when nothing has run yet."""
+    from labpilot.research_engine.shared.experiments.graph import build_graph
+
+    try:
+        graph = build_graph(
+            workspace.effective_runs_dir,
+            workspace.competition,
+            knowledge_dir=workspace.knowledge_dir,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    nodes = sorted(graph.nodes.values(), key=lambda e: e.created_at)
+    return nodes[-1].id if nodes else None
 
 
 def run_until_stop(
@@ -190,10 +222,18 @@ def run_until_stop(
             for tool_step in plan.steps:
                 decision_id = store.new_decision_id()
                 deps = [prev_id] if prev_id else []
+                # Resolve @latest against state *now*, after any earlier step in
+                # this batch created a plan or execution.
+                step_args = resolve_step_args(
+                    tool_step.tool,
+                    tool_step.args,
+                    latest_plan_id=_latest_plan_id(workspace),
+                    latest_execution_id=_latest_execution_id(workspace),
+                )
                 task = store.enqueue(
                     session_id,
                     tool_step.tool,
-                    args=tool_step.args,
+                    args=step_args,
                     decision_id=decision_id,
                     dependencies=deps,
                 )
@@ -202,7 +242,7 @@ def run_until_stop(
                     session_id=session_id,
                     tool_name=tool_step.tool,
                     rationale=research.rationale or research.intent,
-                    args=tool_step.args,
+                    args=step_args,
                     task_id=task.id,
                     observe={"step": step, "intent": research.intent},
                 )

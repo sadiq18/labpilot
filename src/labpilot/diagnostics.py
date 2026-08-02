@@ -149,7 +149,8 @@ def _check_llm_provider() -> CheckResult:
             return CheckResult(
                 name,
                 False,
-                f"ollama up but model {model!r} not pulled (have: {', '.join(available[:3]) or 'none'})",
+                f"ollama up but model {model!r} not pulled "
+                f"(have: {', '.join(available[:3]) or 'none'})",
                 f"Run: ollama pull {model}",
             )
         return CheckResult(name, True, f"ollama · {model} · {config.ollama_base_url}")

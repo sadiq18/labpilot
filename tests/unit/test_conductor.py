@@ -440,3 +440,59 @@ def test_llm_policy_prompt_sees_ranked_evidence() -> None:
     assert "0.91" in captured["user"]
     assert "mixup" in captured["user"].lower()
     assert "context_summary" in captured["system"] or "context_refs" in captured["system"]
+
+
+# --- @latest id resolution --------------------------------------------------
+
+
+def test_run_experiment_no_longer_forces_dry_run():
+    """A campaign that always dry-runs can never produce a real submission."""
+    from labpilot.research_engine.conductor.actions import _default_args
+
+    for tool in ("run_plan", "run_experiment"):
+        assert "dry_run" not in _default_args(tool)
+
+
+def test_step_args_resolve_to_latest_ids():
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "run_plan",
+        {"plan_id": "@latest"},
+        latest_plan_id="P-007",
+        latest_execution_id="E-009",
+    )
+    assert resolved["plan_id"] == "P-007"
+
+    resolved = resolve_step_args(
+        "submit",
+        {"execution_id": "@latest"},
+        latest_plan_id="P-007",
+        latest_execution_id="E-009",
+    )
+    assert resolved["execution_id"] == "E-009"
+
+
+def test_step_args_fall_back_to_first_id_on_empty_workspace():
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "run_plan",
+        {"plan_id": "@latest", "execution_id": "@latest"},
+        latest_plan_id=None,
+        latest_execution_id=None,
+    )
+    assert resolved["plan_id"] == "P-001"
+    assert resolved["execution_id"] == "E-001"
+
+
+def test_step_args_leave_explicit_ids_untouched():
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "run_plan",
+        {"plan_id": "P-003"},
+        latest_plan_id="P-099",
+        latest_execution_id=None,
+    )
+    assert resolved["plan_id"] == "P-003"
