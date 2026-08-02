@@ -70,6 +70,59 @@ def test_pipeline_soft_fails_extractor() -> None:
     assert any(f.facet == "audio" and f.source == "metadata" for f in facets)
 
 
+def test_pipeline_all_extractors_fail_returns_empty() -> None:
+    class Boom:
+        name = "boom"
+
+        def extract(self, ctx: FacetContext) -> list[ExperienceFacet]:
+            del ctx
+            raise RuntimeError("boom")
+
+    pipeline = FacetPipeline(extractors=[Boom(), Boom()])
+    assert pipeline.extract(FacetContext(competition="x")) == []
+
+
+def test_merge_normalizes_facet_casing() -> None:
+    merged = merge_facet_hits(
+        [
+            ExperienceFacet(
+                facet="Audio",
+                confidence=0.5,
+                evidence=["A"],
+                source="rules",
+            ),
+            ExperienceFacet(
+                facet="AUDIO",
+                confidence=0.9,
+                evidence=["B"],
+                source="code",
+            ),
+        ]
+    )
+    assert len(merged) == 1
+    assert merged[0].facet == "audio"
+    assert merged[0].source == "code"
+
+
+def test_merge_reserves_evidence_slots_across_sources() -> None:
+    """High-conf hit cannot fill all 8 slots alone — lower sources still contribute."""
+    high = ExperienceFacet(
+        facet="audio",
+        confidence=0.9,
+        evidence=[f"hi-{i}" for i in range(10)],
+        source="code",
+    )
+    low = ExperienceFacet(
+        facet="audio",
+        confidence=0.4,
+        evidence=["critical-low-signal"],
+        source="rules",
+    )
+    merged = merge_facet_hits([high, low])
+    assert "critical-low-signal" in merged[0].evidence
+    assert len(merged[0].evidence) <= 8
+
+
 def test_code_extractor_from_pipeline_train(tmp_path: Path) -> None:
     pipe = tmp_path / "pipeline"
     pipe.mkdir()

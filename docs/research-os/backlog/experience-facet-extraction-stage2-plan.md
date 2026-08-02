@@ -104,12 +104,15 @@ No schema migration if JSON already holds `ExperienceFacet` dicts (Stage 1).
 
 ## Merge policy (locked for Stage 2)
 
-For the same `facet` name:
+For the same `facet` name (normalized `strip().lower()`; output uses that canonical form):
 
-1. **confidence** = `max(hits.confidence)` (simple; noisy-OR deferred)
-2. **evidence** = de-duped union (preserve order: higher-confidence hit first)
-3. **source** = highest-priority source among hits (table above)
-4. Cap evidence list length (e.g. 8) so ContextBundle text stays bounded
+1. **confidence** = `max(hits.confidence)` — recall-oriented; disagreement
+   penalties deferred until histograms justify them
+2. **evidence** = de-duped union, high-confidence first, **≤3 strings per hit**
+   then global cap 8 (so one source cannot silence others)
+3. **source** = highest-priority source among hits — **heuristic** order
+   (metadata → code → dataset → paper → result → rules → legacy), not calibrated
+4. Cap evidence list length at 8 so ContextBundle text stays bounded
 
 ---
 
