@@ -4,11 +4,16 @@ Back to [../README.md](../README.md) · Backlog:
 [../backlog/capability-registration.md](../backlog/capability-registration.md) ·
 Tools: [02-tools.md](02-tools.md) · Campaigns: [06-campaigns.md](06-campaigns.md).
 
-**Status:** Design  
-**Depends on:** M3 campaign loop + `ToolRegistry` (shipped)  
+**Status:** Parked (design accepted; impl blocked)  
+**Depends on:** M3 campaign loop + `ToolRegistry` (shipped); **impl blocked on**
+[telemetry-suggestions-export](../backlog/telemetry-suggestions-export.md)
+(client log / gap collection)  
 **Does not replace:** Research Engineer `BaseCapability` map (plan-task handlers) —
 Conductor gaps are **OS tools**, not Engineer `TaskType`s (bridge only via a
 `ToolDescriptor` wrapper when needed).
+
+**Pickup rule:** Do not start P0–P4 until telemetry can collect redacted gaps
+from client installs into a maintainer-readable feed.
 
 ---
 

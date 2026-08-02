@@ -1,12 +1,14 @@
 # Backlog — Campaign telemetry & suggestion storage
 
-**Status:** Backlog (post-M3). M3 keeps counters in SQLite (`os_campaign_metrics`)
-and suggestions in SQLite (`os_suggestions`) for durable local campaigns.
+**Status:** Backlog (post-M3) — **prerequisite** for unparking
+[capability-registration](capability-registration.md).  
+M3 keeps counters in SQLite (`os_campaign_metrics`) and suggestions in SQLite
+(`os_suggestions`) for durable local campaigns.
 
-**Also required by:** [capability-registration](capability-registration.md) /
+**Unblocks:** [capability-registration](capability-registration.md) /
 [design/11](../design/11-capability-registration.md) — maintainers cannot read
-user-local `os_suggestions`; a redacted export/telemetry bridge is the product
-gap feed (file export first, OTel later).
+user-local `os_suggestions`; client telemetry (or opt-in export) is the product
+gap feed.
 
 ## Problem
 
