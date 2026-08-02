@@ -38,6 +38,7 @@ configs/competitions/*.yml
 .vscode/
 .cursor/
 .claude-plugin/
+skills/karpathy-guidelines/
 CLAUDE.md
 *.swp
 

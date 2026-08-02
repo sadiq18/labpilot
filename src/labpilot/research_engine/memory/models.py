@@ -8,7 +8,15 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 ExperienceOutcome = Literal["success", "fail"]
-FacetSource = Literal["metadata", "rules", "legacy"]
+FacetSource = Literal[
+    "metadata",
+    "rules",
+    "code",
+    "dataset",
+    "paper",
+    "result",
+    "legacy",
+]
 
 
 class ExperienceFacet(BaseModel):

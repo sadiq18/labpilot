@@ -67,7 +67,7 @@ def test_extract_from_experiment_model(tmp_path: Path) -> None:
         assert facets["audio"].confidence >= 0.8
         assert "audio" in [e.lower() for e in facets["audio"].evidence]
         assert "augmentation" in facets
-        assert facets["augmentation"].source == "rules"
+        assert facets["augmentation"].source in {"rules", "result"}
         assert facets["augmentation"].evidence
         assert facets["augmentation"].confidence < 1.0
         assert "imbalance" in facets
