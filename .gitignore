@@ -33,9 +33,12 @@ configs/competitions/*.yaml
 configs/competitions/*.yml
 !configs/competitions/README.md
 
-# IDE
+# IDE / agent tooling
 .idea/
 .vscode/
+.cursor/
+.claude-plugin/
+CLAUDE.md
 *.swp
 
 # Testing
