@@ -98,7 +98,12 @@ def analyze_competition(
         on_progress=on_progress,
     )
     report = orchestrator.analyze_without_side_effects(
-        context, only=only, include=include, exclude=exclude
+        context,
+        only=only,
+        # Conductor task args round-trip through JSON, where a set becomes a
+        # list, so accept either shape.
+        include=set(include) if include else None,
+        exclude=set(exclude) if exclude else None,
     )
     verification = verify_ai_artifact(
         "analysis_report",

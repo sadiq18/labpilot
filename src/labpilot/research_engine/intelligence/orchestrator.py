@@ -8,6 +8,7 @@ Research Brief → write ``analyze.json``.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -38,9 +39,14 @@ from labpilot.research_engine.intelligence.repositories.local_profile import Loc
 
 logger = logging.getLogger("labpilot.research_engine.intelligence.orchestrator")
 
-_FETCH_KERNEL_VOTE_LIMIT = 5
-_FETCH_KERNEL_SCORE_LIMIT = 5
-_FETCH_DISCUSSION_LIMIT = 5
+# Kernels and discussions are the highest-yield evidence on a Kaggle
+# competition — they are where techniques, and therefore beliefs, claims and
+# hypotheses, actually come from. Five of each produced too few concept
+# candidates for the Knowledge Hub to propose anything to test.
+# Override with LABPILOT_FETCH_KERNELS / LABPILOT_FETCH_DISCUSSIONS.
+_FETCH_KERNEL_VOTE_LIMIT = int(os.environ.get("LABPILOT_FETCH_KERNELS", "15"))
+_FETCH_KERNEL_SCORE_LIMIT = int(os.environ.get("LABPILOT_FETCH_KERNELS", "15"))
+_FETCH_DISCUSSION_LIMIT = int(os.environ.get("LABPILOT_FETCH_DISCUSSIONS", "15"))
 
 
 class AnalyzeOrchestrator:

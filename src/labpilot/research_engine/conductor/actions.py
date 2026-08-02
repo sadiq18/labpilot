@@ -50,7 +50,12 @@ _TEMPLATES: list[tuple[tuple[str, ...], list[ToolStep]]] = [
     ),
     (
         ("analyze", "competition", "understand"),
-        [ToolStep(tool="analyze_competition", args={"fetch_kaggle": True})],
+        [
+            ToolStep(
+                tool="analyze_competition",
+                args={"fetch_kaggle": True},
+            )
+        ],
     ),
     (
         ("plan", "baseline", "hypothesis"),
@@ -135,10 +140,13 @@ def map_research_action(
 
 def _default_args(tool: str) -> dict[str, Any]:
     if tool == "analyze_competition":
-        # Kaggle kernels and discussions are where competition-specific
-        # technique knowledge actually lives. Without them the Knowledge Hub
-        # finds no concepts, no hypotheses get proposed, and the campaign has
-        # nothing to iterate on after the baseline. Fetching is cached.
+        # Evidence breadth is the input to everything downstream: artifacts ->
+        # concepts -> techniques -> beliefs/claims -> hypotheses. Running the
+        # default analyzer set (competition, dataset, experiments, papers,
+        # repositories) AND pulling Kaggle kernels/discussions is what gives a
+        # campaign something to iterate on. Previously this ran with no
+        # arguments at all, so `fetch_kaggle` defaulted to False and no kernel
+        # or discussion evidence was ever gathered.
         return {"fetch_kaggle": True}
     if tool == "generate_plan":
         return {"baseline": True}

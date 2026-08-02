@@ -546,4 +546,8 @@ def test_conductor_analyze_gathers_kaggle_domain_knowledge():
     """No kernels/discussions => no concepts => no hypotheses => no iteration."""
     from labpilot.research_engine.conductor.actions import _default_args
 
-    assert _default_args("analyze_competition") == {"fetch_kaggle": True}
+    args = _default_args("analyze_competition")
+    assert args["fetch_kaggle"] is True
+    # No analyzer is excluded: papers and repositories feed techniques and
+    # beliefs just as kernels do.
+    assert "exclude" not in args
