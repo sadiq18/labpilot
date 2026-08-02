@@ -324,8 +324,8 @@ def test_build_observe_bundle_includes_context_online(tmp_path: Path) -> None:
 def test_build_observe_bundle_skips_context_when_disabled(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from labpilot.research_engine.conductor import policy as policy_mod
     import labpilot.research_engine.context as ctx_mod
+    from labpilot.research_engine.conductor import policy as policy_mod
 
     calls: list[str] = []
 
@@ -352,8 +352,8 @@ def test_build_observe_bundle_skips_context_when_disabled(
 def test_decide_next_prefer_offline_does_not_require_context(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from labpilot.research_engine.conductor.policy import decide_next
     import labpilot.research_engine.context as ctx_mod
+    from labpilot.research_engine.conductor.policy import decide_next
 
     def boom(*_a: object, **_k: object) -> object:
         raise RuntimeError("context must not run offline")
@@ -381,8 +381,8 @@ def test_decide_next_prefer_offline_does_not_require_context(
 def test_observe_survives_build_context_failure(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from labpilot.research_engine.conductor.policy import build_observe_bundle
     import labpilot.research_engine.context as ctx_mod
+    from labpilot.research_engine.conductor.policy import build_observe_bundle
 
     def boom(*_a: object, **_k: object) -> object:
         raise RuntimeError("retrieve down")
