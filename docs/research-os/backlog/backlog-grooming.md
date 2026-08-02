@@ -14,7 +14,7 @@ Catalog of deferred items: [README.md](README.md).
 | # | Capability | So what | Impact |
 |---|------------|---------|--------|
 | 1 | [experience-facet-extraction](experience-facet-extraction.md) (stages 2–5) | Facets get real evidence (artifacts → optional embeddings/LLM), not just rule hints | Better cross-comp retrieve quality without auto-transfer risk |
-| 2 | [capability-registration](capability-registration.md) | Conductor can grow the tool catalog when `no_capability` is common | Campaigns stop stalling on missing actions; expands what autonomy can do |
+| 2 | [capability-registration](capability-registration.md) ([design](../design/11-capability-registration.md)) | Conductor can grow the tool catalog when `no_capability` is common | Campaigns stop stalling on missing actions; expands what autonomy can do |
 | 3 | [coding-tool-adapters](coding-tool-adapters.md) | Swap V1 Code Engineering for Claude Code / Aider / OpenHands behind `CodingTool` | Stronger implementation quality without rewriting the agent OS |
 | 4 | [future-specialists](future-specialists.md) (Critic / Eval / Submit first) | Promote specialists when skill loops are measurable | Less “one mega path”; clearer ownership of review, eval, submit |
 | 5 | [git-worktrees-patches](git-worktrees-patches.md) | Parallel experiment dirs + patch review instead of one dirty tree | Safer concurrent experiments; cleaner review/revert |
