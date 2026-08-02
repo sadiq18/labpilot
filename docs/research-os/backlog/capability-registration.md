@@ -1,6 +1,7 @@
 # Backlog — Capability registration
 
-**Status:** Backlog (not M3). Pick up when the Campaign Engine needs a larger action space.
+**Status:** Design ready — [../design/11-capability-registration.md](../design/11-capability-registration.md)  
+**Pickup order:** [backlog-grooming.md](backlog-grooming.md) `#2` (after Stage 2 facets).
 
 ## Problem
 
@@ -8,19 +9,32 @@ M3 maps research actions onto the **existing** tool catalog only. When policy
 repeatedly emits `no_capability` / suggestions, the OS needs a way to **register
 new tools** so Conductor can expand without code forks.
 
-## Proposed later work
+## Design answers (summary)
 
-- Registry API to add tools at runtime or via config plugins
-- Versioned capability descriptors (name, schemas, cost hints)
-- Conductor observe includes newly registered names automatically
-- Guardrails: approval before enabling high-risk capabilities
+| Question | Answer |
+|----------|--------|
+| **When to add?** | Recurring gap evidence (count / rate thresholds) **or** explicit milestone need; not one-off LLM asks. Prefer **alias** if a synonym of an existing tool. |
+| **How created?** | Path A wrap library → Path B external adapter → Path C new handler + tests; all become `ToolDescriptor` on `ToolRegistry`. |
+| **How track?** | Enrich suggestions → **gap ledger** across sessions → CLI review → promote/defer/reject → verify gap stops growing. |
 
-## Signals to watch (M3 metrics)
+## Proposed work (phased)
 
-- `no_capability` counts
-- Suggestion text themes
+See design §8:
+
+- **P0** — Structured suggestion context + allowlist refresh each loop
+- **P1** — `os_capability_gaps` ledger + `research tools gaps`
+- **P2** — Human promote / defer / reject + audit
+- **P3** — Plugins + risk/approval
+- **P4** — Telemetry export
+
+## Signals to watch (already partially emitted)
+
+- `CampaignMetrics.no_capability`
+- `os_suggestions` themes / `context.intent` / missing tool names
 - Repeated human interventions around the same missing step
 
-## Out of scope here
+## Out of scope
 
-Implementing registration itself — M3 only **emits** the gap signals.
+- Auto-implementing tools without tests
+- Merging Engineer capabilities into `ToolRegistry` wholesale
+- Silent high-risk tool enablement
