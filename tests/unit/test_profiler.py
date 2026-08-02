@@ -339,3 +339,50 @@ def test_validation_plan_plain_kfold_for_iid_dataset(titanic_data_dir):
     plan = derive_validation_plan(profile)
     assert plan.scheme == "kfold"
     assert plan.exclude_features == []
+
+
+def test_partitioned_dataset_selects_partition_aware_template(partitioned_data_dir):
+    from labpilot.research_engine.execution.baseline.selector import BaselineSelector
+    from labpilot.research_engine.intelligence.competition.models import (
+        CompetitionSpec,
+        MetricSpec,
+        ProblemType,
+    )
+
+    profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
+    spec = CompetitionSpec(
+        slug="part-comp",
+        problem_type=ProblemType.TABULAR_REGRESSION,
+        evaluation_metric=MetricSpec(name="mse", direction="minimize", key="mse"),
+    )
+    choice = BaselineSelector().select(spec, profile)
+    assert choice.template_name == "tabular_regression_partitioned"
+    assert choice.partitioned is True
+
+
+def test_iid_dataset_keeps_plain_regression_template(generic_regression_data_dir):
+    from labpilot.research_engine.execution.baseline.selector import BaselineSelector
+    from labpilot.research_engine.intelligence.competition.models import (
+        CompetitionSpec,
+        MetricSpec,
+        ProblemType,
+    )
+
+    profile = _profiler().profile_directory(generic_regression_data_dir, "reg-comp")
+    spec = CompetitionSpec(
+        slug="reg-comp",
+        problem_type=ProblemType.TABULAR_REGRESSION,
+        evaluation_metric=MetricSpec(name="rmse", direction="minimize", key="rmse"),
+    )
+    choice = BaselineSelector().select(spec, profile)
+    assert choice.template_name == "tabular_regression"
+
+
+def test_partitioned_template_is_registered():
+    from labpilot.research_engine.execution.baseline.registry import get_template
+
+    template = get_template("tabular_regression", template_name="tabular_regression_partitioned")
+    assert template is not None
+    assert (template.template_dir / "train.py.j2").is_file()
+    # default for the problem type must stay the plain template
+    assert get_template("tabular_regression").name == "tabular_regression"

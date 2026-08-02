@@ -24,28 +24,45 @@ def list_templates() -> list[BaselineTemplate]:
     root = get_templates_root()
     templates: list[BaselineTemplate] = []
 
-    registry = {
-        "tabular_classification": ("tabular_classification", "LightGBM classifier", "lightgbm"),
-        "tabular_regression": ("tabular_regression", "LightGBM regressor", "lightgbm"),
-        "text_classification": ("text_classification", "TF-IDF + Logistic Regression", "sklearn"),
-        "image_classification": (
+    # (problem_type, dirname, description, model_family). A problem type may
+    # have several templates; the first one listed is its default, and a
+    # specific `template_name` selects the others.
+    registry = [
+        ("tabular_classification", "tabular_classification", "LightGBM classifier", "lightgbm"),
+        ("tabular_regression", "tabular_regression", "LightGBM regressor", "lightgbm"),
+        (
+            "tabular_regression",
+            "tabular_regression_partitioned",
+            "Partition-aware LightGBM for predict-forward tasks",
+            "lightgbm",
+        ),
+        (
+            "text_classification",
+            "text_classification",
+            "TF-IDF + Logistic Regression",
+            "sklearn",
+        ),
+        (
+            "image_classification",
             "image_classification",
             "ResNet18 features + LightGBM",
             "lightgbm",
         ),
-        "text_classification_deep": (
+        (
+            "text_classification_deep",
             "text_classification_deep",
             "Fine-tuned DistilBERT (transfer learning)",
             "transformers",
         ),
-        "image_classification_deep": (
+        (
+            "image_classification_deep",
             "image_classification_deep",
             "Fine-tuned ResNet18 (transfer learning)",
             "torch",
         ),
-    }
+    ]
 
-    for problem_type, (dirname, desc, family) in registry.items():
+    for problem_type, dirname, desc, family in registry:
         template_dir = root / dirname
         if template_dir.exists():
             templates.append(

@@ -125,6 +125,15 @@ class BaselineSelector:
     def select(self, competition: CompetitionSpec, profile: DatasetProfile) -> BaselineChoice:
         problem_type = self._infer_problem_type(competition, profile)
         template_name = self._resolve_template_name(problem_type, competition)
+        # A partitioned predict-forward dataset cannot be served by the plain
+        # single-train-file template: it would read one partition and validate
+        # on shuffled rows.
+        if (
+            profile.partitioned
+            and problem_type == ProblemType.TABULAR_REGRESSION.value
+            and template_name is None
+        ):
+            template_name = "tabular_regression_partitioned"
         template = get_template(problem_type, template_name=template_name)
 
         if template is None:

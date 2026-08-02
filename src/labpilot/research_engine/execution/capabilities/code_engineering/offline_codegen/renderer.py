@@ -53,6 +53,13 @@ class CodeRenderer:
             "output_dir": str(run_dir),
             "max_images_sample": 5_000,
             "model_params": resolved_params,
+            # Partitioned datasets often ship several tables per entity; the
+            # most common suffix is the one carrying the target rows.
+            "primary_kind": max(
+                choice.partition_kinds, key=lambda k: choice.partition_kinds[k]
+            )
+            if getattr(choice, "partition_kinds", None)
+            else "",
             "feature_recipes": feature_recipes or [],
             "target_encoding_columns": target_encoding_columns or [],
             "log_numeric_columns": log_numeric_columns or [],
