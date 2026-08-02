@@ -6,6 +6,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +42,25 @@ class OllamaProvider:
         *,
         model: str,
         temperature: float,
+        json_mode: bool = False,
     ) -> str:
         messages: list[dict[str, str]] = []
         if system.strip():
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": user})
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": False,
             "options": {"temperature": temperature},
         }
+        if json_mode:
+            # Constrained decoding. Small local models routinely ignore "reply
+            # with JSON" and answer in prose — observed as an analyzer
+            # explaining competition rules in English and being discarded.
+            # Asking the runtime to enforce the grammar is far more reliable
+            # than prompting harder or parsing more leniently.
+            payload["format"] = "json"
         request = urllib.request.Request(
             f"{self.base_url}/api/chat",
             data=json.dumps(payload).encode("utf-8"),
@@ -104,10 +113,11 @@ class OllamaClient:
         self.temperature = temperature
         self.base_url = base_url
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
         return self._provider.complete(
             system,
             user,
             model=self.model,
             temperature=self.temperature,
+            json_mode=json_mode,
         )

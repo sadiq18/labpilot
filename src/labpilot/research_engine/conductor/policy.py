@@ -354,16 +354,12 @@ def decide_next(
 
 
 def _parse_json(text: str) -> dict[str, Any]:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        lines = [ln for ln in lines if not ln.strip().startswith("```")]
-        text = "\n".join(lines)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        text = text[start : end + 1]
-    data = json.loads(text)
-    if not isinstance(data, dict):
-        raise ValueError("expected JSON object")
-    return data
+    """Parse a policy decision.
+
+    Delegates to the shared extractor: this used to be a second, naive copy
+    (first ``{`` to last ``}``), so hardening one parser left the Conductor's
+    own decisions just as brittle as before.
+    """
+    from labpilot.llm.json_utils import parse_json_object
+
+    return parse_json_object(text)

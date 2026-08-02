@@ -353,3 +353,53 @@ def test_parse_json_object_error_includes_the_response():
 
     with pytest.raises(ValueError, match="I cannot help"):
         parse_json_object("I cannot help with that request.")
+
+
+# --- constrained JSON decoding ----------------------------------------------
+
+
+def test_ollama_requests_json_format_when_asked(monkeypatch):
+    """Small local models ignore 'reply with JSON'; the runtime must enforce it."""
+    import json as _json
+
+    from labpilot.llm.ollama import OllamaProvider
+
+    captured = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return _json.dumps({"message": {"content": "{}"}}).encode()
+
+    def _fake_urlopen(request, timeout=None):
+        captured["payload"] = _json.loads(request.data.decode())
+        return _Resp()
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    provider = OllamaProvider("http://127.0.0.1:11434")
+
+    provider.complete("s", "u", model="m", temperature=0.1, json_mode=True)
+    assert captured["payload"]["format"] == "json"
+
+    provider.complete("s", "u", model="m", temperature=0.1)
+    assert "format" not in captured["payload"]
+
+
+def test_micro_agent_helper_falls_back_for_clients_without_json_mode():
+    from labpilot.accessor.common.micro_agents import _complete_json
+
+    class _Old:
+        def complete(self, system, user):
+            return '{"ok": true}'
+
+    class _New:
+        def complete(self, system, user, *, json_mode=False):
+            return '{"json_mode": %s}' % ("true" if json_mode else "false")
+
+    assert _complete_json(_Old(), "s", "u") == '{"ok": true}'
+    assert _complete_json(_New(), "s", "u") == '{"json_mode": true}'
