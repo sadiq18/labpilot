@@ -442,6 +442,184 @@ class ConductorStore:
         )
         emit_debug_metrics(logger, line)
 
+    # -- capability gaps (registration) ------------------------------------
+
+    def new_capability_decision_id(self) -> str:
+        return self._new_id("CD", "os_capability_decisions")
+
+    def upsert_capability_gap(
+        self,
+        gap_key: str,
+        *,
+        kind: str = "no_capability",
+        sample_context: dict[str, Any] | None = None,
+    ) -> Any:
+        from labpilot.research_engine.conductor.gap_ledger import CapabilityGap
+
+        now = _now()
+        row = self._conn.execute(
+            "SELECT * FROM os_capability_gaps WHERE gap_key = ?",
+            (gap_key,),
+        ).fetchone()
+        sample = sample_context or {}
+        if row is None:
+            samples = [sample] if sample else []
+            self._conn.execute(
+                """
+                INSERT INTO os_capability_gaps (
+                    gap_key, kind, count, first_seen_at, last_seen_at,
+                    sample_contexts, status, promoted_tool, decision_reason, decided_at
+                ) VALUES (?, ?, 1, ?, ?, ?, 'open', NULL, '', NULL)
+                """,
+                (gap_key, kind, now, now, dumps(samples)),
+            )
+        else:
+            samples = list(loads(row["sample_contexts"], []))
+            if sample:
+                samples.append(sample)
+                samples = samples[-5:]
+            # Keep terminal statuses; still bump count / last_seen for evidence.
+            self._conn.execute(
+                """
+                UPDATE os_capability_gaps
+                SET count = count + 1,
+                    last_seen_at = ?,
+                    sample_contexts = ?,
+                    kind = ?
+                WHERE gap_key = ?
+                """,
+                (now, dumps(samples), kind, gap_key),
+            )
+        self._conn.commit()
+        gap = self.get_capability_gap(gap_key)
+        assert gap is not None
+        return gap
+
+    def get_capability_gap(self, gap_key: str) -> Any | None:
+        from labpilot.research_engine.conductor.gap_ledger import CapabilityGap
+
+        row = self._conn.execute(
+            "SELECT * FROM os_capability_gaps WHERE gap_key = ?",
+            (gap_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_capability_gap(row)
+
+    def list_capability_gaps(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[Any]:
+        if status:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM os_capability_gaps
+                WHERE status = ?
+                ORDER BY count DESC, last_seen_at DESC
+                LIMIT ?
+                """,
+                (status, limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM os_capability_gaps
+                ORDER BY count DESC, last_seen_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._row_to_capability_gap(r) for r in rows]
+
+    def update_capability_gap_status(
+        self,
+        gap_key: str,
+        *,
+        status: str,
+        promoted_tool: str | None = None,
+        decision_reason: str = "",
+    ) -> Any:
+        now = _now()
+        self._conn.execute(
+            """
+            UPDATE os_capability_gaps
+            SET status = ?,
+                promoted_tool = ?,
+                decision_reason = ?,
+                decided_at = ?
+            WHERE gap_key = ?
+            """,
+            (status, promoted_tool, decision_reason, now, gap_key),
+        )
+        self._conn.commit()
+        gap = self.get_capability_gap(gap_key)
+        if gap is None:
+            raise KeyError(f"unknown gap_key: {gap_key}")
+        return gap
+
+    def append_capability_decision(self, decision: Any) -> Any:
+        from labpilot.research_engine.conductor.gap_ledger import CapabilityDecision
+
+        assert isinstance(decision, CapabilityDecision)
+        self._conn.execute(
+            """
+            INSERT INTO os_capability_decisions (
+                id, gap_key, decision, reason, promoted_tool, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                decision.id,
+                decision.gap_key,
+                decision.decision,
+                decision.reason,
+                decision.promoted_tool,
+                decision.created_at,
+            ),
+        )
+        self._conn.commit()
+        return decision
+
+    def list_capability_decisions(
+        self,
+        gap_key: str | None = None,
+        *,
+        limit: int = 50,
+    ) -> list[Any]:
+        from labpilot.research_engine.conductor.gap_ledger import CapabilityDecision
+
+        if gap_key:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM os_capability_decisions
+                WHERE gap_key = ?
+                ORDER BY id DESC LIMIT ?
+                """,
+                (gap_key, limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM os_capability_decisions
+                ORDER BY id DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        out: list[CapabilityDecision] = []
+        for row in reversed(rows):
+            out.append(
+                CapabilityDecision(
+                    id=row["id"],
+                    gap_key=row["gap_key"],
+                    decision=row["decision"],
+                    reason=row["reason"] or "",
+                    promoted_tool=row["promoted_tool"],
+                    created_at=row["created_at"],
+                )
+            )
+        return out
+
     # -- helpers -----------------------------------------------------------
 
     def _new_id(self, prefix: str, table: str) -> str:
@@ -506,4 +684,20 @@ class ConductorStore:
             decision_id=row["decision_id"],
             task_id=row["task_id"],
             created_at=row["created_at"],
+        )
+
+    def _row_to_capability_gap(self, row: Any) -> Any:
+        from labpilot.research_engine.conductor.gap_ledger import CapabilityGap
+
+        return CapabilityGap(
+            gap_key=row["gap_key"],
+            kind=row["kind"],
+            count=row["count"],
+            first_seen_at=row["first_seen_at"],
+            last_seen_at=row["last_seen_at"],
+            sample_contexts=list(loads(row["sample_contexts"], [])),
+            status=row["status"],
+            promoted_tool=row["promoted_tool"],
+            decision_reason=row["decision_reason"] or "",
+            decided_at=row["decided_at"],
         )

@@ -27,6 +27,7 @@ class ActionPlan(BaseModel):
     steps: list[ToolStep] = Field(default_factory=list)
     unmapped: bool = False
     suggestion: str | None = None
+    missing_tools: list[str] = Field(default_factory=list)
 
 
 # Offline / template intents → tool chains
@@ -92,6 +93,7 @@ def map_research_action(
                 return ActionPlan(
                     steps=[],
                     unmapped=True,
+                    missing_tools=[name],
                     suggestion=(
                         f"Need capability/tool {name!r} for intent: {action.intent}"
                     ),
@@ -108,6 +110,7 @@ def map_research_action(
                     return ActionPlan(
                         steps=[],
                         unmapped=True,
+                        missing_tools=[step.tool],
                         suggestion=(
                             f"Need capability/tool {step.tool!r} for intent: {action.intent}"
                         ),

@@ -22,6 +22,7 @@ from labpilot.cli.reflect import claims_app, reflect_app
 from labpilot.cli.conduct import conduct_app
 from labpilot.cli.context_cli import context_app
 from labpilot.cli.memory_cli import memory_app
+from labpilot.cli.tools_cli import tools_app
 from labpilot.config import (
     AppConfig,
     load_config,
@@ -117,6 +118,7 @@ app.add_typer(claims_app, name="claims")
 app.add_typer(conduct_app, name="conduct")
 app.add_typer(context_app, name="context")
 app.add_typer(memory_app, name="memory")
+app.add_typer(tools_app, name="tools")
 console = Console()
 
 
