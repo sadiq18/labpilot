@@ -551,3 +551,51 @@ def test_conductor_analyze_gathers_kaggle_domain_knowledge():
     # No analyzer is excluded: papers and repositories feed techniques and
     # beliefs just as kernels do.
     assert "exclude" not in args
+
+
+# --- precondition-aware tool selection ---------------------------------------
+
+
+class _FakeWorkspace:
+    knowledge_dir = None
+    competition = "demo"
+    effective_runs_dir = None
+
+
+def _available(monkeypatch, *, has_plan, has_execution):
+    import labpilot.research_engine.conductor.loop as loop_mod
+    from labpilot.research_engine.conductor.policy import available_tools
+
+    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-001" if has_plan else None)
+    monkeypatch.setattr(
+        loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
+    )
+    catalog = {
+        "analyze_competition", "search_papers", "query_memory", "generate_plan",
+        "implement", "run_plan", "run_experiment", "reflect", "submit", "submit_learn",
+    }
+    return available_tools(_FakeWorkspace(), catalog)
+
+
+def test_fresh_workspace_cannot_reflect_run_or_submit(monkeypatch):
+    """Step 1 previously chose `reflect` with nothing to reflect on."""
+    tools = _available(monkeypatch, has_plan=False, has_execution=False)
+    assert "reflect" not in tools
+    assert "run_plan" not in tools
+    assert "run_experiment" not in tools
+    assert "submit" not in tools
+    # Evidence gathering and planning are always legitimate first moves.
+    assert {"analyze_competition", "generate_plan", "query_memory"} <= tools
+
+
+def test_plan_unlocks_running_but_not_submitting(monkeypatch):
+    tools = _available(monkeypatch, has_plan=True, has_execution=False)
+    assert "run_plan" in tools
+    assert "run_experiment" in tools
+    assert "reflect" not in tools
+    assert "submit" not in tools
+
+
+def test_execution_unlocks_reflect_and_submit(monkeypatch):
+    tools = _available(monkeypatch, has_plan=True, has_execution=True)
+    assert {"reflect", "submit", "submit_learn"} <= tools

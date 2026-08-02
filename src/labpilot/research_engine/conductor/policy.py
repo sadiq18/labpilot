@@ -291,6 +291,34 @@ def llm_next_action(
         logger.info("Operator requested LLM policy retry (%d/%d)", retries, max_llm_retries)
 
 
+def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
+    """Drop tools whose preconditions the workspace does not yet satisfy.
+
+    Offering the whole catalog regardless of state lets a campaign burn steps
+    on impossible work — reflecting before anything has run, or submitting
+    before a model exists. Filtering first turns "the model picked badly" into
+    "that option was never on the table".
+    """
+    from labpilot.research_engine.conductor.loop import (
+        _latest_execution_id,
+        _latest_plan_id,
+    )
+
+    has_plan = _latest_plan_id(workspace) is not None
+    has_execution = _latest_execution_id(workspace) is not None
+
+    requires: dict[str, bool] = {
+        # Nothing to reflect on until an experiment has produced evidence.
+        "reflect": has_execution,
+        # Cannot run, or submit the result of, a plan that does not exist.
+        "run_plan": has_plan,
+        "run_experiment": has_plan,
+        "submit": has_execution,
+        "submit_learn": has_execution,
+    }
+    return {name for name in allowlist if requires.get(name, True)}
+
+
 def decide_next(
     store: ConductorStore,
     workspace: Workspace,
@@ -307,7 +335,7 @@ def decide_next(
     Online path attaches Context Engine evidence to observe. ``prefer_offline``
     skips retrieve entirely (no forced Context Engine success).
     """
-    allowlist = set(registry.names())
+    allowlist = available_tools(workspace, set(registry.names()))
     observe = build_observe_bundle(
         store,
         workspace,
