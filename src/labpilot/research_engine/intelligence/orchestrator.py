@@ -8,6 +8,8 @@ Research Brief → write ``analyze.json``.
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from typing import Any
 
 from labpilot.research_engine.shared.experiments.models import HypothesisCreatedBy
@@ -52,6 +54,7 @@ class AnalyzeOrchestrator:
         brief: bool = True,
         fetch_kaggle: bool = False,
         kaggle_fetch_service: KaggleFetchService | None = None,
+        on_progress: Callable[[str], None] | None = None,
     ) -> None:
         self._registry = registry
         self._llm_client = llm_client
@@ -60,6 +63,12 @@ class AnalyzeOrchestrator:
         self._brief = brief
         self._fetch_kaggle = fetch_kaggle
         self._kaggle_fetch_service = kaggle_fetch_service
+        self._on_progress = on_progress
+
+    def _progress(self, message: str) -> None:
+        """Report a step boundary; analyzers can each take minutes on a local LLM."""
+        if self._on_progress is not None:
+            self._on_progress(message)
 
     def analyze(
         self,
@@ -96,8 +105,15 @@ class AnalyzeOrchestrator:
             self._refresh_summary(report)
             return report
 
-        for analyzer in selected:
+        total = len(selected)
+        for index, analyzer in enumerate(selected, start=1):
+            started = time.monotonic()
+            self._progress(f"analyzer {index}/{total}: {analyzer.name} …")
             emission = self._run_one(analyzer, context)
+            self._progress(
+                f"analyzer {index}/{total}: {analyzer.name} done "
+                f"({time.monotonic() - started:.1f}s, {len(emission.items)} artifacts)"
+            )
             report.analyzers.append(analyzer.name)
             report.artifacts.extend(emission.items)
             for note in emission.notes:
@@ -112,10 +128,16 @@ class AnalyzeOrchestrator:
         self, report: AnalysisReport, context: AnalyzeContext
     ) -> AnalysisReport:
         """Run fetch / ingest / hypothesize / brief after an external verify gate."""
-        self._fetch_kaggle_run(report, context)
-        self._ingest(report, context)
-        self._hypothesize_run(report, context)
-        self._brief_run(report, context)
+        for label, step in (
+            ("kaggle fetch", self._fetch_kaggle_run),
+            ("knowledge ingest", self._ingest),
+            ("hypotheses", self._hypothesize_run),
+            ("research brief", self._brief_run),
+        ):
+            started = time.monotonic()
+            self._progress(f"{label} …")
+            step(report, context)
+            self._progress(f"{label} done ({time.monotonic() - started:.1f}s)")
         self._refresh_summary(report)
         return report
 

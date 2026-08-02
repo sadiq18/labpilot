@@ -44,6 +44,15 @@ class DatasetProfile(BaseModel):
     image_dir: str | None = None
     image_column: str | None = None
     text_column: str | None = None
+    # Partitioned layouts: one file *per entity* (per well / patient / store)
+    # under train/ and test/ dirs, rather than a single train.csv. Rows are not
+    # IID across partitions, so downstream CV must group by `partition_key`.
+    partitioned: bool = False
+    partition_key: str | None = None
+    partition_kinds: dict[str, int] = Field(default_factory=dict)
+    train_partition_count: int = 0
+    test_partition_count: int = 0
+    row_count_estimated: bool = False
 
 
 class TabularProfiler:
@@ -108,6 +117,19 @@ class TabularProfiler:
         csv_files = sorted(data_dir.rglob("*.csv"))
         if not csv_files:
             raise FileNotFoundError(f"No CSV files found in {data_dir}.")
+
+        # Partitioned layouts (train/<entity>.csv) match no filename prefix, so
+        # try them before the single-file heuristic reports "found 0".
+        partitioned = self._try_profile_partitioned(
+            data_dir,
+            competition,
+            csv_files,
+            train_pattern=train_pattern,
+            test_pattern=test_pattern,
+            submission_pattern=submission_pattern,
+        )
+        if partitioned is not None:
+            return partitioned
 
         train_path = self._single_file(
             [path for path in csv_files if path.name.lower().startswith(train_pattern.lower())],
@@ -214,6 +236,120 @@ class TabularProfiler:
             profile.row_count,
             profile.test_row_count,
         )
+        return profile
+
+    def _role_of(self, path: Path, data_dir: Path, train_pattern: str, test_pattern: str) -> str:
+        """Classify a CSV as train/test by directory, falling back to filename."""
+        parts = [p.lower() for p in path.relative_to(data_dir).parts[:-1]]
+        for part in parts:
+            if part.startswith(train_pattern.lower()):
+                return "train"
+            if part.startswith(test_pattern.lower()):
+                return "test"
+        name = path.name.lower()
+        if name.startswith(train_pattern.lower()):
+            return "train"
+        if name.startswith(test_pattern.lower()):
+            return "test"
+        return "other"
+
+    @staticmethod
+    def _split_entity_kind(stem: str) -> tuple[str, str]:
+        """Split ``<entity>__<kind>`` into its parts; kind is "" when absent."""
+        for sep in ("__", "-", "_"):
+            if sep in stem:
+                entity, _, kind = stem.partition(sep)
+                return entity, kind
+        return stem, ""
+
+    def _try_profile_partitioned(
+        self,
+        data_dir: Path,
+        competition: str,
+        csv_files: list[Path],
+        *,
+        train_pattern: str,
+        test_pattern: str,
+        submission_pattern: str,
+    ) -> DatasetProfile | None:
+        """Profile one-file-per-entity datasets, or return None if not that shape."""
+        by_role: dict[str, list[Path]] = {"train": [], "test": [], "other": []}
+        for path in csv_files:
+            by_role[self._role_of(path, data_dir, train_pattern, test_pattern)].append(path)
+        train_files, test_files = by_role["train"], by_role["test"]
+        if len(train_files) <= 1:
+            return None  # ordinary single-train-file dataset
+
+        sample_paths = [
+            p for p in by_role["other"] if submission_pattern.lower() in p.name.lower()
+        ]
+        sample_path = sample_paths[0] if sample_paths else None
+
+        # Group files by "kind" suffix (horizontal_well / typewell / …). A kind
+        # shared by many entities is a real per-entity table, not a one-off.
+        kinds: dict[str, list[Path]] = {}
+        for path in train_files:
+            _, kind = self._split_entity_kind(path.stem)
+            kinds.setdefault(kind, []).append(path)
+        primary_kind = max(kinds, key=lambda k: len(kinds[k]))
+
+        limit = max(1, min(self.config.max_files_sample, len(kinds[primary_kind])))
+        sampled = kinds[primary_kind][:limit]
+        frames = [pd.read_csv(p, nrows=self.config.max_rows_sample) for p in sampled]
+        sample_df = pd.concat(frames, ignore_index=True)
+
+        mean_rows = sum(len(f) for f in frames) / len(frames)
+        row_count = int(mean_rows * len(kinds[primary_kind]))
+
+        test_columns: set[str] = set()
+        test_kind_files = [
+            p for p in test_files if self._split_entity_kind(p.stem)[1] == primary_kind
+        ]
+        for path in test_kind_files[:limit]:
+            test_columns.update(pd.read_csv(path, nrows=0).columns)
+
+        submission_columns: list[str] = []
+        if sample_path is not None:
+            submission_columns = list(pd.read_csv(sample_path, nrows=0).columns)
+
+        # Target inference: a column present in train but absent from test is a
+        # label candidate; the one also named in the submission header wins.
+        train_only = [c for c in sample_df.columns if c not in test_columns]
+        sub_lower = {c.lower() for c in submission_columns}
+        target = next((c for c in train_only if c.lower() in sub_lower), None)
+        if target is None and train_only:
+            target = train_only[-1]
+
+        profile = self.profile_file(sampled[0])
+        profile.competition = competition
+        profile.columns = [c for c in profile.columns if c.name in sample_df.columns]
+        profile.files = [str(p.relative_to(data_dir)) for p in csv_files[:200]]
+        profile.train_file = str(sampled[0].relative_to(data_dir))
+        profile.test_file = (
+            str(test_kind_files[0].relative_to(data_dir)) if test_kind_files else None
+        )
+        profile.sample_submission_file = (
+            str(sample_path.relative_to(data_dir)) if sample_path else None
+        )
+        profile.submission_columns = submission_columns
+        profile.target_column = target
+        profile.id_column = submission_columns[0] if submission_columns else None
+        profile.row_count = row_count
+        profile.row_count_estimated = True
+        profile.column_count = len(sample_df.columns)
+        profile.partitioned = True
+        profile.partition_key = "file_stem_entity"
+        profile.partition_kinds = {k: len(v) for k, v in sorted(kinds.items())}
+        profile.train_partition_count = len(kinds[primary_kind])
+        profile.test_partition_count = len(test_kind_files)
+        profile.warnings = [
+            f"partitioned dataset: {len(train_files)} train / {len(test_files)} test CSVs",
+            f"primary kind={primary_kind!r}; kinds={profile.partition_kinds}",
+            f"row_count estimated from {len(sampled)} sampled files",
+            "rows are NOT iid across partitions — validation must group by partition",
+        ]
+        if train_only:
+            profile.warnings.append(f"train-only columns (unavailable at test): {train_only}")
         return profile
 
     def _single_file(self, matches: list[Path], role: str) -> Path:

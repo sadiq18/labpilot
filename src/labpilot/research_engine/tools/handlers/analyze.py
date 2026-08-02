@@ -33,6 +33,7 @@ def analyze_competition(
     url: str | None = None,
     verify_auto: bool = True,
     verify: VerifyPrompt | Callable[[str, dict[str, Any]], VerifyResult] | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> ToolResult:
     """Run competition analysis and persist ``analyze.json`` via the artifact adapter.
 
@@ -54,6 +55,7 @@ def analyze_competition(
         hypothesize=hypothesize,
         brief=brief,
         fetch_kaggle=fetch_kaggle,
+        on_progress=on_progress,
     )
     report = orchestrator.analyze_without_side_effects(
         context, only=only, include=include, exclude=exclude

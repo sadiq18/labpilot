@@ -194,3 +194,83 @@ def test_profile_directory_honors_custom_file_patterns(tmp_path: Path):
     assert profile.sample_submission_file == "answer_key.csv"
     assert profile.target_column == "label"
     assert profile.id_column == "id"
+
+
+# --- partitioned (one file per entity) datasets -----------------------------
+
+
+@pytest.fixture
+def partitioned_data_dir(tmp_path):
+    """train/<entity>__<kind>.csv layout, with a train-only label column."""
+    root = tmp_path / "partitioned-fixture"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+
+    def rows(seed: int, n: int, with_label: bool):
+        frame = {
+            "MD": [seed + i for i in range(n)],
+            "GR": [float(i % 7) for i in range(n)],
+            "feat_in": [float(i) for i in range(n)],
+        }
+        if with_label:
+            frame["LABEL"] = [float(i) * 2 for i in range(n)]
+            frame["train_only_marker"] = [float(i) for i in range(n)]
+        return pd.DataFrame(frame)
+
+    for i in range(6):
+        entity = f"e{i:03d}"
+        rows(i * 100, 10, True).to_csv(root / "train" / f"{entity}__main.csv", index=False)
+        rows(i * 100, 4, True).to_csv(root / "train" / f"{entity}__ref.csv", index=False)
+    for i in range(2):
+        entity = f"t{i:03d}"
+        rows(i * 100, 10, False).to_csv(root / "test" / f"{entity}__main.csv", index=False)
+        rows(i * 100, 4, False).to_csv(root / "test" / f"{entity}__ref.csv", index=False)
+
+    pd.DataFrame({"id": ["t000_1", "t000_2"], "label": [0.0, 0.0]}).to_csv(
+        root / "sample_submission.csv", index=False
+    )
+    return root
+
+
+def _profiler():
+    from labpilot.config import ProfilerConfig
+    from labpilot.accessor.profiler.tabular import TabularProfiler
+
+    return TabularProfiler(ProfilerConfig())
+
+
+def test_partitioned_dataset_is_detected_instead_of_raising(partitioned_data_dir):
+    profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
+    assert profile.partitioned is True
+    assert profile.train_partition_count == 6
+    assert profile.test_partition_count == 2
+    assert profile.partition_kinds == {"main": 6, "ref": 6}
+
+
+def test_partitioned_target_inferred_from_train_test_schema_diff(partitioned_data_dir):
+    profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
+    # LABEL is train-only AND named in the submission header -> the target.
+    # train_only_marker is train-only but not in the submission -> not target.
+    assert profile.target_column == "LABEL"
+    assert profile.submission_columns == ["id", "label"]
+
+
+def test_partitioned_warns_that_rows_are_not_iid(partitioned_data_dir):
+    profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
+    joined = " ".join(profile.warnings)
+    assert "NOT iid" in joined
+    assert "train_only_marker" in joined  # leakage columns surfaced
+
+
+def test_partitioned_row_count_is_estimated_not_zero(partitioned_data_dir):
+    profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
+    assert profile.row_count == 60  # 6 partitions x 10 rows
+    assert profile.row_count_estimated is True
+    assert profile.column_count == 5
+
+
+def test_single_train_file_dataset_is_unaffected(titanic_data_dir):
+    profile = _profiler().profile_directory(titanic_data_dir, "titanic")
+    assert profile.partitioned is False
+    assert profile.train_file == "train.csv"
+    assert profile.row_count == 12

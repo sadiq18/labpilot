@@ -39,8 +39,12 @@ class LLMConfig(BaseModel):
     model: str = "gemini-3.5-flash-lite"
     temperature: float = 0.3
     api_key: str = Field(default="", exclude=True, repr=False)
-    ollama_base_url: str = "http://localhost:11434"
+    ollama_base_url: str = "http://127.0.0.1:11434"
     fallback_model: str = "qwen2.5-coder:14b"
+    # Local models generate far slower than cloud APIs; codegen prompts on a 14B
+    # model routinely exceed the old hard-coded 120s and surfaced as a bare
+    # "Ollama unreachable" instead of a timeout.
+    request_timeout_seconds: float = 600.0
     cache: LLMCacheConfig = Field(default_factory=LLMCacheConfig)
     tasks: dict[str, TaskProfile] = Field(default_factory=dict)
 
@@ -54,6 +58,9 @@ class ProfilerConfig(BaseModel):
     max_rows_sample: int = 100_000
     categorical_cardinality_threshold: int = 50
     max_images_sample: int = 5_000
+    # Partitioned datasets can hold thousands of per-entity CSVs; schema and row
+    # statistics converge long before reading them all.
+    max_files_sample: int = 25
 
 
 class DeepBaselineConfig(BaseModel):
@@ -164,6 +171,10 @@ class Settings(BaseSettings):
     github_token: str = ""
     labpilot_runs_dir: str = "runs"
     labpilot_knowledge_dir: str = "knowledge"
+    # Datasets are competition-scoped and immutable, so the download cache is
+    # safe to share across workspaces — otherwise every new workspace re-pulls
+    # gigabytes it already has on disk.
+    labpilot_kaggle_cache_dir: str = ""
     labpilot_llm_provider: str = ""
     labpilot_llm_model: str = ""
     labpilot_llm_mode: str = ""
@@ -301,6 +312,8 @@ def _apply_settings(config: AppConfig, settings: Settings, raw: dict[str, Any]) 
         config.runs_dir = Path(settings.labpilot_runs_dir)
     if settings.labpilot_knowledge_dir != "knowledge":
         config.knowledge_dir = Path(settings.labpilot_knowledge_dir)
+    if settings.labpilot_kaggle_cache_dir:
+        config.kaggle.cache_dir = Path(settings.labpilot_kaggle_cache_dir).expanduser()
     if settings.labpilot_runtimes_dir:
         config.runtime.runtimes_dir = Path(settings.labpilot_runtimes_dir)
     if settings.labpilot_default_runtime:

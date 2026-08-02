@@ -40,8 +40,9 @@ llm:
   provider: gemini    # default cloud provider (matches LABPILOT_LLM_PROVIDER in .env)
   model: gemini-3.5-flash-lite
   temperature: 0.3
-  ollama_base_url: http://localhost:11434
+  ollama_base_url: http://127.0.0.1:11434
   fallback_model: qwen2.5-coder:14b
+  request_timeout_seconds: 600   # local 14B codegen far exceeds a 120s budget
   cache:
     enabled: true
     path: .cache/llm.sqlite

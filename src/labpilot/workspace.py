@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
-from labpilot.config import AppConfig, load_config
+from labpilot.config import AppConfig, Settings, load_config
 
 MARKER_NAME = "labpilot.yaml"
 SCHEMA_VERSION = 1
@@ -408,10 +408,16 @@ def apply_workspace_to_config(
     config: AppConfig,
     workspace: CompetitionWorkspace,
 ) -> AppConfig:
-    """Rewrite artifact roots onto the competition workspace."""
+    """Rewrite artifact roots onto the competition workspace.
+
+    The Kaggle download cache is deliberately exempt when an explicit shared
+    path is configured: datasets are competition-scoped and immutable, so
+    re-pulling gigabytes per workspace is pure waste.
+    """
     config.knowledge_dir = workspace.knowledge_dir
     config.runs_dir = workspace.root / "runs"
-    config.kaggle.cache_dir = workspace.cache_dir / "kaggle"
+    if not Settings().labpilot_kaggle_cache_dir:
+        config.kaggle.cache_dir = workspace.cache_dir / "kaggle"
     config.llm.cache.path = workspace.cache_dir / "llm.sqlite"
     return config
 

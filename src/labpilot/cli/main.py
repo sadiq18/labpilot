@@ -1,5 +1,7 @@
 import logging
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -642,6 +644,22 @@ def _parse_analyzer_csv(value: str | None) -> set[str] | None:
     return names or None
 
 
+def _stderr_progress() -> "Callable[[str], None]":
+    """Step-boundary reporter with wall-clock elapsed, written to stderr.
+
+    Analyzer and codegen steps each take minutes on a local model, so without
+    this a long run is indistinguishable from a hang. stderr keeps ``--format
+    json`` stdout machine-parseable.
+    """
+    start = time.monotonic()
+    err = Console(stderr=True)
+
+    def report(message: str) -> None:
+        err.print(f"[dim][{time.monotonic() - start:7.1f}s][/dim] {message}")
+
+    return report
+
+
 @app.command()
 def analyze(
     target: str | None = typer.Argument(
@@ -770,6 +788,7 @@ def analyze(
             fetch_kaggle=fetch_kaggle,
             refresh=refresh,
             url=competition_url or slug_or_url,
+            on_progress=_stderr_progress(),
         )
     except UnknownAnalyzerError as exc:
         console.print(f"[red]{exc}[/red]")
