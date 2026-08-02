@@ -16,5 +16,6 @@ LabPilot docs are split by product generation:
 
 **Research OS**
 
+- **[Competition SOP](research-os/COMPETITION-SOP.md)** — operator guide: what to run, and what to verify before trusting it
 - [Product roadmap](research-os/README.md) (architecture + tech co-evolve per milestone)
 - [Principles](research-os/architecture.md) · [Execution plan](research-os/execution-plan.md)
