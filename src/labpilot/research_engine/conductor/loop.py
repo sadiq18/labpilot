@@ -138,6 +138,8 @@ def run_until_stop(
                         rationale=next_tool.rationale,
                         suggested_tools=[next_tool.tool],
                     )
+            # Re-read after policy/offline so same-step registration is visible.
+            allowlist = set(registry.names())
             plan = map_research_action(research, allowlist)
             if research.stop:
                 record = DecisionRecord(
