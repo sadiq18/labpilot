@@ -283,6 +283,14 @@ def test_write_code_overrides_existing_train_py(tmp_path: Path) -> None:
         '{"competition":"override-demo","problem_type":"tabular_regression"}',
         encoding="utf-8",
     )
+    # The baseline selector reads the problem type from the competition
+    # contract; without it the type is "unknown", no template matches, and a
+    # non-dry run now refuses to continue rather than leaving a stub behind.
+    (ws / "competition.json").write_text(
+        '{"slug":"override-demo","title":"Override Demo",'
+        '"problem_type":"tabular_regression","tags":["tabular"]}',
+        encoding="utf-8",
+    )
 
     now = datetime.now()
     plan = ResearchPlan(

@@ -3,10 +3,13 @@
 Primary path: :class:`CodeEngineerAgent` → typed :class:`CodeProposal` →
 deterministic apply under allow-list.
 
-Baseline selection still records ``baseline_choice.json`` (problem type / metric
-hints). Jinja template scaffolds are **not** used — code is always generated
-from scratch from the dataset profile + inventory (LLM), with a tiny last-resort
-stub only when the LLM is unavailable.
+Baseline selection records ``baseline_choice.json`` (problem type, metric, and
+the validation plan derived from the dataset profile). The LLM is the primary
+author; when it yields nothing, the registered Jinja baseline template is
+rendered as a fallback because it is real, tested code that honours that
+validation plan. The tiny emergency stub is used only when no template matches,
+and a non-dry run refuses to continue on it rather than emitting fake metrics
+and an invalid submission.
 """
 
 from __future__ import annotations
@@ -229,24 +232,54 @@ class CodeEngineeringCapability(BaseCapability):
         proposal = self._agent.run(structured)
         origin = "llm" if self._agent.last_used_llm else "last_resort"
 
+
         if not proposal.files:
-            proposal = CodeProposal(
-                summary="last-resort scaffold",
-                rationale="LLM produced no files",
-                files=[
-                    CodeFileSpec(
-                        path="pipeline/train.py",
-                        content=_LAST_RESORT_TRAIN,
-                        action="write",
-                    ),
-                    CodeFileSpec(
-                        path="pipeline/infer.py",
-                        content=_LAST_RESORT_INFER,
-                        action="write",
-                    ),
-                ],
+            # Prefer the deterministic baseline template over the emergency
+            # stub. The stub writes fake metrics and a wrong-header submission
+            # while reporting success, so a failed LLM silently produced a
+            # garbage leaderboard entry. A rendered template is real, tested
+            # code that honours the derived validation plan.
+            rendered = self._render_template_fallback(root, choice)
+            if rendered is not None:
+                proposal = rendered
+                origin = "template"
+            else:
+                proposal = CodeProposal(
+                    summary="last-resort scaffold",
+                    rationale="LLM produced no files and no template matched",
+                    files=[
+                        CodeFileSpec(
+                            path="pipeline/train.py",
+                            content=_LAST_RESORT_TRAIN,
+                            action="write",
+                        ),
+                        CodeFileSpec(
+                            path="pipeline/infer.py",
+                            content=_LAST_RESORT_INFER,
+                            action="write",
+                        ),
+                    ],
+                )
+                origin = "last_resort"
+
+        # A dry run only checks wiring, so the stub is fine there. A real run
+        # must not continue on it: the stub writes fake metrics and a
+        # wrong-header submission, which evaluate/submit would then dress up as
+        # a genuine leaderboard result.
+        if origin == "last_resort" and not is_dry_run(context):
+            return evidence(
+                context,
+                capability=self.name,
+                passed=False,
+                summary="no usable training code (LLM produced none, no template matched)",
+                checks=["write_code"],
+                error=(
+                    "Code generation produced no files and no baseline template "
+                    "matched this problem type. Check `research doctor` (LLM "
+                    "provider) or add a template for this problem type."
+                ),
+                metadata={"origin": origin, "problem_type": problem_type},
             )
-            origin = "last_resort"
 
         try:
             written = apply_proposal(root, proposal)
@@ -343,6 +376,51 @@ class CodeEngineeringCapability(BaseCapability):
             "combo_techniques": list(hyp.combo_techniques),
             "evidence": [e.model_dump(mode="json") for e in hyp.evidence],
         }
+
+    def _render_template_fallback(self, root: Path, choice: object | None) -> CodeProposal | None:
+        """Render the registered baseline template as a CodeProposal, or None.
+
+        Used when LLM codegen yields nothing. The template already encodes the
+        validation plan derived from the dataset profile, so this fallback is a
+        real baseline rather than a placeholder.
+        """
+        if choice is None:
+            return None
+        try:
+            from labpilot.config import load_config
+            from labpilot.research_engine.execution.baseline.registry import get_template
+            from labpilot.research_engine.execution.capabilities.code_engineering.offline_codegen.renderer import (  # noqa: E501
+                CodeRenderer,
+            )
+
+            template = get_template(
+                choice.problem_type, template_name=choice.template_name
+            )
+            if template is None:
+                return None
+            config = load_config()
+            CodeRenderer(config.training).render(template, choice, root)
+        except Exception as exc:  # noqa: BLE001 — fall through to the stub
+            logger.warning("Template fallback render failed: %s", exc)
+            return None
+
+        produced = [p for p in (root / "pipeline").glob("*") if p.is_file()]
+        if not produced:
+            return None
+        # Files are already on disk; describe them so the apply step records
+        # digests and the run stays auditable.
+        return CodeProposal(
+            summary=f"rendered baseline template {template.name}",
+            rationale="LLM produced no files; used the deterministic template",
+            files=[
+                CodeFileSpec(
+                    path=f"pipeline/{p.name}",
+                    content=p.read_text(encoding="utf-8"),
+                    action="write",
+                )
+                for p in produced
+            ],
+        )
 
     def _inventory(self, root: Path) -> list[str]:
         items: list[str] = []
