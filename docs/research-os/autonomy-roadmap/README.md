@@ -43,6 +43,7 @@ Do not reorder. Each is dead without the previous.
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
 | **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | Decided |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
+| **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
 | — | [Interaction modes](07-interaction-modes.md) | Auto / accept-edits / plan UX | Not started |
 
 ### Ordering notes
@@ -54,6 +55,8 @@ Do not reorder. Each is dead without the previous.
   class visible on day one. Phases 2–3 need a test migration (see the plan).
 - **M13 requires M7 and M8.** "Plateaued" cannot be detected while every
   experiment returns the same score.
+- **M16's skip condition already ships.** Evidence gathering is gated on
+  backlog **and** artifact freshness; only the background *routine* remains.
 - **M15 is a standing practice, not a one-off.** Its contract test — *different
   input must produce a different artifact* — is the generalisation of M7's exit
   criterion and the check that would have caught the hollow layer immediately.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 from labpilot.research_engine.conductor.approvals import (
@@ -298,11 +299,11 @@ def llm_next_action(
 # A campaign only needs a handful of untested ideas in front of it. Below this
 # it is worth spending minutes gathering more evidence; at or above it, that
 # time is better spent testing what is already queued.
-_HYPOTHESIS_BACKLOG_TARGET = 3
+_HYPOTHESIS_BACKLOG_TARGET = int(os.environ.get("LABPILOT_HYPOTHESIS_BACKLOG_TARGET", "3"))
 # Re-sweeping the same kernels and papers minutes apart mostly re-ingests the
 # same sources under new artifact ids, bloating the store without adding
 # information. Evidence has to be allowed to go stale before refetching.
-_EVIDENCE_COOLDOWN_HOURS = 6.0
+_EVIDENCE_COOLDOWN_HOURS = float(os.environ.get("LABPILOT_EVIDENCE_COOLDOWN_HOURS", "6.0"))
 
 
 def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
