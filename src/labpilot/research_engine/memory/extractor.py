@@ -1,8 +1,8 @@
 """ExperienceExtractor — deterministic experiment (+ reflection) → ExperienceRecord.
 
 No LLM. Reads existing SoR (experiment / plan / hypothesis / reflection) and
-persists via :class:`ExperienceStore`. Facets are rule hints with confidence +
-evidence (not treated as ground truth).
+persists via :class:`ExperienceStore`. Facets come from :class:`FacetPipeline`
+(Stage 2 artifact-aware extractors; not treated as ground truth).
 """
 
 from __future__ import annotations
@@ -12,10 +12,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from labpilot.research_engine.agents.git_evolution import find_experiment_record
+from labpilot.research_engine.memory.facets import FacetContext, FacetPipeline
 from labpilot.research_engine.memory.models import (
     ExperienceArtifacts,
-    ExperienceFacet,
     ExperienceOutcome,
     ExperienceRecord,
 )
@@ -33,30 +32,6 @@ from labpilot.research_engine.shared.experiments.models import (
 )
 from labpilot.workspace import competition_workspace_path
 
-# Lightweight modality / technique facets — not a curated taxonomy product.
-_MODALITY_HINTS: list[tuple[str, tuple[str, ...]]] = [
-    ("audio", ("audio", "bird", "sound", "spectrogram", "clef")),
-    ("image", ("image", "vision", "cv", "detect", "segment")),
-    ("text", ("text", "nlp", "llm", "language", "token")),
-    ("tabular", ("tabular", "table", "xgboost", "lightgbm", "catboost")),
-    ("time_series", ("time", "forecast", "series", "temporal")),
-]
-
-_TECHNIQUE_HINTS: list[tuple[str, tuple[str, ...]]] = [
-    ("augmentation", ("augment", "specaugment", "mixup", "cutmix", "ema")),
-    ("ensemble", ("ensemble", "stack", "blend")),
-    ("imbalance", ("imbalance", "minority", "class_weight", "focal")),
-    ("finetune", ("finetune", "fine-tune", "pretrained", "transfer")),
-    ("features", ("feature", "embedding", "descriptor")),
-]
-
-# Confidence from distinct needle hits (rules are uncertain by design).
-_CONF_ONE = 0.45
-_CONF_TWO = 0.65
-_CONF_THREE_PLUS = 0.82
-_CONF_METADATA = 0.88
-_CONF_TECHNIQUE_FIELD = 0.75
-
 
 class ExperienceExtractor:
     """Map a completed experiment (+ optional reflection) into an Experience Record."""
@@ -66,10 +41,12 @@ class ExperienceExtractor:
         knowledge_dir: Path,
         *,
         store: ExperienceStore | None = None,
+        facet_pipeline: FacetPipeline | None = None,
     ) -> None:
         self.knowledge_dir = Path(knowledge_dir)
         self._store = store or ExperienceStore(self.knowledge_dir)
         self._owns_store = store is None
+        self._facet_pipeline = facet_pipeline or FacetPipeline()
 
     def close(self) -> None:
         if self._owns_store:
@@ -127,12 +104,22 @@ class ExperienceExtractor:
             comparison=comparison_dict,
             reflection=reflection_payload,
         )
-        facets = self._facets(
-            competition=competition,
-            payload=payload,
-            hypothesis_text=hypothesis_text,
-            action=action,
-            reflection=reflection_payload,
+        workspace = (
+            Path(workspace_path)
+            if workspace_path
+            else competition_workspace_path(self.knowledge_dir, competition)
+        )
+        facets = self._facet_pipeline.extract(
+            FacetContext(
+                competition=competition,
+                payload=payload,
+                hypothesis_text=hypothesis_text,
+                action=action,
+                reflection=reflection_payload,
+                comparison=comparison_dict,
+                workspace_path=workspace if workspace.is_dir() else None,
+                paper_texts=_paper_texts(payload),
+            )
         )
         artifacts = ExperienceArtifacts(
             experiment_id=str(exp_id) if exp_id else None,
@@ -222,6 +209,10 @@ class ExperienceExtractor:
         )
         lookup_id = payload.get("experiment_id") or payload.get("execution_id")
         if lookup_id and workspace is not None:
+            from labpilot.research_engine.agents.git_evolution import (
+                find_experiment_record,
+            )
+
             disk = find_experiment_record(workspace, str(lookup_id))
             if isinstance(disk, dict):
                 for key in (
@@ -418,111 +409,18 @@ class ExperienceExtractor:
             return "success"
         return "fail"
 
-    def _facets(
-        self,
-        *,
-        competition: str,
-        payload: dict[str, Any],
-        hypothesis_text: str,
-        action: str,
-        reflection: dict[str, Any],
-    ) -> list[ExperienceFacet]:
-        """Rule hints → facet hits with confidence + evidence (not ground truth)."""
-        corpus_parts = [
-            competition,
-            str(payload.get("problem_type") or ""),
-            str(payload.get("description") or ""),
-            hypothesis_text,
-            action,
-            str(reflection.get("observation") or ""),
-            str(reflection.get("likely_cause") or ""),
-            " ".join(str(t) for t in (payload.get("tags") or [])),
-        ]
-        corpus = re.sub(r"[_\-]+", " ", " ".join(corpus_parts).lower())
 
-        by_facet: dict[str, ExperienceFacet] = {}
-
-        problem_type = payload.get("problem_type")
-        if problem_type:
-            label = str(problem_type).lower().replace(" ", "_")
-            by_facet[label] = ExperienceFacet(
-                facet=label,
-                confidence=_CONF_METADATA,
-                evidence=[str(problem_type)],
-                source="metadata",
-            )
-
-        for label, needles in (*_MODALITY_HINTS, *_TECHNIQUE_HINTS):
-            matched = [n for n in needles if n in corpus]
-            if not matched:
-                continue
-            hit = ExperienceFacet(
-                facet=label,
-                confidence=_confidence_from_hits(len(matched)),
-                evidence=list(matched),
-                source="rules",
-            )
-            existing = by_facet.get(label)
-            by_facet[label] = (
-                hit if existing is None else _merge_facet_hits(existing, hit)
-            )
-
-        technique = payload.get("technique")
-        if technique:
-            label = str(technique).lower().replace(" ", "_")
-            tech_hit = ExperienceFacet(
-                facet=label,
-                confidence=_CONF_TECHNIQUE_FIELD,
-                evidence=[str(technique)],
-                source="metadata",
-            )
-            existing = by_facet.get(label)
-            by_facet[label] = (
-                tech_hit if existing is None else _merge_facet_hits(existing, tech_hit)
-            )
-
-        # Stable order: higher confidence first, then facet name.
-        return sorted(
-            by_facet.values(),
-            key=lambda f: (-f.confidence, f.facet),
-        )
-
-
-def _confidence_from_hits(n: int) -> float:
-    if n >= 3:
-        return _CONF_THREE_PLUS
-    if n == 2:
-        return _CONF_TWO
-    return _CONF_ONE
-
-
-def _merge_facet_hits(left: ExperienceFacet, right: ExperienceFacet) -> ExperienceFacet:
-    """Prefer higher confidence; union evidence; metadata source wins when tied."""
-    evidence: list[str] = []
-    seen: set[str] = set()
-    for item in [*left.evidence, *right.evidence]:
-        key = item.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        evidence.append(item)
-    if right.confidence > left.confidence:
-        primary = right
-    elif left.confidence > right.confidence:
-        primary = left
-    else:
-        primary = left if left.source == "metadata" else right
-    source = (
-        "metadata"
-        if "metadata" in {left.source, right.source}
-        else primary.source
-    )
-    return ExperienceFacet(
-        facet=primary.facet,
-        confidence=max(left.confidence, right.confidence),
-        evidence=evidence,
-        source=source,
-    )
+def _paper_texts(payload: dict[str, Any]) -> list[str]:
+    texts: list[str] = []
+    papers = payload.get("papers")
+    if isinstance(papers, list):
+        for item in papers:
+            if isinstance(item, str):
+                texts.append(item)
+            elif isinstance(item, dict):
+                texts.append(str(item.get("title") or ""))
+                texts.append(str(item.get("abstract") or item.get("summary") or ""))
+    return [t for t in texts if t.strip()]
 
 
 def _is_number(value: Any) -> bool:

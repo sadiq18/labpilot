@@ -1,14 +1,20 @@
 # AGENTS.md
 
 Committed agent guidance for LabPilot. Local Cursor/Claude copies may live in
-`.cursor/` and `CLAUDE.md` (gitignored); this file is the repository source of truth.
+`.cursor/`, `.claude-plugin/`, `skills/karpathy-guidelines/`, and `CLAUDE.md`
+(gitignored); this file is the repository source of truth.
 
 ## Behavioral rules (Karpathy)
+
+Synced from [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills):
 
 1. Think before coding — surface assumptions and tradeoffs.
 2. Simplicity first — minimum code that solves the ask.
 3. Surgical changes — touch only what you must.
 4. Goal-driven execution — define verifiable success criteria and loop until checked.
+
+Local mirrors (gitignored): `.cursor/rules/karpathy-guidelines.mdc`,
+`skills/karpathy-guidelines/SKILL.md`, `CLAUDE.md`.
 
 ## Growth areas (required)
 
@@ -18,7 +24,8 @@ Committed agent guidance for LabPilot. Local Cursor/Claude copies may live in
 2. **Repo hygiene** — No real secrets in the tree (test fakes like `sk-test` are
    OK). Prefer conventional commits (`feat:`, `fix:`, `test:`, `docs:`…).
    Do not mass-split oversized modules unless asked.
-   Keep `.cursor/` and `CLAUDE.md` gitignored; do not commit local agent tooling.
+   Keep `.cursor/`, `.claude-plugin/`, `skills/karpathy-guidelines/`, and
+   `CLAUDE.md` gitignored; do not commit local agent tooling.
 3. **Discoverable tests** — Put automated checks under [`tests/`](tests/) so CI
    and scanners find them. Prefer `tests/unit/` for fast unit coverage.
 

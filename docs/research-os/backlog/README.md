@@ -25,4 +25,5 @@ milestone or explicit pickup.
 | [automatic-transfer-confidence.md](automatic-transfer-confidence.md) | Auto warm-start with confidence scoring (M7+; M6 is human-visible seed only) |
 | [experience-pattern-extraction.md](experience-pattern-extraction.md) | Emergent prompt/model/feature/paper patterns from experience usage (post-M6) |
 | [experience-facet-extraction.md](experience-facet-extraction.md) | Evidence-backed facets (confidence → artifact extractors → embeddings → LLM → facet graph) |
+| [experience-facet-extraction-stage2-plan.md](experience-facet-extraction-stage2-plan.md) | Stage 2 design: FacetPipeline roles, files, tests |
 | [backlog-grooming.md](backlog-grooming.md) | Post-M6 recommended pickup order (capability · so what · impact) |

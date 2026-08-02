@@ -4,6 +4,9 @@
 [`ExperienceExtractor`](../../milestones/06-transfer-memory/plan-2-experience-extractor.md)
 (`ExperienceFacet`: confidence + evidence + source). Stages 2+ remain future work.
 
+**Stage 2 design:** [experience-facet-extraction-stage2-plan.md](experience-facet-extraction-stage2-plan.md)
+(roles, impacted files, new modules, tests).
+
 **Principle:** Research OS memory wants **evidence-backed extraction**, not a
 fixed taxonomy. Wrong extraction must be recoverable; LLMs later reason over
 evidence, not over opaque labels.
@@ -48,7 +51,9 @@ Keep hints, stop treating matches as truth. Stored as `ExperienceRecord.facets`:
 - [x] Each hit has `confidence`, `evidence[]`, `source`
 - [x] Unit tests: keyword path produces evidence; low-signal → low confidence
 
-### Stage 2 — Artifact-aware extractors
+### Stage 2 — Artifact-aware extractors — **Done**
+
+Design: [experience-facet-extraction-stage2-plan.md](experience-facet-extraction-stage2-plan.md).
 
 Different sources reveal different signals.
 
@@ -71,7 +76,18 @@ FacetExtractor
 
 Merge with confidence aggregation (max / noisy-OR / calibrated weights — pick at impl).
 
+**Exit criteria:**
+
+- [x] `ExperienceExtractor` uses `FacetPipeline` (no inline keyword tables)
+- [x] Metadata + Rules + Code + Dataset + Paper + Result extractors registered
+- [x] Merge policy unit-tested; confidence histogram logged per extract
+- [x] Stage 4 deferred until mid/low band share hurts seed/inspect
+- [x] Stage 3 deferred until BM25 cross-comp paraphrase misses
+
 ### Stage 3 — Embeddings for similarity, not classification
+
+**Trigger:** ContextBundle BM25 misses cross-comp paraphrases — see
+[hybrid-semantic-retrieval](hybrid-semantic-retrieval.md).
 
 Do **not** ask “Is this audio?”  
 Ask “What previous research experiences look similar?”
@@ -84,6 +100,9 @@ Depends on experience corpus size + [hybrid-semantic-retrieval](hybrid-semantic-
 signals. Prefer similarity into ContextBundle over hard modality labels.
 
 ### Stage 4 — LLM extraction for ambiguous cases only
+
+**Trigger:** Stage 2 confidence histograms show a clear share of extracts in the
+low/mid band **and** those misses hurt `research memory seed|inspect`.
 
 ```text
 Fast extractor
