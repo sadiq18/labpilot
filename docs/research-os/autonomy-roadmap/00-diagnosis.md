@@ -42,7 +42,12 @@ Claude Code works because `Edit` really edits and tests really fail. The
 equivalent ground truth here is the CV score, and it was wired to nothing that
 decides.
 
-→ [02-objective-loop.md](02-objective-loop.md)
+Concretely: `BudgetState.metric_history` and `last_metric` are read in four
+places and **written in none**, so the `metric_target` and `plateau` stops are
+unreachable code. A campaign can only end on a step counter.
+
+→ [02-objective-loop.md](02-objective-loop.md) ·
+[12-run-until-done.md](12-run-until-done.md)
 
 ## Root cause 3 — silent success at every layer
 

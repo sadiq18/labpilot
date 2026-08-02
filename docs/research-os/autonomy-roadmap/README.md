@@ -44,6 +44,7 @@ Do not reorder. Each is dead without the previous.
 | **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | Decided |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
 | **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
+| **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
 | — | [Interaction modes](07-interaction-modes.md) | Auto / accept-edits / plan UX | Not started |
 
 ### Ordering notes
@@ -57,6 +58,9 @@ Do not reorder. Each is dead without the previous.
   experiment returns the same score.
 - **M16's skip condition already ships.** Evidence gathering is gated on
   backlog **and** artifact freshness; only the background *routine* remains.
+- **M17 shares M8's wiring.** Both need the metric fed into durable state;
+  `metric_history` and `last_metric` are currently read in four places and
+  written in none, so `metric_target` and `plateau` can never fire.
 - **M15 is a standing practice, not a one-off.** Its contract test — *different
   input must produce a different artifact* — is the generalisation of M7's exit
   criterion and the check that would have caught the hollow layer immediately.
