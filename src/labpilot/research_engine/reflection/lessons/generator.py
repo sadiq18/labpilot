@@ -31,6 +31,7 @@ class LessonGenerator:
         evidence: dict[str, Any],
         *,
         cross_competition: bool = False,
+        needs_review: bool = False,
     ) -> dict[str, Any]:
         draft = self._agent.run(
             StructuredContext(
@@ -45,15 +46,18 @@ class LessonGenerator:
         )
         assert isinstance(draft, LessonDraft)
         slug = None if cross_competition else self.competition
+        meta: dict[str, Any] = {
+            "strength": evidence.get("strength"),
+            "belief_effect": assessment.belief_effect,
+            "generated_by": "llm" if self._agent.last_used_llm else "rule_engine",
+        }
+        if needs_review:
+            meta["needs_review"] = True
         return self._store.create_lesson(
             draft.summary,
             category=draft.category,
             confidence=draft.confidence,
             source_execution=evidence.get("execution_id"),
             competition_slug=slug,
-            metadata={
-                "strength": evidence.get("strength"),
-                "belief_effect": assessment.belief_effect,
-                "generated_by": "llm" if self._agent.last_used_llm else "rule_engine",
-            },
+            metadata=meta,
         )

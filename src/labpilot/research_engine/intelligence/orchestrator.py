@@ -69,6 +69,20 @@ class AnalyzeOrchestrator:
         include: set[str] | None = None,
         exclude: set[str] | None = None,
     ) -> AnalysisReport:
+        report = self.analyze_without_side_effects(
+            context, only=only, include=include, exclude=exclude
+        )
+        return self.apply_side_effects(report, context)
+
+    def analyze_without_side_effects(
+        self,
+        context: AnalyzeContext,
+        *,
+        only: str | None = None,
+        include: set[str] | None = None,
+        exclude: set[str] | None = None,
+    ) -> AnalysisReport:
+        """Run analyzers only — no Kaggle fetch, hub ingest, hypotheses, or brief."""
         selected = self._registry.select(only=only, include=include, exclude=exclude)
         report = AnalysisReport(competition={"slug": context.competition})
         if context.url:
@@ -79,6 +93,7 @@ class AnalyzeOrchestrator:
                 "No analyzers selected/registered — wrote stub report only "
                 "(real analyzers land in Plans 4–7)."
             )
+            self._refresh_summary(report)
             return report
 
         for analyzer in selected:
@@ -90,12 +105,23 @@ class AnalyzeOrchestrator:
             self._merge_emission(report, emission)
             report.transfer_opportunities.extend(emission.transfers)
 
+        self._refresh_summary(report)
+        return report
+
+    def apply_side_effects(
+        self, report: AnalysisReport, context: AnalyzeContext
+    ) -> AnalysisReport:
+        """Run fetch / ingest / hypothesize / brief after an external verify gate."""
         self._fetch_kaggle_run(report, context)
         self._ingest(report, context)
         self._hypothesize_run(report, context)
         self._brief_run(report, context)
+        self._refresh_summary(report)
+        return report
 
+    def _refresh_summary(self, report: AnalysisReport) -> None:
         report.summary = {
+            **dict(report.summary or {}),
             "analyzer_count": len(report.analyzers),
             "artifact_count": len(report.artifacts),
             "paper_count": len(report.papers),
@@ -105,7 +131,6 @@ class AnalyzeOrchestrator:
             "hypothesis_count": len(report.hypothesis_recommendations),
             "has_research_brief": bool(report.research_brief),
         }
-        return report
 
     def _fetch_kaggle_run(self, report: AnalysisReport, context: AnalyzeContext) -> None:
         """Opt-in: pull popular kernels + discussions before hub ingest."""

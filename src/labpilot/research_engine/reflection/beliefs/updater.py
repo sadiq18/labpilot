@@ -35,6 +35,7 @@ class BeliefUpdater:
         evidence: dict[str, Any],
         *,
         technique: str | None = None,
+        needs_review: bool = False,
     ) -> dict[str, Any]:
         technique_name = technique or _technique_from_evidence(evidence)
         belief_id = f"belief:{self.competition}:{_slug(technique_name)}"
@@ -49,18 +50,24 @@ class BeliefUpdater:
         new_effect = _effect_from(assessment.belief_effect, prior_effect)
         new_status = _status_from(new_confidence, assessment.belief_effect)
 
+        belief_meta: dict[str, Any] = {
+            "last_execution_id": evidence.get("execution_id"),
+            "last_evidence_id": evidence.get("id"),
+            "critic_summary": assessment.summary,
+        }
+        if needs_review:
+            belief_meta["needs_review"] = True
         self._knowledge.upsert_belief(
             belief_id=belief_id,
             technique=technique_name,
             status=new_status,
             effect=new_effect,
             confidence=new_confidence,
-            metadata={
-                "last_execution_id": evidence.get("execution_id"),
-                "last_evidence_id": evidence.get("id"),
-                "critic_summary": assessment.summary,
-            },
+            metadata=belief_meta,
         )
+        update_meta: dict[str, Any] = {"belief_effect": assessment.belief_effect}
+        if needs_review:
+            update_meta["needs_review"] = True
         update_id = self._reflection.append_belief_update(
             belief_id=belief_id,
             prior_confidence=prior_confidence,
@@ -71,7 +78,7 @@ class BeliefUpdater:
             execution_id=evidence.get("execution_id"),
             experiment_id=evidence.get("experiment_id"),
             evidence_id=evidence.get("id"),
-            metadata={"belief_effect": assessment.belief_effect},
+            metadata=update_meta,
         )
         return {
             "belief_id": belief_id,
@@ -80,6 +87,7 @@ class BeliefUpdater:
             "prior_status": prior_status,
             "new_status": new_status,
             "belief_update_id": update_id,
+            "needs_review": needs_review,
         }
 
 

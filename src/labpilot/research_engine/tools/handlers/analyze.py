@@ -36,8 +36,9 @@ def analyze_competition(
 ) -> ToolResult:
     """Run competition analysis and persist ``analyze.json`` via the artifact adapter.
 
-    Before durable write, runs ``verify_ai_artifact`` (default auto-approve).
-    ``reject`` skips the write; ``spot_check`` writes with ``needs_review``.
+    Analyzers run first; ``verify_ai_artifact`` gates durable side effects
+    (ingest / hypothesize / brief / fetch) and ``write_analysis``.
+    ``reject`` skips those writes; ``spot_check`` writes with ``needs_review``.
     """
     competition_ref = url or workspace.competition
     context = build_context(
@@ -54,7 +55,7 @@ def analyze_competition(
         brief=brief,
         fetch_kaggle=fetch_kaggle,
     )
-    report = orchestrator.analyze(
+    report = orchestrator.analyze_without_side_effects(
         context, only=only, include=include, exclude=exclude
     )
     verification = verify_ai_artifact(
@@ -78,6 +79,7 @@ def analyze_competition(
                 "report": report,
                 "verification": verification.model_dump(),
                 "written": False,
+                "needs_review": False,
             },
         )
 
@@ -89,6 +91,8 @@ def analyze_competition(
         note = "needs_review: spot_check"
         if note not in report.notes:
             report.notes = [*report.notes, note]
+
+    orchestrator.apply_side_effects(report, context)
 
     ref = write_analysis(
         report,

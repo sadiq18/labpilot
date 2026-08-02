@@ -7,7 +7,7 @@ from typing import Any
 
 from labpilot.research_engine.reflection.beliefs.updater import BeliefUpdater
 from labpilot.research_engine.reflection.claims.promoter import ClaimPromoter
-from labpilot.research_engine.reflection.critic.critic import CriticAssessment, ExperimentCritic
+from labpilot.research_engine.reflection.critic.critic import ExperimentCritic
 from labpilot.research_engine.reflection.evidence.extractor import EvidenceExtractor
 from labpilot.research_engine.reflection.hypotheses.evaluator import HypothesisEvaluator
 from labpilot.research_engine.reflection.lessons.generator import LessonGenerator
@@ -15,6 +15,20 @@ from labpilot.research_engine.reflection.recommendation.next_experiment import (
     recommend_next_experiment,
 )
 from labpilot.research_engine.reflection.synthesis.synthesizer import KnowledgeSynthesizer
+
+
+def _rejected_belief_stub() -> dict[str, Any]:
+    """Stable keys so callers can use belief_id / belief_update_id safely."""
+    return {
+        "skipped": True,
+        "reason": "verification_reject",
+        "belief_id": None,
+        "belief_update_id": None,
+        "prior_confidence": None,
+        "new_confidence": None,
+        "prior_status": None,
+        "new_status": None,
+    }
 
 
 def run_reflection(
@@ -33,8 +47,9 @@ def run_reflection(
 ) -> dict[str, Any]:
     """Evidence → Micro Agents (critic/lessons/…) → durable SoR writes.
 
-    After critic assessment, a soft verification gate can skip belief/claim
-    promotion on ``reject`` without failing the pipeline.
+    After critic assessment, verification gates durable belief / hypothesis /
+    lesson / claim writes. ``reject`` skips those; ``spot_check`` persists with
+    ``needs_review`` marked on durable rows.
     """
     from labpilot.research_engine.shared.verify_artifact import verify_ai_artifact
 
@@ -65,23 +80,56 @@ def run_reflection(
             auto=verify_auto,
             prompt=verify,
         )
-        promote = promote_claims and verification.decision != "reject"
+        needs_review = verification.decision == "spot_check"
         if verification.decision == "reject":
-            belief_result: dict[str, Any] = {
-                "skipped": True,
-                "reason": "verification_reject",
+            understanding = synth.current_understanding()
+            recommendation = recommend_next_experiment(
+                understanding,
+                assessment_recommendation=assessment.recommendation,
+                llm_client=llm_client,
+            )
+            return {
+                "evidence": evidence,
+                "assessment": assessment.model_dump(),
+                "belief": _rejected_belief_stub(),
+                "hypothesis": {
+                    "skipped": True,
+                    "reason": "verification_reject",
+                    "hypothesis_id": hyp_id,
+                },
+                "lesson": {
+                    "skipped": True,
+                    "reason": "verification_reject",
+                    "id": None,
+                },
+                "claims": [],
+                "understanding": understanding,
+                "recommendation": recommendation,
+                "verification": verification.model_dump(),
+                "needs_review": False,
             }
-        else:
-            belief_result = beliefs.update_from_critic(assessment, evidence)
+
+        belief_result = beliefs.update_from_critic(
+            assessment,
+            evidence,
+            needs_review=needs_review,
+        )
         hyp_result = hyps.evaluate(
             assessment,
             hypothesis_id=hyp_id,
             evidence_run_id=evidence.get("execution_id") or evidence.get("experiment_id"),
         )
-        lesson = lessons.generate(assessment, evidence)
+        lesson = lessons.generate(
+            assessment,
+            evidence,
+            needs_review=needs_review,
+        )
         claim_rows: list[dict[str, Any]] = []
-        if promote:
-            claim_rows = claims.promote_eligible(evidence_id=evidence.get("id"))
+        if promote_claims:
+            claim_rows = claims.promote_eligible(
+                evidence_id=evidence.get("id"),
+                needs_review=needs_review,
+            )
             contradiction = assessment.contradiction
             if (
                 contradiction
@@ -101,6 +149,7 @@ def run_reflection(
                             belief,
                             evidence_id=evidence["id"],
                             contradicting_evidence_id=evidence["id"],
+                            needs_review=needs_review,
                         )
                         if contested:
                             claim_rows.append(contested)
@@ -123,7 +172,7 @@ def run_reflection(
             "understanding": understanding,
             "recommendation": recommendation,
             "verification": verification.model_dump(),
-            "needs_review": verification.decision == "spot_check",
+            "needs_review": needs_review,
         }
     finally:
         extractor.close()

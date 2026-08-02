@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -191,6 +192,7 @@ class RepositoryAnalyzer(BaseAnalyzer):
         card.loss = _ground_terms(card.loss, corpus)
         card.augmentation = _ground_terms(card.augmentation, corpus)
         card.training_tricks = _ground_terms(card.training_tricks, corpus)
+        card.confidence = _confidence_after_grounding(card)
         return card
 
     def _maybe_attach_llm_client(self) -> None:
@@ -287,22 +289,46 @@ def _grounding_corpus(repo: Repository) -> str:
 
 
 def _ground_terms(terms: list[str], corpus: str) -> list[str]:
-    """Keep LLM terms that appear (loosely) in deterministic repo evidence."""
+    """Keep LLM terms that appear as whole words / adjacent phrases in evidence."""
     kept: list[str] = []
     for raw in terms:
         term = str(raw).strip()
         if not term:
             continue
         needle = term.lower()
-        if needle in corpus:
-            kept.append(term)
-            continue
         tokens = [
             tok
-            for tok in needle.replace("-", " ").replace("_", " ").split()
-            if len(tok) > 2
+            for tok in re.split(r"[\s\-_]+", needle)
+            if tok and len(tok) > 1
         ]
-        if tokens and all(tok in corpus for tok in tokens):
+        if not tokens:
+            continue
+        if len(tokens) == 1:
+            pattern = rf"(?<![a-z0-9]){re.escape(tokens[0])}(?![a-z0-9])"
+            if re.search(pattern, corpus):
+                kept.append(term)
+            continue
+        # Multi-token: require adjacent phrase with flexible separators.
+        phrase = r"[\s\-_/]+".join(re.escape(tok) for tok in tokens)
+        pattern = rf"(?<![a-z0-9]){phrase}(?![a-z0-9])"
+        if re.search(pattern, corpus):
             kept.append(term)
     return list(dict.fromkeys(kept))
+
+
+def _confidence_after_grounding(card: RepoKnowledge) -> float:
+    """Down-rank cards whose technique/architecture lists were emptied by grounding."""
+    prior = float(card.confidence)
+    signals = (
+        len(card.architecture)
+        + len(card.techniques)
+        + len(card.loss)
+        + len(card.augmentation)
+        + len(card.training_tricks)
+    )
+    if signals == 0:
+        return min(prior, 0.35)
+    if signals <= 2:
+        return min(prior, 0.55)
+    return prior
 

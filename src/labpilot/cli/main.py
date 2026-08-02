@@ -776,7 +776,12 @@ def analyze(
     report = result.data["report"]
     path = Path(result.data["path"]) if result.data.get("path") else None
     brief_path = None
-    if do_brief and getattr(report, "research_brief", None):
+    written = bool(result.data.get("written", True))
+    if (
+        written
+        and do_brief
+        and getattr(report, "research_brief", None)
+    ):
         from labpilot.research_engine.intelligence.brief.models import ResearchBrief
         from labpilot.research_engine.intelligence.renderers.markdown import write_brief
 

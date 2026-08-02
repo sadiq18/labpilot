@@ -61,10 +61,19 @@ def verify_ai_artifact(
     """Run an explicit verification step for an AI-produced artifact.
 
     Defaults to auto-approve so existing non-interactive flows stay unchanged.
-    Pass ``auto=False`` (or a custom ``prompt``) for interactive / test gates.
+    Pass a custom ``prompt`` for interactive / test gates. ``auto=False`` without
+    ``prompt`` raises — it does not block on ``input()``.
     """
     data = dict(payload or {})
-    fn = prompt or (auto_approve_artifact if auto else prompt_verify_artifact)
+    if prompt is not None:
+        fn = prompt
+    elif auto:
+        fn = auto_approve_artifact
+    else:
+        raise ValueError(
+            "verify_ai_artifact(auto=False) requires an explicit prompt= callback; "
+            "refusing to block on interactive input()"
+        )
     result = fn(kind, data)
     if result.kind != kind:
         result = result.model_copy(update={"kind": kind})

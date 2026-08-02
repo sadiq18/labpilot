@@ -28,6 +28,7 @@ class ClaimPromoter:
         *,
         evidence_id: str | None = None,
         contradicting_evidence_id: str | None = None,
+        needs_review: bool = False,
     ) -> dict[str, Any] | None:
         confidence = float(belief.get("confidence") or 0)
         if confidence < _MIN_CONFIDENCE and not contradicting_evidence_id:
@@ -54,6 +55,9 @@ class ClaimPromoter:
             status = "contested"
             contradictions.append(contradicting_evidence_id)
 
+        meta: dict[str, Any] = {}
+        if needs_review:
+            meta["needs_review"] = True
         claim = self._reflection.create_claim(
             statement,
             status=status,
@@ -62,6 +66,7 @@ class ClaimPromoter:
             effect=effect,
             promoted_from=belief.get("id"),
             contradictions=contradictions,
+            metadata=meta or None,
         )
         link_id = evidence_id or (strong[0]["id"] if strong else None)
         if link_id:
@@ -71,14 +76,23 @@ class ClaimPromoter:
             )
         return claim
 
-    def promote_eligible(self, *, evidence_id: str | None = None) -> list[dict[str, Any]]:
+    def promote_eligible(
+        self,
+        *,
+        evidence_id: str | None = None,
+        needs_review: bool = False,
+    ) -> list[dict[str, Any]]:
         created: list[dict[str, Any]] = []
         for belief in self._knowledge.list_beliefs():
             if float(belief.get("confidence") or 0) < _MIN_CONFIDENCE:
                 continue
             if belief.get("status") == "rejected":
                 continue
-            claim = self.promote_from_belief(belief, evidence_id=evidence_id)
+            claim = self.promote_from_belief(
+                belief,
+                evidence_id=evidence_id,
+                needs_review=needs_review,
+            )
             if claim:
                 created.append(claim)
         return created
