@@ -78,6 +78,9 @@ class AnalyzeContext(BaseModel):
     knowledge_dir: Path
     refresh: bool = False
     url: str | None = None  # original URL when a URL was passed instead of a slug
+    # Raw data root, so analysis can profile the dataset before any run exists.
+    # Planning is otherwise data-blind on a fresh workspace.
+    data_dir: Path | None = None
 
     @property
     def paths(self) -> ResearchPaths:

@@ -162,6 +162,11 @@ class Workspace(BaseModel):
         return (self.root / "data").resolve()
 
     @property
+    def raw_data_dir(self) -> Path:
+        """Downloaded competition data (``data/raw``)."""
+        return self.data_dir / "raw"
+
+    @property
     def pipeline_dir(self) -> Path:
         """Pipeline / code package root."""
         if self._client is not None:

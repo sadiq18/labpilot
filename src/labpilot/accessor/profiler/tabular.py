@@ -53,6 +53,12 @@ class DatasetProfile(BaseModel):
     train_partition_count: int = 0
     test_partition_count: int = 0
     row_count_estimated: bool = False
+    # True when the scored rows form a contiguous *suffix* of each test
+    # partition (predict-forward / forecast tasks). Validation must then hold
+    # out the tail of each training partition, not random rows.
+    scored_is_partition_suffix: bool = False
+    scored_fraction: float = 0.0
+    train_only_columns: list[str] = Field(default_factory=list)
 
 
 class TabularProfiler:
@@ -342,6 +348,8 @@ class TabularProfiler:
         profile.partition_kinds = {k: len(v) for k, v in sorted(kinds.items())}
         profile.train_partition_count = len(kinds[primary_kind])
         profile.test_partition_count = len(test_kind_files)
+        profile.train_only_columns = train_only
+        self._detect_suffix_scoring(profile, sample_path, test_kind_files, data_dir)
         profile.warnings = [
             f"partitioned dataset: {len(train_files)} train / {len(test_files)} test CSVs",
             f"primary kind={primary_kind!r}; kinds={profile.partition_kinds}",
@@ -350,7 +358,67 @@ class TabularProfiler:
         ]
         if train_only:
             profile.warnings.append(f"train-only columns (unavailable at test): {train_only}")
+        if profile.scored_is_partition_suffix:
+            profile.warnings.append(
+                f"scored rows are a contiguous suffix of each test partition "
+                f"(~{profile.scored_fraction:.0%} of rows) — this is a forecast task; "
+                "validate by holding out each partition's tail"
+            )
         return profile
+
+    def _detect_suffix_scoring(
+        self,
+        profile: DatasetProfile,
+        sample_path: Path | None,
+        test_kind_files: list[Path],
+        data_dir: Path,
+    ) -> None:
+        """Detect ``<entity>_<row_index>`` submission ids covering only a tail.
+
+        A random split is meaningless for these: at inference the model has the
+        head of the partition and must predict forward, so validation has to
+        reproduce that gap rather than sampling rows uniformly.
+        """
+        if sample_path is None or not test_kind_files:
+            return
+        try:
+            submission = pd.read_csv(sample_path)
+        except Exception:  # noqa: BLE001 — detection is best-effort
+            return
+        if submission.empty:
+            return
+
+        ids = submission[submission.columns[0]].astype(str)
+        split = ids.str.rsplit("_", n=1)
+        if not (split.str.len() == 2).all():
+            return
+        entities = split.str[0]
+        try:
+            indices = split.str[1].astype(int)
+        except (TypeError, ValueError):
+            return
+
+        fractions: list[float] = []
+        for path in test_kind_files:
+            entity, _ = self._split_entity_kind(path.stem)
+            scored = indices[entities == entity]
+            if scored.empty:
+                continue
+            try:
+                n_rows = sum(1 for _ in path.open("r", encoding="utf-8")) - 1
+            except OSError:
+                continue
+            if n_rows <= 0:
+                continue
+            # Contiguous tail: every index from min(scored) to the last row.
+            expected_tail = n_rows - int(scored.min())
+            if len(scored) != expected_tail or int(scored.max()) != n_rows - 1:
+                return
+            fractions.append(len(scored) / n_rows)
+
+        if fractions:
+            profile.scored_is_partition_suffix = True
+            profile.scored_fraction = sum(fractions) / len(fractions)
 
     def _single_file(self, matches: list[Path], role: str) -> Path:
         if len(matches) != 1:

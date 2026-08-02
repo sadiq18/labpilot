@@ -274,3 +274,68 @@ def test_single_train_file_dataset_is_unaffected(titanic_data_dir):
     assert profile.partitioned is False
     assert profile.train_file == "train.csv"
     assert profile.row_count == 12
+
+
+# --- validation plan derivation --------------------------------------------
+
+
+def _suffix_scored_dir(tmp_path):
+    """Partitioned dataset whose submission ids cover only each partition's tail."""
+    root = tmp_path / "suffix-fixture"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+
+    def frame(n, with_label):
+        data = {"MD": list(range(n)), "GR": [float(i % 5) for i in range(n)]}
+        if with_label:
+            data["LABEL"] = [float(i) for i in range(n)]
+            data["leak_marker"] = [1.0] * n
+        return pd.DataFrame(data)
+
+    for i in range(4):
+        frame(10, True).to_csv(root / "train" / f"e{i}__main.csv", index=False)
+    for i in range(2):
+        frame(10, False).to_csv(root / "test" / f"t{i}__main.csv", index=False)
+
+    ids = [f"t{w}_{idx}" for w in range(2) for idx in range(6, 10)]  # tail 6..9
+    pd.DataFrame({"id": ids, "label": [0.0] * len(ids)}).to_csv(
+        root / "sample_submission.csv", index=False
+    )
+    return root
+
+
+def test_suffix_scoring_detected(tmp_path):
+    profile = _profiler().profile_directory(_suffix_scored_dir(tmp_path), "suffix-comp")
+    assert profile.scored_is_partition_suffix is True
+    assert profile.scored_fraction == pytest.approx(0.4)
+
+
+def test_validation_plan_uses_suffix_holdout_for_forecast_tasks(tmp_path):
+    from labpilot.research_engine.execution.baseline.selector import derive_validation_plan
+
+    profile = _profiler().profile_directory(_suffix_scored_dir(tmp_path), "suffix-comp")
+    plan = derive_validation_plan(profile)
+    assert plan.scheme == "partition_suffix_holdout"
+    assert plan.holdout_fraction == pytest.approx(0.4)
+    # leakage column excluded, target kept
+    assert "leak_marker" in plan.exclude_features
+    assert profile.target_column not in plan.exclude_features
+
+
+def test_validation_plan_groups_for_partitioned_non_forecast(partitioned_data_dir):
+    from labpilot.research_engine.execution.baseline.selector import derive_validation_plan
+
+    profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
+    profile.scored_is_partition_suffix = False
+    plan = derive_validation_plan(profile)
+    assert plan.scheme == "group_kfold"
+    assert plan.group_key == "file_stem_entity"
+
+
+def test_validation_plan_plain_kfold_for_iid_dataset(titanic_data_dir):
+    from labpilot.research_engine.execution.baseline.selector import derive_validation_plan
+
+    profile = _profiler().profile_directory(titanic_data_dir, "titanic")
+    plan = derive_validation_plan(profile)
+    assert plan.scheme == "kfold"
+    assert plan.exclude_features == []

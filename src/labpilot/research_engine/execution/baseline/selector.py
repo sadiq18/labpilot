@@ -42,6 +42,63 @@ SUPPORTED_METRICS_BY_PROBLEM_TYPE: dict[str, set[str]] = {
 MAX_CLASSIFICATION_CARDINALITY = 20
 
 
+class ValidationPlan(BaseModel):
+    """How to split data so local CV *means* what the leaderboard measures.
+
+    Derived from the dataset profile rather than hardcoded per template. A
+    shuffled row-level KFold on a partitioned dataset scores a near-duplicate
+    of every training row (adjacent rows in a partition are almost identical),
+    producing a CV number that is both wildly optimistic and uncorrelated with
+    the leaderboard.
+    """
+
+    scheme: str = "kfold"  # kfold | group_kfold | partition_suffix_holdout
+    group_key: str | None = None
+    n_splits: int = 5
+    holdout_fraction: float = 0.0
+    # Columns present in train but not at inference time. Using them as
+    # features trains a model that cannot be served (and usually leaks the
+    # target outright).
+    exclude_features: list[str] = Field(default_factory=list)
+    rationale: str = ""
+
+
+def derive_validation_plan(profile: DatasetProfile, n_splits: int = 5) -> ValidationPlan:
+    """Choose a validation scheme that mirrors the test-time information split."""
+    exclude = [c for c in profile.train_only_columns if c != profile.target_column]
+
+    if profile.scored_is_partition_suffix:
+        return ValidationPlan(
+            scheme="partition_suffix_holdout",
+            group_key=profile.partition_key,
+            n_splits=n_splits,
+            holdout_fraction=profile.scored_fraction or 0.5,
+            exclude_features=exclude,
+            rationale=(
+                "scored rows form a contiguous suffix of each test partition, so "
+                "validation holds out each training partition's tail to reproduce "
+                "the same predict-forward gap"
+            ),
+        )
+    if profile.partitioned:
+        return ValidationPlan(
+            scheme="group_kfold",
+            group_key=profile.partition_key,
+            n_splits=n_splits,
+            exclude_features=exclude,
+            rationale=(
+                "rows are not iid across partitions; grouping prevents "
+                "near-duplicate rows from spanning the train/validation boundary"
+            ),
+        )
+    return ValidationPlan(
+        scheme="kfold",
+        n_splits=n_splits,
+        exclude_features=exclude,
+        rationale="iid rows — plain KFold is appropriate",
+    )
+
+
 class BaselineChoice(BaseModel):
     problem_type: str
     template_name: str
@@ -57,6 +114,9 @@ class BaselineChoice(BaseModel):
     image_dir: str | None = None
     image_column: str | None = None
     baseline_strategy: str = "lightweight"
+    validation: ValidationPlan = Field(default_factory=ValidationPlan)
+    partitioned: bool = False
+    partition_kinds: dict[str, int] = Field(default_factory=dict)
 
 
 class BaselineSelector:
@@ -92,6 +152,9 @@ class BaselineSelector:
             image_dir=profile.image_dir,
             image_column=profile.image_column,
             baseline_strategy=competition.baseline_strategy,
+            validation=derive_validation_plan(profile),
+            partitioned=profile.partitioned,
+            partition_kinds=profile.partition_kinds,
         )
 
     def save(self, run_dir: Path, choice: BaselineChoice) -> Path:

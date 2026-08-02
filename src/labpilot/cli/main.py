@@ -789,6 +789,7 @@ def analyze(
             refresh=refresh,
             url=competition_url or slug_or_url,
             on_progress=_stderr_progress(),
+            kaggle_config=config.kaggle,
         )
     except UnknownAnalyzerError as exc:
         console.print(f"[red]{exc}[/red]")
