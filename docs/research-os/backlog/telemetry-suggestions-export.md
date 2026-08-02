@@ -1,14 +1,15 @@
 # Backlog — Campaign telemetry & suggestion storage
 
-**Status:** Backlog (post-M3) — **prerequisite** for unparking
-[capability-registration](capability-registration.md).  
+**Status:** Backlog — **pre-launch must-have** (see
+[backlog-grooming.md](backlog-grooming.md) § Pre-launch must-haves).  
 M3 keeps counters in SQLite (`os_campaign_metrics`) and suggestions in SQLite
-(`os_suggestions`) for durable local campaigns.
+(`os_suggestions`) for durable local campaigns. Capability registration now has
+a **local** ledger + `export-gaps`; that is not enough for multi-user go-live.
 
-**Unblocks:** [capability-registration](capability-registration.md) /
-[design/11](../design/11-capability-registration.md) — maintainers cannot read
-user-local `os_suggestions`; client telemetry (or opt-in export) is the product
-gap feed.
+**Required before public launch:** Client-side collection of redacted campaign
+metrics + capability gaps into a maintainer-readable feed (OTel / Phoenix /
+Langfuse and/or automatic export). Without this, LabPilot maintainers cannot see
+`no_capability` themes across users.
 
 ## Problem
 

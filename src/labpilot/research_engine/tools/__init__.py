@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from labpilot.research_engine.tools.catalog import build_default_tool_registry
 from labpilot.research_engine.tools.descriptors import ToolDescriptor, ToolResult
+from labpilot.research_engine.tools.registration import register_tool
 from labpilot.research_engine.tools.registry import ToolRegistry
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "ToolRegistry",
     "ToolResult",
     "build_default_tool_registry",
+    "register_tool",
 ]

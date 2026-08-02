@@ -467,6 +467,33 @@ CREATE TABLE IF NOT EXISTS os_campaign_metrics (
     updated_at      TEXT NOT NULL
 );
 
+-- Capability gap ledger (cross-session aggregate of no_capability suggestions)
+CREATE TABLE IF NOT EXISTS os_capability_gaps (
+    gap_key         TEXT PRIMARY KEY,
+    kind            TEXT NOT NULL DEFAULT 'no_capability',
+    count           INTEGER NOT NULL DEFAULT 0,
+    first_seen_at   TEXT NOT NULL,
+    last_seen_at    TEXT NOT NULL,
+    sample_contexts TEXT NOT NULL DEFAULT '[]',
+    status          TEXT NOT NULL DEFAULT 'open',
+    promoted_tool   TEXT,
+    decision_reason TEXT NOT NULL DEFAULT '',
+    decided_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_os_capability_gaps_status
+    ON os_capability_gaps(status);
+
+CREATE TABLE IF NOT EXISTS os_capability_decisions (
+    id              TEXT PRIMARY KEY,
+    gap_key         TEXT NOT NULL REFERENCES os_capability_gaps(gap_key),
+    decision        TEXT NOT NULL,
+    reason          TEXT NOT NULL DEFAULT '',
+    promoted_tool   TEXT,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_os_capability_decisions_gap
+    ON os_capability_decisions(gap_key);
+
 -- Cross-competition Experience Records (shared experiences.db SoR).
 -- Episodes: goal/hypothesis/action/result/outcome + artifact links.
 -- Column ``tags`` stores JSON list of facet objects

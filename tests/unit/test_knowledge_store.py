@@ -41,7 +41,7 @@ def test_creating_store_yields_locked_tree(tmp_path: Path):
     assert (paths.extracted_dir / "forums").is_dir()
     assert (paths.knowledge_dir / "techniques").is_dir()
     assert paths.db_path.is_file()
-    assert store.schema_version() == "8"
+    assert store.schema_version() == "9"
     store.close()
 
 

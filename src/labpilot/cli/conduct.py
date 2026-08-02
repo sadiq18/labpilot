@@ -487,5 +487,10 @@ def conduct_status(
             console.print("  suggestions:")
             for s in suggestions[-5:]:
                 console.print(f"    [{s.kind}] {s.message[:100]}")
+        gaps = store.list_capability_gaps(status="open", limit=5)
+        if gaps:
+            console.print("  open_gaps:")
+            for g in gaps:
+                console.print(f"    {g.gap_key} count={g.count} last={g.last_seen_at}")
     finally:
         store.close()

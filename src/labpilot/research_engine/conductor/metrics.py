@@ -58,4 +58,7 @@ def record_suggestion(
         context=context or {},
     )
     store.append_suggestion(suggestion)
+    from labpilot.research_engine.conductor.gap_ledger import note_suggestion
+
+    note_suggestion(store, suggestion)
     return suggestion

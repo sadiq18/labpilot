@@ -23,7 +23,8 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 #: v6 adds Conductor tables (``os_sessions``, ``os_tasks``, ``os_decisions``,
 #: ``os_operator_feedback``). v7 adds Campaign Engine tables
 #: (``os_suggestions``, ``os_campaign_metrics``). v8 adds ``experience_records``.
-SCHEMA_VERSION = "8"
+#: v9 adds capability gap ledger (``os_capability_gaps``, ``os_capability_decisions``).
+SCHEMA_VERSION = "9"
 
 
 def run_migration(conn: sqlite3.Connection) -> None:

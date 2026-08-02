@@ -22,6 +22,7 @@ from labpilot.research_engine.conductor.checkpoint import (
     persist_budgets,
     save_checkpoint,
 )
+from labpilot.research_engine.conductor.gap_ledger import build_suggestion_context
 from labpilot.research_engine.conductor.metrics import ensure_metrics, record_suggestion
 from labpilot.research_engine.conductor.models import DecisionRecord
 from labpilot.research_engine.conductor.policy import decide_next
@@ -73,7 +74,6 @@ def run_until_stop(
             on_progress(msg)
         logger.info(msg)
 
-    allowlist = set(registry.names())
     policy_kw: dict[str, Any] = {
         "prefer_offline": prefer_offline,
         "auto_offline_fallback": auto_approve,
@@ -81,6 +81,8 @@ def run_until_stop(
     }
 
     for step in range(max_steps):
+        # Refresh each iteration so mid-session registration is visible.
+        allowlist = set(registry.names())
         session = store.get_session(session_id)
         assert session is not None
         if session.status == "paused":
@@ -151,11 +153,19 @@ def run_until_stop(
                 _progress(f"Conductor stop: {research.rationale}")
                 break
             if plan.unmapped:
+                ctx = build_suggestion_context(
+                    intent=research.intent,
+                    suggested_tools=research.suggested_tools,
+                    missing_tools=plan.missing_tools,
+                    competition=store.competition,
+                    session_id=session_id,
+                    goal=session.goal,
+                )
                 record_suggestion(
                     store,
                     session_id,
                     plan.suggestion or research.intent,
-                    context={"intent": research.intent},
+                    context=ctx,
                 )
                 record = DecisionRecord(
                     id=store.new_decision_id(),
@@ -163,7 +173,11 @@ def run_until_stop(
                     tool_name=None,
                     rationale=plan.suggestion or "no_capability",
                     stop=False,
-                    observe={"unmapped": True, "intent": research.intent},
+                    observe={
+                        "unmapped": True,
+                        "intent": research.intent,
+                        "missing_tools": list(plan.missing_tools),
+                    },
                 )
                 store.append_decision(record)
                 decisions.append(record)

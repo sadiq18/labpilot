@@ -10,8 +10,8 @@ milestone or explicit pickup.
 
 | Item | Focus |
 |------|--------|
-| [capability-registration.md](capability-registration.md) | **Parked** — register tools from `no_capability`; blocked on telemetry · [design](../design/11-capability-registration.md) |
-| [telemetry-suggestions-export.md](telemetry-suggestions-export.md) | Metrics → OpenTelemetry + Phoenix/Langfuse; suggestions export — **unblocks** capability-registration |
+| [capability-registration.md](capability-registration.md) | Local gap ledger + export + maintainer decisions · [design](../design/11-capability-registration.md) |
+| [telemetry-suggestions-export.md](telemetry-suggestions-export.md) | **Pre-launch ★** — client metrics/gaps → maintainer feed (required before public) |
 | [shared-multi-tenant-store.md](shared-multi-tenant-store.md) | Shared tables across competitions (user / team / org) |
 | [memory-hierarchy-ports.md](memory-hierarchy-ports.md) | Public Short/Working/Long/Episodic/Semantic ports (M4 hides these) |
 | [hybrid-semantic-retrieval.md](hybrid-semantic-retrieval.md) | Embeddings + Qdrant when `bm25_metrics` show lexical gaps |

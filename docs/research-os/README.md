@@ -375,4 +375,4 @@ One implementation branch per milestone. See [execution-plan.md](execution-plan.
 | [design/07-context-engine.md](design/07-context-engine.md) | M4 |
 | [design/08-agents.md](design/08-agents.md) … [09-parallel-and-events.md](design/09-parallel-and-events.md) | M5 |
 | [design/10-memory-os.md](design/10-memory-os.md) | M4 ports + M6 transfer |
-| [design/11-capability-registration.md](design/11-capability-registration.md) | Parked — grow catalog from `no_capability`; impl after telemetry |
+| [design/11-capability-registration.md](design/11-capability-registration.md) | Capability registration (local ledger now; telemetry before public) |

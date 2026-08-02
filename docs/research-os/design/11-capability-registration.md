@@ -4,16 +4,14 @@ Back to [../README.md](../README.md) · Backlog:
 [../backlog/capability-registration.md](../backlog/capability-registration.md) ·
 Tools: [02-tools.md](02-tools.md) · Campaigns: [06-campaigns.md](06-campaigns.md).
 
-**Status:** Parked (design accepted; impl blocked)  
-**Depends on:** M3 campaign loop + `ToolRegistry` (shipped); **impl blocked on**
-[telemetry-suggestions-export](../backlog/telemetry-suggestions-export.md)
-(client log / gap collection)  
+**Status:** Implementing (local path); telemetry still **pre-launch must-have**  
+**Depends on:** M3 campaign loop + `ToolRegistry` (shipped)  
+**Before public launch:** [telemetry-suggestions-export](../backlog/telemetry-suggestions-export.md)
+must collect redacted gaps from clients (local ledger / `export-gaps` alone is
+not enough for multi-user product evolution).  
 **Does not replace:** Research Engineer `BaseCapability` map (plan-task handlers) —
 Conductor gaps are **OS tools**, not Engineer `TaskType`s (bridge only via a
 `ToolDescriptor` wrapper when needed).
-
-**Pickup rule:** Do not start P0–P4 until telemetry can collect redacted gaps
-from client installs into a maintainer-readable feed.
 
 ---
 
@@ -381,14 +379,13 @@ If gaps continue under a new name → improve mapping (alias), not add a twin to
 
 | Phase | Deliverable | Exit |
 |-------|-------------|------|
-| **P0** | Enrich suggestion `context`; refresh allowlist each loop iteration | Structured local gaps; live register works in-session |
-| **P1** | **Export bridge** — `export-gaps` (file) and/or telemetry of redacted aggregates | Maintainer can read gaps **without** user SQLite |
-| **P2** | Maintainer review over export/feed — promote / defer / reject + CapabilityDecision | Product evolution loop operable by maintainer only |
-| **P3** | Optional local `os_capability_gaps` rollup for `conduct status` UX | Users see top local gaps read-only |
+| **P0** | Enrich suggestion `context`; refresh allowlist each loop iteration | ✅ Structured local gaps; live register works in-session |
+| **P1** | Local `os_capability_gaps` + `research tools export-gaps` | ✅ File export for maintainer; telemetry still pre-launch |
+| **P2** | Maintainer `gaps --promote/--defer/--reject` (`LABPILOT_MAINTAINER=1`) | ✅ Local evolution loop; decisions audited |
+| **P3** | Client telemetry feed (see telemetry backlog) | **Pre-launch ★** — multi-user gap visibility |
 | **P4** | Plugin entry points + descriptor `risk` / approval | Local/private tools without forking core; high-risk gated |
 
-P0 + **P1–P2** are the minimum to evolve the **shared** catalog from real user
-gaps. Local rollup (P3) helps the user; it does not replace export.
+P0–P2 ship for local/dev use. **P3 telemetry is required before public launch.**
 
 ---
 
