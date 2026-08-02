@@ -152,9 +152,10 @@ def test_code_engineering_writes_without_llm(tmp_path: Path) -> None:
     ev = CodeEngineeringCapability().execute(ctx)
     assert ev.passed
     assert (ctx.workspace_root / "pipeline" / "train.py").is_file()
-    # Offline (no LLM): last-resort stub only — Jinja scaffolds are disabled.
-    assert ev.metadata.get("origin") == "last_resort"
-    assert ev.metadata.get("used_jinja") is False
+    # Offline (no LLM): fall back to the deterministic baseline template. The
+    # emergency stub writes fake metrics and a wrong-header submission while
+    # reporting success, so it is a last resort only when no template matches.
+    assert ev.metadata.get("origin") == "template"
     assert "digests" in ev.metadata
 
 

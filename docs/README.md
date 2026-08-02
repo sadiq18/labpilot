@@ -16,5 +16,7 @@ LabPilot docs are split by product generation:
 
 **Research OS**
 
+- **[Autonomy Roadmap](research-os/autonomy-roadmap/)** — why the loop cannot yet optimise, and the ordered plan to fix it (start with `00-diagnosis.md`)
+- **[Competition SOP](research-os/COMPETITION-SOP.md)** — operator guide: what to run, and what to verify before trusting it
 - [Product roadmap](research-os/README.md) (architecture + tech co-evolve per milestone)
 - [Principles](research-os/architecture.md) · [Execution plan](research-os/execution-plan.md)

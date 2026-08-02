@@ -50,6 +50,20 @@ def coerce_str_list(value: object) -> list[str]:
     return [str(value)]
 
 
+def _complete_json(llm_client: object, system: str, user: str) -> str:
+    """Ask for a completion, requesting constrained JSON decoding when supported.
+
+    Every micro agent parses the reply as JSON, and small local models happily
+    answer such prompts in prose instead — the reply is then discarded and the
+    agent silently degrades to its rule engine. Providers that can enforce a
+    JSON grammar should do so; those that cannot keep the old behaviour.
+    """
+    try:
+        return llm_client.complete(system, user, json_mode=True)  # type: ignore[call-arg]
+    except TypeError:
+        return llm_client.complete(system, user)  # type: ignore[attr-defined]
+
+
 def _is_transient_llm_error(exc: BaseException) -> bool:
     """True for rate-limit / high-demand errors that often clear on retry."""
     text = str(exc).upper()
@@ -192,7 +206,7 @@ class BaseMicroAgent:
             )
         except Exception:  # noqa: BLE001 — skill injection must never break agents
             pass
-        raw = self.llm_client.complete(system, self.user_prompt(context))
+        raw = _complete_json(self.llm_client, system, self.user_prompt(context))
         return self._parse(raw)
 
     def _parse(self, raw: str) -> BaseModel:

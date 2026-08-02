@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 from labpilot.research_engine.shared.experiments.models import HypothesisEvidenceRef, HypothesisOrigin
 from labpilot.research_engine.intelligence.hypothesis.models import (
@@ -22,12 +25,73 @@ if TYPE_CHECKING:
     from labpilot.research_engine.intelligence.hypothesis.ledger import ExperimentLedger
 
 
+# Technique tokens that only make sense for a given modality. Evidence cards
+# are harvested from kernels and papers across every kind of competition, so
+# without this a tabular regression campaign happily proposes "apply vit" and
+# burns a whole experiment cycle proving it does nothing.
+_MODALITY_TOKENS: dict[str, set[str]] = {
+    "vision": {
+        "vit", "cnn", "resnet", "efficientnet", "convnext", "unet", "yolo",
+        "densenet", "mobilenet", "swin", "imagenet", "pixel", "image",
+        "randaugment", "cutmix", "randomcrop", "hflip",
+    },
+    "text": {
+        "bert", "roberta", "deberta", "gpt", "llm", "tokenizer", "tokenization",
+        "wordpiece", "sentencepiece", "tfidf", "word2vec", "glove",
+    },
+}
+_ALLOWED_MODALITIES: dict[str, set[str]] = {
+    "tabular": set(),  # neither vision nor text techniques apply
+    "image": {"vision"},
+    "text": {"text"},
+}
+
+
+def _modality_of(problem_type: str) -> str:
+    lowered = (problem_type or "").lower()
+    for key in ("image", "text", "tabular"):
+        if key in lowered:
+            return key
+    return ""
+
+
+def filter_incompatible_techniques(
+    candidates: list[HypothesisCandidate],
+    problem_type: str,
+) -> tuple[list[HypothesisCandidate], list[str]]:
+    """Drop candidates whose technique belongs to a different modality.
+
+    Returns the kept candidates and the names dropped, so the caller can
+    report *why* a suggestion disappeared rather than silently losing it.
+    """
+    modality = _modality_of(problem_type)
+    if not modality:
+        return candidates, []
+    allowed = _ALLOWED_MODALITIES.get(modality, set())
+    blocked: set[str] = set()
+    for name, tokens in _MODALITY_TOKENS.items():
+        if name not in allowed:
+            blocked |= tokens
+
+    kept: list[HypothesisCandidate] = []
+    dropped: list[str] = []
+    for candidate in candidates:
+        label = f"{candidate.technique or ''} {candidate.title or ''}".lower()
+        words = set(re.findall(r"[a-z0-9]+", label))
+        if words & blocked:
+            dropped.append(candidate.technique or candidate.title or candidate.key)
+            continue
+        kept.append(candidate)
+    return kept, dropped
+
+
 def generate_candidates(
     context: ResearchContext,
     *,
     transfers: list[TransferOpportunity] | list[dict[str, Any]] | None = None,
     tried_techniques: set[str] | None = None,
     ledger: ExperimentLedger | None = None,
+    problem_type: str = "",
 ) -> list[HypothesisCandidate]:
     """Build candidates from beliefs/techniques, pipeline-diff, transfers, failures.
 
@@ -201,7 +265,16 @@ def generate_candidates(
     if ledger is not None:
         candidates.extend(_candidates_from_ledger(ledger, tried=tried))
 
-    return _dedupe_candidates(candidates)
+    deduped = _dedupe_candidates(candidates)
+    kept, dropped = filter_incompatible_techniques(deduped, problem_type)
+    if dropped:
+        logger.info(
+            "Dropped %d technique(s) incompatible with problem_type=%s: %s",
+            len(dropped),
+            problem_type,
+            ", ".join(sorted(set(dropped))[:8]),
+        )
+    return kept
 
 
 def _candidates_from_ledger(

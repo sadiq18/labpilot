@@ -49,3 +49,6 @@ htmlcov/
 
 # OS
 .DS_Store
+
+# Local env backups
+.env.bak*

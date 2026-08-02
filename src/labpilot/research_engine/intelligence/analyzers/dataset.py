@@ -58,6 +58,15 @@ class DatasetAnalyzer(BaseAnalyzer):
                 "id_column": profile.id_column,
                 "null_heavy_columns": null_heavy,
                 "warnings": profile.warnings,
+                # Partition facts drive validation design downstream: rows in a
+                # partitioned dataset are not iid, so a shuffled row-level split
+                # scores a near-duplicate of every training row.
+                "partitioned": profile.partitioned,
+                "partition_key": profile.partition_key,
+                "partition_kinds": profile.partition_kinds,
+                "train_partition_count": profile.train_partition_count,
+                "test_partition_count": profile.test_partition_count,
+                "row_count_estimated": profile.row_count_estimated,
             },
         )
 
@@ -80,4 +89,26 @@ class DatasetAnalyzer(BaseAnalyzer):
                 return exp.id, load_profile(run_dir)
             except (OSError, ValueError):
                 continue
-        return None
+        return self._profile_raw_data(context)
+
+    def _profile_raw_data(self, context: AnalyzeContext) -> tuple[str, DatasetProfile] | None:
+        """Profile ``data/raw`` directly when no prior run has produced one.
+
+        Without this, a fresh workspace analyzes (and therefore plans) with no
+        knowledge of the data at all — the profile only appeared after a run,
+        which is exactly backwards from what planning needs.
+        """
+        data_dir = context.data_dir
+        if data_dir is None or not data_dir.is_dir():
+            return None
+        from labpilot.config import ProfilerConfig
+        from labpilot.accessor.profiler.tabular import TabularProfiler
+
+        try:
+            profile = TabularProfiler(ProfilerConfig()).profile_directory(
+                data_dir, context.competition
+            )
+        except Exception as exc:  # noqa: BLE001 — analysis degrades, never aborts
+            self._raw_profile_error = str(exc)
+            return None
+        return "raw", profile

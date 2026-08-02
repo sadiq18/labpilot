@@ -63,6 +63,14 @@ log. Long-running **Campaign Engine** autonomy is **M3** (M2 ships the Conductor
 
 Design satellites (`design/01`…`11`) hold depth; **this README is the roadmap**.
 
+Planning the next milestones? Start with the
+**[Autonomy Roadmap](autonomy-roadmap/)** — a validation session against a real
+competition found that the loop cannot yet optimise, and why.
+
+Running a real competition? Start with the
+**[Competition SOP](COMPETITION-SOP.md)** — the operator loop and its
+verification gates.
+
 ---
 
 ## M0 — Foundations (current / done)

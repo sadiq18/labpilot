@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 from labpilot.research_engine.conductor.approvals import (
@@ -76,6 +77,10 @@ def build_observe_bundle(
             for d in decisions[-5:]
         ],
     }
+    # Backlog is the campaign's core scheduling signal: test what is queued,
+    # gather more evidence only when the queue runs dry.
+    observe["untested_hypotheses"] = untested_hypothesis_count(workspace)
+    observe["hours_since_last_artifact"] = hours_since_last_artifact(workspace)
     _attach_evidence_refresh(observe, workspace)
     if include_context:
         _attach_context(
@@ -291,6 +296,131 @@ def llm_next_action(
         logger.info("Operator requested LLM policy retry (%d/%d)", retries, max_llm_retries)
 
 
+# A campaign only needs a handful of untested ideas in front of it. Below this
+# it is worth spending minutes gathering more evidence; at or above it, that
+# time is better spent testing what is already queued.
+_HYPOTHESIS_BACKLOG_TARGET = int(os.environ.get("LABPILOT_HYPOTHESIS_BACKLOG_TARGET", "3"))
+# Re-sweeping the same kernels and papers minutes apart mostly re-ingests the
+# same sources under new artifact ids, bloating the store without adding
+# information. Evidence has to be allowed to go stale before refetching.
+_EVIDENCE_COOLDOWN_HOURS = float(os.environ.get("LABPILOT_EVIDENCE_COOLDOWN_HOURS", "6.0"))
+
+
+def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
+    """Drop tools whose preconditions the workspace does not yet satisfy.
+
+    Offering the whole catalog regardless of state lets a campaign burn steps
+    on impossible work — reflecting before anything has run, or submitting
+    before a model exists. Filtering first turns "the model picked badly" into
+    "that option was never on the table".
+    """
+    from labpilot.research_engine.conductor.loop import (
+        _latest_execution_id,
+        _latest_plan_id,
+    )
+
+    has_plan = _latest_plan_id(workspace) is not None
+    has_execution = _latest_execution_id(workspace) is not None
+
+    # Evidence gathering is expensive (kernels, discussions, papers, repos —
+    # minutes of network and LLM work). Once there is a backlog of untested
+    # hypotheses, the useful move is to *test* one, not to re-derive the same
+    # techniques and beliefs again. Gathering reopens when the backlog runs dry.
+    gather_ok, gather_reason = should_gather_evidence(workspace)
+    if not gather_ok:
+        logger.info("Skipping evidence gathering: %s", gather_reason)
+
+    requires: dict[str, bool] = {
+        # Nothing to reflect on until an experiment has produced evidence.
+        "reflect": has_execution,
+        # Cannot run, or submit the result of, a plan that does not exist.
+        "run_plan": has_plan,
+        "run_experiment": has_plan,
+        "submit": has_execution,
+        "submit_learn": has_execution,
+        # Re-analysing with work already queued is the single most expensive
+        # way for a campaign to make no progress.
+        "analyze_competition": gather_ok,
+        "search_papers": gather_ok,
+        # Same brake one level down: queuing another plan while one is still
+        # unrun adds no information and starves the thing that does.
+        "generate_plan": not has_unrun_plan(workspace),
+    }
+    return {name for name in allowlist if requires.get(name, True)}
+
+
+def hours_since_last_artifact(workspace: Workspace) -> float | None:
+    """Age of the newest research artifact in hours, or None when there are none."""
+    from datetime import UTC, datetime
+
+    from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
+
+    try:
+        with KnowledgeStore(workspace.knowledge_dir, workspace.competition) as store:
+            row = store._conn.execute(  # noqa: SLF001 — read-only freshness probe
+                "SELECT MAX(created_at) AS newest FROM research_artifacts"
+            ).fetchone()
+    except Exception:  # noqa: BLE001 — no store means no artifacts
+        return None
+    newest = row["newest"] if row else None
+    if not newest:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(newest))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - stamp).total_seconds() / 3600.0
+
+
+def should_gather_evidence(workspace: Workspace) -> tuple[bool, str]:
+    """Decide whether pulling more artifacts is worth it right now.
+
+    Two independent brakes, because either one alone lets the store bloat:
+    a queue of untested ideas means the bottleneck is *testing*, not evidence;
+    and a recent sweep means another one would mostly re-ingest the same
+    kernels and papers under new artifact ids.
+    """
+    backlog = untested_hypothesis_count(workspace)
+    if backlog >= _HYPOTHESIS_BACKLOG_TARGET:
+        return False, f"{backlog} untested hypotheses already queued"
+
+    age_hours = hours_since_last_artifact(workspace)
+    if age_hours is not None and age_hours < _EVIDENCE_COOLDOWN_HOURS:
+        return False, f"evidence gathered {age_hours:.1f}h ago (cooldown)"
+
+    if age_hours is None:
+        return True, "no evidence gathered yet"
+    return True, f"backlog {backlog} is thin and evidence is {age_hours:.1f}h old"
+
+
+def has_unrun_plan(workspace: Workspace) -> bool:
+    """True when a compiled plan is still waiting to be executed."""
+    from labpilot.research_engine.artifacts.plan import PlanArtifacts
+
+    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    try:
+        plans = artifacts.list()
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        artifacts.close()
+    return any(str(p.status) in {"ready", "draft"} for p in plans)
+
+
+def untested_hypothesis_count(workspace: Workspace) -> int:
+    """How many proposed hypotheses are waiting to be tested."""
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+    from labpilot.research_engine.shared.experiments.models import HypothesisStatus
+
+    try:
+        store = HypothesisStore(workspace.knowledge_dir, workspace.competition)
+        return len(store.list(status=HypothesisStatus.PROPOSED))
+    except Exception:  # noqa: BLE001 — absent store means nothing queued
+        return 0
+
+
 def decide_next(
     store: ConductorStore,
     workspace: Workspace,
@@ -307,7 +437,7 @@ def decide_next(
     Online path attaches Context Engine evidence to observe. ``prefer_offline``
     skips retrieve entirely (no forced Context Engine success).
     """
-    allowlist = set(registry.names())
+    allowlist = available_tools(workspace, set(registry.names()))
     observe = build_observe_bundle(
         store,
         workspace,
@@ -326,16 +456,12 @@ def decide_next(
 
 
 def _parse_json(text: str) -> dict[str, Any]:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        lines = [ln for ln in lines if not ln.strip().startswith("```")]
-        text = "\n".join(lines)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        text = text[start : end + 1]
-    data = json.loads(text)
-    if not isinstance(data, dict):
-        raise ValueError("expected JSON object")
-    return data
+    """Parse a policy decision.
+
+    Delegates to the shared extractor: this used to be a second, naive copy
+    (first ``{`` to last ``}``), so hardening one parser left the Conductor's
+    own decisions just as brittle as before.
+    """
+    from labpilot.llm.json_utils import parse_json_object
+
+    return parse_json_object(text)

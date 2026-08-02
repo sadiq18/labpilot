@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -10,6 +11,7 @@ from labpilot.research_engine.conductor.actions import (
     ResearchAction,
     map_research_action,
     offline_next_research_action,
+    resolve_step_args,
 )
 from labpilot.research_engine.conductor.approvals import (
     ApprovalPrompt,
@@ -34,6 +36,103 @@ from labpilot.research_engine.workspace_facade import Workspace
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], None]
+
+# How many times an advisory "stop" is overridden while the objective is unmet.
+# Bounded so a policy that genuinely has nothing left can still end the run.
+_MAX_STOP_OVERRIDES = 2
+
+
+def _objective_unmet(config: Any, state: Any) -> bool:
+    """True when a metric target was set and the best result has not reached it."""
+    target = getattr(config, "target_value", None)
+    if getattr(config, "target_metric", None) is None or target is None:
+        return False
+    last = getattr(state, "last_metric", None)
+    if last is None:
+        return True
+    return last < target if getattr(config, "maximize", False) else last > target
+
+
+def _latest_plan_id(workspace: Workspace) -> str | None:
+    """Latest *runnable* plan, falling back to the newest of any status.
+
+    Taking the highest id outright targeted plans that had already finished —
+    the Engineer then refused with "status=done; need ready or in_progress" and
+    the campaign lost a step. A plan is only a useful run target while it still
+    has work left.
+    """
+    from labpilot.research_engine.artifacts.plan import PlanArtifacts
+
+    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    try:
+        plans = artifacts.list()
+    except Exception:  # noqa: BLE001 — absent store simply means "no plans yet"
+        return None
+    finally:
+        artifacts.close()
+    if not plans:
+        return None
+    runnable = sorted(
+        p.id for p in plans if str(p.status) in {"ready", "in_progress", "draft"}
+    )
+    if runnable:
+        return runnable[-1]
+    return sorted(p.id for p in plans)[-1]
+
+
+def _next_hypothesis_id(workspace: Workspace) -> str | None:
+    """Highest-confidence untested hypothesis, or None when there are none.
+
+    This is what lets a campaign iterate: once the baseline plan exists, the
+    next plan has to be built against a hypothesis rather than re-requesting an
+    idempotent baseline.
+    """
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+    from labpilot.research_engine.shared.experiments.models import HypothesisStatus
+
+    try:
+        store = HypothesisStore(workspace.knowledge_dir, workspace.competition)
+        proposed = store.list(status=HypothesisStatus.PROPOSED)
+    except Exception:  # noqa: BLE001 — absent store means "nothing to test yet"
+        return None
+    if not proposed:
+        return None
+    ranked = sorted(
+        proposed,
+        key=lambda h: (getattr(h, "confidence", 0.0) or 0.0, h.id),
+        reverse=True,
+    )
+    return ranked[0].id
+
+
+def _baseline_plan_exists(workspace: Workspace) -> bool:
+    """True when a baseline plan has already been compiled for this competition."""
+    from labpilot.research_engine.artifacts.plan import PlanArtifacts
+
+    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    try:
+        plans = artifacts.list()
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        artifacts.close()
+    return any((p.metadata or {}).get("plan_kind") == "baseline" for p in plans)
+
+
+def _latest_execution_id(workspace: Workspace) -> str | None:
+    """Most recent execution id, or None when nothing has run yet."""
+    from labpilot.research_engine.shared.experiments.graph import build_graph
+
+    try:
+        graph = build_graph(
+            workspace.effective_runs_dir,
+            workspace.competition,
+            knowledge_dir=workspace.knowledge_dir,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    nodes = sorted(graph.nodes.values(), key=lambda e: e.created_at)
+    return nodes[-1].id if nodes else None
 
 
 def run_until_stop(
@@ -74,6 +173,7 @@ def run_until_stop(
             on_progress(msg)
         logger.info(msg)
 
+    consecutive_stop_overrides = 0
     policy_kw: dict[str, Any] = {
         "prefer_offline": prefer_offline,
         "auto_offline_fallback": auto_approve,
@@ -118,6 +218,11 @@ def run_until_stop(
             if prefer_offline:
                 research = offline_next_research_action(completed, allowlist)
             else:
+                # Observe (Context Engine retrieval) + think (LLM) both run
+                # before the first dispatch message, so without this a campaign
+                # step is several silent minutes on a local model.
+                _progress(f"step {step + 1}/{max_steps}: observing + deciding …")
+                started = time.monotonic()
                 next_tool, _obs = decide_next(
                     store,
                     workspace,
@@ -125,6 +230,10 @@ def run_until_stop(
                     registry,
                     llm_client=llm_client,
                     **policy_kw,
+                )
+                _progress(
+                    f"step {step + 1}/{max_steps}: chose "
+                    f"{next_tool.tool or 'stop'} ({time.monotonic() - started:.1f}s)"
                 )
                 if next_tool.stop or not next_tool.tool:
                     research = ResearchAction(
@@ -141,6 +250,44 @@ def run_until_stop(
             # Re-read after policy/offline so same-step registration is visible.
             allowlist = set(registry.names())
             plan = map_research_action(research, allowlist)
+            if research.stop and _objective_unmet(budget_cfg, budget_state):
+                # Goal persistence. The policy tends to call it done once it has
+                # used each tool once ("no immediate next step in the
+                # allowlist"), even with the target metric far away. A campaign
+                # exists to pursue an objective, so an advisory stop is not
+                # honoured while the target is unmet and budget remains —
+                # reflection and the next hypothesis are still open moves.
+                # Budgets, max_steps and repeated insistence still end the run.
+                consecutive_stop_overrides += 1
+                if consecutive_stop_overrides <= _MAX_STOP_OVERRIDES:
+                    _progress(
+                        f"Policy wanted to stop with the objective unmet "
+                        f"({consecutive_stop_overrides}/{_MAX_STOP_OVERRIDES}); "
+                        "continuing toward the target."
+                    )
+                    record_suggestion(
+                        store,
+                        session_id,
+                        "Policy stopped early with the objective unmet: "
+                        f"{research.rationale}",
+                        context={"step": step},
+                    )
+                    # Name the tool explicitly. Routing this by intent text let
+                    # keyword matching hijack it: the phrase contains
+                    # "hypothesis", which matches the ("plan", "baseline",
+                    # "hypothesis") template before anything else, so the
+                    # override dispatched generate_plan(baseline=True) instead
+                    # of reflecting on the result it was reacting to.
+                    override_tool = "reflect" if "reflect" in allowlist else "generate_plan"
+                    research = ResearchAction(
+                        intent=f"objective unmet — {override_tool} and continue",
+                        rationale="objective still unmet; continuing",
+                        suggested_tools=[override_tool],
+                    )
+                    plan = map_research_action(research, allowlist)
+            else:
+                consecutive_stop_overrides = 0
+
             if research.stop:
                 record = DecisionRecord(
                     id=store.new_decision_id(),
@@ -190,10 +337,20 @@ def run_until_stop(
             for tool_step in plan.steps:
                 decision_id = store.new_decision_id()
                 deps = [prev_id] if prev_id else []
+                # Resolve @latest against state *now*, after any earlier step in
+                # this batch created a plan or execution.
+                step_args = resolve_step_args(
+                    tool_step.tool,
+                    tool_step.args,
+                    latest_plan_id=_latest_plan_id(workspace),
+                    latest_execution_id=_latest_execution_id(workspace),
+                    next_hypothesis_id=_next_hypothesis_id(workspace),
+                    baseline_plan_exists=_baseline_plan_exists(workspace),
+                )
                 task = store.enqueue(
                     session_id,
                     tool_step.tool,
-                    args=tool_step.args,
+                    args=step_args,
                     decision_id=decision_id,
                     dependencies=deps,
                 )
@@ -202,7 +359,7 @@ def run_until_stop(
                     session_id=session_id,
                     tool_name=tool_step.tool,
                     rationale=research.rationale or research.intent,
-                    args=tool_step.args,
+                    args=step_args,
                     task_id=task.id,
                     observe={"step": step, "intent": research.intent},
                 )

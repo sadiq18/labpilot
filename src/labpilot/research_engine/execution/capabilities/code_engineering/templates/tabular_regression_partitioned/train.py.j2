@@ -1,0 +1,286 @@
+"""Partition-aware regression baseline for predict-forward tasks.
+
+The dataset stores one file per entity and the scored rows are a contiguous
+suffix of each test partition, so this script:
+
+  * concatenates every train partition,
+  * drops columns that do not exist at inference time,
+  * anchors on the last observed target instead of predicting an absolute
+    level, and
+  * validates by holding out each training partition's tail, reproducing the
+    same gap the leaderboard measures.
+"""
+
+import json
+from pathlib import Path
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+from sklearn.metrics import mean_squared_error
+
+DATA_DIR = Path({{ data_dir | tojson }})
+OUTPUT_DIR = Path({{ output_dir | tojson }})
+TARGET_COLUMN = {{ choice.target_column | tojson }}
+ID_COLUMN = {{ choice.id_column | tojson }}
+METRIC_NAME = {{ choice.metric_name | tojson }}
+SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
+RANDOM_SEED = {{ random_seed }}
+MODEL_PARAMS = {{ model_params | tojson }}
+EXCLUDE_FEATURES = {{ choice.validation.exclude_features | tojson }}
+HOLDOUT_FRACTION = {{ choice.validation.holdout_fraction }}
+PRIMARY_KIND = {{ primary_kind | tojson }}
+SMOKE_PARTITIONS = 40
+
+
+def _partition_files(split: str) -> dict[str, Path]:
+    """Map entity id -> its primary-kind CSV under ``data/raw/<split>/``."""
+    out: dict[str, Path] = {}
+    root = DATA_DIR / split
+    if not root.is_dir():
+        return out
+    for path in sorted(root.glob("*.csv")):
+        stem = path.stem
+        entity, _, kind = stem.partition("__")
+        if PRIMARY_KIND and kind != PRIMARY_KIND:
+            continue
+        out[entity] = path
+    return out
+
+
+def _add_partition_features(frame: pd.DataFrame, known_rows: int) -> pd.DataFrame:
+    """Generic predict-forward features, computed within a single partition.
+
+    ``known_rows`` is how many leading rows have an observed target. Features
+    describe *where* a row sits relative to that boundary, and carry the last
+    observed target forward as an anchor so the model learns a correction
+    rather than an absolute level.
+    """
+    out = frame.copy()
+    n = len(out)
+    out["row_index"] = np.arange(n, dtype=float)
+    out["partition_length"] = float(n)
+    out["rows_since_known"] = np.arange(n, dtype=float) - (known_rows - 1)
+    out["frac_through_partition"] = out["row_index"] / max(n - 1, 1)
+
+    if known_rows > 0 and TARGET_COLUMN in out.columns:
+        head = out[TARGET_COLUMN].iloc[:known_rows]
+        anchor = float(head.iloc[-1])
+        out["anchor_target"] = anchor
+        # Local trend of the observed target, extrapolated forward. The window
+        # is deliberately long: short windows fit local noise and the slope
+        # error compounds over a long forecast horizon.
+        window = head.iloc[-min(len(head), 800):]
+        if len(window) >= 2:
+            slope = float(np.polyfit(np.arange(len(window)), window.to_numpy(), 1)[0])
+        else:
+            slope = 0.0
+        out["anchor_slope"] = slope
+        out["anchor_projection"] = anchor + slope * out["rows_since_known"].clip(lower=0)
+    else:
+        out["anchor_target"] = np.nan
+        out["anchor_slope"] = 0.0
+        out["anchor_projection"] = np.nan
+    # Residual base. Holding the last observed value is far more stable over a
+    # long horizon than extrapolating a slope, whose error compounds linearly
+    # with distance; the slope stays available as a feature so the model can
+    # add drift back where it actually helps.
+    out["anchor_base"] = out["anchor_target"]
+
+    # Express every driver *relative to the anchor row*. Absolute coordinates
+    # differ per entity, so a tree splitting on them memorises entities instead
+    # of learning the displacement -> target-change relationship that actually
+    # transfers to an unseen partition.
+    anchor_row = min(max(known_rows - 1, 0), n - 1)
+    delta_columns: list[str] = []
+    for column in frame.columns:
+        # Deriving from an excluded column would smuggle a train-only signal
+        # back in under a new name, and the feature would be missing at test.
+        if column == TARGET_COLUMN or column in set(EXCLUDE_FEATURES):
+            continue
+        if not pd.api.types.is_numeric_dtype(frame[column]):
+            continue
+        base = frame[column].iloc[anchor_row]
+        if pd.isna(base):
+            continue
+        name = f"{column}__delta_from_anchor"
+        out[name] = frame[column].to_numpy() - float(base)
+        delta_columns.append(name)
+
+    # A per-partition Ridge calibration was tried here (fit the head, project
+    # forward). It made things markedly worse: the observed head and the scored
+    # tail sit in different regimes, so the local fit extrapolates badly. The
+    # flat anchor plus learned residual is both simpler and stronger.
+    return out
+
+
+def _known_rows(frame: pd.DataFrame) -> int:
+    """Rows before the first gap in the target — the observed head."""
+    if TARGET_COLUMN not in frame.columns:
+        return 0
+    observed = frame[TARGET_COLUMN].notna().to_numpy()
+    if not observed.any():
+        return 0
+    missing = np.flatnonzero(~observed)
+    return int(missing[0]) if missing.size else int(len(frame))
+
+
+def _feature_columns(frame: pd.DataFrame) -> list[str]:
+    # `__is_holdout__` marks the simulated validation tail — using it as a
+    # feature would tell the model exactly which rows it is being scored on.
+    drop = set(EXCLUDE_FEATURES) | {TARGET_COLUMN, "__entity__", "__is_holdout__", ID_COLUMN}
+    return [
+        c
+        for c in frame.columns
+        if c not in drop and pd.api.types.is_numeric_dtype(frame[c])
+    ]
+
+
+def build_training_frame(smoke: bool) -> pd.DataFrame:
+    """Concatenate train partitions, simulating the test-time known/unknown split."""
+    files = _partition_files("train")
+    entities = sorted(files)
+    if smoke:
+        entities = entities[:SMOKE_PARTITIONS]
+    if not entities:
+        raise RuntimeError(f"No train partitions found under {DATA_DIR / 'train'}")
+
+    frames = []
+    for entity in entities:
+        raw = pd.read_csv(files[entity])
+        if TARGET_COLUMN not in raw.columns:
+            continue
+        n = len(raw)
+        # Mirror the leaderboard split: the tail is unobserved at inference.
+        known = max(1, int(round(n * (1.0 - HOLDOUT_FRACTION))))
+        block = raw.copy()
+        # Hide the tail target from feature construction, keep it as the label.
+        block_for_features = block.copy()
+        block_for_features.loc[known:, TARGET_COLUMN] = np.nan
+        featured = _add_partition_features(block_for_features, known)
+        featured[TARGET_COLUMN] = block[TARGET_COLUMN].to_numpy()
+        featured["__entity__"] = entity
+        featured["__is_holdout__"] = np.arange(n) >= known
+        frames.append(featured)
+
+    if not frames:
+        raise RuntimeError("No train partitions contained the target column")
+    return pd.concat(frames, ignore_index=True)
+
+
+def build_test_frame(submission: pd.DataFrame) -> pd.DataFrame:
+    """Feature rows for every scored submission id."""
+    files = _partition_files("test")
+    ids = submission[submission.columns[0]].astype(str)
+    split = ids.str.rsplit("_", n=1)
+    entities = split.str[0]
+    indices = split.str[1].astype(int)
+
+    frames = []
+    for entity, group in pd.DataFrame({"e": entities, "i": indices, "id": ids}).groupby("e"):
+        path = files.get(entity)
+        if path is None:
+            continue
+        raw = pd.read_csv(path)
+        known = _known_rows(raw)
+        featured = _add_partition_features(raw, known)
+        featured["__entity__"] = entity
+        picked = featured.iloc[group["i"].to_numpy()].copy()
+        picked[ID_COLUMN] = group["id"].to_numpy()
+        frames.append(picked)
+
+    if not frames:
+        raise RuntimeError("No test partitions matched the submission ids")
+    return pd.concat(frames, ignore_index=True)
+
+
+def main() -> None:
+    import os
+
+    smoke = os.environ.get("LABPILOT_SMOKE", "").strip() in {"1", "true", "True"}
+    train = build_training_frame(smoke)
+    features = _feature_columns(train)
+
+    params = dict(MODEL_PARAMS)
+    params.setdefault("objective", "regression")
+    params.setdefault("random_state", RANDOM_SEED)
+    params.setdefault("verbose", -1)
+    if smoke:
+        params["n_estimators"] = min(int(params.get("n_estimators", 200)), 60)
+
+    # Two nested splits, both required:
+    #   1. rows -> only the simulated *future* tail is a training example. Head
+    #      rows sit before the anchor, so their residual runs backwards and
+    #      teaches the inverse of what inference asks for.
+    #   2. partitions -> validation partitions are entirely unseen, so the
+    #      score measures generalisation to a new entity rather than memorised
+    #      per-entity coordinates.
+    entities = np.sort(train["__entity__"].unique())
+    rng = np.random.default_rng(RANDOM_SEED)
+    val_entities = set(rng.permutation(entities)[: max(1, len(entities) // 5)].tolist())
+    is_val_partition = train["__entity__"].isin(val_entities).to_numpy()
+    predict_region = train["__is_holdout__"].to_numpy()
+
+    fit = train.loc[predict_region & ~is_val_partition]
+    val = train.loc[predict_region & is_val_partition]
+    if fit.empty or val.empty:
+        raise RuntimeError("Partition split left an empty side; need more partitions")
+
+    # Learn the *residual* from the anchor projection, not the absolute level.
+    # Partitions sit at different absolute depths, and a tree cannot
+    # extrapolate beyond the target range it saw in training — predicting the
+    # correction keeps the problem in a small, shared, stationary range.
+    fit_residual = fit[TARGET_COLUMN] - fit["anchor_base"]
+    model = lgb.LGBMRegressor(**params)
+    model.fit(fit[features], fit_residual)
+    val_pred = val["anchor_base"].to_numpy() + model.predict(val[features])
+    mse = float(mean_squared_error(val[TARGET_COLUMN], val_pred))
+
+    # Reference point: the anchor projection alone, no learning. If the model
+    # cannot beat this, the features are not earning their keep.
+    baseline_mse = float(mean_squared_error(val[TARGET_COLUMN], val["anchor_base"]))
+    projection_mse = float(
+        mean_squared_error(val[TARGET_COLUMN], val["anchor_projection"])
+    )
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    metrics = {
+        f"cv_{METRIC_NAME}": mse,
+        "mse": mse,
+        "rmse": float(np.sqrt(mse)),
+        "anchor_hold_mse": baseline_mse,
+        "anchor_projection_mse": projection_mse,
+        "validation_scheme": "partition_suffix_holdout",
+        "holdout_fraction": HOLDOUT_FRACTION,
+        "n_train_rows": int(len(fit)),
+        "n_val_partitions": len(val_entities),
+        "n_val_rows": int(len(val)),
+        "n_partitions": int(train["__entity__"].nunique()),
+        "n_features": len(features),
+        "features": features,
+        "excluded_features": EXCLUDE_FEATURES,
+        "smoke": smoke,
+    }
+    (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+
+    # Refit on every row (head + tail) before predicting the real test tail.
+    final = lgb.LGBMRegressor(**params)
+    region = train.loc[predict_region]
+    final.fit(region[features], region[TARGET_COLUMN] - region["anchor_base"])
+
+    submission = pd.read_csv(DATA_DIR / SAMPLE_SUBMISSION_FILE)
+    test = build_test_frame(submission)
+    preds = test["anchor_base"].to_numpy() + final.predict(test[features])
+
+    target_out = submission.columns[1]
+    mapping = dict(zip(test[ID_COLUMN].astype(str), preds, strict=False))
+    submission[target_out] = submission[submission.columns[0]].astype(str).map(mapping)
+    fallback = test["anchor_base"] if "anchor_base" in test else None
+    if submission[target_out].isna().any() and fallback is not None:
+        submission[target_out] = submission[target_out].fillna(float(np.nanmean(fallback)))
+    submission.to_csv(OUTPUT_DIR / "submission.csv", index=False)
+    print(json.dumps({k: metrics[k] for k in ("mse", "rmse", "anchor_hold_mse", "anchor_projection_mse", "smoke")}))
+
+
+if __name__ == "__main__":
+    main()

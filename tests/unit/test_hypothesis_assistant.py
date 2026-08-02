@@ -378,3 +378,52 @@ def test_rerun_generates_no_duplicate_hypotheses(tmp_path: Path) -> None:
     second = _run()
     assert second.new_count == 0
     assert len(HypothesisStore(knowledge_dir, "birdclef-2026").list()) == first.new_count
+
+
+# --- cross-modality technique rejection --------------------------------------
+
+
+class _Cand:
+    def __init__(self, technique):
+        self.technique = technique
+        self.title = technique
+        self.key = f"technique:{technique}"
+
+
+def _filter(techniques, problem_type):
+    from labpilot.research_engine.intelligence.hypothesis.candidates import (
+        filter_incompatible_techniques,
+    )
+
+    kept, dropped = filter_incompatible_techniques(
+        [_Cand(t) for t in techniques], problem_type
+    )
+    return [c.technique for c in kept], dropped
+
+
+def test_tabular_competition_rejects_vision_and_text_techniques():
+    """A tabular campaign proposed "apply vit" and burned an experiment on it."""
+    kept, dropped = _filter(
+        ["vit", "cnn", "bert", "target encoding", "feature_engineering", "SWA"],
+        "tabular_regression",
+    )
+    assert kept == ["target encoding", "feature_engineering", "SWA"]
+    assert set(dropped) == {"vit", "cnn", "bert"}
+
+
+def test_image_competition_keeps_vision_techniques():
+    kept, _ = _filter(["vit", "cnn", "target encoding"], "image_classification")
+    assert "vit" in kept and "cnn" in kept
+
+
+def test_text_competition_keeps_text_techniques():
+    kept, _ = _filter(["bert", "vit"], "text_classification")
+    assert "bert" in kept
+    assert "vit" not in kept
+
+
+def test_unknown_problem_type_filters_nothing():
+    """Never drop candidates on a guess."""
+    kept, dropped = _filter(["vit", "bert"], "")
+    assert kept == ["vit", "bert"]
+    assert dropped == []

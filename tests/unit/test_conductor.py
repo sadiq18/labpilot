@@ -324,8 +324,8 @@ def test_build_observe_bundle_includes_context_online(tmp_path: Path) -> None:
 def test_build_observe_bundle_skips_context_when_disabled(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from labpilot.research_engine.conductor import policy as policy_mod
     import labpilot.research_engine.context as ctx_mod
+    from labpilot.research_engine.conductor import policy as policy_mod
 
     calls: list[str] = []
 
@@ -352,8 +352,8 @@ def test_build_observe_bundle_skips_context_when_disabled(
 def test_decide_next_prefer_offline_does_not_require_context(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from labpilot.research_engine.conductor.policy import decide_next
     import labpilot.research_engine.context as ctx_mod
+    from labpilot.research_engine.conductor.policy import decide_next
 
     def boom(*_a: object, **_k: object) -> object:
         raise RuntimeError("context must not run offline")
@@ -381,8 +381,8 @@ def test_decide_next_prefer_offline_does_not_require_context(
 def test_observe_survives_build_context_failure(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from labpilot.research_engine.conductor.policy import build_observe_bundle
     import labpilot.research_engine.context as ctx_mod
+    from labpilot.research_engine.conductor.policy import build_observe_bundle
 
     def boom(*_a: object, **_k: object) -> object:
         raise RuntimeError("retrieve down")
@@ -440,3 +440,456 @@ def test_llm_policy_prompt_sees_ranked_evidence() -> None:
     assert "0.91" in captured["user"]
     assert "mixup" in captured["user"].lower()
     assert "context_summary" in captured["system"] or "context_refs" in captured["system"]
+
+
+# --- @latest id resolution --------------------------------------------------
+
+
+def test_run_experiment_no_longer_forces_dry_run():
+    """A campaign that always dry-runs can never produce a real submission.
+
+    Asserting merely that the key is absent is not enough, and previously gave
+    false confidence: `run_experiment` defaults dry_run=True in its own
+    signature, so omitting it left every campaign run a dry run.
+    """
+    from labpilot.research_engine.conductor.actions import _default_args
+
+    for tool in ("run_plan", "run_experiment"):
+        assert _default_args(tool).get("dry_run") is False
+
+
+def test_step_args_resolve_to_latest_ids():
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "run_plan",
+        {"plan_id": "@latest"},
+        latest_plan_id="P-007",
+        latest_execution_id="E-009",
+    )
+    assert resolved["plan_id"] == "P-007"
+
+    resolved = resolve_step_args(
+        "submit",
+        {"execution_id": "@latest"},
+        latest_plan_id="P-007",
+        latest_execution_id="E-009",
+    )
+    assert resolved["execution_id"] == "E-009"
+
+
+def test_step_args_fall_back_to_first_id_on_empty_workspace():
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "run_plan",
+        {"plan_id": "@latest", "execution_id": "@latest"},
+        latest_plan_id=None,
+        latest_execution_id=None,
+    )
+    assert resolved["plan_id"] == "P-001"
+    assert resolved["execution_id"] == "E-001"
+
+
+def test_step_args_leave_explicit_ids_untouched():
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "run_plan",
+        {"plan_id": "P-003"},
+        latest_plan_id="P-099",
+        latest_execution_id=None,
+    )
+    assert resolved["plan_id"] == "P-003"
+
+
+def test_generate_plan_switches_to_hypothesis_once_baseline_exists():
+    """Baseline compilation is idempotent — a campaign must iterate elsewhere."""
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "generate_plan",
+        {"baseline": True},
+        latest_plan_id="P-001",
+        latest_execution_id="E-001",
+        next_hypothesis_id="H-007",
+        baseline_plan_exists=True,
+    )
+    assert resolved == {"hypothesis_id": "H-007"}
+
+
+def test_generate_plan_keeps_baseline_when_none_exists_yet():
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "generate_plan",
+        {"baseline": True},
+        latest_plan_id=None,
+        latest_execution_id=None,
+        next_hypothesis_id="H-007",
+        baseline_plan_exists=False,
+    )
+    assert resolved == {"baseline": True}
+
+
+def test_generate_plan_keeps_baseline_when_no_hypothesis_available():
+    """Without a hypothesis there is nothing better to ask for."""
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "generate_plan",
+        {"baseline": True},
+        latest_plan_id="P-001",
+        latest_execution_id="E-001",
+        next_hypothesis_id=None,
+        baseline_plan_exists=True,
+    )
+    assert resolved == {"baseline": True}
+
+
+def test_conductor_analyze_gathers_kaggle_domain_knowledge():
+    """No kernels/discussions => no concepts => no hypotheses => no iteration."""
+    from labpilot.research_engine.conductor.actions import _default_args
+
+    args = _default_args("analyze_competition")
+    assert args["fetch_kaggle"] is True
+    # No analyzer is excluded: papers and repositories feed techniques and
+    # beliefs just as kernels do.
+    assert "exclude" not in args
+
+
+# --- precondition-aware tool selection ---------------------------------------
+
+
+class _FakeWorkspace:
+    knowledge_dir = None
+    competition = "demo"
+    effective_runs_dir = None
+
+
+def _available(monkeypatch, *, has_plan, has_execution):
+    import labpilot.research_engine.conductor.loop as loop_mod
+    from labpilot.research_engine.conductor.policy import available_tools
+
+    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-001" if has_plan else None)
+    monkeypatch.setattr(
+        loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
+    )
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 0)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: None)
+    monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: False)
+    catalog = {
+        "analyze_competition", "search_papers", "query_memory", "generate_plan",
+        "implement", "run_plan", "run_experiment", "reflect", "submit", "submit_learn",
+    }
+    return available_tools(_FakeWorkspace(), catalog)
+
+
+def test_fresh_workspace_cannot_reflect_run_or_submit(monkeypatch):
+    """Step 1 previously chose `reflect` with nothing to reflect on."""
+    tools = _available(monkeypatch, has_plan=False, has_execution=False)
+    assert "reflect" not in tools
+    assert "run_plan" not in tools
+    assert "run_experiment" not in tools
+    assert "submit" not in tools
+    # Evidence gathering and planning are always legitimate first moves.
+    assert {"analyze_competition", "generate_plan", "query_memory"} <= tools
+
+
+def test_plan_unlocks_running_but_not_submitting(monkeypatch):
+    tools = _available(monkeypatch, has_plan=True, has_execution=False)
+    assert "run_plan" in tools
+    assert "run_experiment" in tools
+    assert "reflect" not in tools
+    assert "submit" not in tools
+
+
+def test_execution_unlocks_reflect_and_submit(monkeypatch):
+    tools = _available(monkeypatch, has_plan=True, has_execution=True)
+    assert {"reflect", "submit", "submit_learn"} <= tools
+
+
+# --- goal persistence --------------------------------------------------------
+
+
+class _Cfg:
+    def __init__(self, metric="mse", value=5.0, maximize=False):
+        self.target_metric = metric
+        self.target_value = value
+        self.maximize = maximize
+
+
+class _State:
+    def __init__(self, last=None):
+        self.last_metric = last
+
+
+def test_objective_unmet_when_target_not_reached():
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    # minimising: 194.8 is far above the target of 5
+    assert _objective_unmet(_Cfg(), _State(194.8)) is True
+    assert _objective_unmet(_Cfg(), _State(4.2)) is False
+    # nothing measured yet still counts as unmet
+    assert _objective_unmet(_Cfg(), _State(None)) is True
+
+
+def test_objective_unmet_respects_maximise_direction():
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    cfg = _Cfg(metric="accuracy", value=0.9, maximize=True)
+    assert _objective_unmet(cfg, _State(0.7)) is True
+    assert _objective_unmet(cfg, _State(0.95)) is False
+
+
+def test_no_target_means_policy_stop_is_honoured():
+    """Without an objective there is nothing to persist toward."""
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    assert _objective_unmet(_Cfg(metric=None, value=None), _State(1.0)) is False
+
+
+# --- backlog-aware scheduling -------------------------------------------------
+
+
+def _available_with_backlog(monkeypatch, backlog, *, has_plan=True, has_execution=True):
+    import labpilot.research_engine.conductor.loop as loop_mod
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-001" if has_plan else None)
+    monkeypatch.setattr(
+        loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
+    )
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: backlog)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 99.0)
+    monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: False)
+    catalog = {
+        "analyze_competition", "search_papers", "query_memory", "generate_plan",
+        "implement", "run_plan", "run_experiment", "reflect", "submit",
+    }
+    return policy_mod.available_tools(_FakeWorkspace(), catalog)
+
+
+def test_full_backlog_blocks_re_gathering_evidence(monkeypatch):
+    """Re-analysing with work already queued makes no progress and costs minutes."""
+    tools = _available_with_backlog(monkeypatch, backlog=10)
+    assert "analyze_competition" not in tools
+    assert "search_papers" not in tools
+    # Testing what is queued stays available.
+    assert {"generate_plan", "run_plan", "reflect"} <= tools
+
+
+def test_empty_backlog_reopens_evidence_gathering(monkeypatch):
+    tools = _available_with_backlog(monkeypatch, backlog=0)
+    assert "analyze_competition" in tools
+    assert "search_papers" in tools
+
+
+def test_backlog_below_target_still_gathers(monkeypatch):
+    """A thin queue is worth topping up before it runs dry."""
+    tools = _available_with_backlog(monkeypatch, backlog=2)
+    assert "analyze_competition" in tools
+
+
+def test_evidence_cooldown_blocks_immediate_resweep(monkeypatch):
+    """Re-sweeping minutes later re-ingests the same sources under new ids."""
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 0)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 0.5)
+    ok, reason = policy_mod.should_gather_evidence(_FakeWorkspace())
+    assert ok is False
+    assert "cooldown" in reason
+
+
+def test_stale_evidence_with_thin_backlog_reopens_gathering(monkeypatch):
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 1)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 48.0)
+    ok, _ = policy_mod.should_gather_evidence(_FakeWorkspace())
+    assert ok is True
+
+
+def test_backlog_wins_over_freshness(monkeypatch):
+    """A full queue blocks gathering however old the evidence is."""
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 9)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 999.0)
+    ok, reason = policy_mod.should_gather_evidence(_FakeWorkspace())
+    assert ok is False
+    assert "untested hypotheses" in reason
+
+
+def test_never_gathered_always_allows_gathering(monkeypatch):
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 0)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: None)
+    ok, reason = policy_mod.should_gather_evidence(_FakeWorkspace())
+    assert ok is True
+    assert "no evidence" in reason
+
+
+def test_unrun_plan_blocks_queuing_another(monkeypatch):
+    """The campaign chose generate_plan three steps running without executing one."""
+    import labpilot.research_engine.conductor.loop as loop_mod
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-003")
+    monkeypatch.setattr(loop_mod, "_latest_execution_id", lambda ws: "E-001")
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 5)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 1.0)
+    monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: True)
+
+    tools = policy_mod.available_tools(
+        _FakeWorkspace(), {"generate_plan", "run_plan", "reflect"}
+    )
+    assert "generate_plan" not in tools
+    assert "run_plan" in tools
+
+
+def test_latest_plan_prefers_a_runnable_one(monkeypatch, tmp_path):
+    """Targeting the newest id hit finished plans: 'status=done; need ready'."""
+    import labpilot.research_engine.conductor.loop as loop_mod
+
+    class _Plan:
+        def __init__(self, pid, status):
+            self.id = pid
+            self.status = status
+            self.metadata = {}
+
+    class _Artifacts:
+        def __init__(self, *a, **k):
+            pass
+
+        def list(self):
+            return [
+                _Plan("P-001", "done"),
+                _Plan("P-002", "ready"),
+                _Plan("P-008", "done"),
+            ]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "labpilot.research_engine.artifacts.plan.PlanArtifacts", _Artifacts
+    )
+
+    class _WS:
+        knowledge_dir = tmp_path
+        competition = "demo"
+
+    assert loop_mod._latest_plan_id(_WS()) == "P-002"
+
+
+def test_latest_plan_falls_back_when_none_runnable(monkeypatch, tmp_path):
+    import labpilot.research_engine.conductor.loop as loop_mod
+
+    class _Plan:
+        def __init__(self, pid):
+            self.id = pid
+            self.status = "done"
+            self.metadata = {}
+
+    class _Artifacts:
+        def __init__(self, *a, **k):
+            pass
+
+        def list(self):
+            return [_Plan("P-001"), _Plan("P-008")]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "labpilot.research_engine.artifacts.plan.PlanArtifacts", _Artifacts
+    )
+
+    class _WS:
+        knowledge_dir = tmp_path
+        competition = "demo"
+
+    assert loop_mod._latest_plan_id(_WS()) == "P-008"
+
+
+def test_campaign_runs_are_not_dry_runs():
+    """run_experiment defaults dry_run=True in its own signature, so the
+    Conductor must say otherwise or it renders code and never trains."""
+    from labpilot.research_engine.conductor.actions import _TEMPLATES, _default_args
+
+    for tool in ("run_plan", "run_experiment"):
+        assert _default_args(tool)["dry_run"] is False
+
+    for _keywords, steps in _TEMPLATES:
+        for step in steps:
+            if step.tool in {"run_plan", "run_experiment"}:
+                assert step.args.get("dry_run") is False, step.tool
+
+
+def test_non_dry_experiment_without_metrics_is_a_failure(monkeypatch):
+    """Silent no-op protection: 'completed' with no metrics is not success."""
+    import pytest
+
+    from labpilot.research_engine.tools.handlers import specialists
+
+    monkeypatch.setattr(specialists, "execute_agent_sync", lambda *a, **k: [])
+    monkeypatch.setattr(specialists, "_bundle", lambda *a, **k: None)
+
+    class _Cand:
+        name = "experiment"
+        agent = object()
+
+    class _Reg:
+        def candidates(self, capability):
+            return [_Cand()]
+
+    monkeypatch.setattr(
+        specialists, "build_default_specialist_registry", lambda **k: _Reg()
+    )
+
+    with pytest.raises(specialists.ExperimentProducedNoMetricsError):
+        specialists.run_experiment(object(), plan_id="P-009", dry_run=False)
+
+    # A dry run legitimately produces nothing and must stay allowed.
+    result = specialists.run_experiment(object(), plan_id="P-009", dry_run=True)
+    assert result.data["dry_run"] is True
+
+
+def test_goal_persistence_override_dispatches_reflect_not_generate_plan():
+    """Regression: routing the override by intent text let keyword matching
+    hijack it — the phrase contained "hypothesis", which matches the
+    ("plan", "baseline", "hypothesis") template, so it dispatched
+    generate_plan(baseline=True) instead of reflecting on the result."""
+    from labpilot.research_engine.conductor.actions import (
+        ResearchAction,
+        map_research_action,
+    )
+
+    catalog = {"reflect", "generate_plan", "run_experiment", "analyze_competition"}
+    action = ResearchAction(
+        intent="objective unmet — reflect and continue",
+        rationale="objective still unmet; continuing",
+        suggested_tools=["reflect"],
+    )
+    plan = map_research_action(action, catalog)
+    assert [s.tool for s in plan.steps] == ["reflect"]
+
+
+def test_intent_text_alone_would_still_be_hijacked():
+    """Documents *why* the override names its tool explicitly."""
+    from labpilot.research_engine.conductor.actions import (
+        ResearchAction,
+        map_research_action,
+    )
+
+    catalog = {"reflect", "generate_plan", "run_experiment"}
+    hijacked = map_research_action(
+        ResearchAction(intent="reflect on the last experiment and try the next hypothesis"),
+        catalog,
+    )
+    assert [s.tool for s in hijacked.steps] != ["reflect"]

@@ -18,6 +18,43 @@ from labpilot.research_engine.tools.descriptors import ToolResult
 from labpilot.research_engine.workspace_facade import Workspace
 
 
+def _ensure_data_present(
+    workspace: Workspace,
+    kaggle_config: Any | None,
+    on_progress: Callable[[str], None] | None,
+) -> None:
+    """Materialise ``data/raw`` before analysis, reusing the shared cache.
+
+    Analysis (and therefore planning) is data-blind without this: the dataset
+    profile used to appear only *after* a run, which is backwards from the
+    order the planner needs it in. Soft-fails so analysis still runs offline.
+    """
+    raw_dir = workspace.raw_data_dir
+    if raw_dir.is_dir() and any(p.is_file() for p in raw_dir.rglob("*")):
+        return
+    if kaggle_config is None:
+        return
+    from labpilot.diagnostics import kaggle_credentials_present
+
+    if not kaggle_credentials_present():
+        return
+    try:
+        from labpilot.accessor.data.downloader import DataDownloader
+
+        if on_progress:
+            on_progress("dataset: materialising data/raw (cache reuse if warm) …")
+        DataDownloader(workspace.competition, kaggle_config).download(workspace.root)
+        if on_progress:
+            count = sum(1 for p in raw_dir.rglob("*") if p.is_file())
+            on_progress(f"dataset: data/raw ready ({count} files)")
+    # The Kaggle client calls sys.exit() on auth failure, which is SystemExit
+    # (a BaseException) — catching only Exception would abort the whole command
+    # with an empty stdout instead of degrading to offline analysis.
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
+        if on_progress:
+            on_progress(f"dataset: download skipped ({exc})")
+
+
 def analyze_competition(
     workspace: Workspace,
     *,
@@ -33,6 +70,8 @@ def analyze_competition(
     url: str | None = None,
     verify_auto: bool = True,
     verify: VerifyPrompt | Callable[[str, dict[str, Any]], VerifyResult] | None = None,
+    on_progress: Callable[[str], None] | None = None,
+    kaggle_config: Any | None = None,
 ) -> ToolResult:
     """Run competition analysis and persist ``analyze.json`` via the artifact adapter.
 
@@ -41,11 +80,13 @@ def analyze_competition(
     ``reject`` skips those writes; ``spot_check`` writes with ``needs_review``.
     """
     competition_ref = url or workspace.competition
+    _ensure_data_present(workspace, kaggle_config, on_progress)
     context = build_context(
         competition_ref,
         runs_dir=workspace.effective_runs_dir,
         knowledge_dir=workspace.knowledge_dir,
         refresh=refresh,
+        data_dir=getattr(workspace, "raw_data_dir", None),
     )
     orchestrator = AnalyzeOrchestrator(
         build_default_registry(),
@@ -54,9 +95,15 @@ def analyze_competition(
         hypothesize=hypothesize,
         brief=brief,
         fetch_kaggle=fetch_kaggle,
+        on_progress=on_progress,
     )
     report = orchestrator.analyze_without_side_effects(
-        context, only=only, include=include, exclude=exclude
+        context,
+        only=only,
+        # Conductor task args round-trip through JSON, where a set becomes a
+        # list, so accept either shape.
+        include=set(include) if include else None,
+        exclude=set(exclude) if exclude else None,
     )
     verification = verify_ai_artifact(
         "analysis_report",

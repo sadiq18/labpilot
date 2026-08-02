@@ -35,11 +35,27 @@ def _no_real_dotenv_in_tests(monkeypatch):
         "LABPILOT_KNOWLEDGE_DIR",
         "LABPILOT_LLM_PROVIDER",
         "LABPILOT_LLM_MODEL",
+        # `mode=local` alone is enough to route to a reachable local Ollama even
+        # with no provider/model set, so leaving it in the environment silently
+        # turned hermetic unit tests into real LLM calls (minutes, not seconds,
+        # and machine-dependent assertions).
+        "LABPILOT_LLM_MODE",
+        "OLLAMA_HOST",
+        "LABPILOT_KAGGLE_CACHE_DIR",
         "LABPILOT_RUNTIMES_DIR",
         "LABPILOT_DEFAULT_RUNTIME",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setitem(Settings.model_config, "env_file", None)
+
+    # Clearing env is not sufficient: `llm.mode: auto` in configs/default.yaml
+    # falls back to *any reachable* local Ollama, so on a developer machine
+    # running one, "no LLM configured" tests silently got a real client and
+    # asserted against live model output. Force the liveness probe closed so
+    # hermeticity does not depend on whether Ollama happens to be running.
+    from labpilot.llm.ollama import OllamaProvider
+
+    monkeypatch.setattr(OllamaProvider, "is_reachable", lambda *a, **k: False)
 
 
 @pytest.fixture

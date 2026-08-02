@@ -113,12 +113,80 @@ def _check_deep_deps() -> CheckResult:
     return CheckResult("Deep deps (torch/torchvision/transformers)", True, "importable")
 
 
+def _check_llm_provider() -> CheckResult:
+    """Verify the *resolved* LLM provider can actually serve the configured model.
+
+    Every intelligence stage (analyzers, codegen, conductor policy) soft-fails to
+    template text when the client is unusable, so a broken provider shows up as
+    silently degraded output rather than an error. Checking it here makes
+    ``llm_unavailable`` diagnosable instead of mysterious.
+    """
+    name = "LLM provider"
+    try:
+        from labpilot.config import load_config
+
+        config = load_config().llm
+    except Exception as exc:  # noqa: BLE001 — config errors are reported, not raised
+        return CheckResult(name, False, f"config load failed: {exc}", "Check configs/default.yaml")
+
+    provider = (config.provider or "").strip().lower()
+    model = (config.model or "").strip()
+
+    if provider == "ollama":
+        from labpilot.llm.ollama import OllamaProvider
+
+        probe = OllamaProvider(config.ollama_base_url)
+        if not probe.is_reachable(timeout_seconds=2.0):
+            return CheckResult(
+                name,
+                False,
+                f"ollama unreachable at {config.ollama_base_url}",
+                "Start Ollama (`ollama serve`) or fix llm.ollama_base_url.",
+            )
+        available = probe.list_models()
+        # Ollama accepts a bare name for an explicitly ":latest" tag.
+        if model and model not in available and f"{model}:latest" not in available:
+            return CheckResult(
+                name,
+                False,
+                f"ollama up but model {model!r} not pulled "
+                f"(have: {', '.join(available[:3]) or 'none'})",
+                f"Run: ollama pull {model}",
+            )
+        return CheckResult(name, True, f"ollama · {model} · {config.ollama_base_url}")
+
+    from labpilot.config import Settings
+
+    settings = Settings()
+    key_by_provider = {
+        "gemini": settings.gemini_api_key,
+        "openai": settings.openai_api_key,
+    }
+    if provider in key_by_provider:
+        if not key_by_provider[provider]:
+            return CheckResult(
+                name,
+                False,
+                f"{provider} selected but no API key found",
+                f"Set {provider.upper()}_API_KEY in .env, or use LABPILOT_LLM_PROVIDER=ollama.",
+            )
+        return CheckResult(name, True, f"{provider} · {model}")
+
+    return CheckResult(
+        name,
+        False,
+        f"unknown provider {provider!r}",
+        "Set llm.provider to one of: ollama, gemini, openai.",
+    )
+
+
 def check_environment(include_optional: bool = True) -> list[CheckResult]:
     """Run all environment checks and return their results, in report order."""
     results = [
         _check_python_version(),
         _check_lightgbm(),
         _check_kaggle_credentials(),
+        _check_llm_provider(),
     ]
     if include_optional:
         results.extend([_check_image_deps(), _check_deep_deps()])

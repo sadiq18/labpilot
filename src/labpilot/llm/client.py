@@ -124,7 +124,12 @@ def create_llm_client(config: LLMConfig) -> LLMClient | None:
 
     if provider == LOCAL_PROVIDER:
         try:
-            return OllamaClient(config.ollama_base_url, model, config.temperature)
+            return OllamaClient(
+                config.ollama_base_url,
+                model,
+                config.temperature,
+                config.request_timeout_seconds,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to construct Ollama client (%s); soft-failing.", exc)
             return None
