@@ -599,3 +599,43 @@ def test_plan_unlocks_running_but_not_submitting(monkeypatch):
 def test_execution_unlocks_reflect_and_submit(monkeypatch):
     tools = _available(monkeypatch, has_plan=True, has_execution=True)
     assert {"reflect", "submit", "submit_learn"} <= tools
+
+
+# --- goal persistence --------------------------------------------------------
+
+
+class _Cfg:
+    def __init__(self, metric="mse", value=5.0, maximize=False):
+        self.target_metric = metric
+        self.target_value = value
+        self.maximize = maximize
+
+
+class _State:
+    def __init__(self, last=None):
+        self.last_metric = last
+
+
+def test_objective_unmet_when_target_not_reached():
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    # minimising: 194.8 is far above the target of 5
+    assert _objective_unmet(_Cfg(), _State(194.8)) is True
+    assert _objective_unmet(_Cfg(), _State(4.2)) is False
+    # nothing measured yet still counts as unmet
+    assert _objective_unmet(_Cfg(), _State(None)) is True
+
+
+def test_objective_unmet_respects_maximise_direction():
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    cfg = _Cfg(metric="accuracy", value=0.9, maximize=True)
+    assert _objective_unmet(cfg, _State(0.7)) is True
+    assert _objective_unmet(cfg, _State(0.95)) is False
+
+
+def test_no_target_means_policy_stop_is_honoured():
+    """Without an objective there is nothing to persist toward."""
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    assert _objective_unmet(_Cfg(metric=None, value=None), _State(1.0)) is False

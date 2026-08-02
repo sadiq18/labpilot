@@ -37,6 +37,21 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], None]
 
+# How many times an advisory "stop" is overridden while the objective is unmet.
+# Bounded so a policy that genuinely has nothing left can still end the run.
+_MAX_STOP_OVERRIDES = 2
+
+
+def _objective_unmet(config: Any, state: Any) -> bool:
+    """True when a metric target was set and the best result has not reached it."""
+    target = getattr(config, "target_value", None)
+    if getattr(config, "target_metric", None) is None or target is None:
+        return False
+    last = getattr(state, "last_metric", None)
+    if last is None:
+        return True
+    return last < target if getattr(config, "maximize", False) else last > target
+
 
 def _latest_plan_id(workspace: Workspace) -> str | None:
     """Highest-numbered plan for this competition, or None when none exist."""
@@ -146,6 +161,7 @@ def run_until_stop(
             on_progress(msg)
         logger.info(msg)
 
+    consecutive_stop_overrides = 0
     policy_kw: dict[str, Any] = {
         "prefer_offline": prefer_offline,
         "auto_offline_fallback": auto_approve,
@@ -222,6 +238,36 @@ def run_until_stop(
             # Re-read after policy/offline so same-step registration is visible.
             allowlist = set(registry.names())
             plan = map_research_action(research, allowlist)
+            if research.stop and _objective_unmet(budget_cfg, budget_state):
+                # Goal persistence. The policy tends to call it done once it has
+                # used each tool once ("no immediate next step in the
+                # allowlist"), even with the target metric far away. A campaign
+                # exists to pursue an objective, so an advisory stop is not
+                # honoured while the target is unmet and budget remains —
+                # reflection and the next hypothesis are still open moves.
+                # Budgets, max_steps and repeated insistence still end the run.
+                consecutive_stop_overrides += 1
+                if consecutive_stop_overrides <= _MAX_STOP_OVERRIDES:
+                    _progress(
+                        f"Policy wanted to stop with the objective unmet "
+                        f"({consecutive_stop_overrides}/{_MAX_STOP_OVERRIDES}); "
+                        "continuing toward the target."
+                    )
+                    record_suggestion(
+                        store,
+                        session_id,
+                        "Policy stopped early with the objective unmet: "
+                        f"{research.rationale}",
+                        context={"step": step},
+                    )
+                    research = ResearchAction(
+                        intent="reflect on the last experiment and try the next hypothesis",
+                        rationale="objective still unmet; continuing",
+                    )
+                    plan = map_research_action(research, allowlist)
+            else:
+                consecutive_stop_overrides = 0
+
             if research.stop:
                 record = DecisionRecord(
                     id=store.new_decision_id(),
