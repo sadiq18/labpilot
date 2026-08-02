@@ -446,11 +446,16 @@ def test_llm_policy_prompt_sees_ranked_evidence() -> None:
 
 
 def test_run_experiment_no_longer_forces_dry_run():
-    """A campaign that always dry-runs can never produce a real submission."""
+    """A campaign that always dry-runs can never produce a real submission.
+
+    Asserting merely that the key is absent is not enough, and previously gave
+    false confidence: `run_experiment` defaults dry_run=True in its own
+    signature, so omitting it left every campaign run a dry run.
+    """
     from labpilot.research_engine.conductor.actions import _default_args
 
     for tool in ("run_plan", "run_experiment"):
-        assert "dry_run" not in _default_args(tool)
+        assert _default_args(tool).get("dry_run") is False
 
 
 def test_step_args_resolve_to_latest_ids():
@@ -810,3 +815,17 @@ def test_latest_plan_falls_back_when_none_runnable(monkeypatch, tmp_path):
         competition = "demo"
 
     assert loop_mod._latest_plan_id(_WS()) == "P-008"
+
+
+def test_campaign_runs_are_not_dry_runs():
+    """run_experiment defaults dry_run=True in its own signature, so the
+    Conductor must say otherwise or it renders code and never trains."""
+    from labpilot.research_engine.conductor.actions import _TEMPLATES, _default_args
+
+    for tool in ("run_plan", "run_experiment"):
+        assert _default_args(tool)["dry_run"] is False
+
+    for _keywords, steps in _TEMPLATES:
+        for step in steps:
+            if step.tool in {"run_plan", "run_experiment"}:
+                assert step.args.get("dry_run") is False, step.tool

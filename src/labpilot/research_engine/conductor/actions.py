@@ -70,7 +70,7 @@ _TEMPLATES: list[tuple[tuple[str, ...], list[ToolStep]]] = [
         [
             ToolStep(tool="generate_plan", args={"baseline": True}),
             ToolStep(tool="implement", args={"description": "prepare train/infer code"}),
-            ToolStep(tool="run_experiment", args={"plan_id": LATEST}),
+            ToolStep(tool="run_experiment", args={"plan_id": LATEST, "dry_run": False}),
             ToolStep(tool="reflect", args={"persist": False}),
         ],
     ),
@@ -79,7 +79,7 @@ _TEMPLATES: list[tuple[tuple[str, ...], list[ToolStep]]] = [
         [
             ToolStep(tool="search_papers", args={"offline": True}),
             ToolStep(tool="generate_plan", args={"baseline": True}),
-            ToolStep(tool="run_experiment", args={"plan_id": LATEST}),
+            ToolStep(tool="run_experiment", args={"plan_id": LATEST, "dry_run": False}),
             ToolStep(tool="reflect", args={"persist": False}),
         ],
     ),
@@ -153,7 +153,11 @@ def _default_args(tool: str) -> dict[str, Any]:
     if tool == "search_papers":
         return {"offline": True}
     if tool in {"run_plan", "run_experiment"}:
-        return {"plan_id": LATEST}
+        # dry_run must be explicit. `run_experiment` defaults it to True in its
+        # own signature, so merely dropping it here left every campaign
+        # "experiment" rendering code and skipping training — while reporting
+        # success, which made the campaign loop on it forever.
+        return {"plan_id": LATEST, "dry_run": False}
     if tool == "implement":
         return {"description": "update workspace code"}
     if tool == "submit":
