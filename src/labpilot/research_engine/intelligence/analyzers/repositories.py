@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -185,6 +186,13 @@ class RepositoryAnalyzer(BaseAnalyzer):
             path for path in card.interesting_files if path in set(repo.key_files)
         ]
         card.interesting_files = grounded_files or list(repo.key_files)
+        corpus = _grounding_corpus(repo)
+        card.architecture = _ground_terms(card.architecture, corpus)
+        card.techniques = _ground_terms(card.techniques, corpus)
+        card.loss = _ground_terms(card.loss, corpus)
+        card.augmentation = _ground_terms(card.augmentation, corpus)
+        card.training_tricks = _ground_terms(card.training_tricks, corpus)
+        card.confidence = _confidence_after_grounding(card)
         return card
 
     def _maybe_attach_llm_client(self) -> None:
@@ -266,3 +274,61 @@ def repo_dict_for_report(artifact: ResearchArtifact) -> dict[str, Any] | None:
         "interesting_files": knowledge.get("interesting_files") or [],
         "confidence": artifact.confidence,
     }
+
+
+def _grounding_corpus(repo: Repository) -> str:
+    """Lowercased README + deps + key files + bounded file texts for term checks."""
+    parts = [
+        repo.readme_excerpt or "",
+        " ".join(repo.dependencies),
+        " ".join(repo.key_files),
+    ]
+    for text in repo.file_texts.values():
+        parts.append(text[:20_000])
+    return "\n".join(parts).lower()
+
+
+def _ground_terms(terms: list[str], corpus: str) -> list[str]:
+    """Keep LLM terms that appear as whole words / adjacent phrases in evidence."""
+    kept: list[str] = []
+    for raw in terms:
+        term = str(raw).strip()
+        if not term:
+            continue
+        needle = term.lower()
+        tokens = [
+            tok
+            for tok in re.split(r"[\s\-_]+", needle)
+            if tok and len(tok) > 1
+        ]
+        if not tokens:
+            continue
+        if len(tokens) == 1:
+            pattern = rf"(?<![a-z0-9]){re.escape(tokens[0])}(?![a-z0-9])"
+            if re.search(pattern, corpus):
+                kept.append(term)
+            continue
+        # Multi-token: require adjacent phrase with flexible separators.
+        phrase = r"[\s\-_/]+".join(re.escape(tok) for tok in tokens)
+        pattern = rf"(?<![a-z0-9]){phrase}(?![a-z0-9])"
+        if re.search(pattern, corpus):
+            kept.append(term)
+    return list(dict.fromkeys(kept))
+
+
+def _confidence_after_grounding(card: RepoKnowledge) -> float:
+    """Down-rank cards whose technique/architecture lists were emptied by grounding."""
+    prior = float(card.confidence)
+    signals = (
+        len(card.architecture)
+        + len(card.techniques)
+        + len(card.loss)
+        + len(card.augmentation)
+        + len(card.training_tricks)
+    )
+    if signals == 0:
+        return min(prior, 0.35)
+    if signals <= 2:
+        return min(prior, 0.55)
+    return prior
+

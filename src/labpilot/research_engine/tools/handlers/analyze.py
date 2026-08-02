@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from labpilot.research_engine.artifacts.analysis import write_analysis
 from labpilot.research_engine.intelligence.context import build_context
 from labpilot.research_engine.intelligence.orchestrator import AnalyzeOrchestrator
 from labpilot.research_engine.intelligence.registry import build_default_registry
+from labpilot.research_engine.shared.verify_artifact import (
+    VerifyPrompt,
+    VerifyResult,
+    verify_ai_artifact,
+)
 from labpilot.research_engine.tools.descriptors import ToolResult
 from labpilot.research_engine.workspace_facade import Workspace
 
@@ -25,8 +31,15 @@ def analyze_competition(
     fetch_kaggle: bool = False,
     refresh: bool = False,
     url: str | None = None,
+    verify_auto: bool = True,
+    verify: VerifyPrompt | Callable[[str, dict[str, Any]], VerifyResult] | None = None,
 ) -> ToolResult:
-    """Run competition analysis and persist ``analyze.json`` via the artifact adapter."""
+    """Run competition analysis and persist ``analyze.json`` via the artifact adapter.
+
+    Analyzers run first; ``verify_ai_artifact`` gates durable side effects
+    (ingest / hypothesize / brief / fetch) and ``write_analysis``.
+    ``reject`` skips those writes; ``spot_check`` writes with ``needs_review``.
+    """
     competition_ref = url or workspace.competition
     context = build_context(
         competition_ref,
@@ -42,9 +55,45 @@ def analyze_competition(
         brief=brief,
         fetch_kaggle=fetch_kaggle,
     )
-    report = orchestrator.analyze(
+    report = orchestrator.analyze_without_side_effects(
         context, only=only, include=include, exclude=exclude
     )
+    verification = verify_ai_artifact(
+        "analysis_report",
+        {
+            "competition": workspace.competition,
+            "analyzers": list(report.analyzers),
+            "artifact_count": len(report.artifacts),
+        },
+        auto=verify_auto,
+        prompt=verify,
+    )
+    if verification.decision == "reject":
+        return ToolResult(
+            refs=[],
+            data={
+                "competition": workspace.competition,
+                "analyzers": list(report.analyzers),
+                "path": None,
+                "brief_path": str(context.paths.brief_path),
+                "report": report,
+                "verification": verification.model_dump(),
+                "written": False,
+                "needs_review": False,
+            },
+        )
+
+    if verification.decision == "spot_check":
+        summary = dict(report.summary or {})
+        summary["needs_review"] = True
+        summary["verification"] = verification.model_dump()
+        report.summary = summary
+        note = "needs_review: spot_check"
+        if note not in report.notes:
+            report.notes = [*report.notes, note]
+
+    orchestrator.apply_side_effects(report, context)
+
     ref = write_analysis(
         report,
         workspace.knowledge_dir,
@@ -59,5 +108,8 @@ def analyze_competition(
             "path": ref.path,
             "brief_path": str(context.paths.brief_path),
             "report": report,
+            "verification": verification.model_dump(),
+            "written": True,
+            "needs_review": verification.decision == "spot_check",
         },
     )
