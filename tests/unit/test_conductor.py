@@ -745,3 +745,68 @@ def test_unrun_plan_blocks_queuing_another(monkeypatch):
     )
     assert "generate_plan" not in tools
     assert "run_plan" in tools
+
+
+def test_latest_plan_prefers_a_runnable_one(monkeypatch, tmp_path):
+    """Targeting the newest id hit finished plans: 'status=done; need ready'."""
+    import labpilot.research_engine.conductor.loop as loop_mod
+
+    class _Plan:
+        def __init__(self, pid, status):
+            self.id = pid
+            self.status = status
+            self.metadata = {}
+
+    class _Artifacts:
+        def __init__(self, *a, **k):
+            pass
+
+        def list(self):
+            return [
+                _Plan("P-001", "done"),
+                _Plan("P-002", "ready"),
+                _Plan("P-008", "done"),
+            ]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "labpilot.research_engine.artifacts.plan.PlanArtifacts", _Artifacts
+    )
+
+    class _WS:
+        knowledge_dir = tmp_path
+        competition = "demo"
+
+    assert loop_mod._latest_plan_id(_WS()) == "P-002"
+
+
+def test_latest_plan_falls_back_when_none_runnable(monkeypatch, tmp_path):
+    import labpilot.research_engine.conductor.loop as loop_mod
+
+    class _Plan:
+        def __init__(self, pid):
+            self.id = pid
+            self.status = "done"
+            self.metadata = {}
+
+    class _Artifacts:
+        def __init__(self, *a, **k):
+            pass
+
+        def list(self):
+            return [_Plan("P-001"), _Plan("P-008")]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "labpilot.research_engine.artifacts.plan.PlanArtifacts", _Artifacts
+    )
+
+    class _WS:
+        knowledge_dir = tmp_path
+        competition = "demo"
+
+    assert loop_mod._latest_plan_id(_WS()) == "P-008"

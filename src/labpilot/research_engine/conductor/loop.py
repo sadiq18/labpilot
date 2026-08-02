@@ -54,7 +54,13 @@ def _objective_unmet(config: Any, state: Any) -> bool:
 
 
 def _latest_plan_id(workspace: Workspace) -> str | None:
-    """Highest-numbered plan for this competition, or None when none exist."""
+    """Latest *runnable* plan, falling back to the newest of any status.
+
+    Taking the highest id outright targeted plans that had already finished —
+    the Engineer then refused with "status=done; need ready or in_progress" and
+    the campaign lost a step. A plan is only a useful run target while it still
+    has work left.
+    """
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
 
     artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
@@ -64,8 +70,14 @@ def _latest_plan_id(workspace: Workspace) -> str | None:
         return None
     finally:
         artifacts.close()
-    ids = sorted(p.id for p in plans)
-    return ids[-1] if ids else None
+    if not plans:
+        return None
+    runnable = sorted(
+        p.id for p in plans if str(p.status) in {"ready", "in_progress", "draft"}
+    )
+    if runnable:
+        return runnable[-1]
+    return sorted(p.id for p in plans)[-1]
 
 
 def _next_hypothesis_id(workspace: Workspace) -> str | None:
