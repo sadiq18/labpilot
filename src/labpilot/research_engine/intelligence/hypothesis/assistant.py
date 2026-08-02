@@ -100,6 +100,25 @@ def _candidate_labels(candidate: HypothesisCandidate) -> set[str]:
     return {label for label in labels if label}
 
 
+def _resolve_problem_type(knowledge_dir: Path, competition: str) -> str:
+    """Best-effort problem type, used to reject cross-modality techniques."""
+    from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
+
+    for candidate in (
+        knowledge_dir.parent / "competition.json",
+        knowledge_dir / competition / "competition.json",
+    ):
+        try:
+            if candidate.is_file():
+                spec = CompetitionSpec.model_validate_json(
+                    candidate.read_text(encoding="utf-8")
+                )
+                return str(spec.problem_type)
+        except Exception:  # noqa: BLE001 — filtering is an optimisation, not a gate
+            continue
+    return ""
+
+
 class HypothesisAssistant:
     """Recommend top-N experiments — never executes."""
 
@@ -157,6 +176,7 @@ class HypothesisAssistant:
             transfers=transfers,
             tried_techniques=tried,
             ledger=ledger,
+            problem_type=_resolve_problem_type(knowledge_dir, competition),
         )
         combo_candidates, combo_note = self._combo_candidates(
             ledger, research_context=research_context
