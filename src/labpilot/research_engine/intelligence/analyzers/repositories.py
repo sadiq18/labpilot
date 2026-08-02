@@ -185,6 +185,12 @@ class RepositoryAnalyzer(BaseAnalyzer):
             path for path in card.interesting_files if path in set(repo.key_files)
         ]
         card.interesting_files = grounded_files or list(repo.key_files)
+        corpus = _grounding_corpus(repo)
+        card.architecture = _ground_terms(card.architecture, corpus)
+        card.techniques = _ground_terms(card.techniques, corpus)
+        card.loss = _ground_terms(card.loss, corpus)
+        card.augmentation = _ground_terms(card.augmentation, corpus)
+        card.training_tricks = _ground_terms(card.training_tricks, corpus)
         return card
 
     def _maybe_attach_llm_client(self) -> None:
@@ -266,3 +272,37 @@ def repo_dict_for_report(artifact: ResearchArtifact) -> dict[str, Any] | None:
         "interesting_files": knowledge.get("interesting_files") or [],
         "confidence": artifact.confidence,
     }
+
+
+def _grounding_corpus(repo: Repository) -> str:
+    """Lowercased README + deps + key files + bounded file texts for term checks."""
+    parts = [
+        repo.readme_excerpt or "",
+        " ".join(repo.dependencies),
+        " ".join(repo.key_files),
+    ]
+    for text in repo.file_texts.values():
+        parts.append(text[:20_000])
+    return "\n".join(parts).lower()
+
+
+def _ground_terms(terms: list[str], corpus: str) -> list[str]:
+    """Keep LLM terms that appear (loosely) in deterministic repo evidence."""
+    kept: list[str] = []
+    for raw in terms:
+        term = str(raw).strip()
+        if not term:
+            continue
+        needle = term.lower()
+        if needle in corpus:
+            kept.append(term)
+            continue
+        tokens = [
+            tok
+            for tok in needle.replace("-", " ").replace("_", " ").split()
+            if len(tok) > 2
+        ]
+        if tokens and all(tok in corpus for tok in tokens):
+            kept.append(term)
+    return list(dict.fromkeys(kept))
+

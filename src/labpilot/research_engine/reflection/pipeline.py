@@ -28,8 +28,16 @@ def run_reflection(
     llm_client: Any | None = None,
     persist: bool = True,
     promote_claims: bool = True,
+    verify_auto: bool = True,
+    verify: Any | None = None,
 ) -> dict[str, Any]:
-    """Evidence → Micro Agents (critic/lessons/…) → durable SoR writes."""
+    """Evidence → Micro Agents (critic/lessons/…) → durable SoR writes.
+
+    After critic assessment, a soft verification gate can skip belief/claim
+    promotion on ``reject`` without failing the pipeline.
+    """
+    from labpilot.research_engine.shared.verify_artifact import verify_ai_artifact
+
     extractor = EvidenceExtractor(knowledge_dir, competition)
     critic = ExperimentCritic(llm_client=llm_client)
     beliefs = BeliefUpdater(knowledge_dir, competition)
@@ -47,7 +55,24 @@ def run_reflection(
         )
         hyp_id = hypothesis_id or evidence.get("hypothesis_id")
         assessment = critic.assess(evidence)
-        belief_result = beliefs.update_from_critic(assessment, evidence)
+        verification = verify_ai_artifact(
+            "reflection_assessment",
+            {
+                "competition": competition,
+                "evidence_id": evidence.get("id"),
+                "recommendation": getattr(assessment, "recommendation", None),
+            },
+            auto=verify_auto,
+            prompt=verify,
+        )
+        promote = promote_claims and verification.decision != "reject"
+        if verification.decision == "reject":
+            belief_result: dict[str, Any] = {
+                "skipped": True,
+                "reason": "verification_reject",
+            }
+        else:
+            belief_result = beliefs.update_from_critic(assessment, evidence)
         hyp_result = hyps.evaluate(
             assessment,
             hypothesis_id=hyp_id,
@@ -55,7 +80,7 @@ def run_reflection(
         )
         lesson = lessons.generate(assessment, evidence)
         claim_rows: list[dict[str, Any]] = []
-        if promote_claims:
+        if promote:
             claim_rows = claims.promote_eligible(evidence_id=evidence.get("id"))
             contradiction = assessment.contradiction
             if (
@@ -97,6 +122,8 @@ def run_reflection(
             "claims": claim_rows,
             "understanding": understanding,
             "recommendation": recommendation,
+            "verification": verification.model_dump(),
+            "needs_review": verification.decision == "spot_check",
         }
     finally:
         extractor.close()
