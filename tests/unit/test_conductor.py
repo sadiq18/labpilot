@@ -496,3 +496,54 @@ def test_step_args_leave_explicit_ids_untouched():
         latest_execution_id=None,
     )
     assert resolved["plan_id"] == "P-003"
+
+
+def test_generate_plan_switches_to_hypothesis_once_baseline_exists():
+    """Baseline compilation is idempotent — a campaign must iterate elsewhere."""
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "generate_plan",
+        {"baseline": True},
+        latest_plan_id="P-001",
+        latest_execution_id="E-001",
+        next_hypothesis_id="H-007",
+        baseline_plan_exists=True,
+    )
+    assert resolved == {"hypothesis_id": "H-007"}
+
+
+def test_generate_plan_keeps_baseline_when_none_exists_yet():
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "generate_plan",
+        {"baseline": True},
+        latest_plan_id=None,
+        latest_execution_id=None,
+        next_hypothesis_id="H-007",
+        baseline_plan_exists=False,
+    )
+    assert resolved == {"baseline": True}
+
+
+def test_generate_plan_keeps_baseline_when_no_hypothesis_available():
+    """Without a hypothesis there is nothing better to ask for."""
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+
+    resolved = resolve_step_args(
+        "generate_plan",
+        {"baseline": True},
+        latest_plan_id="P-001",
+        latest_execution_id="E-001",
+        next_hypothesis_id=None,
+        baseline_plan_exists=True,
+    )
+    assert resolved == {"baseline": True}
+
+
+def test_conductor_analyze_gathers_kaggle_domain_knowledge():
+    """No kernels/discussions => no concepts => no hypotheses => no iteration."""
+    from labpilot.research_engine.conductor.actions import _default_args
+
+    assert _default_args("analyze_competition") == {"fetch_kaggle": True}

@@ -50,7 +50,7 @@ _TEMPLATES: list[tuple[tuple[str, ...], list[ToolStep]]] = [
     ),
     (
         ("analyze", "competition", "understand"),
-        [ToolStep(tool="analyze_competition", args={})],
+        [ToolStep(tool="analyze_competition", args={"fetch_kaggle": True})],
     ),
     (
         ("plan", "baseline", "hypothesis"),
@@ -134,6 +134,12 @@ def map_research_action(
 
 
 def _default_args(tool: str) -> dict[str, Any]:
+    if tool == "analyze_competition":
+        # Kaggle kernels and discussions are where competition-specific
+        # technique knowledge actually lives. Without them the Knowledge Hub
+        # finds no concepts, no hypotheses get proposed, and the campaign has
+        # nothing to iterate on after the baseline. Fetching is cached.
+        return {"fetch_kaggle": True}
     if tool == "generate_plan":
         return {"baseline": True}
     if tool == "search_papers":
@@ -153,19 +159,30 @@ def resolve_step_args(
     *,
     latest_plan_id: str | None,
     latest_execution_id: str | None,
+    next_hypothesis_id: str | None = None,
+    baseline_plan_exists: bool = False,
 ) -> dict[str, Any]:
     """Replace ``@latest`` placeholders with ids that actually exist.
 
     Falls back to the conventional first id when nothing has been created yet:
     a step earlier in the same batch is usually about to mint exactly that id,
     so failing here would stall the batch on its first run.
+
+    Also switches ``generate_plan`` off ``baseline`` once a baseline plan
+    exists. Baseline compilation is idempotent, so a campaign that only ever
+    asked for a baseline could never mint a second plan — and therefore could
+    never run a second experiment. Iterating means planning against a proposed
+    hypothesis instead.
     """
-    del tool
     resolved = dict(args)
     if resolved.get("plan_id") == LATEST:
         resolved["plan_id"] = latest_plan_id or FIRST_PLAN_ID
     if resolved.get("execution_id") == LATEST:
         resolved["execution_id"] = latest_execution_id or FIRST_EXECUTION_ID
+    if tool == "generate_plan" and resolved.get("baseline") and baseline_plan_exists:
+        if next_hypothesis_id:
+            resolved.pop("baseline", None)
+            resolved["hypothesis_id"] = next_hypothesis_id
     return resolved
 
 

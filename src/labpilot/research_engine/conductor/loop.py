@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -50,6 +51,45 @@ def _latest_plan_id(workspace: Workspace) -> str | None:
         artifacts.close()
     ids = sorted(p.id for p in plans)
     return ids[-1] if ids else None
+
+
+def _next_hypothesis_id(workspace: Workspace) -> str | None:
+    """Highest-confidence untested hypothesis, or None when there are none.
+
+    This is what lets a campaign iterate: once the baseline plan exists, the
+    next plan has to be built against a hypothesis rather than re-requesting an
+    idempotent baseline.
+    """
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+    from labpilot.research_engine.shared.experiments.models import HypothesisStatus
+
+    try:
+        store = HypothesisStore(workspace.knowledge_dir, workspace.competition)
+        proposed = store.list(status=HypothesisStatus.PROPOSED)
+    except Exception:  # noqa: BLE001 — absent store means "nothing to test yet"
+        return None
+    if not proposed:
+        return None
+    ranked = sorted(
+        proposed,
+        key=lambda h: (getattr(h, "confidence", 0.0) or 0.0, h.id),
+        reverse=True,
+    )
+    return ranked[0].id
+
+
+def _baseline_plan_exists(workspace: Workspace) -> bool:
+    """True when a baseline plan has already been compiled for this competition."""
+    from labpilot.research_engine.artifacts.plan import PlanArtifacts
+
+    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    try:
+        plans = artifacts.list()
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        artifacts.close()
+    return any((p.metadata or {}).get("plan_kind") == "baseline" for p in plans)
 
 
 def _latest_execution_id(workspace: Workspace) -> str | None:
@@ -150,6 +190,11 @@ def run_until_stop(
             if prefer_offline:
                 research = offline_next_research_action(completed, allowlist)
             else:
+                # Observe (Context Engine retrieval) + think (LLM) both run
+                # before the first dispatch message, so without this a campaign
+                # step is several silent minutes on a local model.
+                _progress(f"step {step + 1}/{max_steps}: observing + deciding …")
+                started = time.monotonic()
                 next_tool, _obs = decide_next(
                     store,
                     workspace,
@@ -157,6 +202,10 @@ def run_until_stop(
                     registry,
                     llm_client=llm_client,
                     **policy_kw,
+                )
+                _progress(
+                    f"step {step + 1}/{max_steps}: chose "
+                    f"{next_tool.tool or 'stop'} ({time.monotonic() - started:.1f}s)"
                 )
                 if next_tool.stop or not next_tool.tool:
                     research = ResearchAction(
@@ -229,6 +278,8 @@ def run_until_stop(
                     tool_step.args,
                     latest_plan_id=_latest_plan_id(workspace),
                     latest_execution_id=_latest_execution_id(workspace),
+                    next_hypothesis_id=_next_hypothesis_id(workspace),
+                    baseline_plan_exists=_baseline_plan_exists(workspace),
                 )
                 task = store.enqueue(
                     session_id,
