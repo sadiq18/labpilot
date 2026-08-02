@@ -570,6 +570,11 @@ def _available(monkeypatch, *, has_plan, has_execution):
     monkeypatch.setattr(
         loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
     )
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 0)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: None)
+    monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: False)
     catalog = {
         "analyze_competition", "search_papers", "query_memory", "generate_plan",
         "implement", "run_plan", "run_experiment", "reflect", "submit", "submit_learn",
@@ -653,6 +658,8 @@ def _available_with_backlog(monkeypatch, backlog, *, has_plan=True, has_executio
         loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
     )
     monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: backlog)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 99.0)
+    monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: False)
     catalog = {
         "analyze_competition", "search_papers", "query_memory", "generate_plan",
         "implement", "run_plan", "run_experiment", "reflect", "submit",
@@ -679,3 +686,62 @@ def test_backlog_below_target_still_gathers(monkeypatch):
     """A thin queue is worth topping up before it runs dry."""
     tools = _available_with_backlog(monkeypatch, backlog=2)
     assert "analyze_competition" in tools
+
+
+def test_evidence_cooldown_blocks_immediate_resweep(monkeypatch):
+    """Re-sweeping minutes later re-ingests the same sources under new ids."""
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 0)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 0.5)
+    ok, reason = policy_mod.should_gather_evidence(_FakeWorkspace())
+    assert ok is False
+    assert "cooldown" in reason
+
+
+def test_stale_evidence_with_thin_backlog_reopens_gathering(monkeypatch):
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 1)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 48.0)
+    ok, _ = policy_mod.should_gather_evidence(_FakeWorkspace())
+    assert ok is True
+
+
+def test_backlog_wins_over_freshness(monkeypatch):
+    """A full queue blocks gathering however old the evidence is."""
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 9)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 999.0)
+    ok, reason = policy_mod.should_gather_evidence(_FakeWorkspace())
+    assert ok is False
+    assert "untested hypotheses" in reason
+
+
+def test_never_gathered_always_allows_gathering(monkeypatch):
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 0)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: None)
+    ok, reason = policy_mod.should_gather_evidence(_FakeWorkspace())
+    assert ok is True
+    assert "no evidence" in reason
+
+
+def test_unrun_plan_blocks_queuing_another(monkeypatch):
+    """The campaign chose generate_plan three steps running without executing one."""
+    import labpilot.research_engine.conductor.loop as loop_mod
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-003")
+    monkeypatch.setattr(loop_mod, "_latest_execution_id", lambda ws: "E-001")
+    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 5)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 1.0)
+    monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: True)
+
+    tools = policy_mod.available_tools(
+        _FakeWorkspace(), {"generate_plan", "run_plan", "reflect"}
+    )
+    assert "generate_plan" not in tools
+    assert "run_plan" in tools

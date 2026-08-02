@@ -79,6 +79,7 @@ def build_observe_bundle(
     # Backlog is the campaign's core scheduling signal: test what is queued,
     # gather more evidence only when the queue runs dry.
     observe["untested_hypotheses"] = untested_hypothesis_count(workspace)
+    observe["hours_since_last_artifact"] = hours_since_last_artifact(workspace)
     _attach_evidence_refresh(observe, workspace)
     if include_context:
         _attach_context(
@@ -298,6 +299,10 @@ def llm_next_action(
 # it is worth spending minutes gathering more evidence; at or above it, that
 # time is better spent testing what is already queued.
 _HYPOTHESIS_BACKLOG_TARGET = 3
+# Re-sweeping the same kernels and papers minutes apart mostly re-ingests the
+# same sources under new artifact ids, bloating the store without adding
+# information. Evidence has to be allowed to go stale before refetching.
+_EVIDENCE_COOLDOWN_HOURS = 6.0
 
 
 def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
@@ -320,7 +325,9 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
     # minutes of network and LLM work). Once there is a backlog of untested
     # hypotheses, the useful move is to *test* one, not to re-derive the same
     # techniques and beliefs again. Gathering reopens when the backlog runs dry.
-    backlog = untested_hypothesis_count(workspace)
+    gather_ok, gather_reason = should_gather_evidence(workspace)
+    if not gather_ok:
+        logger.info("Skipping evidence gathering: %s", gather_reason)
 
     requires: dict[str, bool] = {
         # Nothing to reflect on until an experiment has produced evidence.
@@ -332,10 +339,73 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
         "submit_learn": has_execution,
         # Re-analysing with work already queued is the single most expensive
         # way for a campaign to make no progress.
-        "analyze_competition": backlog < _HYPOTHESIS_BACKLOG_TARGET,
-        "search_papers": backlog < _HYPOTHESIS_BACKLOG_TARGET,
+        "analyze_competition": gather_ok,
+        "search_papers": gather_ok,
+        # Same brake one level down: queuing another plan while one is still
+        # unrun adds no information and starves the thing that does.
+        "generate_plan": not has_unrun_plan(workspace),
     }
     return {name for name in allowlist if requires.get(name, True)}
+
+
+def hours_since_last_artifact(workspace: Workspace) -> float | None:
+    """Age of the newest research artifact in hours, or None when there are none."""
+    from datetime import UTC, datetime
+
+    from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
+
+    try:
+        with KnowledgeStore(workspace.knowledge_dir, workspace.competition) as store:
+            row = store._conn.execute(  # noqa: SLF001 — read-only freshness probe
+                "SELECT MAX(created_at) AS newest FROM research_artifacts"
+            ).fetchone()
+    except Exception:  # noqa: BLE001 — no store means no artifacts
+        return None
+    newest = row["newest"] if row else None
+    if not newest:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(newest))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - stamp).total_seconds() / 3600.0
+
+
+def should_gather_evidence(workspace: Workspace) -> tuple[bool, str]:
+    """Decide whether pulling more artifacts is worth it right now.
+
+    Two independent brakes, because either one alone lets the store bloat:
+    a queue of untested ideas means the bottleneck is *testing*, not evidence;
+    and a recent sweep means another one would mostly re-ingest the same
+    kernels and papers under new artifact ids.
+    """
+    backlog = untested_hypothesis_count(workspace)
+    if backlog >= _HYPOTHESIS_BACKLOG_TARGET:
+        return False, f"{backlog} untested hypotheses already queued"
+
+    age_hours = hours_since_last_artifact(workspace)
+    if age_hours is not None and age_hours < _EVIDENCE_COOLDOWN_HOURS:
+        return False, f"evidence gathered {age_hours:.1f}h ago (cooldown)"
+
+    if age_hours is None:
+        return True, "no evidence gathered yet"
+    return True, f"backlog {backlog} is thin and evidence is {age_hours:.1f}h old"
+
+
+def has_unrun_plan(workspace: Workspace) -> bool:
+    """True when a compiled plan is still waiting to be executed."""
+    from labpilot.research_engine.artifacts.plan import PlanArtifacts
+
+    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    try:
+        plans = artifacts.list()
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        artifacts.close()
+    return any(str(p.status) in {"ready", "draft"} for p in plans)
 
 
 def untested_hypothesis_count(workspace: Workspace) -> int:
