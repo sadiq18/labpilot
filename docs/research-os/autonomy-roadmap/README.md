@@ -30,11 +30,42 @@ more than one motion.
 
 ## Build order
 
-**M10 → M7 → M8 → M13**, with M9 and M14 running alongside.
-
 Milestone numbers reflect when each plan was written, not the order to build
-them — the table below is in build order. The first four are a chain: each is
-dead without the previous.
+them. Order below is derived from the `Blocked by` line of each plan, not
+asserted.
+
+| Phase | Work | Why here |
+|-------|------|----------|
+| **0** | **M14 phase 1** — stamp rule-engine results as degraded | Nearly free, and it makes every later phase *observable*. This alone would have exposed the silent-degradation class on day one |
+| **1** | **M10** wiring **⇄ thin M7 slice** | Mutual, not sequential — see below |
+| **2** | **M7** full · adopt **M15**'s contract test | M15's "different input ⇒ different artifact" *is* M7's exit criterion generalised, so the practice starts here |
+| **3** | **M8 + M17** together | Both need the same missing writer: `metric_history` / `last_metric` are read in four places and written in none |
+| **4** | **M13** (needs M7+M8) · **M11** (needs M7 only) | M11 does **not** need M8 and can start as soon as M7 lands |
+| **5** | **M16** (needs M11 + M14 full) · **M12** (needs M7 + M8) | Last |
+
+Standing throughout: **M9** (verification-first), **M15** (capability audit),
+**M14** phases 2–3 once the test migration is budgeted.
+
+### The one cycle: M10 ⇄ M7
+
+These are **mutually dependent** and cannot be ordered linearly:
+
+- M7 needs a competent model — its *path efficacy* metric compares registry
+  recipes against LLM implementations and is unmeasurable without one.
+- M10 needs M7 to prove itself — its real purpose is "codegen gets a model that
+  can write training code", and the only proof is generating training code.
+
+Resolution: **M10 wiring first, then a thin M7 slice (one technique, one
+dataset) validates it, then M7 in full.** Shipping M10 on unit tests alone would
+repeat the mistake review already caught, where `select_route` was tested,
+unwired, and called done.
+
+### Corrections to an earlier statement of this order
+
+The chain "M10 → M7 → M8 → M13" was accurate but incomplete. It hid the M10⇄M7
+cycle, placed M14 phase 1 vaguely "alongside" when it belongs first, separated
+M17 from M8 despite their shared wiring, implied M11 waits for M8 when it only
+needs M7, and omitted M11/M12/M16/M17 entirely.
 
 | # | Plan | Unlocks | Status |
 |---|------|---------|--------|

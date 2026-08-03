@@ -77,15 +77,18 @@ Full diagnosis, eleven plans and an evidence log:
 **[autonomy-roadmap/](autonomy-roadmap/)** — start with
 [`00-diagnosis.md`](autonomy-roadmap/00-diagnosis.md).
 
-**Build order: M10 → M7 → M8 → M13**, with M9 and M14 alongside.
+**Build order** — derived from each plan's `Blocked by`, not asserted. Full
+reasoning and the M10⇄M7 cycle: [autonomy-roadmap/](autonomy-roadmap/#build-order).
 
-| Order | Milestone | Why here |
-|-------|-----------|----------|
-| 1 | **M10** [LLM tiering & routing](autonomy-roadmap/04-llm-tiering.md) | A trustworthy reasoning substrate. Everything downstream inherits its quality — and M7 cannot be *evaluated* without it |
-| 2 | **M7** [Technique → model](autonomy-roadmap/01-technique-to-model.md) | Hypotheses become testable. Nothing can be optimised until a technique changes the model |
-| 3 | **M8** [Objective feedback loop](autonomy-roadmap/02-objective-loop.md) | The system notices it is making no progress, and learns from its own results |
-| 4 | **M13** [Policy reasons about state](autonomy-roadmap/08-policy-reasoning.md) | Decisions replace keyword matching |
-| ∥ | **M9** [Verification-first](autonomy-roadmap/03-verification-first.md) · **M14** [LLM required](autonomy-roadmap/09-llm-required.md) | Standing practices, not gated on the chain |
+| Phase | Work | Why here |
+|-------|------|----------|
+| 0 | **M14** phase 1 — [stamp degraded results](autonomy-roadmap/09-llm-required.md) | Nearly free; makes every later phase observable |
+| 1 | **M10** [LLM tiering & routing](autonomy-roadmap/04-llm-tiering.md) **⇄ thin M7 slice** | Trustworthy substrate. Mutually dependent with M7 — neither ships alone |
+| 2 | **M7** [Technique → model](autonomy-roadmap/01-technique-to-model.md) | Hypotheses become testable. Nothing is optimisable until a technique changes the model |
+| 3 | **M8** [Objective loop](autonomy-roadmap/02-objective-loop.md) + **M17** [Run until plateau](autonomy-roadmap/12-run-until-done.md) | Together — both need the same missing metric writer |
+| 4 | **M13** [Policy reasoning](autonomy-roadmap/08-policy-reasoning.md) · **M11** [Parallel branches](autonomy-roadmap/05-parallel-branches.md) | M13 needs M7+M8; M11 needs only M7 |
+| 5 | **M16** [Background routine](autonomy-roadmap/11-background-routine.md) · **M12** [Beyond Kaggle](autonomy-roadmap/06-beyond-kaggle.md) | Last |
+| ∥ | **M9** [Verification-first](autonomy-roadmap/03-verification-first.md) · **M15** [Capability audit](autonomy-roadmap/10-capability-audit.md) | Standing practices, not gated on the chain |
 
 > **Model capability is a product tier, not an architectural constraint.**
 > A weak component in a research OS does not merely run slower — it produces
