@@ -46,7 +46,7 @@ def enrich_kernel_artifact(
         meta["extraction_source"] = "rule_engine"
         return artifact.model_copy(update={"metadata": meta}), "rule_engine"
 
-    source = "llm" if agent.last_used_llm else "rule_engine"
+    source = agent.last_generated_by
     techniques = list(dict.fromkeys([*artifact.techniques, *card.techniques]))
     models = list(dict.fromkeys([*artifact.models, *card.architecture]))
     claims = list(
@@ -104,7 +104,7 @@ def enrich_discussion_artifact(
         meta["extraction_source"] = "rule_engine"
         return artifact.model_copy(update={"metadata": meta}), "rule_engine"
 
-    source = "llm" if agent.last_used_llm else "rule_engine"
+    source = agent.last_generated_by
     payload = extract.model_dump(mode="json")
     meta["forum_extract"] = payload
     meta["extraction_source"] = source

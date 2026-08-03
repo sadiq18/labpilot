@@ -25,7 +25,7 @@ import inspect
 import logging
 import re
 import time
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +33,11 @@ if TYPE_CHECKING:
     from labpilot.llm.client import LLMClient
 
 logger = logging.getLogger("labpilot.accessor.common.micro_agents")
+
+
+#: What actually produced a result. Sourced from the branch taken in
+#: :meth:`BaseMicroAgent.run`, never inferred by a caller.
+GeneratedBy = Literal["llm", "rule_engine", "template_fallback", "stub"]
 
 
 def coerce_str_list(value: object) -> list[str]:
@@ -131,13 +136,26 @@ class BaseMicroAgent:
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self.llm_client = llm_client
         self.last_used_llm = False
+        self.last_generated_by: GeneratedBy = "rule_engine"
+        self.last_failure_reason: str | None = None
 
     @property
     def uses_llm(self) -> bool:
+        """Whether a client is *configured* — NOT whether the call succeeded.
+
+        Do not use this for provenance. It reports True for a run that fell back
+        to the rule engine, which is how an artifact came to record ``"llm"`` for
+        deterministic output. Use :attr:`last_generated_by`.
+        """
         return self.llm_client is not None
 
     def run(self, context: StructuredContext) -> BaseModel:
         self.last_used_llm = False
+        # Default covers the silent path below: with no client configured the
+        # try/except is skipped entirely and nothing is logged, so the only
+        # record that this run was deterministic is the one set here.
+        self.last_generated_by = "rule_engine"
+        self.last_failure_reason = None if self.llm_client is not None else "no llm client"
         if self.llm_client is not None:
             max_attempts = max(1, int(getattr(self, "llm_max_attempts", 3)))
             retry_delay = float(getattr(self, "llm_retry_delay_seconds", 20.0))
@@ -146,6 +164,8 @@ class BaseMicroAgent:
                 try:
                     result = self._run_llm(context)
                     self.last_used_llm = True
+                    self.last_generated_by = "llm"
+                    self.last_failure_reason = None
                     return result
                 except Exception as exc:  # noqa: BLE001 - soft-fail to deterministic path
                     last_exc = exc
@@ -166,6 +186,7 @@ class BaseMicroAgent:
                         self.name or type(self).__name__,
                         last_exc,
                     )
+                    self.last_failure_reason = str(last_exc)
                     break
         return self._run_rule_engine(context)
 

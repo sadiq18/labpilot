@@ -60,7 +60,7 @@ def build_research_brief(
             data=structured,
         )
     )
-    generated_by = "llm" if agent.last_used_llm else "rule_engine"
+    generated_by = agent.last_generated_by
     problem = str(getattr(narrative, "problem_summary", "") or "").strip()
     if not problem:
         problem = _fallback_problem_summary(competition, dataset)

@@ -194,7 +194,7 @@ class KnowledgeMerger:
         }:
             return None
         category = str(getattr(result, "category", "")).strip()
-        return canonical, "llm" if agent.last_used_llm else "rule_engine", category
+        return canonical, agent.last_generated_by, category
 
 
 def _most_common_variant(distinct: list[str], variants: list[str]) -> str:

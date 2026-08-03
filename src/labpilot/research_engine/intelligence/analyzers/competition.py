@@ -356,9 +356,11 @@ class CompetitionAnalyzer(BaseAnalyzer):
         if not isinstance(extract, CompetitionPageExtract):
             extract = CompetitionPageExtract.model_validate(extract.model_dump())
 
-        source = "llm" if agent.uses_llm else "rule_engine"
-        # If LLM was configured but run fell back, BaseMicroAgent still has uses_llm True;
-        # detect via whether we intended LLM — soft note is enough.
+        # What actually produced this, not what was configured. `uses_llm` is
+        # True whenever a client exists, so it recorded "llm" for runs that fell
+        # back to the rule engine — provenance that reads as reasoning when the
+        # output was deterministic.
+        source = agent.last_generated_by
         profile.page_enrichment_source = source
         apply_page_extract(profile, extract)
         notes.append(f"page enrichment: {source}.")
