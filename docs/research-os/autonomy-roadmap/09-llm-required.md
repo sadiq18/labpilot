@@ -1,6 +1,8 @@
 # M14 — LLM is a hard dependency; delete the rule-engine fallbacks
 
-**Status:** decided, not started · **Decision owner:** product
+**Status:** designed · **Decision owner:** product · **Build phase:** 0
+
+**Design:** [design/09-llm-required.md](design/09-llm-required.md)
 
 ---
 
@@ -55,6 +57,12 @@ Keep the fallback, but a rule-engine result must set `generated_by="rule_engine"
 on the artifact *and* log at WARNING with the reason. Any downstream durable
 write carries the flag. This alone would have made the whole failure visible on
 day one.
+
+Scoping correction: this is **not** 20 agent edits. The fallback is one place
+(`BaseMicroAgent.run()`), `last_used_llm` already exists, and three write paths
+already stamp *something* — the work is unifying an inconsistent convention and
+fixing one place where it is actively wrong (`analyzers/competition.py:359`
+records `"llm"` for runs that fell back). See the design.
 
 **Phase 2 — make it opt-in.**
 Automatic fallback off by default. A rule engine runs only under an explicit
