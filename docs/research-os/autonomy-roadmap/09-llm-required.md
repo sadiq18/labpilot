@@ -94,8 +94,18 @@ relying on rule engines to fill the gap. That is better practice anyway — a te
 asserting rule-engine output is not testing the shipped behaviour — but it is
 real work and should be budgeted, not discovered.
 
-Phase 1 is safe and immediately valuable; phases 2–3 need that test migration
-first.
+Phase 1 is safe and immediately valuable and **has shipped**.
+
+Phase 2 splits in two, with different blockers (the design conflated them):
+
+- **2a** (no client ⇒ raise) is blocked *only* by the test migration —
+  **measured at 76 failing tests**, not the ~49 grep suggested. It is **not**
+  blocked by M10, since a local Ollama satisfies "a client exists".
+- **2b** (failed call ⇒ raise) genuinely needs M10: a 14B model failed 3 of 3
+  campaigns pre-fix, so enabling it now would abort every campaign.
+
+Phase 3 is blocked by phase-1 telemetry — fire-rate data from real campaigns —
+not by M10.
 
 ## Exit criteria
 

@@ -261,8 +261,15 @@ how often — is the input to that decision, so phase 3 must not start first.
 
 ### 9.5 Test migration
 
-The real cost. Current surface: **~49 sites constructing agents with
-`llm_client=None`** and **19 files / 77 references to `rule_engine`**.
+The real cost, and the **only** blocker for phase 2a.
+
+**Measured, not estimated.** Simulating 2a (raise when `llm_client is None`) and
+running the suite: **76 tests fail** — roughly 11% of 709.
+
+Grep undercounts this badly. Only 4 sites construct a micro agent directly; the
+other ~46 construct a *capability* with `llm_client=None`, which builds an agent
+internally. The blast radius is only visible by running it, which is why the
+number in this section is measured rather than counted.
 
 Migration: a `stub_llm_client` fixture returning canned JSON per agent, so tests
 exercise the **shipped path**. A test asserting rule-engine output is not
@@ -421,14 +428,22 @@ needs phase 1's telemetry.
 | Risk | Mitigation |
 |---|---|
 | Phase 2 breaks a workflow depending on implicit fallback | `--deterministic` preserves it explicitly; error names the flag |
-| Test migration underestimated | Sized: ~49 construction sites, 19 files. Budget it, do not discover it |
+| Test migration underestimated | **Measured at 76 failing tests** by simulating the raise, not estimated from grep (which said 4). Budget it, do not discover it |
 | A new agent skips the stamp | Suite-wide coverage test (§10) |
 | Stored artifacts with old field names | Read-aliases for one release (§8.1) |
 
-**Ordering.** Phase 1 is roadmap phase 0 — before [M10](../04-llm-tiering.md),
-because it is what makes M10's wiring observable. Phases 2–3 come after M10, when
-a competent model makes "fail rather than degrade" a reasonable default rather
-than a way to stop the system running at all.
+**Ordering, with trigger conditions rather than vague sequencing.**
+
+| Phase | Ships when | Blocked by |
+|---|---|---|
+| 1 | done | — |
+| **2a** | the 76-test migration lands | test migration **only** — *not* M10 |
+| **2b** | fallback rate under a frontier model is materially below today's | [M10](../04-llm-tiering.md) live, measured by §11.3 run C |
+| **3** | ≥3 real campaigns have run with phase-1 stamps | phase-1 telemetry |
+
+Phase 1 is roadmap phase 0 — before [M10](../04-llm-tiering.md) — because it is
+what makes M10's wiring observable. 2a can follow immediately after; it was
+deferred on a reason that did not survive checking.
 
 **Explicit non-goal.** This does not make the LLM output *good*. It makes
 degradation *visible*. A system that fails loudly is not yet a system that
