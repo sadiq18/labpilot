@@ -1,7 +1,9 @@
 # M7 — A technique must change the model
 
-**Status:** not started · **Blocks:** everything · **Blocked by:** M10 (needs a
+**Status:** designed · **Blocks:** everything · **Blocked by:** M10 (needs a
 model that can write code)
+
+**Design:** [design/01-technique-to-model.md](design/01-technique-to-model.md)
 
 ---
 

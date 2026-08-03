@@ -34,7 +34,7 @@ Do not reorder. Each is dead without the previous.
 
 | # | Plan | Unlocks | Status |
 |---|------|---------|--------|
-| **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | Not started |
+| **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | [Designed](design/01-technique-to-model.md) |
 | **M8** | [Objective feedback loop](02-objective-loop.md) | The system noticing it is making no progress | Not started |
 | **M9** | [Verification-first execution](03-verification-first.md) | Trusting any result | Partly done |
 | **M10** | [LLM tiering & free-tier routing](04-llm-tiering.md) | A model capable enough for M7 | Decision layer only — not wired |
