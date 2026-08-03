@@ -1,7 +1,8 @@
 # M7 — A technique must change the model
 
-**Status:** designed · **Blocks:** everything · **Blocked by:** M10 (needs a
-model that can write code)
+**Status:** designed · **Blocks:** everything · **Blocked by:**
+[M10](04-llm-tiering.md) — not merely "needs a model that can write code", but
+M7's evaluation is incomplete without one (path efficacy is unmeasurable)
 
 **Design:** [design/01-technique-to-model.md](design/01-technique-to-model.md)
 

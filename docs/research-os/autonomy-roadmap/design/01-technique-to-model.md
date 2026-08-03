@@ -87,7 +87,7 @@ attributable to the technique.
 
 | # | Requirement |
 |---|---|
-| N1 | **No LLM dependency.** Recipes are deterministic, so M7 is not blocked on M10/M14 |
+| N1 | Recipes execute **without an LLM** — not so M7 can dodge M10, but because a reproducible path is required for research (see §8.2) |
 | N2 | Adding a technique is a registry entry + a template gate — no changes to Conductor, planner or capability |
 | N3 | **Recipe-path** rendering is deterministic: same (choice, technique) → byte-identical `train.py`. LLM-authored code is not reproducible and is not held to this |
 | N4 | Unknown techniques degrade to an explicit, recorded rejection — never a silent baseline |
@@ -214,10 +214,34 @@ question the eval answers** (§11.3), not one to settle here. If it consistently
 wins, the routing rule should change — and the provenance in §9.6 is what makes
 that measurable.
 
-**Why recipes first.** Not because the LLM path is worse, but because it is
-*blocked* (M10) while recipes are not. Shipping the floor now means M7 stops
-blocking [M8](../02-objective-loop.md) and [M13](../08-policy-reasoning.md)
-without waiting on the routing work.
+**Sequencing: [M10](../04-llm-tiering.md) lands first.** An earlier draft argued
+recipes should go first because they are unblocked. That was reasoning from the
+development environment, not the product. Model capability is a **product tier,
+not an architectural constraint** — a paying customer supplies a frontier model,
+and building around a 14B local model would permanently cap the system at what a
+registry can enumerate.
+
+It also makes M7's evaluation incomplete: §11's *path efficacy* metric compares
+registry against LLM implementations, and cannot be measured at all without a
+competent model. Shipping M7 with only the recipe path evaluated would leave its
+most important path untested — the exact structure-without-function pattern this
+roadmap exists to stop.
+
+**Why recipes are still built, with a frontier model available.** Not as a
+fallback for poverty:
+
+- **Reproducibility.** An experiment that cannot be re-run identically is not
+  evidence. LLM-authored code differs between runs, so a result attributed to it
+  is not independently checkable. For techniques worth standardising, the
+  deterministic path *is* the correct one.
+- **Cost and latency.** A registry recipe is free and instant; a campaign
+  testing twenty hypotheses should not pay for twenty codegen calls to apply
+  `target_encoding`.
+- **Testability.** Golden snapshots and byte-equality checks are only possible
+  against deterministic output.
+
+So the split is not weak-versus-strong. It is *standardised and reproducible*
+versus *open-ended and novel* — a distinction that survives any model upgrade.
 
 **What survives from the original concern.** A *weak* model implementing a
 technique badly is worse than not running it, because the failure is recorded as
@@ -524,6 +548,10 @@ Misattribution is the one that gates a release, because it is the bug.
 
 ### 11.4 What good looks like
 
+**Prerequisite: [M10](../04-llm-tiering.md) is live.** Criterion 5 below cannot
+be measured without a competent model on the `codegen` role, and criteria 1–4
+would otherwise describe a system whose LLM path was never exercised.
+
 Sufficient to call M7 done:
 
 1. Every registry entry applies and changes the digest on at least one reference
@@ -535,6 +563,10 @@ Sufficient to call M7 done:
    the headline: it is the first time the system's experiments differ, and it is
    [M8](../02-objective-loop.md)'s prerequisite, since `metric_history` only
    becomes meaningful once scores can differ.
+5. **Both paths are exercised and compared.** At least one technique applied via
+   LLM codegen and at least one via registry recipe, with `technique_origin`
+   recorded and path efficacy reported. Without this, half the design is
+   unverified.
 
 ### 11.5 Guarding the eval itself
 

@@ -32,12 +32,15 @@ more than one motion.
 
 Do not reorder. Each is dead without the previous.
 
+Numbering reflects when each was written, not the order to build them. Build
+order is M10 → M7 → M8 → M13, with M9 and M14 running alongside.
+
 | # | Plan | Unlocks | Status |
 |---|------|---------|--------|
-| **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | [Designed](design/01-technique-to-model.md) |
+| **M10** | [LLM tiering & routing](04-llm-tiering.md) | **A trustworthy reasoning substrate. Everything downstream inherits its quality.** | Decision layer only — not wired |
+| **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | [Designed](design/01-technique-to-model.md) — blocked on M10 |
 | **M8** | [Objective feedback loop](02-objective-loop.md) | The system noticing it is making no progress | Not started |
 | **M9** | [Verification-first execution](03-verification-first.md) | Trusting any result | Partly done |
-| **M10** | [LLM tiering & free-tier routing](04-llm-tiering.md) | A model capable enough for M7 | Decision layer only — not wired |
 | **M11** | [Parallel branches](05-parallel-branches.md) | Iteration speed | Not started |
 | **M12** | [Beyond Kaggle](06-beyond-kaggle.md) | The actual product thesis | Not started |
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
@@ -47,10 +50,31 @@ Do not reorder. Each is dead without the previous.
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
 | — | [Interaction modes](07-interaction-modes.md) | Auto / accept-edits / plan UX | Not started |
 
+### The principle that sets the order
+
+> **Model capability is a product tier, not an architectural constraint.**
+
+An earlier version of this roadmap was shaped by the machine it was validated on
+— a 14B local model — and let that become the design's ceiling. A paying
+customer supplies a frontier model; the free tier is a development mode with
+known limits, not the substrate to build for.
+
+This is a research OS. A weak component does not merely run slower — it produces
+**wrong research**, which propagates into beliefs, claims and memory where it is
+expensive to remove. No component is left weak because the current dev
+environment is.
+
 ### Ordering notes
 
-- **M10 before M7 in practice.** M7 needs a model that can write code; the local
-  14B produced none. Do M10's remaining wiring first, then M7.
+- **M10 is now first, not M7.** Not for cost control — to make the reasoning
+  substrate trustworthy before anything depends on it. M7's evaluation is also
+  *incomplete* without it: path efficacy compares registry against LLM
+  implementations and cannot be measured with a model that cannot write code.
+- **M10 must be validated by a thin M7 slice.** Its real purpose is "codegen
+  gets a model that can write training code", and the only proof is generating
+  training code. Shipping it on unit tests alone would repeat the mistake review
+  already caught once, where `select_route` was tested, unwired, and called
+  done.
 - **M14 phase 1 is nearly free and should go early.** Merely *stamping*
   rule-engine results as degraded would have made the entire silent-failure
   class visible on day one. Phases 2–3 need a test migration (see the plan).

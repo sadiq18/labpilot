@@ -5,6 +5,29 @@
 
 ---
 
+## Design principle
+
+> **Model capability is a product tier, not an architectural constraint.**
+
+An earlier draft of this roadmap was shaped by the machine it was validated on —
+a 14B local model — and quietly let that become the design's ceiling. That is
+backwards. A paying customer supplies a frontier model; the free tier is a
+**development and hobby mode with known limits**, not the substrate the
+architecture is built for.
+
+This is a research OS. A weak component does not merely run slower — it produces
+*wrong research*, and wrongness propagates into beliefs, claims and memory where
+it is expensive to remove. No component may be left weak because the current
+development environment is.
+
+Concretely, this changes two things:
+
+- The system assumes a **competent model is reachable** and degrades explicitly
+  when one is not (`research doctor` says so; `codegen` waits rather than
+  downgrading). It does not assume weakness and design around it.
+- **M10 lands before M7.** Its purpose is not cost control; it is making the
+  reasoning substrate trustworthy so everything downstream can be trusted.
+
 ## Purpose
 
 Two problems at once:
@@ -110,6 +133,31 @@ pacing. Daily *tokens* bind first.
    chars/token that is ~30k tokens per codegen call; ten calls eats a daily
    allowance. Do this first — it is ten minutes and it is the difference between
    the free tier lasting a day or an hour.
+
+## Exit criteria
+
+M10 has a mutual-dependency problem: its real purpose is "codegen gets a model
+that can write training code", and the only way to verify that is *to generate
+training code* — which is M7. Shipping M10 on unit tests alone would repeat the
+mistake the review already caught once, where `select_route` was tested but
+unwired and described as done.
+
+So M10 is finished when a **thin M7 slice proves it end to end**:
+
+1. `select_route` is on the live path — no call site resolves a provider by name
+   for `codegen`, `reasoning` or `summarize`.
+2. `research doctor` reports the resolved provider per role, and fails loudly
+   when a role has no capable provider.
+3. **A real codegen call produces a working `train.py`** for one technique on a
+   reference dataset: it runs, writes metrics, and the technique is visible in
+   the generated source. This is the forcing function M10 otherwise lacks.
+4. The served model is recorded on the experiment record, so a later failure is
+   attributable to the idea rather than the writer.
+5. Budget exhaustion on `codegen` produces a wait, not a downgrade — observed,
+   not just unit-tested.
+
+Criterion 3 is the one that matters. Everything else can pass while the system
+still cannot write code.
 
 ## Traps
 
