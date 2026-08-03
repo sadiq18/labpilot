@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "theme": "auto",
+  "model": "claude-opus-5",
+  "description": "LabPilot ML Research Platform",
+  "capabilities": {
+    "read": true,
+    "write": true,
+    "execute": true,
+    "git": true
+  },
+  "rules": [
+    {
+      "description": "Use design-doc skill for system/feature design",
+      "trigger": ["design", "architecture", "proposal", "plan"],
+      "action": "suggest_skill:design-doc"
+    }
+  ],
+  "hooks": {
+    "on_init": [
+      "echo 'LabPilot session started'",
+      "python -m pytest --collect-only -q 2>/dev/null | head -5 || true"
+    ]
+  },
+  "context": {
+    "project": "LabPilot - ML Research Platform",
+    "focus": "Research pipelines, competition/kaggle work, modular agent design",
+    "key_dirs": {
+      "configs": "Competition configs (not committed)",
+      "runs": "Local research artifacts (not committed)",
+      "knowledge": "Research memory/hypotheses (not committed)",
+      "src": "Main source code",
+      "tests": "Test suite"
+    }
+  }
+}
