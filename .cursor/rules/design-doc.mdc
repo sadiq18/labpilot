@@ -1,0 +1,53 @@
+---
+name: design-doc
+description: Write focused, concise design documents
+trigger: ["design", "architecture", "proposal", "plan", "technical decision"]
+---
+
+# Design Document Rule for Cursor
+
+When the user is working on system design, feature design, architecture changes, or technical proposals:
+
+## Skip Sections That Don't Apply
+
+Only include sections relevant to the specific design. Better a 2-page focused doc than 20-page verbose one.
+
+## Key Sections (Include Only If Relevant)
+
+1. **Background & Context** - If context matters
+2. **Problem Statement** - If not obvious why this is needed (include metrics)
+3. **Requirements** - Usually needed (functional & non-functional, quantified)
+4. **Goals & Success Metrics** - If success isn't clear
+5. **Scope** - If boundaries aren't obvious
+6. **Design/Architecture** - If approach matters (include diagrams/code)
+7. **Components & Responsibility** - If multiple pieces exist
+8. **Implementation Details** - If complex (include config, code examples)
+9. **Design Choices & Tradeoffs** - If alternative approaches exist
+10. **Observability** - For production systems
+11. **Testing Strategy** - For risky changes
+12. **Deployment & Rollout** - For production changes
+
+## Length Guidelines
+
+- **Simple change:** 1-2 pages
+- **Medium change:** 2-4 pages
+- **Major architecture:** 4-8 pages
+- If over 10 pages: probably including too much detail
+
+## Writing Style
+
+- Use numbers, not "fast" or "scalable"
+- Include diagrams or code examples
+- Assume reader is smart but doesn't know your context
+- Focus on decisions that need buy-in
+- Skip anything obvious or documented elsewhere
+
+## Evaluation Checklist
+
+Before publishing:
+- ✓ Problem is clear
+- ✓ Requirements are quantified
+- ✓ Design solves the problem
+- ✓ Important decisions are explained
+- ✓ Reader knows how to validate it works
+- ✓ Reader knows risks/how to rollback

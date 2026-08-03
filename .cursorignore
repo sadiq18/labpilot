@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Environment
+.env
+.env.bak*
+
+# Run artifacts
+runs/
+/knowledge/
+/competitions/
+.cache/
+
+# IDE
+.idea/
+.vscode/
+.cursor/settings.json
+
+# OS
+.DS_Store
