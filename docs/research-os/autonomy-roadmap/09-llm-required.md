@@ -39,6 +39,13 @@ prose, the parse failed, and the agent silently used its rule engine. The system
 Knowledge Hub then found zero concepts, so no techniques, no beliefs, no
 hypotheses — and the campaign had nothing to iterate on.
 
+**Since measured (see the design, §11.1):** constrained JSON decoding — already
+shipped in this branch — removed that cause. Fallbacks went from 3 of 3
+campaigns to 0 of 2. So M14's justification is *not* "the system is currently
+degraded". It is that **one of the two fallback paths emits no log at all**, so
+today's low rate is knowable only because the failures happened to take the
+observable path.
+
 Nothing above that layer could tell. There was no error, no degraded flag, no
 metric. The only symptom was "the research is oddly shallow".
 

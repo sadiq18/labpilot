@@ -20,13 +20,19 @@ return self._run_rule_engine(context)
 ```
 
 Observed during validation: `qwen2.5-coder:14b` answered a JSON-only prompt in
-English prose, every agent fell back, and the system ran deterministic rules
-while presenting as though it were reasoning. The Knowledge Hub found zero
+English prose, the page analyzer fell back, and the system ran deterministic
+rules while presenting as though it were reasoning. The Knowledge Hub found zero
 concepts, so no techniques, no beliefs, no hypotheses — and the campaign had
 nothing to iterate on.
 
 Nothing above that layer could tell. No error, no metric, and — critically — a
 **provenance record that said the opposite of the truth**.
+
+> **Measured since.** Constrained JSON decoding, shipped in this branch, removed
+> that cause: fallbacks went from 3 of 3 campaigns to 0 of 2 (§11.1). M14 is
+> therefore **not** justified by "the system is currently degraded" — it is not.
+> It is justified by §11.2: one of the two fallback paths cannot be observed at
+> all, so the current rate is knowable only by luck.
 
 ## 2. Problem statement
 
@@ -287,32 +293,110 @@ rot; an enumeration test fails when someone adds writer number twelve.
 Testing proves the stamp is correct. Eval answers **how much degradation is
 actually happening** — currently unknown, because it was never recorded.
 
-### 11.1 Baseline measurement (phase 1's real deliverable)
+### 11.1 Measured baseline — rogii, 9 campaigns (2026-08-02)
 
-Run a full campaign and report:
+Run before writing the rest of this section, and it **contradicted the design's
+premise**. Recovered from the nine `research conduct` campaign logs:
 
-| Metric | Meaning |
-|---|---|
-| **Fallback rate per agent** | share of calls that fell back |
-| **Fallback reason histogram** | parse failure vs timeout vs no client |
-| **Degraded-artifact share** | durable records with `generated_by != "llm"` |
-| **Silent-lie count** | records claiming `llm` where the call fell back — **must reach 0** after §9.2 |
+| Campaign | analyze dispatched | fallbacks | reading |
+|---|---|---|---|
+| 1–3 | 2 each | **1 each** | ran, fell back every time |
+| 4–5 | 2 each | **0** | ran, no fallback |
+| 6–9 | **0** | 0 | contributes nothing — backlog gate skipped analyze |
 
-Expected on a 14B local model before [M10](../04-llm-tiering.md): high fallback
-rate, dominated by parse failures. That number is the argument for M10, measured
-rather than asserted.
+All three fallbacks were `CompetitionPageAnalyzerAgent`, all
+`Response did not contain a JSON object` — the model answering in prose.
 
-### 11.2 After M10
+**Clean before/after: 3 of 3 campaigns fell back before constrained JSON
+decoding; 0 of 2 after.** The `format: "json"` fix already shipped in this
+branch removed the observed cause.
 
-Re-run the same campaign. Fallback rate should collapse. If it does not, either
-routing is not on the live path or the failure is not model capability — both
-worth knowing, and neither currently observable.
+Two corrections this forces on the design:
 
-### 11.3 Phase 3 input
+1. **"Expected: high fallback rate on a 14B model" was wrong for this
+   workload.** The acute problem is already fixed. M14 cannot be justified by
+   "the system is currently running on rule engines" — post-fix, it is not.
+2. **Campaigns 6–9 must be excluded**, not counted as successes. Zero fallbacks
+   there means zero agent calls. Counting them would have produced "6 of 9
+   campaigns clean" — a measurement artifact reported as an improvement, which
+   is the exact disease this roadmap exists to remove.
 
-Rank rule engines by fire rate. One that never fires is dead code; one that
-fires constantly is either load-bearing domain logic (promote) or masking a
-persistent LLM failure (fix the cause).
+### 11.2 The blind spot — why M14 still matters
+
+The measurement above can only see **one of two fallback paths**.
+`BaseMicroAgent.run()` (`micro_agents.py:139-170`):
+
+```python
+if self.llm_client is not None:
+    ...try/except, WARNING on failure...      # ← path 1: logged, measurable
+return self._run_rule_engine(context)          # ← path 2: no client, NO LOG AT ALL
+```
+
+| Path | Trigger | Logged? | In the numbers above? |
+|---|---|---|---|
+| 1 | client present, call fails | WARNING at `:165` | yes — 3 events |
+| 2 | **client absent** | **nothing** | **no — invisible** |
+
+So "0 fallbacks" means *0 among agents that had a client*. An agent constructed
+with `llm_client=None` degrades in complete silence, and no amount of log
+analysis will ever find it.
+
+**This re-justifies M14 on firmer ground than the original premise.** Not "we are
+currently degraded" — measurably, post-fix, we are not. But *one entire
+degradation path is unobservable by construction*, and the only reason the
+current fallback rate is knowable at all is that the failures happened to take
+the logged path.
+
+That is also why phase 1 stamps the **artifact** rather than adding more logging:
+the stamp is set where the branch is taken, so path 2 becomes visible for the
+first time.
+
+### 11.3 Rogii eval protocol
+
+Repeatable, and specified so the same numbers can be produced before and after
+each phase.
+
+**Setup.** The rogii workspace, `LABPILOT_HYPOTHESIS_BACKLOG_TARGET=0` to force
+analyze to run (otherwise the backlog gate skips the agents entirely and the
+measurement is vacuous — see campaigns 6–9).
+
+**Runs.**
+
+| Run | Config | Measures |
+|---|---|---|
+| A | local 14B, current `main` | today's true fallback rate, both paths |
+| B | local 14B, phase 1 shipped | same, now including path 2 |
+| C | frontier model via [M10](../04-llm-tiering.md), phase 1 | does capability remove fallback? |
+| D | no LLM reachable, phase 2 | does it fail loudly rather than degrade? |
+
+**Metrics** (per run, per agent):
+
+| Metric | Source | Target |
+|---|---|---|
+| Fallback rate, path 1 | WARNING count ÷ agent invocations | reported |
+| **Fallback rate, path 2** | `generated_by == "rule_engine"` with no WARNING | **unknown today — the point of A→B** |
+| Degraded-artifact share | durable records where `generated_by != "llm"` | reported |
+| **Silent-lie count** | records claiming `llm` where the call fell back | **0** — release blocker |
+| Unstamped-record count | durable records with no `generated_by` | **0** after phase 1 |
+
+**A→B is the key comparison.** If B reports meaningfully more degradation than
+A, the difference is exactly the silent path — and that number is phase 1's
+justification, measured rather than argued.
+
+**C answers M10's question**, and does so with the same harness: if a frontier
+model does not collapse the fallback rate, the problem is not model capability
+and M10's premise needs revisiting.
+
+### 11.4 Phase 3 input
+
+Rank rule engines by fire rate, using run B's stamps (run A cannot see path 2).
+One that never fires is dead code. One that fires constantly is either
+load-bearing domain logic — promote it to a named deterministic step — or it is
+masking a persistent LLM failure, in which case fix the cause rather than the
+symptom.
+
+Run C decides which: if a frontier model stops a rule engine firing, it was
+masking a failure; if it keeps firing, it is doing real work.
 
 ## 12. Observability
 
@@ -349,3 +433,11 @@ than a way to stop the system running at all.
 **Explicit non-goal.** This does not make the LLM output *good*. It makes
 degradation *visible*. A system that fails loudly is not yet a system that
 reasons well — that is [M10](../04-llm-tiering.md).
+
+**A note on how this design was sized.** The eval in §11 was run *before* the
+rest of the document was finished, and it refuted the premise the plan had been
+written on ("expect a high fallback rate on a 14B model"). The acute problem was
+already fixed; what remained was a structural blind spot. Running the
+measurement first cost an hour and changed what the milestone is for — worth
+repeating on the next design rather than treating §11 as something to write
+after the fact.
