@@ -434,12 +434,29 @@ needs phase 1's telemetry.
 
 **Ordering, with trigger conditions rather than vague sequencing.**
 
-| Phase | Ships when | Blocked by |
-|---|---|---|
-| 1 | done | — |
-| **2a** | the 76-test migration lands | test migration **only** — *not* M10 |
-| **2b** | fallback rate under a frontier model is materially below today's | [M10](../04-llm-tiering.md) live, measured by §11.3 run C |
-| **3** | ≥3 real campaigns have run with phase-1 stamps | phase-1 telemetry |
+| Phase | Status | Ships when | Blocked by |
+|---|---|---|---|
+| 1 | **done** | — | — |
+| 2a | **done** | — | — |
+| **2b** | deferred by decision | after [M10](../04-llm-tiering.md) is live | M10, measured by §11.3 run C |
+| **3** | deferred by decision | after M10 + several stamped campaigns | phase-1 telemetry |
+
+**Decision (2026-08-03).** 2b waits for M10 entirely rather than shipping
+opt-in behind a flag. An opt-in build was offered and declined, on the grounds
+of keeping the branch to what is verified.
+
+> **Guard for whoever builds 2b.** Because it is not being written now, it will
+> arrive after M10 with no exercise history. Do not ship it on unit tests alone
+> — that is exactly how `select_route` reached review tested, unwired and
+> described as done. 2b's acceptance is a **real campaign that completes** with
+> strict mode on, not a passing suite.
+
+**Why 2b is riskier than §8.3 implies.** The failure actually observed —
+`Response did not contain a JSON object` — is **not** classified transient by
+`_is_transient_llm_error`, so it gets no retry. Under 2b a single prose reply
+aborts the whole command. Post-JSON-fix the observed rate is 0 of 2 campaigns,
+which is too thin to justify a total-abort blast radius on the current
+substrate.
 
 Phase 1 is roadmap phase 0 — before [M10](../04-llm-tiering.md) — because it is
 what makes M10's wiring observable. 2a can follow immediately after; it was

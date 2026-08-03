@@ -94,7 +94,9 @@ relying on rule engines to fill the gap. That is better practice anyway — a te
 asserting rule-engine output is not testing the shipped behaviour — but it is
 real work and should be budgeted, not discovered.
 
-Phase 1 is safe and immediately valuable and **has shipped**.
+**Phases 1 and 2a have shipped.** 2b and 3 are deferred by decision
+(2026-08-03) until M10 is live — see the design for the trigger conditions and
+a guard note on exercising 2b rather than shipping it on unit tests.
 
 Phase 2 splits in two, with different blockers (the design conflated them):
 

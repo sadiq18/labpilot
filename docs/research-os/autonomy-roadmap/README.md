@@ -36,7 +36,7 @@ asserted.
 
 | Phase | Work | Why here |
 |-------|------|----------|
-| **0** | **M14 phase 1** — stamp rule-engine results as degraded | Nearly free, and it makes every later phase *observable*. This alone would have exposed the silent-degradation class on day one |
+| **0** | ~~M14 phase 1~~ **done** — stamps + refusal (2a) | Made every later phase observable, and fixed provenance that recorded `llm` for deterministic output |
 | **1** | **M10** wiring **⇄ thin M7 slice** | Mutual, not sequential — see below |
 | **2** | **M7** full · adopt **M15**'s contract test | M15's "different input ⇒ different artifact" *is* M7's exit criterion generalised, so the practice starts here |
 | **3** | **M8 + M17** together | Both need the same missing writer: `metric_history` / `last_metric` are read in four places and written in none |
@@ -76,7 +76,7 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 | **M11** | [Parallel branches](05-parallel-branches.md) | Iteration speed | Not started |
 | **M12** | [Beyond Kaggle](06-beyond-kaggle.md) | The actual product thesis | Not started |
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
-| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | [Designed](design/09-llm-required.md) — phase 0 |
+| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **Phases 1 + 2a shipped**; 2b/3 await M10 |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
 | **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
