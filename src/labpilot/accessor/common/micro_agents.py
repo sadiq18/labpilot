@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import os
 import re
 import time
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
@@ -38,6 +39,26 @@ logger = logging.getLogger("labpilot.accessor.common.micro_agents")
 #: What actually produced a result. Sourced from the branch taken in
 #: :meth:`BaseMicroAgent.run`, never inferred by a caller.
 GeneratedBy = Literal["llm", "rule_engine", "template_fallback", "stub"]
+
+#: Opt-in escape hatch for deterministic operation. Without it, an agent with no
+#: LLM refuses to run rather than silently substituting its rule engine — a
+#: deterministic approximation presented as a result is how false findings enter
+#: beliefs and claims.
+DETERMINISTIC_ENV = "LABPILOT_DETERMINISTIC"
+
+
+class LLMUnavailableError(RuntimeError):
+    """No LLM configured, and deterministic mode was not requested.
+
+    Raised rather than falling back because a missing LLM means *no reasoning
+    happened*. Returning the rule engine's output would be indistinguishable
+    from a reasoned result downstream.
+    """
+
+
+def deterministic_allowed() -> bool:
+    """True when the operator explicitly asked for deterministic operation."""
+    return os.environ.get(DETERMINISTIC_ENV, "").strip().lower() in {"1", "true", "yes"}
 
 
 def coerce_str_list(value: object) -> list[str]:
@@ -150,6 +171,12 @@ class BaseMicroAgent:
         return self.llm_client is not None
 
     def run(self, context: StructuredContext) -> BaseModel:
+        if self.llm_client is None and not deterministic_allowed():
+            raise LLMUnavailableError(
+                f"{self.name or type(self).__name__} requires an LLM and none is "
+                "configured. Check `research doctor`, start Ollama, or set "
+                f"{DETERMINISTIC_ENV}=1 to accept deterministic rule-engine output."
+            )
         self.last_used_llm = False
         # Default covers the silent path below: with no client configured the
         # try/except is skipped entirely and nothing is logged, so the only
@@ -202,9 +229,9 @@ class BaseMicroAgent:
         assert self.llm_client is not None
         system = self.system_prompt()
         try:
-            from labpilot.research_engine.shared.skills import compose_system_prompt
-
             from pathlib import Path as _Path
+
+            from labpilot.research_engine.shared.skills import compose_system_prompt
 
             agent_file = inspect.getfile(type(self))
             workspace = (

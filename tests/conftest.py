@@ -57,6 +57,33 @@ def _no_real_dotenv_in_tests(monkeypatch):
 
     monkeypatch.setattr(OllamaProvider, "is_reachable", lambda *a, **k: False)
 
+    # CI has no LLM, and the suite is deliberately hermetic, so it opts into
+    # deterministic operation explicitly — which is what the escape hatch is
+    # for. This is *declared*, unlike the automatic fallback it replaces:
+    # production sets nothing and therefore refuses to run without an LLM.
+    # Tests covering the refusal itself delete this var (see
+    # tests/unit/test_agent_provenance.py).
+    monkeypatch.setenv("LABPILOT_DETERMINISTIC", "1")
+
+
+@pytest.fixture
+def stub_llm_client():
+    """A client returning canned JSON, for exercising the *shipped* LLM path.
+
+    Preferred over relying on the rule engine: a test asserting rule-engine
+    output is not testing what production does. Set ``payload`` per test.
+    """
+
+    class _Stub:
+        payload: str = "{}"
+        calls: int = 0
+
+        def complete(self, system, user, *, json_mode=False):
+            _Stub.calls += 1
+            return self.payload
+
+    return _Stub()
+
 
 @pytest.fixture
 def titanic_data_dir(tmp_path: Path) -> Path:

@@ -169,3 +169,52 @@ def test_durable_writers_read_recorded_provenance(module_path):
         f"{module_path} infers provenance from uses_llm, which is True even "
         "when the run fell back"
     )
+
+
+# --- phase 2a: refuse rather than silently substitute ------------------------
+
+
+def test_no_client_raises_without_deterministic_opt_in(monkeypatch):
+    """The production default. A missing LLM means no reasoning happened, so
+    returning the rule engine's output would be indistinguishable downstream
+    from a reasoned result."""
+    from labpilot.accessor.common.micro_agents import LLMUnavailableError
+
+    monkeypatch.delenv("LABPILOT_DETERMINISTIC", raising=False)
+    agent = _Agent(llm_client=None)
+    with pytest.raises(LLMUnavailableError) as exc:
+        _run(agent)
+
+    message = str(exc.value)
+    assert "prov_probe" in message, "names the agent that refused"
+    assert "research doctor" in message, "points at the diagnostic"
+    assert "LABPILOT_DETERMINISTIC" in message, "names the escape hatch"
+
+
+def test_deterministic_opt_in_allows_rule_engine(monkeypatch):
+    """The escape hatch works, and the result is still stamped as degraded."""
+    monkeypatch.setenv("LABPILOT_DETERMINISTIC", "1")
+    agent = _Agent(llm_client=None)
+    result = _run(agent)
+    assert result.value == "rule"
+    assert agent.last_generated_by == "rule_engine"
+
+
+def test_failed_llm_call_still_falls_back_in_2a(monkeypatch):
+    """2a governs a *missing* client only. Raising on a failed call is 2b, and
+    is deliberately not enabled: a weak model fails constantly, so it would
+    abort every campaign rather than make the system honest."""
+    monkeypatch.delenv("LABPILOT_DETERMINISTIC", raising=False)
+    agent = _Agent(llm_client=_BadClient())
+    result = _run(agent)
+    assert result.value == "rule"
+    assert agent.last_generated_by == "rule_engine"
+
+
+@pytest.mark.parametrize("value,allowed", [("1", True), ("true", True), ("yes", True),
+                                           ("0", False), ("", False), ("no", False)])
+def test_deterministic_flag_parsing(monkeypatch, value, allowed):
+    from labpilot.accessor.common.micro_agents import deterministic_allowed
+
+    monkeypatch.setenv("LABPILOT_DETERMINISTIC", value)
+    assert deterministic_allowed() is allowed

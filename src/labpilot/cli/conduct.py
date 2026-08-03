@@ -34,6 +34,20 @@ conduct_app = typer.Typer(
 console = Console()
 
 
+def _apply_deterministic_env(offline: bool) -> None:
+    """`--offline` already means "no LLM policy"; extend that to micro agents.
+
+    Without this an offline campaign would refuse at the first agent, since
+    agents now decline to substitute their rule engine unless asked.
+    """
+    import os
+
+    from labpilot.accessor.common.micro_agents import DETERMINISTIC_ENV
+
+    if offline:
+        os.environ[DETERMINISTIC_ENV] = "1"
+
+
 def _test_registry_subset() -> object:
     """Build a registry with cheap offline-safe tools for dry/offline loops."""
     from labpilot.research_engine.tools.handlers.memory import query_memory
@@ -200,7 +214,11 @@ def conduct_run(
     offline: bool = typer.Option(
         False,
         "--offline",
-        help="No LLM policy; deterministic catalog order + safe stubs where needed",
+        help=(
+            "No LLM policy; deterministic catalog order + safe stubs where needed. "
+            "Also permits micro agents to use their rule engines, which otherwise "
+            "refuse to run without an LLM."
+        ),
     ),
     autonomy: int = typer.Option(
         0,
@@ -257,6 +275,7 @@ def conduct_run(
             f"[bold]Conductor[/bold] session [cyan]{session.id}[/cyan] "
             f"goal={goal!r} competition={competition} autonomy={autonomy}"
         )
+        _apply_deterministic_env(offline)
         decisions = run_until_stop(
             store,
             ws,
@@ -315,6 +334,7 @@ def _continue_session(
             f"[bold]Continue[/bold] session [cyan]{session.id}[/cyan] "
             f"status={session.status} autonomy={level}"
         )
+        _apply_deterministic_env(offline)
         decisions = run_until_stop(
             store,
             ws,
