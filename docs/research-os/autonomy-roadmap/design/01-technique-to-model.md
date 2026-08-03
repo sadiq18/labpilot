@@ -89,7 +89,7 @@ attributable to the technique.
 |---|---|
 | N1 | **No LLM dependency.** Recipes are deterministic, so M7 is not blocked on M10/M14 |
 | N2 | Adding a technique is a registry entry + a template gate — no changes to Conductor, planner or capability |
-| N3 | Rendering stays deterministic: same (choice, technique) → byte-identical `train.py` |
+| N3 | **Recipe-path** rendering is deterministic: same (choice, technique) → byte-identical `train.py`. LLM-authored code is not reproducible and is not held to this |
 | N4 | Unknown techniques degrade to an explicit, recorded rejection — never a silent baseline |
 | N5 | Backward compatible: a plan with no technique renders exactly what it renders today |
 
@@ -109,7 +109,10 @@ or [§11](#11-evaluation); a requirement with no check is not a requirement.
 
 ### Out of scope
 
-- Free-form LLM code generation quality → [M10](../04-llm-tiering.md), [M14](../09-llm-required.md)
+- **Improving** LLM codegen quality → [M10](../04-llm-tiering.md),
+  [M14](../09-llm-required.md). The LLM path already receives the technique and
+  is unchanged by this design apart from a richer spec in the prompt; making it
+  *good* is the routing milestone's job
 - Reflection generating hypotheses from results → [M8](../02-objective-loop.md)
 - Score-driven technique *selection* → [M13](../08-policy-reasoning.md)
 - Bridging mined `FeatureRecipe.transform` (executable code from papers) — this
@@ -178,16 +181,49 @@ legacy supplier all already exist and agree on the same label set.
 create a third `feature_recipes` namespace alongside the two that already fail
 to meet.
 
-### 8.2 Declarative specs before LLM codegen
+### 8.2 Recipes are the floor, LLM codegen is the ceiling
 
-**Chosen.** A recipe either changed the feature set or it did not — assertable in
-a unit test, and independent of model quality.
+**Chosen.** Both paths receive the technique. Neither is rejected.
 
-*Rejected:* relying on LLM codegen. On `qwen2.5-coder:14b` it produced no usable
-training code across an entire day; the emergency stub that replaced it wrote
-`cv_accuracy: 0.0` on a regression task. A weak model implementing a technique
-badly is **worse than not running it**, because the failure is recorded as
-evidence against the technique.
+This corrects an earlier framing in this document that read LLM codegen as
+*rejected*. The evidence supports only a narrower claim: **a 14B local model
+could not do it**. That is a statement about one model, not about the approach —
+and once [M10](../04-llm-tiering.md) routes `codegen` to a frontier model, the
+LLM path becomes the stronger of the two for anything a registry entry does not
+cover.
+
+It is also worth being clear that **the LLM path is not broken**. It already
+receives `technique`, `technique_stack` and `combo_techniques` in full
+(`capability.py:214-220` → `code_engineer_user.j2:7-9`). The defect this design
+fixes is entirely in the *fallback*.
+
+| | Recipe path | LLM path |
+|---|---|---|
+| Coverage | registry entries only | open-ended |
+| Determinism | byte-identical (N3) | not reproducible |
+| Cost | none | tokens, latency |
+| Testability | golden snapshot + digest | behavioural only |
+| Available today | yes | needs M10 |
+
+**Routing rule:** use a recipe when one exists for the technique; use LLM codegen
+when none does. Recipes are cheap, tested and reproducible; the LLM covers the
+long tail the registry will never enumerate.
+
+Whether an LLM-authored `target_encoding` beats the registry's is an **empirical
+question the eval answers** (§11.3), not one to settle here. If it consistently
+wins, the routing rule should change — and the provenance in §9.6 is what makes
+that measurable.
+
+**Why recipes first.** Not because the LLM path is worse, but because it is
+*blocked* (M10) while recipes are not. Shipping the floor now means M7 stops
+blocking [M8](../02-objective-loop.md) and [M13](../08-policy-reasoning.md)
+without waiting on the routing work.
+
+**What survives from the original concern.** A *weak* model implementing a
+technique badly is worse than not running it, because the failure is recorded as
+evidence against the technique. That risk is real but is handled by
+[M10](../04-llm-tiering.md)'s wait-rather-than-degrade rule for the `codegen`
+role plus the provenance in §9.6 — not by declining to use an LLM.
 
 ### 8.3 Reject at plan time, not train time
 
@@ -339,6 +375,13 @@ All of it is deterministic and offline. Recipes involve no LLM and no network,
 so the whole suite belongs in the default CI slice
 (`pytest -m "not llm and not image and not deep"`) and must stay fast.
 
+**These levels test the recipe path.** LLM-authored code is not reproducible, so
+golden snapshots and byte-equality do not apply to it. The LLM path is covered
+behaviourally instead — the technique appears in the prompt (assertable), the
+proposal applies cleanly, and the resulting run produces metrics. Its *quality*
+is an eval question (§11), not a unit-test one, and belongs behind the `llm`
+marker so the default slice stays hermetic.
+
 ### 10.2 Unit — registry and resolver
 
 - Each registry entry resolves to a non-empty spec (`is_noop()` is False).
@@ -377,6 +420,12 @@ assert A != B
 `file_digest` is already computed at `capability.py:265` and nothing compares it
 across runs. That unread value is precisely what would have caught this bug
 class on day one; this test is that comparison, made permanent.
+
+For the LLM path the same contract holds with a weaker assertion: two techniques
+must not produce byte-identical code. That cannot be a unit test (it needs a
+model), so it runs under the `llm` marker — but it is the same question, and it
+is the check that would catch a regression where the technique silently stops
+reaching the prompt.
 
 ### 10.5 Integration — smoke train
 
@@ -430,6 +479,14 @@ enters durable memory and never leaves — the failure this milestone exists to
 stop. The provenance in §9.6 is what makes them distinguishable, and eval is
 what checks the distinction holds.
 
+**A fourth dimension: which path implemented it.** A technique applied by a
+registry recipe and the same technique applied by LLM-authored code are
+*different experiments*. "`target_encoding` did not help" is a claim about an
+implementation as much as about the idea, so `technique_origin`
+(`registry` | `llm`) must be recorded alongside the result and carried into any
+belief. Without it, a poor LLM implementation and a genuine negative are again
+indistinguishable — the same disease one level down.
+
 ### 11.2 Harness
 
 A repeatable sweep, not a one-off: for each (dataset, technique) run the
@@ -452,6 +509,12 @@ sweep is hours.
 | **Efficacy** | score improved / applied | no target; this is the *finding* |
 | **Mean delta** | mean(score − control), per technique per dataset | reported, not targeted |
 | **Misattribution rate** | "did not help" records where the technique was not applied | **0** — a release blocker |
+| **Path efficacy** | efficacy split by `technique_origin` (registry vs llm) | reported per technique |
+
+Path efficacy is what settles §8.2's open question empirically. If LLM-authored
+implementations consistently beat registry recipes for a technique, the routing
+rule should prefer the LLM for it; if they are noisier, the recipe should win.
+The design deliberately does not guess.
 
 Efficacy deliberately has no target. A technique that helps on 30% of datasets
 is a useful, honest result; forcing it upward would mean tuning the registry to
