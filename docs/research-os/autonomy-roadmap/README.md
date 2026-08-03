@@ -28,12 +28,13 @@ more than one motion.
 
 ---
 
-## Critical path
+## Build order
 
-Do not reorder. Each is dead without the previous.
+**M10 → M7 → M8 → M13**, with M9 and M14 running alongside.
 
-Numbering reflects when each was written, not the order to build them. Build
-order is M10 → M7 → M8 → M13, with M9 and M14 running alongside.
+Milestone numbers reflect when each plan was written, not the order to build
+them — the table below is in build order. The first four are a chain: each is
+dead without the previous.
 
 | # | Plan | Unlocks | Status |
 |---|------|---------|--------|

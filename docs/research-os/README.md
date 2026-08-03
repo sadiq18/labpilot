@@ -53,6 +53,7 @@ Details: [architecture.md](architecture.md).
 | **M4** | Memory & context | Retrieve→rank→compress; hierarchy ports | [milestones/04-context/](milestones/04-context/) | `research-os-m4-context` |
 | **M5** | Agents, events, parallel | Specialists + bus + concurrent branches | [milestones/05-agents/](milestones/05-agents/) | `research-os-m5-agents` |
 | **M6** | Self-improving memory | Experience records + retrieve/seed CLI | [milestones/06-transfer-memory/](milestones/06-transfer-memory/) | `research-os-m6-transfer-memory` |
+| **M7+** | Autonomy hardening | A loop that can actually optimise | [autonomy-roadmap/](autonomy-roadmap/) | `research-os-m7-competition-hardening` |
 
 **Critical path:** M1 → M2 → M3 (Orchestrator). M4–M6 deepen the OS into a research
 **manager** (better decisions → delegate/parallel → learn across campaigns).  
@@ -63,9 +64,34 @@ log. Long-running **Campaign Engine** autonomy is **M3** (M2 ships the Conductor
 
 Design satellites (`design/01`…`11`) hold depth; **this README is the roadmap**.
 
-Planning the next milestones? Start with the
-**[Autonomy Roadmap](autonomy-roadmap/)** — a validation session against a real
-competition found that the loop cannot yet optimise, and why.
+---
+
+## Post-M6 — autonomy hardening
+
+M1–M6 built the control plane. Validating it against a real competition
+(`rogii-wellbore-geology-prediction`) showed the loop turning correctly while
+**every experiment produced an identical score** — the Conductor can decide "try
+a CNN" and nothing downstream can produce one.
+
+Full diagnosis, eleven plans and an evidence log:
+**[autonomy-roadmap/](autonomy-roadmap/)** — start with
+[`00-diagnosis.md`](autonomy-roadmap/00-diagnosis.md).
+
+**Build order: M10 → M7 → M8 → M13**, with M9 and M14 alongside.
+
+| Order | Milestone | Why here |
+|-------|-----------|----------|
+| 1 | **M10** [LLM tiering & routing](autonomy-roadmap/04-llm-tiering.md) | A trustworthy reasoning substrate. Everything downstream inherits its quality — and M7 cannot be *evaluated* without it |
+| 2 | **M7** [Technique → model](autonomy-roadmap/01-technique-to-model.md) | Hypotheses become testable. Nothing can be optimised until a technique changes the model |
+| 3 | **M8** [Objective feedback loop](autonomy-roadmap/02-objective-loop.md) | The system notices it is making no progress, and learns from its own results |
+| 4 | **M13** [Policy reasons about state](autonomy-roadmap/08-policy-reasoning.md) | Decisions replace keyword matching |
+| ∥ | **M9** [Verification-first](autonomy-roadmap/03-verification-first.md) · **M14** [LLM required](autonomy-roadmap/09-llm-required.md) | Standing practices, not gated on the chain |
+
+> **Model capability is a product tier, not an architectural constraint.**
+> A weak component in a research OS does not merely run slower — it produces
+> *wrong research*, which propagates into beliefs, claims and memory where it is
+> expensive to remove. The free tier is a development mode with known limits,
+> not the substrate to architect for.
 
 Running a real competition? Start with the
 **[Competition SOP](COMPETITION-SOP.md)** — the operator loop and its
