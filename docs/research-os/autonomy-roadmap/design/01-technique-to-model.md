@@ -93,6 +93,9 @@ attributable to the technique.
 | N4 | Unknown techniques degrade to an explicit, recorded rejection — never a silent baseline |
 | N5 | Backward compatible: a plan with no technique renders exactly what it renders today |
 
+Every requirement above has a corresponding check in [§10](#10-testing-strategy)
+or [§11](#11-evaluation); a requirement with no check is not a requirement.
+
 ## 5. Scope
 
 ### In scope
@@ -314,7 +317,183 @@ delta-feature guard that already skips excluded columns.
 - The experiment record carries the technique, so reflection can attribute a
   result to it
 
-## 10. Observability
+## 10. Testing strategy
+
+The governing rule, learned the hard way in this branch: **assert the effect,
+not the call.** The test that concealed the `dry_run` bug asserted
+`"dry_run" not in args` — the absence of a key — and passed while the behaviour
+was wrong. Every test below asserts a rendered artifact, a feature set, or a
+score, never that a keyword argument was forwarded.
+
+### 10.1 Levels
+
+| Level | What it proves | Cost |
+|---|---|---|
+| Unit — registry & resolver | A technique maps to the spec we intended; inapplicable ones are rejected | ms |
+| Golden — rendered code | The spec reaches the template and produces the expected source | ms |
+| Contract — artifact digest | **Different technique ⇒ different `train.py`** | ms |
+| Integration — smoke train | The rendered code executes and produces metrics | seconds |
+| Regression — no technique | Byte-identical output to today (N5) | ms |
+
+All of it is deterministic and offline. Recipes involve no LLM and no network,
+so the whole suite belongs in the default CI slice
+(`pytest -m "not llm and not image and not deep"`) and must stay fast.
+
+### 10.2 Unit — registry and resolver
+
+- Each registry entry resolves to a non-empty spec (`is_noop()` is False).
+- `applies_to` rejects a technique on the wrong problem type — e.g.
+  `lag_features` on a non-partitioned dataset.
+- `requires` rejects when the data lacks the precondition — `target_encoding`
+  with no categorical columns.
+- **Leakage guard (F7):** a recipe whose inputs intersect
+  `choice.validation.exclude_features` is rejected. On rogii this is the test
+  that stops a technique quietly reintroducing `TVT` or `ANCC`.
+- Stack composition: `technique_stack` unions feature recipes; conflicting
+  `model_family` entries produce a rejection, not a silent pick.
+- **An unknown technique raises** rather than resolving empty (F4).
+
+### 10.3 Golden — rendered code
+
+Render `(template, choice, technique)` into a snapshot and compare. This is the
+cheapest way to see *what the model will actually train*, and it makes a recipe
+regression a readable diff rather than a score mystery.
+
+Snapshots stay small: one per (template × technique) for the tabular templates
+only. Determinism (N3) is a precondition — if rendering is not reproducible the
+snapshot is worthless, so a repeat-render equality check guards the guard.
+
+### 10.4 Contract — the digest test
+
+The single most important test, and the generalised form of
+[M15](../10-capability-audit.md)'s tool contract:
+
+```
+render(choice, technique="target_encoding")   -> digest A
+render(choice, technique="feature_interactions") -> digest B
+assert A != B
+```
+
+`file_digest` is already computed at `capability.py:265` and nothing compares it
+across runs. That unread value is precisely what would have caught this bug
+class on day one; this test is that comparison, made permanent.
+
+### 10.5 Integration — smoke train
+
+Rendered code must *run*, not merely differ. Using the existing
+`generic_regression_data_dir` and `partitioned_data_dir` fixtures with
+`LABPILOT_SMOKE=1`:
+
+- the script exits 0 and writes `metrics.json`;
+- the metric key matches `choice.metric_name`;
+- the recipe's feature appears in the recorded `features` list — the direct
+  check that the technique reached the model rather than merely the source.
+
+### 10.6 Regression — no technique
+
+A plan carrying no technique renders **byte-identical** output to `main` (N5).
+This is what makes the change safe to ship behind existing behaviour.
+
+### 10.7 Fixtures
+
+Reuse `tests/conftest.py`: `titanic_data_dir` (categoricals, for
+`target_encoding`), `generic_regression_data_dir` (numeric, for
+`log1p_transform` / `feature_interactions`), and `partitioned_data_dir` from
+`tests/unit/test_profiler.py` (for `lag`/`rolling`/`aggregation`). Only a
+datetime-bearing fixture is missing and would need adding.
+
+Fixtures must exercise the **`requires` predicates**, not just happy paths —
+a registry entry whose precondition is never tested is a precondition that does
+not work.
+
+---
+
+## 11. Evaluation
+
+Testing proves a technique *changes* the model. Evaluation asks whether it
+*helps* — a different question, and the one that determines whether the research
+memory is worth trusting.
+
+### 11.1 The three outcomes that must never be conflated
+
+This is the core requirement. Today all three are recorded identically as
+"technique X did not help":
+
+| Outcome | Meaning | Legitimate evidence about the technique? |
+|---|---|---|
+| **Not applied** | Wiring bug — the run trained the baseline | **No.** Must be impossible after M7 |
+| **Applied, no effect** | Recipe was a no-op on this data (e.g. no categoricals) | **No.** Evidence about the *data* |
+| **Applied, effect, worse score** | The technique genuinely did not help here | **Yes** |
+
+Only the third may reach a belief. Conflating them is how a false negative
+enters durable memory and never leaves — the failure this milestone exists to
+stop. The provenance in §9.6 is what makes them distinguishable, and eval is
+what checks the distinction holds.
+
+### 11.2 Harness
+
+A repeatable sweep, not a one-off: for each (dataset, technique) run the
+baseline as control and the technique as treatment, holding the validation plan
+fixed.
+
+Reference datasets, cheapest first: `generic_regression_data_dir` (synthetic,
+seconds) → `titanic` (small, real, categorical) → `playground-series-s6e7`
+(already on disk) → `rogii` (partitioned, predict-forward, slow).
+
+The first two run in CI. The last two are operator-invoked, because a full rogii
+sweep is hours.
+
+### 11.3 Metrics
+
+| Metric | Definition | Target |
+|---|---|---|
+| **Application rate** | resolved ∧ rendered / attempted | 100% for applicable techniques |
+| **Effect rate** | digest changed / applied | 100% — a no-effect application is a registry bug |
+| **Efficacy** | score improved / applied | no target; this is the *finding* |
+| **Mean delta** | mean(score − control), per technique per dataset | reported, not targeted |
+| **Misattribution rate** | "did not help" records where the technique was not applied | **0** — a release blocker |
+
+Efficacy deliberately has no target. A technique that helps on 30% of datasets
+is a useful, honest result; forcing it upward would mean tuning the registry to
+the eval set.
+
+Misattribution is the one that gates a release, because it is the bug.
+
+### 11.4 What good looks like
+
+Sufficient to call M7 done:
+
+1. Every registry entry applies and changes the digest on at least one reference
+   dataset.
+2. At least one technique **improves** the score on at least one dataset — proof
+   the loop can optimise at all.
+3. Misattribution rate is 0.
+4. A rogii campaign produces **≥2 distinct scores** across hypotheses. This is
+   the headline: it is the first time the system's experiments differ, and it is
+   [M8](../02-objective-loop.md)'s prerequisite, since `metric_history` only
+   becomes meaningful once scores can differ.
+
+### 11.5 Guarding the eval itself
+
+Two ways an eval like this misleads:
+
+- **Overfitting the registry to the reference set.** Keep rogii as a held-out
+  case: techniques are added from the mined vocabulary, never tuned against
+  rogii's score.
+- **Control drift.** The control must be re-run in the same sweep, not compared
+  against a stored historical number. Template, data and library versions all
+  move; a stale control makes every delta suspect.
+
+### 11.6 Continuous signal
+
+Once reflection consumes results ([M8](../02-objective-loop.md)), the eval stops
+being a manual sweep and becomes ambient: every campaign contributes a
+(technique, dataset, delta) observation to experience memory, and the registry's
+efficacy table is a query rather than a report. That is the point at which the
+system is genuinely learning which techniques work — and it is only trustworthy
+because §11.1 keeps unapplied techniques out of the record.
+
+## 12. Observability
 
 | Signal | Where | Answers |
 |---|---|---|
@@ -331,16 +510,12 @@ Rejections route through `record_suggestion`, the existing mechanism for "the
 system naming a capability it lacks", so an unsupported technique becomes a
 roadmap signal rather than a silent skip.
 
-## 11. Production readiness
+## 13. Production readiness
 
-**Correctness gates**
-
-- Contract test (generalises to [M15](../10-capability-audit.md)): two techniques
-  → two different `train.py` digests
-- Every registry entry has a test asserting its recipe changes the generated
-  feature set
-- Leakage test: a recipe deriving from an excluded column is rejected
-- Regression: a plan with **no** technique renders byte-identically to today (N5)
+**Correctness gates** — detailed in [§10](#10-testing-strategy). The release
+blockers are the digest contract test (§10.4), the leakage rejection test
+(§10.2), the no-technique regression (§10.6), and a **misattribution rate of 0**
+(§11.3).
 
 **Failure modes**
 
