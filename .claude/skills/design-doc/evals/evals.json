@@ -3,81 +3,105 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Help me write a design doc for a new feature. We're building a distributed cache layer for our API to reduce database load. The API team is getting complaints about 500ms p99 latency during peak hours. We want to cache frequently accessed user profiles that don't change often. I need a complete design doc covering background, requirements, architecture, and how we'll monitor it in production.",
-      "expected_output": "A comprehensive markdown design document with all required sections: background/context, problem statement with metrics, functional and non-functional requirements, goals and success criteria, scope definition, high-level architecture diagram, components with responsibility boundaries, detailed low-level design with code examples for cache logic, design choices with tradeoffs, observability/metrics setup, and production readiness checklist.",
+      "prompt": "Help me write a design doc for a new feature. We're building a distributed cache layer for our API to reduce database load. The API team is getting complaints about 500ms p99 latency during peak hours. We want to cache frequently accessed user profiles that don't change often.",
+      "expected_output": "Focused design doc with relevant sections only: Problem statement with metrics, clear requirements (latency/throughput targets), design approach, code examples, how to verify it works, rollout plan.",
       "files": [],
       "assertions": [
         {
-          "name": "all-11-sections-present",
-          "description": "All 11 required sections must be present: Background, Problem Statement, Requirements (Func/Non-Func), Goals, Scope, HLD, Components, Design Choices, LLD, Observability, Prod Readiness"
+          "name": "problem-clear",
+          "description": "Problem statement explains the issue with specific metrics (500ms p99 latency, % of queries hitting DB)"
         },
         {
-          "name": "lld-has-code-examples",
-          "description": "LLD section must contain at least 1 code block (pseudocode or actual language) showing cache implementation"
+          "name": "requirements-quantified",
+          "description": "Requirements specify numeric targets (e.g., <50ms p99, >85% hit rate, 10K req/sec)"
         },
         {
-          "name": "architecture-diagram-present",
-          "description": "HLD section must include ASCII art diagram, Mermaid diagram, or detailed text-based architecture visualization"
+          "name": "design-explained",
+          "description": "Design/architecture section explains the approach (Redis cluster, TTL + invalidation, etc.)"
         },
         {
-          "name": "nfr-quantified",
-          "description": "NFR requirements must specify numeric targets for at least 4 metrics: latency (ms), hit rate (%), throughput (req/sec), availability (%)"
+          "name": "code-or-config",
+          "description": "Includes code examples or configuration showing implementation (not just high-level description)"
         },
         {
-          "name": "production-readiness-complete",
-          "description": "Prod Readiness section must include phased deployment strategy, canary %, rollback procedure, and pre-deployment checklist"
+          "name": "verification-clear",
+          "description": "Explains how to verify the design works (load test, monitor metrics, etc.)"
+        },
+        {
+          "name": "focused-length",
+          "description": "Document is 2-4 pages, not verbose or filled with unnecessary sections"
         }
       ]
     },
     {
       "id": 2,
-      "prompt": "I need to document a smaller change — we're adding read replicas to our PostgreSQL database to improve query performance. It's not a brand new system, just scaling an existing one. Can you help me write a focused design doc? The current setup has one primary DB and we're adding 2 read-only replicas with async replication.",
-      "expected_output": "A focused design doc that skips extensive HLD (since it's a small change to existing system), but includes problem statement (current bottleneck), requirements, components affected (primary + replicas + connection pooler), detailed explanation of replication strategy, monitoring for replication lag, and production rollout plan with testing strategy.",
+      "prompt": "We're adding read replicas to our PostgreSQL database to improve query performance. It's not a brand new system, just scaling an existing one. Current setup has primary + 2 replicas with async replication.",
+      "expected_output": "Focused design doc skipping unnecessary sections, with problem/requirements, specific PostgreSQL configuration, how to monitor replication lag, testing strategy, and rollout plan.",
       "files": [],
       "assertions": [
         {
-          "name": "hld-appropriately-brief",
-          "description": "HLD section should be concise (<300 words) and not repeat full system architecture; focus only on replica topology"
+          "name": "no-verbose-background",
+          "description": "Background is brief or skipped (since this is a known scaling task)"
         },
         {
-          "name": "replica-configuration-detailed",
-          "description": "Document must include PostgreSQL-specific configuration details: wal_level, max_wal_senders, replication slots, async streaming setup"
+          "name": "postgres-specifics",
+          "description": "Includes PostgreSQL config details (wal_level, replication slots, async streaming, etc.) not just generic explanation"
         },
         {
-          "name": "replication-lag-monitoring",
-          "description": "Observability section must specify how to measure replication lag and define alert threshold (e.g., >1s lag = alert)"
+          "name": "monitoring-specified",
+          "description": "Explains how to measure replication lag and defines alert thresholds (e.g., >1s lag = alert)"
         },
         {
-          "name": "failover-testing-included",
-          "description": "Testing Strategy must include chaos test for promoting replica to primary and verifying read consistency"
+          "name": "testing-practical",
+          "description": "Testing section includes realistic scenarios (failover, lag handling, consistency checks)"
+        },
+        {
+          "name": "rollout-clear",
+          "description": "Deployment/rollout plan is specified (canary %, rollback procedure)"
+        },
+        {
+          "name": "concise",
+          "description": "Document is 1-2 pages, appropriately focused for incremental change"
         }
       ]
     },
     {
       "id": 3,
-      "prompt": "We're redesigning our notification system from a simple webhook-based approach to a message queue based system (using RabbitMQ). This is a significant architectural change affecting multiple teams. Create a design document that covers everything — why we're changing, what the new architecture looks like, components and their responsibilities, how we'll migrate without breaking existing integrations, observability for the queue, and production readiness steps.",
-      "expected_output": "A comprehensive design doc with full depth: background on current limitations, problem statement with impact metrics, detailed requirements (functional like message durability/ordering, non-functional like throughput), clear scope including what's NOT changing, HLD with diagrams showing webhook system vs new queue-based system, detailed component breakdown (producer, queue, consumer, retry logic), LLD with code examples for publishing/consuming messages, migration/compatibility strategy, observability metrics and alerts, disaster recovery plan, and deployment phases.",
+      "prompt": "We're redesigning our notification system from webhooks to RabbitMQ message queue. Major architectural change affecting multiple teams. Need design doc covering why we're changing, new architecture, components, migration/compatibility strategy, and production readiness.",
+      "expected_output": "Comprehensive design doc with problem/requirements, architecture comparison, detailed components, migration strategy ensuring backward compatibility, observability plan, and phased rollout with go/no-go criteria.",
       "files": [],
       "assertions": [
         {
-          "name": "webhook-vs-queue-comparison",
-          "description": "Document must contain explicit comparison of webhook vs message queue approaches with at least 5 comparison points"
+          "name": "problem-justified",
+          "description": "Clearly explains why webhooks aren't working and why message queue is better (comparison table or discussion)"
         },
         {
-          "name": "producer-consumer-code",
-          "description": "LLD section must include at least 2 code blocks: one showing message producer implementation, one showing consumer implementation"
+          "name": "architecture-clear",
+          "description": "New architecture is explained with diagram or clear text description showing producer/queue/consumer flow"
         },
         {
-          "name": "backward-compatibility-strategy",
-          "description": "Document must explain how existing webhook integrations continue working during migration (adapter pattern, dual-write, etc.) with specific phased migration plan including % traffic targets"
+          "name": "components-defined",
+          "description": "Components are identified with responsibilities (producer, queue cluster, consumer pool, DLQ handler, etc.)"
         },
         {
-          "name": "queue-observability-metrics",
-          "description": "Observability section must specify metrics: queue_depth, processing_lag_ms, dlq_size with defined alert thresholds"
+          "name": "migration-strategy",
+          "description": "Migration plan is detailed with phase approach, traffic targets (e.g., 5% → 50% → 100%), rollback procedure"
         },
         {
-          "name": "disaster-recovery-plan",
-          "description": "Prod Readiness must include message retention policy, dead-letter queue strategy, RTO/RPO targets, and failure scenario playbooks"
+          "name": "backward-compatibility",
+          "description": "Explains how existing webhook integrations continue working during migration (compatibility adapter, dual-write, etc.)"
+        },
+        {
+          "name": "observability-metrics",
+          "description": "Specifies key metrics to monitor (queue_depth, lag, DLQ size) with alert thresholds"
+        },
+        {
+          "name": "go-no-go-criteria",
+          "description": "Defines success criteria and go/no-go gates for each phase (e.g., error rate threshold)"
+        },
+        {
+          "name": "reasonable-length",
+          "description": "Document is 4-8 pages (appropriate for major architecture), detailed but not verbose with irrelevant sections"
         }
       ]
     }
