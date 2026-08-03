@@ -36,8 +36,6 @@ configs/competitions/*.yml
 # IDE / agent tooling
 .idea/
 .vscode/
-.cursor/
-.claude-plugin/
 skills/karpathy-guidelines/
 CLAUDE.md
 *.swp
