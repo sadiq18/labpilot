@@ -1,5 +1,7 @@
 # M10 — LLM tiering and free-tier routing
 
+**Design:** [design/04-llm-tiering.md](design/04-llm-tiering.md)
+
 **Status:** decision layer built and tested, **not wired into the live path** ·
 **Blocks:** M7 in practice
 
@@ -129,10 +131,29 @@ pacing. Daily *tokens* bind first.
 3. **Pace on `wait_seconds`** — the decision already returns it.
 4. **Record the served model on each experiment** — without this, a failed
    hypothesis cannot be attributed to the idea vs the writer.
-5. **Trim `prior_train[:120_000]`** in `code_engineering/capability.py`. At ~4
+5. ~~**Trim `prior_train[:120_000]`** in `code_engineering/capability.py`. At ~4
    chars/token that is ~30k tokens per codegen call; ten calls eats a daily
    allowance. Do this first — it is ten minutes and it is the difference between
-   the free tier lasting a day or an hour.
+   the free tier lasting a day or an hour.~~
+   **Refuted by measurement** — [design](design/04-llm-tiering.md) §2.2. The
+   rendered codegen prompt is **6,419 tokens**, not ~30k, because
+   `code_engineer/agent.py:65` already caps the same field at 20,000 chars and
+   rogii's real `train.py` is 12,146. The 120k slice never binds on any input
+   this system has produced.
+6. **Cache and meter every call** — replaces item 5 as the cost work.
+   `.cache/llm.sqlite` holds **one row across nine campaigns**: micro agents
+   call `.complete()` on a bound client, bypassing `LLM.generate` and therefore
+   `PromptCache`, and nothing calls `BudgetLedger.record` at all. Uncached
+   repeats, not one oversized field, are what spend a daily allowance.
+7. **Fix two latent breaks in the built layer** (design §2.4):
+   `ProviderSpec.has_credentials()` reads `os.environ`, but `Settings` loads
+   `.env` without exporting — a key in the workspace `.env` is invisible and
+   the campaign reports "no eligible provider"; and `_BoundClient.complete`
+   drops `json_mode`, so the obvious wiring would silently undo the
+   constrained-decoding fix (measured 3/3 fallback before it, 0/2 after).
+8. **Collapse three routers into one.** `resolve_llm_client` (15 call sites),
+   `resolve_route` (1), `select_route` (0). Wiring roles beside the other two
+   makes it the fourth.
 
 ## Exit criteria
 

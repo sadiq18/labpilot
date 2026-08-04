@@ -69,7 +69,7 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 
 | # | Plan | Unlocks | Status |
 |---|------|---------|--------|
-| **M10** | [LLM tiering & routing](04-llm-tiering.md) | **A trustworthy reasoning substrate. Everything downstream inherits its quality.** | Decision layer only — not wired |
+| **M10** | [LLM tiering & routing](04-llm-tiering.md) | **A trustworthy reasoning substrate. Everything downstream inherits its quality.** | [Designed](design/04-llm-tiering.md) — decision layer only, not wired |
 | **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | [Designed](design/01-technique-to-model.md) — blocked on M10 |
 | **M8** | [Objective feedback loop](02-objective-loop.md) | The system noticing it is making no progress | Not started |
 | **M9** | [Verification-first execution](03-verification-first.md) | Trusting any result | Partly done |
