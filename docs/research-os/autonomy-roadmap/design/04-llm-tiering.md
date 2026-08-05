@@ -1,7 +1,18 @@
-# Design — M10: LLM tiering and role-based routing
+# Design — M10: adopt the router; collapse labpilot's three
 
 **Plan:** [../04-llm-tiering.md](../04-llm-tiering.md) ·
 **Status:** design · **Owner:** unassigned · **Build phase:** 1
+
+> **Scope change (2026-08-05).** Routing itself is no longer built here. It
+> moves to a standalone, open-source, budget-aware router —
+> [docs/smart-router/DESIGN.md](../../../smart-router/DESIGN.md) — with labpilot
+> as its first consumer and forcing function.
+>
+> This document keeps what is labpilot's: the three internal routers that must
+> collapse into one, the role binding across 95 agent construction sites, the
+> measured findings in §2, and the rogii exit criterion. Where it describes
+> `select_route`, `LLMGateway` or adapter internals, the router package now owns
+> them; read those sections as the *integration contract* labpilot needs.
 
 ---
 

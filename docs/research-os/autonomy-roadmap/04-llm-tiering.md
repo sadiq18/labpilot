@@ -1,6 +1,12 @@
 # M10 — LLM tiering and free-tier routing
 
-**Design:** [design/04-llm-tiering.md](design/04-llm-tiering.md)
+**Design:** [design/04-llm-tiering.md](design/04-llm-tiering.md) ·
+**Router product design:** [../../smart-router/DESIGN.md](../../smart-router/DESIGN.md)
+
+> **Scope change (2026-08-05).** Routing moves out of labpilot into a
+> standalone open-source router. M10 becomes "adopt it and collapse labpilot's
+> three internal routers into one". Free-tier support stops being the design
+> and becomes one case of a general budget mechanism (`cost == 0`).
 
 **Status:** decision layer built and tested, **not wired into the live path** ·
 **Blocks:** M7 in practice
