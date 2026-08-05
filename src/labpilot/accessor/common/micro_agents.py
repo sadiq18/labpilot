@@ -153,12 +153,23 @@ class BaseMicroAgent:
     name: str = ""
     #: The Pydantic type this agent always returns.
     output_model: type[BaseModel]
+    #: What class of model this agent's prompt needs. Declared here rather than
+    #: at the ~95 construction sites because the requirement belongs next to the
+    #: prompt that creates it: whoever writes the prompt knows what it needs.
+    llm_role: str = "reasoning"
 
     def __init__(self, llm_client: LLMClient | None = None) -> None:
+        # Accept a gateway wherever a client is accepted, so every existing
+        # `Agent(llm_client=...)` call site keeps working and plain test stubs
+        # stay valid.
+        if hasattr(llm_client, "for_role"):
+            llm_client = llm_client.for_role(self.llm_role)  # type: ignore[union-attr]
         self.llm_client = llm_client
         self.last_used_llm = False
         self.last_generated_by: GeneratedBy = "rule_engine"
         self.last_failure_reason: str | None = None
+        #: Set after a successful LLM call when the client reports it.
+        self.last_served: object | None = None
 
     @property
     def uses_llm(self) -> bool:
@@ -178,6 +189,7 @@ class BaseMicroAgent:
                 f"{DETERMINISTIC_ENV}=1 to accept deterministic rule-engine output."
             )
         self.last_used_llm = False
+        self.last_served = None
         # Default covers the silent path below: with no client configured the
         # try/except is skipped entirely and nothing is logged, so the only
         # record that this run was deterministic is the one set here.
@@ -193,6 +205,9 @@ class BaseMicroAgent:
                     self.last_used_llm = True
                     self.last_generated_by = "llm"
                     self.last_failure_reason = None
+                    # Which model produced this, when the client can say. M14
+                    # records *what kind of thing* ran; this records *which*.
+                    self.last_served = getattr(self.llm_client, "last_served", None)
                     return result
                 except Exception as exc:  # noqa: BLE001 - soft-fail to deterministic path
                     last_exc = exc

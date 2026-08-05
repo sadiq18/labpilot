@@ -1,17 +1,15 @@
-"""Task → provider/model routing.
+"""Legacy task → provider/model routing.
 
-Extension points for Claude / OpenRouter: add providers when clients land —
-callers never import them directly.
+``resolve_route`` predates role-based routing and survives only for the
+``LLM.generate`` facade. New work resolves a **role** through
+:mod:`fitroute.select`; see ``docs/smart-router/DESIGN.md``.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 from labpilot.config import DEFAULT_MODEL_BY_PROVIDER, LLMConfig, Settings, TaskProfile
-from labpilot.llm.budget import BudgetLedger
-from labpilot.llm.catalog import ProviderSpec, RoutingConfig, eligible_providers
 from labpilot.llm.schemas import ResolvedRoute
 
 logger = logging.getLogger(__name__)
@@ -92,96 +90,6 @@ def _cloud_model(config: LLMConfig, profile: TaskProfile, provider: str) -> str:
     if provider == config.provider.strip().lower() and config.model:
         return config.model
     return DEFAULT_MODEL_BY_PROVIDER.get(provider, config.model)
-
-
-@dataclass(frozen=True)
-class RouteDecision:
-    """Outcome of tiered routing.
-
-    ``provider`` is None when nothing is currently usable; ``wait_seconds``
-    then says how long until the best candidate frees up. Callers pace on that
-    rather than firing a call they know will be rejected.
-    """
-
-    provider: ProviderSpec | None
-    model: str = ""
-    role: str = ""
-    wait_seconds: float = 0.0
-    degraded: bool = False
-    reason: str = ""
-
-
-def select_route(
-    routing: RoutingConfig,
-    role: str,
-    ledger: BudgetLedger,
-    *,
-    now: float | None = None,
-) -> RouteDecision:
-    """Pick a provider for ``role`` within entitlement, policy and budget.
-
-    NOT YET ON THE LIVE PATH. Production resolution still goes through
-    ``resolve_route``; this is the decision layer for tiered routing and is
-    exercised only by tests until an OpenAI-compatible adapter lands and call
-    sites pass a role. Until then the wait-rather-than-degrade guarantee below
-    is a property of this function, not of the running system.
-
-    Exhaustion is handled per role rather than globally. Downgrading a codegen
-    or hypothesis call to a weak model is worse than waiting: the weak output
-    gets recorded as "this technique did not help", a false negative that is
-    indistinguishable from a real one and permanently pollutes research memory.
-    Summarisation has no such property and degrades freely.
-    """
-    spec = routing.role_spec(role)
-    candidates = eligible_providers(routing, role)
-
-    best_wait: float | None = None
-    best_reason = ""
-    for provider in candidates:
-        avail = ledger.availability(
-            provider.name,
-            rpm=provider.rpm,
-            rpd=provider.rpd,
-            tpm=provider.tpm,
-            now=now,
-        )
-        if avail.ok:
-            return RouteDecision(
-                provider=provider,
-                model=provider.model_for(role) or "",
-                role=role,
-                reason=f"{provider.tier} tier",
-            )
-        if best_wait is None or avail.wait_seconds < best_wait:
-            best_wait, best_reason = avail.wait_seconds, avail.reason
-
-    if not candidates:
-        best_reason = "no eligible provider (entitlement, data policy, or credentials)"
-
-    if spec.on_exhaustion == "degrade":
-        for provider in eligible_providers(routing, role, ignore_strength=True):
-            avail = ledger.availability(
-                provider.name,
-                rpm=provider.rpm,
-                rpd=provider.rpd,
-                tpm=provider.tpm,
-                now=now,
-            )
-            if avail.ok:
-                return RouteDecision(
-                    provider=provider,
-                    model=provider.model_for(role) or "",
-                    role=role,
-                    degraded=True,
-                    reason=f"degraded to {provider.tier} tier: {best_reason}",
-                )
-
-    return RouteDecision(
-        provider=None,
-        role=role,
-        wait_seconds=best_wait or 0.0,
-        reason=best_reason,
-    )
 
 
 def resolve_route(

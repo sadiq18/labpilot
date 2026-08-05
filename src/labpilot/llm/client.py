@@ -18,8 +18,10 @@ from typing import Protocol, TypeVar, overload
 
 from pydantic import BaseModel, ValidationError
 
+from fitroute.cache import PromptCache, cache_key
+from fitroute.catalog import CredentialResolver
+from fitroute.gateway import LLMGateway
 from labpilot.config import DEFAULT_MODEL_BY_PROVIDER, LLMConfig, Settings
-from labpilot.llm.cache import PromptCache, cache_key
 from labpilot.llm.json_utils import parse_json_object
 from labpilot.llm.ollama import OllamaClient, OllamaProvider
 from labpilot.llm.providers import GeminiClient, GeminiProvider, OpenAIClient, OpenAIProvider
@@ -163,13 +165,66 @@ def create_llm_client(config: LLMConfig) -> LLMClient | None:
         return None
 
 
+def settings_credential_resolver(settings: Settings | None = None) -> CredentialResolver:
+    """Look a key up in ``Settings`` (which reads the workspace ``.env``).
+
+    pydantic-settings loads ``.env`` into a Settings object and never exports to
+    ``os.environ``, so a catalog that only reads the environment cannot see a
+    key the user just put in their ``.env`` — and routing then reports "no
+    eligible provider" with the key sitting in the file they edited.
+    """
+    resolved = settings or Settings()
+
+    def resolve(env_name: str) -> str:
+        value = getattr(resolved, env_name.lower(), "")
+        return str(value or "")
+
+    return resolve
+
+
+def build_gateway(config: LLMConfig, *, settings: Settings | None = None) -> LLMGateway | None:
+    """Build the role-routing gateway, or ``None`` when no providers are set.
+
+    ``None`` means "this workspace has not configured routing yet", and callers
+    fall back to the legacy provider-priority path. It does not mean "no LLM".
+    """
+    from fitroute.budget import BudgetLedger
+    from fitroute.gateway import LLMGateway
+
+    if not config.routing.providers:
+        return None
+
+    settings = settings or Settings()
+    ledger = BudgetLedger(Path(config.budget_path))
+    cache = PromptCache(config.cache.path, enabled=config.cache.enabled)
+    return LLMGateway(
+        config.routing,
+        ledger,
+        cache=cache,
+        credential_resolver=settings_credential_resolver(settings),
+        temperature=config.temperature,
+    )
+
+
 def resolve_llm_client(
     config: LLMConfig,
     *,
     alternate_keys: dict[str, str] | None = None,
 ) -> LLMClient | None:
-    """Return the first LLM client that can be constructed for a configured provider."""
+    """Return an LLM client for the configured providers.
+
+    Prefers the role-routing gateway when ``llm.routing.providers`` is
+    configured; otherwise falls back to the legacy provider-priority search so
+    existing workspaces are unaffected. Callers that want a *role* should pass
+    the gateway to their agent instead — the agent declares its own role
+    (``BaseMicroAgent.llm_role``).
+    """
     settings = Settings()
+
+    gateway = build_gateway(config, settings=settings)
+    if gateway is not None:
+        return gateway  # type: ignore[return-value]
+
     if alternate_keys is None:
         alternate_keys = {
             "openai": settings.openai_api_key,

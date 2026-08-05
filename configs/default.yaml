@@ -51,6 +51,40 @@ llm:
     coding: {}        # inherits gemini (override provider/model here for Ollama coding)
     summary: {}       # inherits gemini
     default: {}
+  budget_path: .cache/llm_budget.sqlite
+  # Role-based routing. `providers` is empty by default, which keeps the legacy
+  # provider-priority behaviour; add entries to switch a workspace over.
+  #
+  # Order is preference order — there is deliberately no built-in "paid beats
+  # local", so a good local model can be listed first and win.
+  routing:
+    plan: free                    # free | pro | enterprise
+    allow_training_on_inputs: true
+    providers: []
+    # Example — uncomment and set the key to route codegen to a strong model:
+    #   - name: groq
+    #     kind: openai_compat
+    #     base_url: https://api.groq.com/openai/v1
+    #     api_key_env: GROQ_API_KEY
+    #     tier: free
+    #     strong: true
+    #     caps: [structured_output]
+    #     rpm: 30
+    #     models: {default: llama-3.3-70b-versatile}
+    #   - name: ollama
+    #     kind: ollama
+    #     base_url: http://127.0.0.1:11434
+    #     tier: local
+    #     caps: [structured_output]
+    #     models: {default: qwen2.5-coder:14b}
+    roles:
+      # A model that cannot constrain output to JSON will answer a JSON-only
+      # prompt in prose and return HTTP 200 — so structured_output is required,
+      # not preferred.
+      codegen:   {requires_strong: true,  requires: [structured_output], on_exhaustion: wait}
+      reasoning: {requires_strong: true,  requires: [structured_output], on_exhaustion: wait}
+      summarize: {requires_strong: false, requires: [structured_output], on_exhaustion: degrade}
+      default:   {requires_strong: false, requires: [structured_output], on_exhaustion: degrade}
   # Local-only alternative for non-coding tasks:
   #   planning: { model: qwen2.5-coder:14b, provider: ollama, force_local: true }
   # OpenAI cloud:

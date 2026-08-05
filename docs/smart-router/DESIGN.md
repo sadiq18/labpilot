@@ -128,14 +128,20 @@ independent confirmation of the mechanism in §8.4 — and it shows that mechani
 is stronger than assumed: limits are discoverable **proactively**, before a
 single 429, for the price of one token.
 
-**Conclusions that shape the design:**
+**Conclusions that shape the design.** Sync is not impossible — it is layered,
+and only the last row resists it:
 
-1. Model *facts* are syncable from three independent APIs.
-2. Free-tier *limits* are discoverable by probe on any provider you hold a key
-   for — proactively, not only reactively (§8.4, §8.15 layer 3).
-3. **Which providers exist and offer free tiers at all** is the one thing no
-   API answers. That is irreducibly curation, and it is where an open-source
-   project has an advantage a hosted gateway does not (§8.15 layer 4).
+| What | Syncable? | How |
+|---|---|---|
+| Model facts — cost, context, `structured_output`, base_url, env var | **yes** | models.dev · OpenRouter · LiteLLM |
+| New models and retirements | **yes** | `release_date` · `created` · `expiration_date` |
+| Models *your key* can reach | **yes** | the provider's own `/v1/models` |
+| Your actual quota | **yes** | one-token probe, `x-ratelimit-limit-*` headers |
+| **A provider you have never signed up for** | **no** | curation only (§8.15 layer 4) |
+
+The unsyncable row is also the slowest-moving: models arrive weekly, providers a
+few times a year. A community catalog file covers it, which is why §8.15
+layer 4 is data rather than code.
 
 Note on reuse: that repository publishes **no license**, so its data cannot be
 vendored. Consuming it means reimplementing the probe (trivial — it is the
@@ -881,6 +887,20 @@ OpenTelemetry spans for anyone with a collector.
 ## 13. Production readiness
 
 ### 13.1 Build order
+
+> **Where v0.1 is being built (2026-08-05).** Phases 1–2 land **inside
+> `src/labpilot/llm/`**, not yet as a separate package. Standing up a repo and a
+> release process before anything consumes the code would spend the session on
+> packaging rather than on the forcing function.
+>
+> Extraction stays cheap by rule, not by intention: **`catalog.py`, `budget.py`,
+> `adapters.py` and `select()` import nothing from `labpilot`.** A source guard
+> test enforces it (`test_router_core_has_no_labpilot_imports`). When the
+> open-source package is stood up, extraction is a file move plus a rename —
+> which is exactly the property "extract later" usually fails to keep.
+>
+> Everything in §8.10–§8.15 and §13.5 stays in this document as designed future
+> work. v0.1 implements none of it.
 
 | Phase | Ships | Verified by |
 |---|---|---|

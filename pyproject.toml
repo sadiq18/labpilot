@@ -44,7 +44,7 @@ dev = [
 research = "labpilot.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/labpilot"]
+packages = ["src/labpilot", "src/fitroute"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

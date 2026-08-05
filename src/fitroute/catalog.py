@@ -17,12 +17,15 @@ change plus a plan name, not a rewrite.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 
 from pydantic import BaseModel, Field
 
-# Tier ordering used when several providers qualify: a paying customer should
-# get the model they are paying for before a free-tier fallback.
-_TIER_RANK = {"paid": 0, "free": 1, "local": 2}
+#: Resolves an env var name to its value. Injected so this module stays free of
+#: any ``labpilot`` import (router-core rule) while still seeing keys that live
+#: only in a workspace ``.env`` — pydantic-settings loads those into a Settings
+#: object and never exports them to ``os.environ``.
+CredentialResolver = Callable[[str], str]
 
 # Which provider tiers each plan may draw on. Enterprise deliberately excludes
 # free tiers: their data policies generally permit training on inputs, which is
@@ -49,17 +52,32 @@ class ProviderSpec(BaseModel):
     trains_on_input: bool = False
     # role -> model name; "default" is the fallback for unlisted roles.
     models: dict[str, str] = Field(default_factory=dict)
+    # What this endpoint can actually do. `structured_output` is the one that
+    # matters most: a model that cannot constrain its output to JSON will
+    # cheerfully answer a JSON-only prompt in prose, return HTTP 200, and have
+    # the reply discarded downstream — observed as a 3-of-3 fallback rate before
+    # constrained decoding was requested.
+    caps: set[str] = Field(default_factory=set)
     rpm: int | None = None
     rpd: int | None = None
     tpm: int | None = None
+    request_timeout_seconds: float = 600.0
 
     def model_for(self, role: str) -> str | None:
         return self.models.get(role) or self.models.get("default")
 
-    def has_credentials(self) -> bool:
-        """Local providers need none; everything else needs its env var set."""
+    def has_credentials(self, resolver: CredentialResolver | None = None) -> bool:
+        """Local providers need none; everything else needs its key resolvable.
+
+        ``resolver`` is consulted before the process environment so a key that
+        lives only in a workspace ``.env`` is visible. Without it, routing
+        reports "no eligible provider" while the key sits in the file the user
+        just edited.
+        """
         if self.tier == "local" or not self.api_key_env:
             return self.tier == "local"
+        if resolver is not None and resolver(self.api_key_env).strip():
+            return True
         return bool(os.environ.get(self.api_key_env, "").strip())
 
 
@@ -67,12 +85,20 @@ class RoleSpec(BaseModel):
     """What a class of work needs, and what to do when it cannot be had."""
 
     requires_strong: bool = False
+    # Capabilities a provider must have to serve this role at all. A hard
+    # precondition, checked before any ranking: routing a JSON-parsing role to
+    # a model that cannot produce JSON is not a degraded result, it is a
+    # guaranteed one.
+    requires: set[str] = Field(default_factory=set)
     # wait   — queue until a capable provider frees up (default for reasoning
     #          and codegen: a weak model silently produces a *false negative*,
     #          recording "technique X failed" when really "the writer failed").
     # degrade— accept a weaker provider (fine for summarisation).
     # fail   — raise rather than proceed.
     on_exhaustion: str = "degrade"
+    # Bounded, because an unbounded wait in an unattended campaign is
+    # indistinguishable from a hang.
+    max_wait_seconds: float = 900.0
 
 
 class RoutingConfig(BaseModel):
@@ -99,25 +125,32 @@ def eligible_providers(
     role: str,
     *,
     ignore_strength: bool = False,
+    credential_resolver: CredentialResolver | None = None,
 ) -> list[ProviderSpec]:
-    """Providers that may serve ``role``, best first.
+    """Providers that may serve ``role``, in preference order.
 
     ``ignore_strength`` is used only by an explicit degrade step, so that
     relaxing capability is always a deliberate, recorded decision rather than a
-    silent side effect of exhaustion.
+    silent side effect of exhaustion. Required *capabilities* are never relaxed
+    — degrading to a model that cannot do the job is not a degraded result.
+
+    Order is **catalog order**. There is deliberately no tier ranking: a free
+    local model that answers correctly for zero cost and no network should be
+    able to outrank a paid one, and a hardcoded ``paid > free > local`` makes
+    that impossible. Preference is the operator's to state, by listing
+    providers in the order they want them tried.
     """
     tiers = allowed_tiers(routing.plan)
     spec = routing.role_spec(role)
     needs_strong = spec.requires_strong and not ignore_strength
 
-    candidates = [
+    return [
         provider
         for provider in routing.providers
         if provider.tier in tiers
         and (routing.allow_training_on_inputs or not provider.trains_on_input)
         and (provider.strong or not needs_strong)
+        and spec.requires <= provider.caps
         and provider.model_for(role) is not None
-        and provider.has_credentials()
+        and provider.has_credentials(credential_resolver)
     ]
-    # Stable sort: tier preference first, catalog order within a tier.
-    return sorted(candidates, key=lambda p: _TIER_RANK.get(p.tier, 99))

@@ -180,6 +180,51 @@ def _check_llm_provider() -> CheckResult:
     )
 
 
+def check_llm_roles() -> list[CheckResult]:
+    """Report the provider resolved for each role, or why there is none.
+
+    A role with no capable provider is a **failure**, not a warning: the work it
+    covers will either not run or run on something that cannot do it, and the
+    second is worse because it produces plausible wrong answers.
+
+    Returns an empty list when routing is unconfigured — that workspace is still
+    on the legacy provider-priority path and has nothing to report.
+    """
+    try:
+        from labpilot.config import load_config
+        from labpilot.llm.client import build_gateway
+
+        config = load_config().llm
+    except Exception as exc:  # noqa: BLE001 — config errors are reported, not raised
+        return [CheckResult("LLM routing", False, f"config load failed: {exc}", "")]
+
+    gateway = build_gateway(config)
+    if gateway is None:
+        return []
+
+    results: list[CheckResult] = []
+    for role in sorted(config.routing.roles):
+        if role == "default":
+            continue
+        decision = gateway.preview(role)
+        label = f"LLM role · {role}"
+        if decision.provider is None:
+            results.append(
+                CheckResult(
+                    label,
+                    False,
+                    decision.reason,
+                    f"Add a provider to llm.routing.providers that satisfies role {role!r}.",
+                )
+            )
+            continue
+        detail = f"{decision.provider.name} · {decision.model} ({decision.provider.tier})"
+        if decision.degraded:
+            detail += " — degraded"
+        results.append(CheckResult(label, True, detail))
+    return results
+
+
 def check_environment(include_optional: bool = True) -> list[CheckResult]:
     """Run all environment checks and return their results, in report order."""
     results = [
@@ -187,6 +232,7 @@ def check_environment(include_optional: bool = True) -> list[CheckResult]:
         _check_lightgbm(),
         _check_kaggle_credentials(),
         _check_llm_provider(),
+        *check_llm_roles(),
     ]
     if include_optional:
         results.extend([_check_image_deps(), _check_deep_deps()])

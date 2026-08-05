@@ -8,6 +8,8 @@ import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from fitroute.catalog import RoutingConfig
+
 # Shared with `labpilot.llm.client.create_llm_client()`: if a user switches
 # `llm.provider` without also overriding `llm.model`, this is what resolves
 # to a real model name for that provider instead of silently sending an
@@ -47,6 +49,11 @@ class LLMConfig(BaseModel):
     request_timeout_seconds: float = 600.0
     cache: LLMCacheConfig = Field(default_factory=LLMCacheConfig)
     tasks: dict[str, TaskProfile] = Field(default_factory=dict)
+    # Role-based routing (fitroute). Empty by default, so a fresh checkout keeps
+    # the legacy provider-priority behaviour until providers are configured.
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    #: Where the persistent rate/quota ledger lives, relative to the workspace.
+    budget_path: Path = Path(".cache/llm_budget.sqlite")
 
 
 class TrainingConfig(BaseModel):
