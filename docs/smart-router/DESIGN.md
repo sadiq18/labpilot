@@ -123,6 +123,19 @@ whether the result worked.
   or that sit outside an allowed region, per workload.
 - **F11** — **Record & replay**: every request/response recorded; a run replays
   offline against the recording.
+- **F12** — **Local competes on merit.** A local model is ranked by the same
+  posterior and cost arithmetic as a hosted one. There is no tier preference
+  that makes it a fallback (§8.10).
+- **F13** — **Bring your own inference.** Any OpenAI-compatible endpoint —
+  self-hosted vLLM, TGI, SGLang, llama.cpp, an internal gateway — is registrable
+  with declared capabilities, and those declarations are **probe-verified**
+  rather than trusted (§8.11).
+- **F14** — **Streaming**, with failover semantics stated rather than discovered
+  (§8.12).
+- **F15** — **Cost accounting in currency**, attributable by tag (user, feature,
+  customer), with unmetered calls counted separately from zero-cost ones (§8.13).
+- **F16** — **`role="auto"`** derives requirements from the call and biases
+  toward the stronger role on ambiguity (§8.14).
 
 ### Non-functional
 
@@ -148,13 +161,14 @@ whether the result worked.
 Roles + requirements · capability preflight · rate and spend budgets · outcome
 memory and bandit selection · verdict failover · registry sync · override ·
 exact cache · OpenAI-compatible + Anthropic + Gemini + Ollama adapters ·
-record/replay · labpilot adapter.
+**custom endpoints with capability probing** (§8.11) · **streaming** (§8.12) ·
+**cost attribution by tag** (§8.13) · **`role="auto"`** (§8.14) · record/replay ·
+labpilot adapter.
 
 ### Deferred (v2+)
 
-OpenAI-compatible **proxy server** (§8.1) · semantic cache · streaming ·
-multi-turn tool loops · conversation memory beyond context-fitting · a hosted
-dashboard.
+OpenAI-compatible **proxy server** (§8.1) · semantic cache · multi-turn tool
+loops · conversation memory beyond context-fitting · a hosted dashboard.
 
 ### Out of scope
 
@@ -303,9 +317,11 @@ Two ledgers, kept separate because they exhaust differently:
 Free-tier support therefore falls out of the general mechanism rather than being
 the mechanism, which is the correction that started this redesign.
 
-*Consequence to accept:* some endpoints do not report usage. Record `0` tokens
-rather than estimating. An invented number in a quota ledger produces a wait no
-one can explain.
+*Consequence to accept:* some endpoints do not report usage. Never estimate — an
+invented number in a quota ledger produces a wait no one can explain. But
+**unknown is not zero**: record `tokens = None`, distinct from a genuine zero,
+so a provider that reports nothing shows up as an unmetered call rather than
+silently understating the day's spend (§8.13).
 
 ### 8.5 Waiting must be bounded
 
@@ -355,6 +371,9 @@ requiring a separate code path.
 It is also the clearest structural difference from a hosted gateway: a
 marketplace cannot route to the machine you are sitting at.
 
+See §8.10 — being *in* the pool is not enough, and the seed code inherited from
+labpilot actively prevents local from ever winning.
+
 ### 8.9 Conversation memory belongs here for one specific reason
 
 Generic chat memory does not belong in a router. **Context-fitting** does: the
@@ -364,6 +383,136 @@ the only one that knows the context window the history must fit into.
 So v1's `Thread` does exactly that — hold turns, and fit them to the selected
 model's window (drop, or summarise via the `summarize` role). Anything more —
 retrieval, persistence, entity memory — is a different library's job.
+
+### 8.10 Delete the tier preference — local wins when local is better
+
+The seed code carried over from labpilot sorts candidates by tier:
+
+```python
+_TIER_RANK = {"paid": 0, "free": 1, "local": 2}   # llm/catalog.py:25
+```
+
+That single line makes local a permanent last resort. It is defensible in a
+cost-control router and wrong in this one: a 14B model that answers a
+summarisation prompt correctly 88% of the time for **zero cost and no network**
+should beat a frontier model that answers it 91% of the time for real money —
+and under a tier sort it never can.
+
+**Tier stops being a ranking input and becomes only a filter input** (via
+entitlement and data policy, §8.7 unchanged). Ranking is posterior × cost ×
+latency, and `cost = 0` is a genuine advantage rather than a consolation.
+
+Two guards this needs, or it becomes a different kind of wrong:
+
+- **Latency belongs in the score.** Local inference can be 20× slower. A role
+  with a latency SLO filters it out; a role without one accepts the trade
+  knowingly. Without this, "local is free" quietly makes everything slow.
+- **A cold local model has no posterior.** Seed it from the registry's
+  capability tier like any other model (§8.2), so a 3B model is not tried for
+  codegen merely because it is free. Capability preflight (F2) catches the worst
+  of it first.
+
+*Consequence to accept:* on a machine with a good local model, most traffic goes
+local and the hosted providers' posteriors stay thin. Exploration (§8.2) is what
+stops that from becoming a one-way door.
+
+### 8.11 Bring your own inference — declared, then probed
+
+Registering a private endpoint is the same shape as any provider, except the
+registry knows nothing about it, so the operator declares its facts:
+
+```yaml
+providers:
+  - id: internal/llama-70b
+    base_url: https://inference.corp.internal/v1
+    api_key_env: CORP_INFERENCE_KEY
+    tier: local              # cost 0, data never leaves — both true here
+    caps: [structured_output, tool_call]
+    context: 131072
+```
+
+**Declared capabilities are not trusted.** `router probe internal/llama-70b`
+runs a small suite — does `response_format` actually constrain output, do tool
+calls come back well-formed, does the advertised context length hold at the top
+end, what is p50 latency — and writes an observed record that overrides the
+declaration, with a diff when they disagree.
+
+This matters more for private endpoints than for anything else: a
+self-hosted server behind an OpenAI-compatible facade very often implements a
+*subset*, and the failure mode is the one this router exists to prevent — a
+prompt requiring structured output sent to something that will return prose with
+a 200.
+
+Probing is also how F2 stays honest for public providers when a registry flag is
+wrong (§11.3, third falsifier).
+
+### 8.12 Streaming, with failover semantics stated up front
+
+Streaming is table stakes for any user-facing product, so it ships in v1. But it
+is in genuine tension with two core mechanisms, and the tension must be a
+decision rather than a surprise:
+
+- **Verdict failover (F5)** — you cannot un-send tokens already delivered.
+- **Schema validation** — invalidity is knowable only at the end.
+
+The rule: **first emitted token commits the choice.** Before it, failover works
+normally (connection errors, refusals in the first chunk). After it, a late
+`SCHEMA_INVALID` still penalises the posterior and is still reported to the
+caller, but no retry happens — the caller owns recovery.
+
+Roles may set `stream: never`, which is the right setting for anything whose
+output is parsed rather than shown to a human. labpilot's micro agents all set
+it: there is no one watching tokens arrive, so the only effect of streaming
+there would be to disable failover.
+
+*Rejected:* buffer the full response, validate, then replay it as a stream. It
+preserves failover and destroys the only reason to stream.
+
+### 8.13 Cost in currency — with unmetered calls visible
+
+Every call carries an optional `tags={"user": ..., "feature": ...}`, and spend
+rolls up by tag, role, model and day. This is the first thing anyone running an
+LLM feature in production asks for and rarely gets without a vendor dashboard.
+
+Two honesty constraints, both non-negotiable:
+
+- **Cost is an estimate, labelled as one.** It is registry price × reported
+  usage. Registry prices go stale; the number is for decisions, never presented
+  as an invoice.
+- **Unmetered calls are reported, not zero-filled.** A provider that returns no
+  usage produces `$1.34 + 12 unmetered calls`, never `$1.34`. Silently treating
+  unknown as zero is how a budget cap gets blown while the dashboard looks calm.
+
+Spend caps per role already exist (§8.4); this adds attribution and reporting on
+top of the same ledger, so it costs a schema column and a report command rather
+than a new mechanism.
+
+### 8.14 `role="auto"` — derive what you can, guess upward
+
+Zero-config is what makes this usable by people who will never declare roles, so
+`auto` ships. But a misclassification routes codegen to a weak model, which is
+the exact failure the router exists to prevent. So `auto` is built to be
+conservative rather than clever:
+
+1. **Derive, don't guess, wherever possible.** A `schema=` argument *proves*
+   structured output is required. Prompt length *measures* the context needed.
+   Attached images *determine* the modality. Most of what matters is derivable
+   with no classifier at all.
+2. **Guess only the strength axis**, from cheap signals — length, imperative
+   verbs, presence of code, output-size hints — never an LLM call. Adding a
+   classification call to every call would tax the hot path and raise the
+   question of which model classifies.
+3. **Bias upward on ambiguity.** Guessing `summarize` when the work was codegen
+   corrupts a result; guessing `codegen` when the work was summarisation costs
+   money. Those are not symmetric, so ties resolve to the stronger role.
+4. **Mark it.** `role_inferred=true` on the record, so auto-routed calls can be
+   compared against declared ones. If auto's success rate is materially worse,
+   that is measurable rather than folklore — and it is the signal that decides
+   whether `auto` should ever become the default.
+
+*Rejected:* an LLM-based intent classifier in v1. Latency and cost on every call,
+plus a bootstrapping problem — the classifier needs a model, chosen by the
+router, whose choice depends on the classification.
 
 ---
 
@@ -487,6 +636,16 @@ Named tests that map to a measured failure rather than an imagined one:
    10 lowers the effective limit.
 7. `test_sync_failure_serves_stale_and_warns` — NF2.
 8. `test_recording_contains_no_credentials` — NF6, asserted by pattern scan.
+9. `test_free_local_outranks_costly_hosted_when_posterior_close` — §8.10. The
+   tier sort inherited from labpilot fails this today.
+10. `test_probe_overrides_a_false_capability_declaration` — an endpoint claiming
+    `structured_output` that ignores `response_format` is demoted. §8.11.
+11. `test_stream_after_first_token_does_not_failover` — and still records the
+    verdict. §8.12.
+12. `test_unmetered_calls_are_not_zero_filled` — a usage-less provider shows as
+    unmetered, not as free. §8.13.
+13. `test_auto_biases_upward_on_ambiguity` — a prompt matching both roles routes
+    to the stronger. §8.14.
 
 ### 10.1 Simulation is the one that earns the design
 
@@ -577,14 +736,20 @@ OpenTelemetry spans for anyone with a collector.
 | Phase | Ships | Verified by |
 |---|---|---|
 | 1 | registry + adapters + `select()` (capability, entitlement, budget) | property + golden tests |
-| 2 | gateway: cache, meter, verdicts, failover, learned limits | simulation + a local Ollama run |
-| 3 | outcome memory + bandit; `router doctor`; override | simulation §10.1 |
+| 2 | gateway: cache, meter, verdicts, failover, learned limits; **cost attribution** (§8.13) | simulation + a local Ollama run |
+| 3 | outcome memory + bandit, **no tier preference** (§8.10); `router doctor`; override | simulation §10.1 |
 | 4 | labpilot adapter — **the forcing function** | rogii, §11.2 |
-| 5 | record/replay; conversation `Thread` | replay CI |
+| 5 | **custom endpoints + `router probe`** (§8.11); **streaming** (§8.12) | probe against a local vLLM |
+| 6 | **`role="auto"`** (§8.14); record/replay; conversation `Thread` | auto-vs-declared success rates; replay CI |
 | v2 | Rust proxy + TS client | adoption, not correctness |
 
 Phases 1–3 are inert for labpilot. Phase 4 is where behaviour changes, and it is
 what proves phases 1–3 were real rather than merely tested.
+
+Phases 5–6 are ordered after the forcing function deliberately. Streaming,
+probing and `auto` all widen the surface, and none of them makes routing better
+— building them before phase 4 would grow the thing without ever testing whether
+its core claim holds.
 
 ### 13.2 The prerequisite only the user can supply
 
@@ -626,13 +791,17 @@ Everything above is v1 or v2. Beyond it, in the order that would matter:
 3. **Prompt-cache-aware routing** — prefer a provider whose own prompt cache
    would hit; `cache_read` cost is already in the registry.
 4. **Latency SLO per role** — "summarize must return in < 2s" as a filter.
-5. **Cost attribution by tag** — per user, per feature, per customer. The first
-   thing anyone running this in production asks for.
-6. **Degradation ladders** — an explicit ordered fallback per role, so degrading
+   Promoted in importance by §8.10: once local can win on cost, latency is the
+   only thing stopping it from winning everywhere.
+5. **Degradation ladders** — an explicit ordered fallback per role, so degrading
    is a declared path rather than whatever ranked next.
-7. **Multi-region / residency routing** — EU-only endpoints as a policy filter.
-8. **A `fitroute.eval` harness** — replay a recorded workload against a
-   candidate model to get its posterior *before* routing traffic to it.
+6. **Multi-region / residency routing** — EU-only endpoints as a policy filter.
+7. **A `fitroute.eval` harness** — replay a recorded workload against a
+   candidate model to get its posterior *before* routing traffic to it. Pairs
+   naturally with `router probe` (§8.11): probe answers *can it*, eval answers
+   *is it any good*.
+8. **Local capacity awareness** — queue depth and VRAM on the local box as a
+   routing input, so §8.10 does not send twenty concurrent calls to one GPU.
 
 ### 13.6 Name
 
