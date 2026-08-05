@@ -74,16 +74,38 @@ OpenRouter can be one of this router's providers.
 | [models.dev/api.json](https://models.dev/api.json) | per-provider `env` var + `api` base URL; per-model `structured_output`, `tool_call`, `context`, `output`, `modalities`, `cost{input,output,cache_read,cache_write}`, `open_weights`, `release_date` | rate limits, free-tier flag |
 | [OpenRouter `/api/v1/models`](https://openrouter.ai/api/v1/models) | pricing (`0` for `:free` variants), `supported_parameters`, `benchmarks`, `context_length`, `expiration_date` | per-day quotas |
 | [LiteLLM prices JSON](https://github.com/BerriAI/litellm) | `supports_response_schema`, `supports_function_calling`, costs, token limits | rpm/tpm, free tier |
-| [cheahjs/free-llm-api-resources](https://github.com/cheahjs/free-llm-api-resources) | actual free-tier numbers | markdown, hand-maintained, explicitly volatile |
+| [cheahjs/free-llm-api-resources](https://github.com/cheahjs/free-llm-api-resources) | actual free-tier numbers across 13 providers | no JSON artifact — output is a generated README; **no license file** |
 
-**Conclusion that shapes the design:** model *facts* are syncable from three
-independent APIs. Free-tier *budgets* are not machine-readable anywhere, and the
-lists that have them warn that they change constantly.
+**Correction (2026-08-05).** An earlier draft of this section called the last
+row "markdown, hand-maintained". That is wrong, and the truth is more useful:
+its README is **generated** by `src/pull_available_models.py`, which discovers
+limits by sending a one-token probe and reading the response headers —
 
-So budgets are **learned from the account's own traffic** — `Retry-After`,
-`X-RateLimit-*`, and observed 429 ceilings — rather than trusted from docs. This
-is not a workaround. Limits differ per account, per tier and per model, so the
-observed number is the only correct one.
+```python
+# their fetch_groq / get_groq_limits_for_model, condensed
+r = requests.post(".../chat/completions",
+                  json={"model": m, "messages": [...], "max_tokens": 1, "stream": True})
+rpd = int(r.headers["x-ratelimit-limit-requests"])
+tpm = int(r.headers["x-ratelimit-limit-tokens"])
+```
+
+29k stars, updated the day this was written, 13 provider fetchers. It is
+independent confirmation of the mechanism in §8.4 — and it shows that mechanism
+is stronger than assumed: limits are discoverable **proactively**, before a
+single 429, for the price of one token.
+
+**Conclusions that shape the design:**
+
+1. Model *facts* are syncable from three independent APIs.
+2. Free-tier *limits* are discoverable by probe on any provider you hold a key
+   for — proactively, not only reactively (§8.4, §8.15 layer 3).
+3. **Which providers exist and offer free tiers at all** is the one thing no
+   API answers. That is irreducibly curation, and it is where an open-source
+   project has an advantage a hosted gateway does not (§8.15 layer 4).
+
+Note on reuse: that repository publishes **no license**, so its data cannot be
+vendored. Consuming it means reimplementing the probe (trivial — it is the
+snippet above) or upstreaming a JSON output and asking for a licence.
 
 ---
 
@@ -136,6 +158,13 @@ whether the result worked.
   customer), with unmetered calls counted separately from zero-cost ones (§8.13).
 - **F16** — **`role="auto"`** derives requirements from the call and biases
   toward the stronger role on ambiguity (§8.14).
+- **F17** — **Discovery**: new models are found by sync, reachable models by the
+  provider's own `/v1/models`, quotas by a one-token header probe, and new
+  *providers* by a community catalog. A newly discovered capable model is
+  **auto-enrolled into exploration**, not merely listed (§8.15).
+- **F18** — **Retirement**: a model past `expiration_date` or absent from sync
+  is withdrawn from candidates with a warning naming it and its current traffic
+  share — never left to 404 mid-run (§8.15).
 
 ### Non-functional
 
@@ -162,8 +191,9 @@ Roles + requirements · capability preflight · rate and spend budgets · outcom
 memory and bandit selection · verdict failover · registry sync · override ·
 exact cache · OpenAI-compatible + Anthropic + Gemini + Ollama adapters ·
 **custom endpoints with capability probing** (§8.11) · **streaming** (§8.12) ·
-**cost attribution by tag** (§8.13) · **`role="auto"`** (§8.14) · record/replay ·
-labpilot adapter.
+**cost attribution by tag** (§8.13) · **`role="auto"`** (§8.14) ·
+**discovery: sync diff, `/v1/models`, limit probe, auto-enrolment, retirement**
+(§8.15) · record/replay · labpilot adapter.
 
 ### Deferred (v2+)
 
@@ -307,9 +337,11 @@ success. A helper (`with router.call(...) as c:`) makes the common path report
 
 Two ledgers, kept separate because they exhaust differently:
 
-- **Rate** — rpm/rpd/tpm windows, per (provider, account). Seeded from config,
-  then **corrected by observation**: `Retry-After`, `X-RateLimit-Remaining`,
-  `X-RateLimit-Reset`, and 429 ceilings. Observed always beats configured.
+- **Rate** — rpm/rpd/tpm windows, per (provider, account). Discovered by a
+  one-token probe at key registration (§2.3), then **corrected continuously by
+  observation**: `Retry-After`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`,
+  and 429 ceilings. Observed always beats configured, and a probe result beats
+  documentation.
 - **Spend** — currency, per role and global, per day/month. Computed from the
   registry's per-token costs and the response's usage. Free tier is not a
   special case: it is `cost == 0`.
@@ -514,6 +546,80 @@ conservative rather than clever:
 plus a bootstrapping problem — the classifier needs a model, chosen by the
 router, whose choice depends on the classification.
 
+### 8.15 Discovery — four layers, because one mechanism cannot cover it
+
+Learned limits (§8.4) answer *how much budget do I have here*. They say nothing
+about a provider you have never signed up for, and nothing about a model that
+launched this morning. Discovery is a separate problem with four distinct
+sub-problems, and conflating them is why routers end up with stale hardcoded
+model lists.
+
+**Layer 1 — a new model on a provider I already use.** Solved by sync.
+models.dev carries `release_date` / `last_updated`; OpenRouter carries
+`created`. A daily sync diffs against the local registry and yields new arrivals.
+
+Knowing is the cheap half. **The router auto-enrols them**: a new model that
+passes capability preflight for a role enters that role's bandit with a
+registry-seeded prior and receives exploration traffic (§8.2). Within a day
+there is a real posterior measured on *your* prompts.
+
+This is the sharpest difference from a marketplace. OpenRouter can tell you a
+model exists. It cannot tell you that it is now your best summariser at a tenth
+of the cost, because it never ran your work through it and never saw whether the
+output parsed.
+
+**Layer 2 — which models my key can actually reach.** Public catalogs list what
+exists; a provider's own `/v1/models` lists what *this account* may call, which
+differs by tier and by region. Queried on key registration and on a schedule.
+Cheap, exact, no inference.
+
+**Layer 3 — what my free quota actually is.** The probe from §2.3: one request,
+`max_tokens: 1`, read `x-ratelimit-limit-*` from the response headers. Run on
+key registration, per model, then corrected continuously from live traffic
+(§8.4). Providers that return no such headers fall back to learn-from-429.
+
+Layers 2 and 3 compose into `router discover`: give it a key, get back the
+models that key can reach, their real limits, and their probe-verified
+capabilities (§8.11).
+
+**Layer 4 — a provider I have never heard of.** No API answers this, and no
+amount of cleverness changes that. Three sources, in increasing order of value:
+
+- **A community catalog file** in the repo — provider, signup URL, tier terms,
+  `verified_on` date. PR-able. Deliberately data, not code, so contributing does
+  not require understanding the router.
+- **Upstream cooperation.** cheahjs/free-llm-api-resources already tracks 13
+  providers with the same probe method and has 29k users watching it for
+  breakage. The right move is to upstream a JSON output there rather than fork
+  its effort — better for them, better here, and it needs a licence conversation
+  (§2.3) that is worth having early.
+- **Opt-in anonymous telemetry.** Users share observed limits only — provider,
+  model, observed rpd/tpm, date. No prompts, no responses, no keys, no tags.
+  That produces an empirically verified free-tier map that no documentation
+  source has, and it improves as adoption grows.
+
+  Non-negotiable conditions, because a router sits between users and their API
+  keys and trust is the whole asset: **off by default**, one flag to enable,
+  and `router telemetry --dry-run` prints the exact payload that would be sent.
+  Anything less and this becomes the reason people do not adopt it.
+
+**And discovery must produce an action, not a log line.** `router whatsnew`:
+
+```
+3 new models since 2026-08-01
+  groq/llama-4-scout     free · 1000 rpd · structured_output ✓  → exploring for `summarize`
+  openai/gpt-5.2-mini    $0.15/1M · structured_output ✓         → exploring for `codegen`
+  xai/grok-4-fast        no structured_output                   → skipped: `codegen` requires it
+
+1 model retiring
+  google/gemini-3.0-flash  expires 2026-09-30 · currently 41% of `summarize` traffic
+```
+
+That last line is something only a router can know, and nothing surfaces it
+today. Retirement is handled deliberately for the same reason: a model that
+passes `expiration_date` or disappears from sync is withdrawn from candidates
+with a warning naming it, never left to 404 mid-campaign.
+
 ---
 
 ## 9. Low-level design
@@ -646,6 +752,15 @@ Named tests that map to a measured failure rather than an imagined one:
     unmetered, not as free. §8.13.
 13. `test_auto_biases_upward_on_ambiguity` — a prompt matching both roles routes
     to the stronger. §8.14.
+14. `test_new_capable_model_is_auto_enrolled` — a model appearing in a sync
+    fixture receives exploration traffic for a role it qualifies for; one
+    lacking a required capability does not. §8.15 layers 1–2.
+15. `test_limit_probe_beats_configured_limit` — probe reports 1000 rpd where
+    config said 14400; the ledger uses 1000. §8.15 layer 3.
+16. `test_expired_model_is_withdrawn_with_a_warning` — and the warning names its
+    current traffic share. F18.
+17. `test_telemetry_payload_carries_no_prompt_or_key` — asserted by field
+    allowlist, not by pattern scan. §8.15 layer 4.
 
 ### 10.1 Simulation is the one that earns the design
 
@@ -739,9 +854,10 @@ OpenTelemetry spans for anyone with a collector.
 | 2 | gateway: cache, meter, verdicts, failover, learned limits; **cost attribution** (§8.13) | simulation + a local Ollama run |
 | 3 | outcome memory + bandit, **no tier preference** (§8.10); `router doctor`; override | simulation §10.1 |
 | 4 | labpilot adapter — **the forcing function** | rogii, §11.2 |
-| 5 | **custom endpoints + `router probe`** (§8.11); **streaming** (§8.12) | probe against a local vLLM |
-| 6 | **`role="auto"`** (§8.14); record/replay; conversation `Thread` | auto-vs-declared success rates; replay CI |
-| v2 | Rust proxy + TS client | adoption, not correctness |
+| 5 | **discovery + auto-enrolment + retirement** (§8.15); `router discover` / `whatsnew` | a new model appears in a sync fixture and receives exploration traffic |
+| 6 | **custom endpoints + `router probe`** (§8.11); **streaming** (§8.12) | probe against a local vLLM |
+| 7 | **`role="auto"`** (§8.14); record/replay; conversation `Thread` | auto-vs-declared success rates; replay CI |
+| v2 | Rust proxy + TS client; community catalog; opt-in telemetry | adoption, not correctness |
 
 Phases 1–3 are inert for labpilot. Phase 4 is where behaviour changes, and it is
 what proves phases 1–3 were real rather than merely tested.
@@ -763,7 +879,16 @@ Mistral all fit the OpenAI-compatible adapter; any paid key works too.
   budgets but not outcome memory, it is LiteLLM with fewer providers. The bandit
   is the reason to exist; do not ship the wrapper and call it done.
 - **Registry rot.** Free tiers deprecate models constantly. Mitigated by sync,
-  `expiration_date` handling, and never hardcoding a model name anywhere.
+  `expiration_date` handling, retirement (F18), and never hardcoding a model
+  name anywhere.
+- **Discovery outruns judgement.** Auto-enrolment (§8.15) means unknown models
+  get real traffic. Bounded by capability preflight, a small exploration budget,
+  and per-role spend caps — and a new model must never be enrolled into a role
+  whose `on_exhaustion` is `wait`, where a bad choice is expensive, until it has
+  a posterior from a cheaper role.
+- **Telemetry kills trust.** Opt-in, off by default, payload inspectable
+  (§8.15). If in doubt, ship without it — the community catalog gets most of the
+  value at none of the risk.
 - **Provider ToS.** Rotating across providers within published limits is fine.
   Multi-account rotation is not, will not be supported, and should be refused as
   a feature request (NF5).
