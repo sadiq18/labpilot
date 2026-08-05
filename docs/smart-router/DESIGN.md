@@ -50,6 +50,40 @@ OpenRouter is a **marketplace and gateway**. This is a **policy engine**. They
 are not the same category, and the goal is not to compete on model breadth —
 OpenRouter can be one of this router's providers.
 
+### 2.1a Prior art — a correction (2026-08-05)
+
+An earlier draft of this document claimed nobody routes on whether the output
+worked. **That is wrong**, and the error matters enough to fix in place rather
+than quietly amend.
+
+| Prior art | What it does | Overlaps |
+|---|---|---|
+| [RouteLLM](https://arxiv.org/abs/2406.18665) (LMSYS, peer-reviewed) | strong/weak routing from preference data — reported 85% cost saving at 95% of GPT-4 quality | the cost-quality claim in §11.1 |
+| [BaRP](https://arxiv.org/pdf/2510.07429) | **routing learned from bandit feedback**, trained under the same partial-feedback restriction as deployment | **§8.2 almost exactly** |
+| [Not Diamond](https://github.com/Not-Diamond/awesome-ai-model-routing) | meta-model predicting the best LLM per query | per-prompt selection |
+| [LLMRouter](https://github.com/ulab-uiuc/LLMRouter) (ulab-uiuc) | open-source routing library — RouterDC, AutoMix, Router-R1 | the OSS-library position |
+| [xRouter](https://arxiv.org/pdf/2510.08439) | cost-aware orchestration via RL | budget-constrained selection |
+| Martian | quality prediction before inference; **pivoted away from routing** in 2026 | — a market signal worth reading |
+
+So the bandit is **not** novel. What survives scrutiny is narrower, and stating
+it honestly is worth more than a bigger claim:
+
+1. **Verdict source.** The prior art scores the *response* — preference models,
+   judge models, learned quality predictors. This scores **application-defined
+   outcomes**: the generated code ran, the metric improved, the schema parsed.
+   That signal is free, exact, and unavailable to a general router because only
+   the application knows it.
+2. **Capability preflight as a hard filter** (F2). Not present in any of the
+   above. It is unglamorous and it fixes a *measured* failure.
+3. **Quota discovery and spend caps per role** (§8.4, §8.15). The routers above
+   optimise a cost-quality trade-off; they assume you can call anything.
+4. **Local models competing on merit** (§8.10), and record/replay (F11).
+
+Items 2–4 are plumbing, not research. They are real, and they are the reason to
+build this — but they will not carry a claim of novelty, and §11 should be read
+with that in mind. **Read BaRP before writing any bandit code**: it either saves
+months or shows the idea is taken.
+
 ### 2.2 The seven pain points, stated plainly
 
 1. **"Which model should I use for this?"** Every framework makes you answer
@@ -851,21 +885,26 @@ OpenTelemetry spans for anyone with a collector.
 | Phase | Ships | Verified by |
 |---|---|---|
 | 1 | registry + adapters + `select()` (capability, entitlement, budget) | property + golden tests |
-| 2 | gateway: cache, meter, verdicts, failover, learned limits; **cost attribution** (§8.13) | simulation + a local Ollama run |
-| 3 | outcome memory + bandit, **no tier preference** (§8.10); `router doctor`; override | simulation §10.1 |
-| 4 | labpilot adapter — **the forcing function** | rogii, §11.2 |
+| 2 | **labpilot adapter — the forcing function, moved up** | rogii, §11.2 |
+| 3 | gateway: cache, meter, verdicts, failover, learned limits; **cost attribution** (§8.13) | simulation + a real campaign |
+| 4 | outcome memory + bandit, **no tier preference** (§8.10); `router doctor`; override | simulation §10.1 **on real verdicts** |
 | 5 | **discovery + auto-enrolment + retirement** (§8.15); `router discover` / `whatsnew` | a new model appears in a sync fixture and receives exploration traffic |
 | 6 | **custom endpoints + `router probe`** (§8.11); **streaming** (§8.12) | probe against a local vLLM |
 | 7 | **`role="auto"`** (§8.14); record/replay; conversation `Thread` | auto-vs-declared success rates; replay CI |
 | v2 | Rust proxy + TS client; community catalog; opt-in telemetry | adoption, not correctness |
 
-Phases 1–3 are inert for labpilot. Phase 4 is where behaviour changes, and it is
-what proves phases 1–3 were real rather than merely tested.
+**The forcing function moved from phase 4 to phase 2 deliberately.** The
+original order built cache, metering, verdicts and the bandit before anything
+real consumed them — which is `select_route`'s mistake at larger scale: tested,
+unwired, described as done. Outcome memory in particular cannot be validated
+without verdicts, and labpilot is the only source of them.
 
-Phases 5–6 are ordered after the forcing function deliberately. Streaming,
-probing and `auto` all widen the surface, and none of them makes routing better
-— building them before phase 4 would grow the thing without ever testing whether
-its core claim holds.
+So phase 2 is the smallest thing that makes labpilot's codegen work through the
+router, and every phase after it is justified by something observed in a real
+campaign rather than by this document.
+
+Phases 5–7 are ordered last for the same reason. Streaming, probing, discovery
+and `auto` all widen the surface, and none of them makes routing better.
 
 ### 13.2 The prerequisite only the user can supply
 
