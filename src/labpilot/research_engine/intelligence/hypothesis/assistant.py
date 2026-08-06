@@ -7,11 +7,11 @@ Never executes training or forks runs.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from labpilot.accessor.common.micro_agents import StructuredContext
-from labpilot.research_engine.shared.experiments.models import HypothesisCreatedBy, HypothesisOrigin
 from labpilot.research_engine.intelligence.hypothesis.candidates import generate_candidates
 from labpilot.research_engine.intelligence.hypothesis.combo import (
     build_combo_shortlist,
@@ -51,6 +51,7 @@ from labpilot.research_engine.intelligence.retrieval.models import (
     QueryType,
     ResearchContext,
 )
+from labpilot.research_engine.shared.experiments.models import HypothesisCreatedBy, HypothesisOrigin
 
 #: Candidate-kind marker tags — not techniques, so they never match a backlog tag.
 _KIND_TAGS = frozenset(
@@ -101,7 +102,20 @@ def _candidate_labels(candidate: HypothesisCandidate) -> set[str]:
 
 
 def _resolve_problem_type(knowledge_dir: Path, competition: str) -> str:
-    """Best-effort problem type, used to reject cross-modality techniques."""
+    """Best-effort problem type, used to reject cross-modality techniques.
+
+    Falls through to `baseline_choice.json` when the competition spec says
+    ``unknown``. Measured on rogii 2026-08-07: `competition.json` carries
+    ``unknown`` (it is written before the data is profiled) while
+    `baseline_choice.json` — derived from the profile — says
+    ``tabular_regression``.
+
+    That mattered: an empty/unknown type makes `filter_incompatible_techniques`
+    return early, so the cross-modality filter was **disabled entirely**. `vit`
+    was proposed for a tabular regression, executed, and then propagated into
+    every subsequent `technique_stack`. The filter was correctly configured all
+    along — it was reading the one source of three that did not know.
+    """
     from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 
     for candidate in (
@@ -113,8 +127,23 @@ def _resolve_problem_type(knowledge_dir: Path, competition: str) -> str:
                 spec = CompetitionSpec.model_validate_json(
                     candidate.read_text(encoding="utf-8")
                 )
-                return str(spec.problem_type)
+                resolved = str(spec.problem_type or "").strip()
+                if resolved and resolved.lower() != "unknown":
+                    return resolved
         except Exception:  # noqa: BLE001 — filtering is an optimisation, not a gate
+            continue
+
+    for derived in (
+        knowledge_dir.parent / "baseline_choice.json",
+        knowledge_dir / competition / "baseline_choice.json",
+    ):
+        try:
+            if derived.is_file():
+                data = json.loads(derived.read_text(encoding="utf-8"))
+                resolved = str(data.get("problem_type") or "").strip()
+                if resolved and resolved.lower() != "unknown":
+                    return resolved
+        except Exception:  # noqa: BLE001
             continue
     return ""
 

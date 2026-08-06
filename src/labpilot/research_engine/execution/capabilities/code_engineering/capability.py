@@ -88,6 +88,42 @@ if __name__ == "__main__":
 '''
 
 
+#: Example filenames kept when summarising; enough to convey the naming
+#: convention, far short of enumerating a partitioned dataset.
+_FILE_SAMPLE = 5
+
+
+def _summarise_profile(profile: dict) -> dict:
+    """Drop the parts of `profile.json` the model cannot use.
+
+    Measured on rogii 2026-08-07: the profile is 47% of the codegen prompt, and
+    `files` is 61% of *that* — a flat list of 200 filenames costing ~1,770
+    tokens. The generated code globs ``data/raw/<split>/*.csv`` at runtime, so
+    it needs the naming *convention*, which five examples convey better than
+    two hundred rows. Trimming is lossless for this consumer.
+
+    It matters because a 14,437-token codegen call exceeded the 12,000 TPM
+    ceiling of the free tier serving it and ended a campaign.
+
+    Applied unconditionally rather than only when a budget is tight: a prompt
+    that changes shape by provider would make two experiments differ in their
+    *input*, and that difference would be read as a finding about the technique.
+    Same reason `technique_origin` and the served-model stamp exist.
+    """
+    if not isinstance(profile, dict):
+        return {}
+    files = profile.get("files")
+    if not isinstance(files, list) or len(files) <= _FILE_SAMPLE:
+        return profile
+    trimmed = dict(profile)
+    trimmed["files"] = {
+        "count": len(files),
+        "sample": [str(f) for f in files[:_FILE_SAMPLE]],
+        "note": "full list omitted; the generated code globs the data directory at runtime",
+    }
+    return trimmed
+
+
 class CodeEngineeringCapability(BaseCapability):
     name = "code_engineering"
 
@@ -480,7 +516,7 @@ class CodeEngineeringCapability(BaseCapability):
         if not path.is_file():
             return {}
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            return _summarise_profile(json.loads(path.read_text(encoding="utf-8")))
         except Exception:
             return {}
 

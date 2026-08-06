@@ -123,3 +123,38 @@ def test_codegen_entry_has_headroom_for_the_measured_prompt():
     tokens, so the entry leading the strong chain needs room for a reply."""
     catalog = known_providers()
     assert catalog["groq-llama70b"].tpm >= 12000
+
+
+# --- role keys must be roles this system actually has -----------------------
+
+#: The only roles `model_for` will ever be asked for. A `models` key outside
+#: this set is silently ignored — `model_for` returns None and
+#: `eligible_providers` drops the entry — so the provider looks configured and
+#: never serves anything.
+KNOWN_ROLES = frozenset({"codegen", "reasoning", "summarize", "default"})
+
+
+def test_no_entry_declares_a_role_this_system_does_not_have():
+    """Measured 2026-08-07: two entries shipped declaring `coding` and
+    `intelligence`. One served only reasoning (codegen silently lost), the other
+    served nothing at all. Neither raised."""
+    offenders = {
+        name: sorted(set(spec.models) - KNOWN_ROLES)
+        for name, spec in known_providers().items()
+        if set(spec.models) - KNOWN_ROLES
+    }
+    assert not offenders, (
+        f"unknown role keys — these entries are inert: {offenders}. "
+        f"Valid roles: {sorted(KNOWN_ROLES)}"
+    )
+
+
+def test_every_entry_serves_at_least_one_role():
+    """The stronger check: a spec can have valid-looking keys and still resolve
+    to nothing for every role."""
+    dead = [
+        name
+        for name, spec in known_providers().items()
+        if not any(spec.model_for(role) for role in KNOWN_ROLES)
+    ]
+    assert not dead, f"entries that serve no role at all: {dead}"

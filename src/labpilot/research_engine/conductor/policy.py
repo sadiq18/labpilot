@@ -205,11 +205,32 @@ def validate_next_action(action: NextAction, allowlist: set[str]) -> NextAction:
     return action
 
 
+class _GatedToolError(RuntimeError):
+    """The policy picked a real tool that is gated right now.
+
+    Distinct from a transport failure so the retry can name it back to the
+    model instead of repeating an identical prompt.
+    """
+
+    def __init__(self, tool: str, available: list[str]) -> None:
+        self.tool = tool
+        super().__init__(f"policy chose unavailable tool {tool!r}; available now: {available}")
+
+
 def _invoke_llm_next_action(
     observe: dict[str, Any],
     allowlist: set[str],
     llm_client: Any,
+    rejected: list[str] | None = None,
 ) -> NextAction:
+    """Ask for one tool choice, telling the model what it already got wrong.
+
+    ``rejected`` carries tools this step already tried and that are gated right
+    now. Without it a retry re-sends an identical prompt, so a model that
+    wanted a gated tool asks for it again — measured 2026-08-07, where
+    `generate_plan` was chosen six times in one run and every retry was
+    indistinguishable from the first.
+    """
     catalog = sorted(allowlist)
     system = (
         "You are the LabPilot Research Conductor. Choose the single next tool "
@@ -218,11 +239,17 @@ def _invoke_llm_next_action(
         "evidence (higher score is stronger). Respond with JSON only: "
         '{"tool": "<name>|null", "args": {}, "rationale": "...", "stop": false}'
     )
-    user = json.dumps(
-        {"allowlist": catalog, "observe": observe},
-        indent=2,
-        default=str,
-    )
+    payload: dict[str, Any] = {"allowlist": catalog, "observe": observe}
+    if rejected:
+        payload["already_rejected"] = {
+            "tools": sorted(set(rejected)),
+            "why": (
+                "Not available right now — a precondition is unmet (for example "
+                "generate_plan is gated while a plan is still unrun). Choose a "
+                "different tool from allowlist, or stop."
+            ),
+        }
+    user = json.dumps(payload, indent=2, default=str)
     if hasattr(llm_client, "complete"):
         text = llm_client.complete(system, user)
     elif hasattr(llm_client, "generate"):
@@ -231,7 +258,18 @@ def _invoke_llm_next_action(
         raise TypeError("llm_client has no complete/generate method")
     data = _parse_json(text)
     action = NextAction.model_validate(data)
-    return validate_next_action(action, allowlist)
+    validated = validate_next_action(action, allowlist)
+    # Choosing a tool that is currently gated is a *recoverable* policy mistake,
+    # not a reason to end the campaign. Measured 2026-08-07: `generate_plan` is
+    # removed from the allowlist while a plan is unrun; the policy chose it
+    # anyway and the run stopped at step 4 with "rejected non-catalog tool".
+    #
+    # Raising routes it into the retry/offline-fallback loop below, which either
+    # gets a better answer or falls back to the deterministic order — both of
+    # which make progress. A genuine `stop` from the model is still honoured.
+    if validated.stop and action.tool and not action.stop:
+        raise _GatedToolError(action.tool, sorted(allowlist))
+    return validated
 
 
 def llm_next_action(
@@ -254,12 +292,30 @@ def llm_next_action(
         return offline_next_action(observe, allowlist)
 
     retries = 0
+    # Tools this step already asked for that are currently gated. Fed back into
+    # the next attempt so a retry is a genuinely different question.
+    rejected: list[str] = []
+    gated_retries = 0
     while True:
         if llm_client is None:
             reason = "No LLM client available"
         else:
             try:
-                return _invoke_llm_next_action(observe, allowlist, llm_client)
+                return _invoke_llm_next_action(observe, allowlist, llm_client, rejected)
+            except _GatedToolError as exc:
+                # Retry *directly* rather than falling through to the offline
+                # prompt below: under `--yes` that prompt auto-allows, so the
+                # run would drop to the deterministic order without the model
+                # ever being told what was wrong. Bounded by the same budget.
+                rejected.append(exc.tool)
+                gated_retries += 1
+                logger.info(
+                    "Policy asked for gated tool %r; retrying with it ruled out", exc.tool
+                )
+                if gated_retries <= max_llm_retries:
+                    continue
+                reason = f"LLM policy kept choosing gated tools: {sorted(set(rejected))}"
+                logger.warning("%s", reason)
             except Exception as exc:
                 reason = f"LLM policy failed: {exc}"
                 logger.warning("Conductor policy LLM failed (%s)", exc)
