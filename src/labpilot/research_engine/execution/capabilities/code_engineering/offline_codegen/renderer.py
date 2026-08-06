@@ -15,6 +15,23 @@ from labpilot.research_engine.execution.capabilities.code_engineering.offline_co
 logger = logging.getLogger(__name__)
 
 
+def py_literal(value: Any) -> str:
+    """Render `value` as a Python literal, for interpolation into `*.py.j2`.
+
+    `tojson` is the wrong filter for a Python file: JSON spells the three
+    singletons `null`, `true`, `false`. Those are valid Python *names*, so the
+    rendered module passes `validate_python_syntax` and then dies at import
+    with `NameError: name 'null' is not defined` — which is why a None-valued
+    `BaselineChoice` field (`sample_submission_file`, `id_column`, ...) only
+    surfaced on a competition that left one unset.
+
+    `repr` is faithful for everything these templates carry: str, int, float,
+    bool, None, and lists/dicts of the same. YAML templates keep `tojson`,
+    since JSON is valid YAML.
+    """
+    return repr(value)
+
+
 class CodeRenderer:
     """Render baseline training code from Jinja2 templates."""
 
@@ -37,6 +54,7 @@ class CodeRenderer:
             loader=FileSystemLoader(template.template_dir),
             autoescape=select_autoescape(default=False),
         )
+        env.filters["py"] = py_literal
 
         resolved_params = dict(DEFAULT_TABULAR_MODEL_PARAMS)
         resolved_params["random_state"] = self.training_config.random_seed
