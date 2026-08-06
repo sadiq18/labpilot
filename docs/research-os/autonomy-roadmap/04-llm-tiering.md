@@ -1,9 +1,40 @@
 # M10 — LLM tiering and free-tier routing
 
+**Design:** [design/04-llm-tiering.md](design/04-llm-tiering.md) ·
+**Router product design:** [../../smart-router/DESIGN.md](../../smart-router/DESIGN.md)
+
+> **Scope change (2026-08-05).** Routing moves out of labpilot into a
+> standalone open-source router. M10 becomes "adopt it and collapse labpilot's
+> three internal routers into one". Free-tier support stops being the design
+> and becomes one case of a general budget mechanism (`cost == 0`).
+
 **Status:** decision layer built and tested, **not wired into the live path** ·
 **Blocks:** M7 in practice
 
 ---
+
+## Design principle
+
+> **Model capability is a product tier, not an architectural constraint.**
+
+An earlier draft of this roadmap was shaped by the machine it was validated on —
+a 14B local model — and quietly let that become the design's ceiling. That is
+backwards. A paying customer supplies a frontier model; the free tier is a
+**development and hobby mode with known limits**, not the substrate the
+architecture is built for.
+
+This is a research OS. A weak component does not merely run slower — it produces
+*wrong research*, and wrongness propagates into beliefs, claims and memory where
+it is expensive to remove. No component may be left weak because the current
+development environment is.
+
+Concretely, this changes two things:
+
+- The system assumes a **competent model is reachable** and degrades explicitly
+  when one is not (`research doctor` says so; `codegen` waits rather than
+  downgrading). It does not assume weakness and design around it.
+- **M10 lands before M7.** Its purpose is not cost control; it is making the
+  reasoning substrate trustworthy so everything downstream can be trusted.
 
 ## Purpose
 
@@ -106,10 +137,54 @@ pacing. Daily *tokens* bind first.
 3. **Pace on `wait_seconds`** — the decision already returns it.
 4. **Record the served model on each experiment** — without this, a failed
    hypothesis cannot be attributed to the idea vs the writer.
-5. **Trim `prior_train[:120_000]`** in `code_engineering/capability.py`. At ~4
+5. ~~**Trim `prior_train[:120_000]`** in `code_engineering/capability.py`. At ~4
    chars/token that is ~30k tokens per codegen call; ten calls eats a daily
    allowance. Do this first — it is ten minutes and it is the difference between
-   the free tier lasting a day or an hour.
+   the free tier lasting a day or an hour.~~
+   **Refuted by measurement** — [design](design/04-llm-tiering.md) §2.2. The
+   rendered codegen prompt is **6,419 tokens**, not ~30k, because
+   `code_engineer/agent.py:65` already caps the same field at 20,000 chars and
+   rogii's real `train.py` is 12,146. The 120k slice never binds on any input
+   this system has produced.
+6. **Cache and meter every call** — replaces item 5 as the cost work.
+   `.cache/llm.sqlite` holds **one row across nine campaigns**: micro agents
+   call `.complete()` on a bound client, bypassing `LLM.generate` and therefore
+   `PromptCache`, and nothing calls `BudgetLedger.record` at all. Uncached
+   repeats, not one oversized field, are what spend a daily allowance.
+7. **Fix two latent breaks in the built layer** (design §2.4):
+   `ProviderSpec.has_credentials()` reads `os.environ`, but `Settings` loads
+   `.env` without exporting — a key in the workspace `.env` is invisible and
+   the campaign reports "no eligible provider"; and `_BoundClient.complete`
+   drops `json_mode`, so the obvious wiring would silently undo the
+   constrained-decoding fix (measured 3/3 fallback before it, 0/2 after).
+8. **Collapse three routers into one.** `resolve_llm_client` (15 call sites),
+   `resolve_route` (1), `select_route` (0). Wiring roles beside the other two
+   makes it the fourth.
+
+## Exit criteria
+
+M10 has a mutual-dependency problem: its real purpose is "codegen gets a model
+that can write training code", and the only way to verify that is *to generate
+training code* — which is M7. Shipping M10 on unit tests alone would repeat the
+mistake the review already caught once, where `select_route` was tested but
+unwired and described as done.
+
+So M10 is finished when a **thin M7 slice proves it end to end**:
+
+1. `select_route` is on the live path — no call site resolves a provider by name
+   for `codegen`, `reasoning` or `summarize`.
+2. `research doctor` reports the resolved provider per role, and fails loudly
+   when a role has no capable provider.
+3. **A real codegen call produces a working `train.py`** for one technique on a
+   reference dataset: it runs, writes metrics, and the technique is visible in
+   the generated source. This is the forcing function M10 otherwise lacks.
+4. The served model is recorded on the experiment record, so a later failure is
+   attributable to the idea rather than the writer.
+5. Budget exhaustion on `codegen` produces a wait, not a downgrade — observed,
+   not just unit-tested.
+
+Criterion 3 is the one that matters. Everything else can pass while the system
+still cannot write code.
 
 ## Traps
 

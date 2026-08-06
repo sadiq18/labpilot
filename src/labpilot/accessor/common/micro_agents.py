@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import inspect
 import logging
+import os
 import re
 import time
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +34,31 @@ if TYPE_CHECKING:
     from labpilot.llm.client import LLMClient
 
 logger = logging.getLogger("labpilot.accessor.common.micro_agents")
+
+
+#: What actually produced a result. Sourced from the branch taken in
+#: :meth:`BaseMicroAgent.run`, never inferred by a caller.
+GeneratedBy = Literal["llm", "rule_engine", "template_fallback", "stub"]
+
+#: Opt-in escape hatch for deterministic operation. Without it, an agent with no
+#: LLM refuses to run rather than silently substituting its rule engine — a
+#: deterministic approximation presented as a result is how false findings enter
+#: beliefs and claims.
+DETERMINISTIC_ENV = "LABPILOT_DETERMINISTIC"
+
+
+class LLMUnavailableError(RuntimeError):
+    """No LLM configured, and deterministic mode was not requested.
+
+    Raised rather than falling back because a missing LLM means *no reasoning
+    happened*. Returning the rule engine's output would be indistinguishable
+    from a reasoned result downstream.
+    """
+
+
+def deterministic_allowed() -> bool:
+    """True when the operator explicitly asked for deterministic operation."""
+    return os.environ.get(DETERMINISTIC_ENV, "").strip().lower() in {"1", "true", "yes"}
 
 
 def coerce_str_list(value: object) -> list[str]:
@@ -127,17 +153,48 @@ class BaseMicroAgent:
     name: str = ""
     #: The Pydantic type this agent always returns.
     output_model: type[BaseModel]
+    #: What class of model this agent's prompt needs. Declared here rather than
+    #: at the ~95 construction sites because the requirement belongs next to the
+    #: prompt that creates it: whoever writes the prompt knows what it needs.
+    llm_role: str = "reasoning"
 
     def __init__(self, llm_client: LLMClient | None = None) -> None:
+        # Accept a gateway wherever a client is accepted, so every existing
+        # `Agent(llm_client=...)` call site keeps working and plain test stubs
+        # stay valid.
+        if hasattr(llm_client, "for_role"):
+            llm_client = llm_client.for_role(self.llm_role)  # type: ignore[union-attr]
         self.llm_client = llm_client
         self.last_used_llm = False
+        self.last_generated_by: GeneratedBy = "rule_engine"
+        self.last_failure_reason: str | None = None
+        #: Set after a successful LLM call when the client reports it.
+        self.last_served: object | None = None
 
     @property
     def uses_llm(self) -> bool:
+        """Whether a client is *configured* — NOT whether the call succeeded.
+
+        Do not use this for provenance. It reports True for a run that fell back
+        to the rule engine, which is how an artifact came to record ``"llm"`` for
+        deterministic output. Use :attr:`last_generated_by`.
+        """
         return self.llm_client is not None
 
     def run(self, context: StructuredContext) -> BaseModel:
+        if self.llm_client is None and not deterministic_allowed():
+            raise LLMUnavailableError(
+                f"{self.name or type(self).__name__} requires an LLM and none is "
+                "configured. Check `research doctor`, start Ollama, or set "
+                f"{DETERMINISTIC_ENV}=1 to accept deterministic rule-engine output."
+            )
         self.last_used_llm = False
+        self.last_served = None
+        # Default covers the silent path below: with no client configured the
+        # try/except is skipped entirely and nothing is logged, so the only
+        # record that this run was deterministic is the one set here.
+        self.last_generated_by = "rule_engine"
+        self.last_failure_reason = None if self.llm_client is not None else "no llm client"
         if self.llm_client is not None:
             max_attempts = max(1, int(getattr(self, "llm_max_attempts", 3)))
             retry_delay = float(getattr(self, "llm_retry_delay_seconds", 20.0))
@@ -146,6 +203,11 @@ class BaseMicroAgent:
                 try:
                     result = self._run_llm(context)
                     self.last_used_llm = True
+                    self.last_generated_by = "llm"
+                    self.last_failure_reason = None
+                    # Which model produced this, when the client can say. M14
+                    # records *what kind of thing* ran; this records *which*.
+                    self.last_served = getattr(self.llm_client, "last_served", None)
                     return result
                 except Exception as exc:  # noqa: BLE001 - soft-fail to deterministic path
                     last_exc = exc
@@ -166,6 +228,7 @@ class BaseMicroAgent:
                         self.name or type(self).__name__,
                         last_exc,
                     )
+                    self.last_failure_reason = str(last_exc)
                     break
         return self._run_rule_engine(context)
 
@@ -181,9 +244,9 @@ class BaseMicroAgent:
         assert self.llm_client is not None
         system = self.system_prompt()
         try:
-            from labpilot.research_engine.shared.skills import compose_system_prompt
-
             from pathlib import Path as _Path
+
+            from labpilot.research_engine.shared.skills import compose_system_prompt
 
             agent_file = inspect.getfile(type(self))
             workspace = (

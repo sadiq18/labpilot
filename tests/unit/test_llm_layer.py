@@ -9,7 +9,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from labpilot.config import LLMCacheConfig, LLMConfig, TaskProfile
-from labpilot.llm.cache import PromptCache, cache_key
+from fitroute.cache import PromptCache, cache_key
 from labpilot.llm.client import LLM
 from labpilot.llm.ollama import OllamaProvider
 from labpilot.llm.router import resolve_route

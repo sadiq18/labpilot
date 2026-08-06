@@ -359,7 +359,7 @@ class HypothesisAssistant:
 
             picks = rule_engine_pick_combos(shortlist, limit=3)
         candidates = picks_to_candidates(picks, ledger)  # type: ignore[arg-type]
-        source = "llm" if agent.last_used_llm else "rule_engine"
+        source = agent.last_generated_by
         note = (
             f"hypothesis: combo shortlist={len(shortlist)} → "
             f"picks={len(candidates)} ({source})"

@@ -1,6 +1,8 @@
 # M14 — LLM is a hard dependency; delete the rule-engine fallbacks
 
-**Status:** decided, not started · **Decision owner:** product
+**Status:** designed · **Decision owner:** product · **Build phase:** 0
+
+**Design:** [design/09-llm-required.md](design/09-llm-required.md)
 
 ---
 
@@ -37,6 +39,13 @@ prose, the parse failed, and the agent silently used its rule engine. The system
 Knowledge Hub then found zero concepts, so no techniques, no beliefs, no
 hypotheses — and the campaign had nothing to iterate on.
 
+**Since measured (see the design, §11.1):** constrained JSON decoding — already
+shipped in this branch — removed that cause. Fallbacks went from 3 of 3
+campaigns to 0 of 2. So M14's justification is *not* "the system is currently
+degraded". It is that **one of the two fallback paths emits no log at all**, so
+today's low rate is knowable only because the failures happened to take the
+observable path.
+
 Nothing above that layer could tell. There was no error, no degraded flag, no
 metric. The only symptom was "the research is oddly shallow".
 
@@ -55,6 +64,12 @@ Keep the fallback, but a rule-engine result must set `generated_by="rule_engine"
 on the artifact *and* log at WARNING with the reason. Any downstream durable
 write carries the flag. This alone would have made the whole failure visible on
 day one.
+
+Scoping correction: this is **not** 20 agent edits. The fallback is one place
+(`BaseMicroAgent.run()`), `last_used_llm` already exists, and three write paths
+already stamp *something* — the work is unifying an inconsistent convention and
+fixing one place where it is actively wrong (`analyzers/competition.py:359`
+records `"llm"` for runs that fell back). See the design.
 
 **Phase 2 — make it opt-in.**
 Automatic fallback off by default. A rule engine runs only under an explicit
@@ -79,8 +94,20 @@ relying on rule engines to fill the gap. That is better practice anyway — a te
 asserting rule-engine output is not testing the shipped behaviour — but it is
 real work and should be budgeted, not discovered.
 
-Phase 1 is safe and immediately valuable; phases 2–3 need that test migration
-first.
+**Phases 1 and 2a have shipped.** 2b and 3 are deferred by decision
+(2026-08-03) until M10 is live — see the design for the trigger conditions and
+a guard note on exercising 2b rather than shipping it on unit tests.
+
+Phase 2 splits in two, with different blockers (the design conflated them):
+
+- **2a** (no client ⇒ raise) is blocked *only* by the test migration —
+  **measured at 76 failing tests**, not the ~49 grep suggested. It is **not**
+  blocked by M10, since a local Ollama satisfies "a client exists".
+- **2b** (failed call ⇒ raise) genuinely needs M10: a 14B model failed 3 of 3
+  campaigns pre-fix, so enabling it now would abort every campaign.
+
+Phase 3 is blocked by phase-1 telemetry — fire-rate data from real campaigns —
+not by M10.
 
 ## Exit criteria
 

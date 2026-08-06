@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from labpilot.llm.budget import BudgetLedger
-from labpilot.llm.catalog import (
+from fitroute.budget import BudgetLedger
+from fitroute.catalog import (
     ProviderSpec,
     RoleSpec,
     RoutingConfig,
     allowed_tiers,
     eligible_providers,
 )
-from labpilot.llm.router import select_route
+from fitroute.select import select_route
 
 
 @pytest.fixture
@@ -59,13 +59,43 @@ def test_free_plan_cannot_reach_paid_providers(ledger):
     assert decision.provider.name == "freea"
 
 
-def test_pro_plan_prefers_paid_over_free(ledger):
+def test_pro_plan_can_reach_paid_providers(ledger):
+    """Entitlement, not preference: a pro plan *may* use paid tiers."""
+    routing = _routing([_provider("paid", tier="paid", strong=True)], plan="pro")
+    decision = select_route(routing, "reasoning", ledger)
+    assert decision.provider.name == "paid"
+
+
+def test_preference_is_catalog_order_not_tier(ledger):
+    """There is deliberately no built-in `paid > free > local`.
+
+    A tier ranking makes a local model a permanent last resort no matter how
+    well it performs, which is wrong for a router whose whole point is picking
+    what actually works. Preference is the operator's to state, by ordering.
+    """
     routing = _routing(
         [_provider("freea", tier="free", strong=True), _provider("paid", tier="paid", strong=True)],
         plan="pro",
     )
-    decision = select_route(routing, "reasoning", ledger)
-    assert decision.provider.name == "paid"
+    assert select_route(routing, "reasoning", ledger).provider.name == "freea"
+
+    reordered = _routing(
+        [_provider("paid", tier="paid", strong=True), _provider("freea", tier="free", strong=True)],
+        plan="pro",
+    )
+    assert select_route(reordered, "reasoning", ledger).provider.name == "paid"
+
+
+def test_a_local_model_can_be_preferred_over_a_paid_one(ledger):
+    """The case the old tier rank made impossible."""
+    routing = _routing(
+        [
+            _provider("ollama", tier="local", api_key_env="", strong=True),
+            _provider("paid", tier="paid", strong=True),
+        ],
+        plan="pro",
+    )
+    assert select_route(routing, "reasoning", ledger).provider.name == "ollama"
 
 
 def test_enterprise_excludes_free_tiers_entirely():

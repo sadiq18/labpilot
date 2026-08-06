@@ -1,7 +1,10 @@
 # M7 — A technique must change the model
 
-**Status:** not started · **Blocks:** everything · **Blocked by:** M10 (needs a
-model that can write code)
+**Status:** designed · **Blocks:** everything · **Blocked by:**
+[M10](04-llm-tiering.md) — not merely "needs a model that can write code", but
+M7's evaluation is incomplete without one (path efficacy is unmeasurable)
+
+**Design:** [design/01-technique-to-model.md](design/01-technique-to-model.md)
 
 ---
 
@@ -46,15 +49,17 @@ Most useful techniques (`target_encoding`, `feature_interactions`, `SWA`,
 `ensemble`, hyperparameter moves, model swaps) are expressible this way.
 Reserve LLM codegen for what recipes cannot express.
 
-**Why recipes before codegen:**
+**Why recipes first — sequencing, not preference:**
 
-1. **Deterministic and testable.** A recipe either changed the feature set or it
-   did not; assertable in a unit test. Generated code is neither.
-2. **No model dependency.** Recipes work with a weak local model, so M7 is not
-   hostage to M10 completing.
-3. **Attributable failures.** When a recipe technique does not help, that is
-   evidence about the *technique*. When generated code does not help, it is
-   evidence about nothing (see Traps).
+1. **Unblocked.** Recipes need no LLM, so M7 stops blocking M8 and M13 without
+   waiting on the routing work.
+2. **Deterministic and testable.** A recipe either changed the feature set or it
+   did not; assertable in a unit test and reproducible byte-for-byte.
+3. **Attributable.** Recording `technique_origin` (`registry` | `llm`) keeps a
+   poor implementation distinguishable from a genuine negative result.
+
+The LLM path already receives the technique in full and is not broken; the
+defect is entirely in the template fallback. Both paths are kept.
 
 **Wiring:** `generate_plan(hypothesis_id=X)` must carry `technique` through to
 the renderer, and the renderer must apply the matching recipe. The seam already
@@ -77,10 +82,14 @@ Criterion 1 is the whole milestone. It cannot be satisfied by accident.
 
 ## Traps
 
-- **Do not start with LLM codegen.** On `qwen2.5-coder:14b` it produced no
-  usable training code across an entire day. The emergency stub that replaced it
-  wrote `cv_accuracy: 0.0` on a regression task and a submission with header
-  `id,prediction` instead of `id,tvt` — while reporting success.
+- **Start with recipes, but do not reject LLM codegen.** On
+  `qwen2.5-coder:14b` it produced no usable training code across an entire day,
+  and the emergency stub that replaced it wrote `cv_accuracy: 0.0` on a
+  regression task while reporting success. That is evidence about *a 14B local
+  model*, not about the approach: once [M10](04-llm-tiering.md) routes `codegen`
+  to a frontier model, the LLM path covers the long tail no registry will
+  enumerate. Recipes go first because they are unblocked, not because the LLM
+  path is worse — see [the design](design/01-technique-to-model.md) §8.2.
 - **A weak model implementing a technique is worse than not running it.** The
   result is recorded as "technique X did not help": a false negative
   indistinguishable from a real one, which then poisons hypothesis generation

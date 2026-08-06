@@ -21,6 +21,10 @@ _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 class CodeEngineerAgent(BaseMicroAgent):
     name = "CodeEngineerAgent"
     output_model = CodeProposal
+    # The one role that must never degrade: a weak model that implements a
+    # technique badly makes the system record "technique X did not help" — a
+    # false negative indistinguishable from a real one.
+    llm_role = "codegen"
 
     def __init__(self, llm_client=None) -> None:
         super().__init__(llm_client)
