@@ -22,6 +22,14 @@ from dataclasses import dataclass
 
 _DEFAULT_TIMEOUT_SECONDS = 600.0
 
+#: Sent on every request. Not cosmetic: Groq sits behind Cloudflare, which
+#: rejects urllib's default ``Python-urllib/3.x`` agent with a 403 (error 1010)
+#: on *every* endpoint — so without this the provider is unreachable rather
+#: than merely rate-limited, and the failure looks like a bad key. Measured
+#: 2026-08-06: default UA 403, ``fitroute/0.1`` 200. Identifying the client
+#: honestly is also what providers ask for; do not impersonate a browser.
+_USER_AGENT = "fitroute/0.1"
+
 
 @dataclass(frozen=True)
 class Completion:
@@ -95,6 +103,7 @@ class OpenAICompatAdapter:
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self._api_key}",
+                "User-Agent": _USER_AGENT,
             },
             method="POST",
         )
