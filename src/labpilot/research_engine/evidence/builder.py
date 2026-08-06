@@ -199,18 +199,23 @@ def _claim_updates_from_attribution(
     for tech, credit in attribution.items():
         if abs(credit) < 1e-9:
             continue
-        if decision == EvidenceDecision.ACCEPTED and credit > 0:
+        # Signed toward "better": positive means the metric moved the way we
+        # want, whichever direction that is. Everything below reads `signed`,
+        # never `credit` — orienting only the sentence left the *belief* going
+        # the other way, so a card could read "SWA improves the primary metric"
+        # while teaching the belief store that SWA is harmful and lowering its
+        # confidence. `apply_card_to_beliefs` keys the confidence step and the
+        # `effect` off `evidence`, so that half is the half that steers.
+        signed = credit if maximize else -credit
+        if decision == EvidenceDecision.ACCEPTED and signed > 0:
             kind = ClaimEvidenceKind.SUPPORT
-            delta = min(0.12, 0.04 + abs(credit) * 4)
-        elif decision == EvidenceDecision.REJECTED or credit < 0:
+            delta = min(0.12, 0.04 + abs(signed) * 4)
+        elif decision == EvidenceDecision.REJECTED or signed < 0:
             kind = ClaimEvidenceKind.CONTRADICT
-            delta = -min(0.12, 0.04 + abs(credit) * 4)
+            delta = -min(0.12, 0.04 + abs(signed) * 4)
         else:
             kind = ClaimEvidenceKind.NEUTRAL
             delta = 0.0
-        # Signed toward "better": positive means the metric moved the way we
-        # want, whichever direction that is.
-        signed = credit if maximize else -credit
         verb = CLAIM_IMPROVES if signed >= 0 else CLAIM_HURTS
         updates.append(
             ClaimUpdate(
@@ -389,9 +394,12 @@ def build_evidence_card(
         overfitting=overfitting,
     )
     if placeholder_treatment or placeholder_control:
-        which = "treatment" if placeholder_treatment else "control"
-        status = (treatment_metrics if placeholder_treatment else control_metrics).get("status")
-        reason = f"placeholder_metrics: {which} run reported {status!r}, no model was trained"
+        sides = []
+        if placeholder_treatment:
+            sides.append(f"treatment reported {treatment_metrics.get('status')!r}")
+        if placeholder_control:
+            sides.append(f"control reported {control_metrics.get('status')!r}")
+        reason = f"placeholder_metrics: {', '.join(sides)}; no model was trained"
     elif mismatched_metric:
         reason = (
             f"metric_key_mismatch: control scored {parent_found[1]!r}, "

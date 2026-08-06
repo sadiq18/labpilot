@@ -194,8 +194,14 @@ def run_until_stop(
         # would otherwise have its inverted conclusion re-confirmed. Measured
         # 2026-08-07, all 15 rogii cards were built as `maximize=True` on an MSE
         # competition, which recorded the one real improvement as `rejected`.
+        # `workspace.root` matters for a workspace whose only `metric.direction`
+        # is on the run's own competition.json: without it repair falls back to
+        # the knowledge copy and the Analyze profile, and silently no-ops when
+        # neither carries a direction.
         reoriented = repair_card_directions(
-            workspace.knowledge_dir, workspace.competition
+            workspace.knowledge_dir,
+            workspace.competition,
+            workspace_root=workspace.root,
         )
         if reoriented:
             _progress(

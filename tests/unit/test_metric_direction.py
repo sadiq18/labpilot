@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from labpilot.research_engine.evidence.builder import build_evidence_card
-from labpilot.research_engine.evidence.models import EvidenceDecision
+from labpilot.research_engine.evidence.models import ClaimEvidenceKind, EvidenceDecision
 from labpilot.research_engine.intelligence.competition.direction import resolve_maximize
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 
@@ -200,3 +200,77 @@ def test_the_claim_verb_follows_the_direction(tmp_path):
     verbs = [u.claim for u in card.claim_updates]
     assert verbs, "no claim updates: the test would prove nothing"
     assert all("improves" in v for v in verbs), verbs
+    # The sentence is the half a human reads; `evidence` and `confidence_delta`
+    # are the half that steers the belief store. Asserting only the verb let an
+    # inverted polarity through review once already.
+    assert all(u.evidence == ClaimEvidenceKind.SUPPORT for u in card.claim_updates)
+    assert all(u.confidence_delta > 0 for u in card.claim_updates)
+
+
+def test_belief_polarity_follows_the_direction_too(tmp_path):
+    """An MSE improvement must not teach the belief store that SWA is harmful.
+
+    `apply_card_to_beliefs` keys both the confidence step and the recorded
+    `effect` off `evidence`, so a card can say "improves" while pushing the
+    belief the other way. That is what happens when only the verb is oriented.
+    """
+    from labpilot.research_engine.evidence.apply import apply_card_to_beliefs
+    from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+
+    competition = "rogii-like"
+    paths = ResearchPaths(tmp_path, competition).ensure()
+    _competition_json(paths.root, "minimize")
+    hyp = HypothesisStore(tmp_path, competition).create(
+        observation="o", reason="r", prediction="p", confidence=0.7, technique="SWA"
+    )
+    card = build_evidence_card(
+        knowledge_dir=tmp_path,
+        competition=competition,
+        treatment_execution_id="E-treat",
+        treatment_metrics={"cv_mse": 190.97, "cv_std": 0.01},
+        control_execution_id="E-ctrl",
+        control_metrics={"cv_mse": 194.80, "cv_std": 0.01},
+        hypothesis_id=hyp.id,
+        persist=True,
+    )
+    apply_card_to_beliefs(knowledge_dir=tmp_path, competition=competition, card=card)
+
+    with KnowledgeStore(tmp_path, competition) as store:
+        beliefs = {b["technique"]: b for b in store.list_beliefs()}
+    swa = beliefs.get("SWA")
+    assert swa is not None, beliefs
+    assert swa["effect"] == "positive", swa
+    assert float(swa["confidence"]) > 0.5, swa
+
+
+def test_a_regression_still_lowers_the_belief(tmp_path):
+    """The mirror case, so the fix cannot be 'always positive'."""
+    from labpilot.research_engine.evidence.apply import apply_card_to_beliefs
+    from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+
+    competition = "rogii-like"
+    paths = ResearchPaths(tmp_path, competition).ensure()
+    _competition_json(paths.root, "minimize")
+    hyp = HypothesisStore(tmp_path, competition).create(
+        observation="o", reason="r", prediction="p", confidence=0.7, technique="vit"
+    )
+    card = build_evidence_card(
+        knowledge_dir=tmp_path,
+        competition=competition,
+        treatment_execution_id="E-treat",
+        treatment_metrics={"cv_mse": 250.0, "cv_std": 0.01},
+        control_execution_id="E-ctrl",
+        control_metrics={"cv_mse": 194.80, "cv_std": 0.01},
+        hypothesis_id=hyp.id,
+        persist=True,
+    )
+    assert card.decision == EvidenceDecision.REJECTED
+    assert all("hurts" in u.claim for u in card.claim_updates)
+    apply_card_to_beliefs(knowledge_dir=tmp_path, competition=competition, card=card)
+
+    with KnowledgeStore(tmp_path, competition) as store:
+        beliefs = {b["technique"]: b for b in store.list_beliefs()}
+    assert beliefs["vit"]["effect"] == "negative", beliefs["vit"]
+    assert float(beliefs["vit"]["confidence"]) < 0.5, beliefs["vit"]

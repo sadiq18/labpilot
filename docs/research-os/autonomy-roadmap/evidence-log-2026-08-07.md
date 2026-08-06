@@ -144,6 +144,32 @@ Against a sandbox copy of rogii's 15 cards:
 Four claims contested. No workspace artifact was edited by hand: the campaign
 heals its own memory on the next run, which is the standing rule for this system.
 
+### The compass had two needles
+
+Review of the fix found the same defect one layer down. `_claim_updates_from_attribution`
+oriented the *sentence* by the direction-corrected `signed` value, but still chose
+`ClaimEvidenceKind` and `confidence_delta` from the **raw** credit:
+
+| Field | Was | Should be |
+|---|---|---|
+| `claim` | `SWA improves the primary metric` | ✓ |
+| `evidence` | `contradict` | `support` |
+| `confidence_delta` | −0.12 | positive |
+
+`apply_card_to_beliefs` keys both the confidence step and the recorded `effect`
+off `evidence`, so the card said SWA helped while teaching the belief store that
+SWA is harmful and lowering its confidence. The half a human reads was right and
+the half that steers was wrong.
+
+The test that should have caught it asserted only `"improves" in claim` — a
+weaker assertion than the defect. Both halves are now derived from `signed`, and
+the tests assert polarity and delta through to the stored belief's `effect`.
+
+**The generalisation, third time this session:** a value can be corrected at the
+site you are looking at and stay wrong at the site that consumes it. Orienting
+`_decide` did not orient the verb; orienting the verb did not orient the belief.
+Each fix looked complete from where it was made.
+
 ### Guards that looked protective and were not
 
 A sharper sub-class: the check exists, and its *input* is wrong. Three of these
