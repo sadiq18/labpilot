@@ -190,6 +190,19 @@ class CodeEngineeringCapability(BaseCapability):
 
         hyp_fields = self._hypothesis_fields(context)
         plan_meta = dict(context.plan.metadata or {})
+        # Resolved *before* the prompt is built, not after. A rejected label is
+        # worse than no label — rogii asked codegen to implement "hyp:H-010",
+        # which no model can do, and the triad below already carries the real
+        # intent. Resolution is also needed by the fallback and by provenance.
+        resolution = resolve_technique(
+            plan_meta, hyp_fields, choice=choice, profile=profile_summary
+        )
+        if resolution.status != "none":
+            logger.info("technique %s: %s", resolution.status, resolution.reason)
+        self._stamp_technique(root, resolution)
+        prompt_technique = (
+            None if resolution.status == "rejected" else resolution.requested or None
+        )
         structured = StructuredContext(
             competition=context.competition,
             question=context.plan.goal or context.task.description,
@@ -215,7 +228,7 @@ class CodeEngineeringCapability(BaseCapability):
                 "prior_train_py": prior_train[:120_000],
                 "parent_hypothesis_id": plan_meta.get("parent_hypothesis_id"),
                 "parent_metrics": plan_meta.get("parent_metrics") or {},
-                "technique": plan_meta.get("technique") or hyp_fields.get("technique"),
+                "technique": prompt_technique,
                 "technique_stack": plan_meta.get("technique_stack")
                 or hyp_fields.get("technique_stack")
                 or [],
@@ -235,17 +248,6 @@ class CodeEngineeringCapability(BaseCapability):
         )
         proposal = self._agent.run(structured)
         origin = "llm" if self._agent.last_used_llm else "last_resort"
-
-        # Resolved even when the LLM path succeeds, because the resolution is
-        # what makes a result attributable: "technique X did not help" is only
-        # evidence about X if X was actually applied.
-        resolution = resolve_technique(
-            plan_meta, hyp_fields, choice=choice, profile=profile_summary
-        )
-        if resolution.status in {"rejected", "not_applicable", "candidate"}:
-            logger.info(
-                "technique %s: %s", resolution.status, resolution.reason
-            )
 
         if not proposal.files:
             # Prefer the deterministic baseline template over the emergency
@@ -547,3 +549,28 @@ class CodeEngineeringCapability(BaseCapability):
         except Exception:
             pass
         return choice
+
+    def _stamp_technique(self, root: Path, resolution: TechniqueResolution) -> None:
+        """Record the resolution on ``baseline_choice.json`` (F5).
+
+        Written after the fact rather than by the selector, which derives from
+        **data only** and never sees a plan — a property worth keeping
+        (design §8.5). This is the artifact an operator reads to answer "what
+        did this run actually apply?" without replaying the log.
+        """
+        path = root / "baseline_choice.json"
+        if not path.is_file():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["applied_technique"] = {
+                "requested": resolution.requested,
+                "canonical": resolution.canonical,
+                "status": resolution.status,
+                "reason": resolution.reason,
+                "feature_recipes": list(resolution.feature_recipes),
+                "model_params": dict(resolution.model_params),
+            }
+            path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 — provenance must not fail a run
+            logger.warning("Could not stamp applied_technique: %s", exc)

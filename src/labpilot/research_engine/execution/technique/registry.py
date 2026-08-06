@@ -27,15 +27,34 @@ mines, so mined text and this registry cannot drift apart for the same idea.
 
 from __future__ import annotations
 
+import re
+from functools import cache
+
 from labpilot.research_engine.execution.technique.models import TechniqueSpec
 
-#: Recipe labels that currently have `{% if %}` gates in a shipped template.
-#: Only `tabular_regression` (and its classification twin) has any; the
-#: partitioned template rogii uses has **zero**, which is why a technique can
-#: be recipe-backed in principle and still not change that template's output.
-#: The gates are added in the template-gate step; this constant exists so the
-#: gap is asserted rather than assumed.
-GATED_RECIPES: frozenset[str] = frozenset({"log_numeric", "target_encoding"})
+#: Matches `{% if "some_recipe" in feature_recipes %}` in a template.
+_GATE_RE = re.compile(r'["\']([a-z0-9_]+)["\']\s+in\s+feature_recipes')
+
+
+@cache
+def gated_recipes(template_name: str) -> frozenset[str]:
+    """Recipes a given template can actually act on.
+
+    Read from the template source rather than declared in a constant, because a
+    declared list drifts the moment someone adds a gate — and a registry that
+    *claims* a capability the template lacks is how `applied` gets recorded for
+    a run that changed nothing. Measured 2026-08-06: `tabular_regression` and
+    `tabular_classification` gate `log_numeric` and `target_encoding`;
+    `tabular_regression_partitioned` — the one rogii uses — gates **nothing**.
+    """
+    from labpilot.research_engine.execution.baseline.registry import get_templates_root
+
+    train = get_templates_root() / template_name / "train.py.j2"
+    try:
+        source = train.read_text(encoding="utf-8")
+    except OSError:
+        return frozenset()
+    return frozenset(_GATE_RE.findall(source))
 
 
 EXECUTABLE_TECHNIQUES: tuple[TechniqueSpec, ...] = (
@@ -112,21 +131,20 @@ EXECUTABLE_TECHNIQUES: tuple[TechniqueSpec, ...] = (
         description="Discretise a numeric column into bins.",
     ),
     # --- model-family / hyperparameter techniques ---
-    TechniqueSpec(
-        name="catboost",
-        aliases=["cat boost", "catboostregressor"],
-        model_family="catboost",
-        description="Swap the booster to CatBoost.",
-    ),
+    # `catboost` deliberately absent: it would set `model_family`, which
+    # `CodeRenderer.render` does not accept (design §9.4 says it should). The
+    # resolution would report `applied` while the rendered bytes were unchanged
+    # — provenance asserting work that did not happen. Re-add it together with
+    # the renderer change, not before.
     TechniqueSpec(
         name="deeper_trees",
-        aliases=["deeper trees", "increase depth", "max_depth"],
+        aliases=["deeper trees", "deeper tree depth"],
         model_params={"max_depth": 10, "num_leaves": 127},
         description="Raise tree depth and leaf count.",
     ),
     TechniqueSpec(
         name="more_estimators",
-        aliases=["more estimators", "n_estimators", "more rounds"],
+        aliases=["more estimators", "more boosting rounds"],
         model_params={"n_estimators": 2000},
         description="Train more boosting rounds.",
     ),

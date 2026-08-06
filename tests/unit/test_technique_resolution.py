@@ -168,16 +168,50 @@ def test_requested_technique_precedence(plan_meta, expected):
     assert requested_technique(plan_meta, {}) == expected
 
 
-# --- F7: a derived feature inherits its parents' availability ---------------
+# --- the template must be able to act on the recipe -------------------------
+#
+# Removed here: a test asserting F7 by putting a *recipe name* into
+# `exclude_features`. Real exclude lists hold column names (TVT, ANCC), so that
+# check could never fire on live data — it asserted a safety property that was
+# structurally unable to fail. F7 is enforced in the templates instead; see the
+# resolver module docstring.
 
 
-def test_recipe_naming_an_excluded_feature_is_refused():
-    """On rogii this is what stops a technique quietly reintroducing TVT/ANCC."""
+def test_recipe_without_a_template_gate_is_not_reported_as_applied():
+    """rogii's exact case, and the reason it matters.
+
+    `lag_features` passes every precondition on the partitioned dataset, is
+    handed to the renderer, and the template — which has zero gates — ignores
+    it. Reporting `applied` would record "the technique ran and changed
+    nothing" as evidence about the technique.
+    """
     res = resolve_technique(
         {"technique": "lag_features"},
         {},
-        choice=_choice(validation=SimpleNamespace(exclude_features=["lag_features"])),
+        choice=_choice(template_name="tabular_regression_partitioned"),
         profile=ROGII_PROFILE,
     )
     assert res.status == "not_applicable"
-    assert "excluded" in res.reason
+    assert "no gate" in res.reason
+    assert res.changes_rendering is False
+
+
+def test_recipe_with_a_template_gate_is_applied():
+    """Control: the gate check must not reject everything."""
+    res = resolve_technique(
+        {"technique": "target_encoding"},
+        {},
+        choice=_choice(partitioned=False, template_name="tabular_regression"),
+        profile=CATEGORICAL_PROFILE,
+    )
+    assert res.status == "applied", res.reason
+    assert res.feature_recipes == ["target_encoding"]
+
+
+def test_gate_detection_reads_the_real_templates():
+    """The gate map is derived from template source, so it cannot drift."""
+    from labpilot.research_engine.execution.technique.registry import gated_recipes
+
+    assert gated_recipes("tabular_regression") == {"log_numeric", "target_encoding"}
+    assert gated_recipes("tabular_regression_partitioned") == frozenset()
+    assert gated_recipes("no_such_template") == frozenset()

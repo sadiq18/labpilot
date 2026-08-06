@@ -158,3 +158,61 @@ def test_resolution_to_render_is_end_to_end(tmp_path, technique):
         model_params=res.model_params or None,
     )
     assert _digest(baseline) != _digest(treated)
+
+
+def test_applied_technique_is_stamped_on_baseline_choice(tmp_path):
+    """F5, producer side. The artifact an operator reads to answer "what did
+    this run apply?" without replaying the log."""
+    import json
+
+    from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
+        CodeEngineeringCapability,
+    )
+    from labpilot.research_engine.execution.technique.resolver import TechniqueResolution
+
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "baseline_choice.json").write_text(
+        _choice().model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    cap = CodeEngineeringCapability(llm_client=None)
+    cap._stamp_technique(
+        root,
+        TechniqueResolution(
+            requested="target encoding",
+            canonical="target_encoding",
+            status="applied",
+            reason="resolved",
+            feature_recipes=["target_encoding"],
+        ),
+    )
+
+    stamped = json.loads((root / "baseline_choice.json").read_text(encoding="utf-8"))
+    assert stamped["applied_technique"]["canonical"] == "target_encoding"
+    assert stamped["applied_technique"]["status"] == "applied"
+    # The selector's own fields must survive the merge.
+    assert stamped["problem_type"] == "tabular_regression"
+
+
+def test_stamping_never_fails_a_run(tmp_path):
+    """Provenance is not worth aborting training for."""
+    from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
+        CodeEngineeringCapability,
+    )
+    from labpilot.research_engine.execution.technique.resolver import TechniqueResolution
+
+    cap = CodeEngineeringCapability(llm_client=None)
+    cap._stamp_technique(tmp_path / "missing", TechniqueResolution())  # no file
+    (tmp_path / "bad").mkdir()
+    (tmp_path / "bad" / "baseline_choice.json").write_text("{not json", encoding="utf-8")
+    cap._stamp_technique(tmp_path / "bad", TechniqueResolution())
+
+
+def test_a_rejected_label_never_reaches_the_codegen_prompt():
+    """rogii asked codegen to implement `hyp:H-010`. The triad carries the real
+    intent, so a rejected label is strictly worse than none."""
+    res = resolve_technique({"technique": "hyp:H-010"}, {}, choice=_choice())
+    assert res.status == "rejected"
+    prompt_technique = None if res.status == "rejected" else res.requested or None
+    assert prompt_technique is None

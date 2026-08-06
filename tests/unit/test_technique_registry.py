@@ -14,7 +14,7 @@ from labpilot.research_engine.execution.technique import (
     executable_names,
     get_technique,
 )
-from labpilot.research_engine.execution.technique.registry import GATED_RECIPES
+from labpilot.research_engine.execution.technique.registry import gated_recipes
 
 
 def test_every_entry_declares_something_or_is_named_as_llm_only():
@@ -97,15 +97,18 @@ def test_executable_names_are_the_contract_surface():
 
 
 def test_recipe_backed_techniques_name_their_gate_requirement():
-    """Recipe-backed entries reference template gates by name.
+    """Which recipes no tabular template can execute yet.
 
-    `GATED_RECIPES` records which gates actually exist today. Most do not yet —
-    the partitioned template rogii uses has zero — so this asserts the *gap*
-    explicitly rather than letting the registry imply a capability the
-    templates lack. When the gate step lands, this list shrinks.
+    Gates are read from template source, so this cannot drift silently: adding
+    a gate shrinks the list and fails here until someone updates it — which is
+    the point, since a registry implying a capability the templates lack is how
+    `applied` gets recorded for a run that changed nothing.
     """
+    tabular = gated_recipes("tabular_regression") | gated_recipes(
+        "tabular_regression_partitioned"
+    )
     ungated = sorted(
-        {r for spec in EXECUTABLE_TECHNIQUES for r in spec.feature_recipes} - GATED_RECIPES
+        {r for spec in EXECUTABLE_TECHNIQUES for r in spec.feature_recipes} - tabular
     )
     assert ungated == [
         "aggregation_features",
@@ -117,3 +120,21 @@ def test_recipe_backed_techniques_name_their_gate_requirement():
         "polynomial_features",
         "rolling_features",
     ], "update this list as template gates are added, so the gap stays visible"
+
+
+def test_no_entry_declares_model_family_until_the_renderer_accepts_it():
+    """`CodeRenderer.render` has no `model_family` argument (design §9.4 says
+    it should). An entry setting it would resolve as `applied` while the
+    rendered bytes were unchanged — provenance asserting work that did not
+    happen. `catboost` is held back for exactly this reason."""
+    import inspect
+
+    from labpilot.research_engine.execution.capabilities.code_engineering.offline_codegen.renderer import (  # noqa: E501
+        CodeRenderer,
+    )
+
+    accepted = inspect.signature(CodeRenderer.render).parameters
+    offenders = [s.name for s in EXECUTABLE_TECHNIQUES if s.model_family]
+    assert not offenders or "model_family" in accepted, (
+        f"{offenders} declare model_family, which the renderer cannot apply"
+    )

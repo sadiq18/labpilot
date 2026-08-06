@@ -108,7 +108,7 @@ attributable to the technique.
 | F2 | A technique resolves to a declarative spec: feature recipes, model family, model params |
 | F3 | A technique that cannot apply to the problem type / data is rejected **at plan time**, not discovered at train time |
 | F4 | A technique that resolves to *no change* fails loudly rather than silently rendering the baseline |
-| F5 | The applied technique is recorded on the experiment record and in `baseline_choice.json` |
+| F5 | The applied technique is recorded on the experiment record and in `baseline_choice.json` — **producer side done; no consumer reads `technique_status` yet, so F5 is not closed** (see §9.6) |
 | F6 | Technique stacks (`technique_stack`, `combo_techniques`) compose without conflicting |
 | F7 | Recipes respect `validation.exclude_features` — a derived feature inherits its parents' availability |
 
@@ -119,7 +119,7 @@ attributable to the technique.
 | N1 | Recipes execute **without an LLM** — not so M7 can dodge M10, but because a reproducible path is required for research (see §8.2) |
 | N2 | Adding a technique is a registry entry + a template gate — no changes to Conductor, planner or capability |
 | N3 | **Recipe-path** rendering is deterministic: same (choice, technique) → byte-identical `train.py`. LLM-authored code is not reproducible and is not held to this |
-| N4 | Unknown techniques degrade to an explicit, recorded rejection — never a silent baseline |
+| N4 | ~~Unknown techniques degrade to an explicit, recorded rejection~~ → **revised by §8.7**: an unknown name is a recorded `candidate`, not a rejection. Never a *silent* baseline either way |
 | N5 | Backward compatible: a plan with no technique renders exactly what it renders today |
 
 Every requirement above has a corresponding check in [§10](#10-testing-strategy)
@@ -453,8 +453,12 @@ def resolve_technique(plan_meta, choice, profile) -> TechniqueResolution:
 
 - Reads `technique`, then `technique_stack`, then `combo_techniques` — the same
   precedence `capability.py:214-220` already uses for the LLM prompt.
-- Composes a stack by union of `feature_recipes` and last-wins on `model_params`;
-  a conflicting `model_family` is a rejection, not a silent pick.
+- ~~Composes a stack by union of `feature_recipes` and last-wins on
+  `model_params`; a conflicting `model_family` is a rejection.~~ **Not built.**
+  The resolver takes the last entry of `technique_stack` only. Stack
+  composition is deferred until single techniques demonstrably work — composing
+  two techniques that neither apply nor render is untestable, and F6 has no
+  check today.
 - Applicability: `choice.problem_type in spec.applies_to` (or empty), and every
   `requires` satisfied by the `DatasetProfile`.
 - **Leakage guard (F7):** any recipe whose inputs intersect
@@ -549,9 +553,10 @@ marker so the default slice stays hermetic.
 - **Leakage guard (F7):** a recipe whose inputs intersect
   `choice.validation.exclude_features` is rejected. On rogii this is the test
   that stops a technique quietly reintroducing `TVT` or `ANCC`.
-- Stack composition: `technique_stack` unions feature recipes; conflicting
-  `model_family` entries produce a rejection, not a silent pick.
-- **An unknown technique raises** rather than resolving empty (F4).
+- ~~Stack composition~~ — deferred, see §9.3.
+- ~~**An unknown technique raises**~~ → **revised by §8.7**: it resolves to
+  `candidate` and the run proceeds on its description. What still fails is a
+  technique that reached the recipe path and changed nothing.
 
 ### 10.3 Golden — rendered code
 
@@ -755,7 +760,8 @@ blockers are the digest contract test (§10.4), the leakage rejection test
 
 | Mode | Handling |
 |---|---|
-| Unknown technique | Reject, record suggestion, fail the step (F4) |
+| Unknown technique | Record as `candidate`, proceed via LLM codegen (§8.7 revises F4) |
+| Recipe with no template gate | `not_applicable` — never reported as applied |
 | Inapplicable to problem type | Reject at resolve time (F3) |
 | Recipe raises at train time | Existing `ExperimentProducedNoMetricsError` catches the no-metrics case |
 | Conflicting stack | Reject rather than silently pick |

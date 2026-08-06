@@ -18,6 +18,17 @@ Four outcomes, and the distinctions between them are the point:
                     silently discarded.
 ``rejected``        provably not a technique — a record reference like
                     ``hyp:H-010``. The only outcome that asserts "this is junk".
+
+**On F7 (leakage).** This module does *not* implement the design's F7 rule.
+F7 rejects a recipe whose **input columns** intersect
+``validation.exclude_features``; recipes here declare no input columns, so the
+check is not expressible yet. Exclusion is enforced one level down, in the
+templates: `tabular_regression_partitioned` skips
+``column in set(EXCLUDE_FEATURES)`` when deriving features, which is what keeps
+``TVT``/``ANCC`` out on rogii. Any new gate must follow that pattern. An earlier
+version of this file intersected exclude_features with *recipe names*, which
+could never fire on a real column list — a guard that looked protective and was
+not, exactly the class of defect this milestone keeps finding.
 """
 
 from __future__ import annotations
@@ -26,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from labpilot.research_engine.execution.technique.models import TechniqueSpec
-from labpilot.research_engine.execution.technique.registry import get_technique
+from labpilot.research_engine.execution.technique.registry import gated_recipes, get_technique
 from labpilot.research_engine.shared.labels import is_record_reference
 
 _NUMERIC_DTYPES = ("int", "float", "double", "decimal")
@@ -98,12 +109,8 @@ def _precondition_met(req: str, profile: dict[str, Any], choice: Any) -> bool:
     return False
 
 
-def _excluded(choice: Any) -> set[str]:
-    validation = getattr(choice, "validation", None)
-    raw = getattr(validation, "exclude_features", None)
-    if raw is None and isinstance(validation, dict):
-        raw = validation.get("exclude_features")
-    return {str(x) for x in (raw or [])}
+def _template_name(choice: Any) -> str:
+    return str(getattr(choice, "template_name", "") or "")
 
 
 def requested_technique(plan_meta: dict[str, Any], hyp_fields: dict[str, Any]) -> str:
@@ -173,17 +180,25 @@ def resolve_technique(
             reason=f"{spec.name} requires {', '.join(sorted(unmet))}, absent from this dataset",
         )
 
-    # F7 leakage guard. A derived feature inherits its parents' availability, so
-    # a recipe naming an excluded column would smuggle a train-only signal back
-    # under a new name — and it would be missing at test time.
-    collisions = _excluded(choice) & set(spec.feature_recipes)
-    if collisions:
-        return TechniqueResolution(
-            requested=requested,
-            canonical=spec.name,
-            status="not_applicable",
-            reason=f"{spec.name} derives from excluded features {sorted(collisions)}",
-        )
+    # A recipe the chosen template cannot act on must not be reported as
+    # applied. `lag_features` on `tabular_regression_partitioned` resolves
+    # cleanly, is passed to the renderer, and the template — which has zero
+    # gates — ignores it. Recording that as `applied` would put "the technique
+    # ran and did nothing" into research memory, which is the false negative
+    # this milestone exists to prevent, one level up.
+    template = _template_name(choice)
+    if spec.feature_recipes and template:
+        missing = sorted(set(spec.feature_recipes) - gated_recipes(template))
+        if missing:
+            return TechniqueResolution(
+                requested=requested,
+                canonical=spec.name,
+                status="not_applicable",
+                reason=(
+                    f"template {template!r} has no gate for {missing}; "
+                    "the recipe path cannot execute this technique yet"
+                ),
+            )
 
     return TechniqueResolution(
         requested=requested,
