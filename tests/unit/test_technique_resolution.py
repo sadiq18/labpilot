@@ -178,15 +178,14 @@ def test_requested_technique_precedence(plan_meta, expected):
 
 
 def test_recipe_without_a_template_gate_is_not_reported_as_applied():
-    """rogii's exact case, and the reason it matters.
+    """A technique the template cannot execute must not be recorded as applied.
 
-    `lag_features` passes every precondition on the partitioned dataset, is
-    handed to the renderer, and the template — which has zero gates — ignores
-    it. Reporting `applied` would record "the technique ran and changed
-    nothing" as evidence about the technique.
+    `polynomial_features` passes every precondition on this dataset but no
+    tabular template gates it, so reporting `applied` would put "the technique
+    ran and changed nothing" into research memory as evidence about it.
     """
     res = resolve_technique(
-        {"technique": "lag_features"},
+        {"technique": "polynomial_features"},
         {},
         choice=_choice(template_name="tabular_regression_partitioned"),
         profile=ROGII_PROFILE,
@@ -194,6 +193,24 @@ def test_recipe_without_a_template_gate_is_not_reported_as_applied():
     assert res.status == "not_applicable"
     assert "no gate" in res.reason
     assert res.changes_rendering is False
+
+
+def test_partition_techniques_now_apply_on_rogii():
+    """The payoff of the gate step, on rogii's real template and data shape.
+
+    Before the gates these resolved `not_applicable` with "no gate"; every
+    hypothesis therefore rendered identical code. This is the assertion that
+    the flat MSE 194.80 can no longer be produced by the recipe path.
+    """
+    for technique in ("lag_features", "rolling_features", "aggregation_features"):
+        res = resolve_technique(
+            {"technique": technique},
+            {},
+            choice=_choice(template_name="tabular_regression_partitioned"),
+            profile=ROGII_PROFILE,
+        )
+        assert res.status == "applied", f"{technique}: {res.reason}"
+        assert res.changes_rendering is True
 
 
 def test_recipe_with_a_template_gate_is_applied():
@@ -213,5 +230,9 @@ def test_gate_detection_reads_the_real_templates():
     from labpilot.research_engine.execution.technique.registry import gated_recipes
 
     assert gated_recipes("tabular_regression") == {"log_numeric", "target_encoding"}
-    assert gated_recipes("tabular_regression_partitioned") == frozenset()
+    assert gated_recipes("tabular_regression_partitioned") == {
+        "lag_features",
+        "rolling_features",
+        "aggregation_features",
+    }
     assert gated_recipes("no_such_template") == frozenset()
