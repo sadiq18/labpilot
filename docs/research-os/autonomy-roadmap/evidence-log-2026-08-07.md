@@ -4,9 +4,9 @@ Everything found by taking M10 routing live and then driving `research conduct`
 against `rogii-wellbore-geology-prediction` until it produced a result.
 Companion to [evidence-log.md](evidence-log.md) (2026-08-02).
 
-**Branch:** `research-os-m7-technique-identity` · **Result:** 909 tests passing
-(from 749), 11 commits. **First distinct experiment scores in the system's
-history.**
+**Branch:** `research-os-m7-technique-identity` · **Result:** 922 tests passing
+(from 749), 16 commits across PRs #91–#94 and follow-ups. **First distinct
+experiment scores in the system's history.**
 
 ---
 
@@ -40,7 +40,7 @@ Caveats: n=1, cross-validation not leaderboard, and ~2% from seed ensembling is
 unremarkable in itself. **The recipe path contributed nothing** — every template
 gate built this session remains unexercised in a real campaign.
 
-## One defect, five times
+## One defect, six times
 
 Every wiring defect found had the same shape: **the plumbing is present and one
 connection is not made.** That is the roadmap's founding diagnosis recurring at
@@ -54,8 +54,11 @@ finer grain, and it is worth naming as a pattern rather than five bugs.
 | 4 | `update_hypothesis_from_local` | had no parameter to carry the client to combo minting | a *successful* experiment aborted its learn-from-outcome step |
 | 5 | `ClaimPromoter` | gated on confidence; never consulted measured effect | `"vit improves the primary metric"` — `supported`, while both vit runs scored identically to baseline |
 
+| 6 | `revalidate_claims` | counted attribution computed from placeholder scores (`parent_cv=0.0`, `treatment_cv=0.5`) | a +194.8 "improvement" against a control that never ran, which is the whole basis of the vit claim |
+
 Defect 1 is the one that mattered most: **the LLM reached the Conductor's policy
-but not its hands.**
+but not its hands.** Defect 6 is mine, and is the reason the repair took three
+attempts.
 
 ### Guards that looked protective and were not
 
@@ -130,6 +133,32 @@ The generated code globs the data directory at runtime, so the filename list is
 dead weight in every call. Replacing it with `{count, sample: [5], note}` cut the
 profile **58%** with no information loss. The `stats` blobs — my first
 hypothesis — were only 9.9%.
+
+## Research memory repairs itself
+
+A design property worth separating from the bug that prompted it. The operator's
+instruction was: *"Make labpilot system smart enough to do it. Do it if migration
+or cleanup need but learn from it again fix in labpilot so that it could not
+repeat."*
+
+So the cleanup is **not a script anyone runs**. `revalidate_claims()` executes at
+the start of every campaign and again before every promotion cycle, contesting
+any claim that asserts an effect no measurement supports. Three properties make
+it safe to run unattended:
+
+- **Contested, never deleted.** What the system once believed, and why it
+  stopped, is itself research evidence. All 417 rogii claims survive; one
+  changes status.
+- **Direction-agnostic.** It refuses only on *no measured effect*, never on the
+  sign of one — `SWA` scored **−3.83** for a genuine improvement on MSE, so
+  inferring "positive" from sign would be wrong half the time. Judging direction
+  needs the metric's optimisation sense and belongs with
+  [M8](02-objective-loop.md).
+- **Never fatal.** Repair failures are logged and swallowed; a campaign must not
+  die because its memory could not be tidied.
+
+The same rule that repairs old records prevents new ones, which is what stops it
+being a migration.
 
 ## Campaign progression
 
