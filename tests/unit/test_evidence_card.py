@@ -74,6 +74,7 @@ def test_evidence_card_round_trip(tmp_path: Path) -> None:
             "cv_std": 0.01,
             "train_time_s": 100.0,
         },
+        maximize=True,  # accuracy: higher is better
         control_execution_id="E-008",
         control_metrics={
             "cv_accuracy": 0.90,
@@ -121,6 +122,7 @@ def test_missing_control_inconclusive(tmp_path: Path) -> None:
         competition="demo-miss",
         treatment_execution_id="E-1",
         treatment_metrics={"cv_accuracy": 0.9},
+        maximize=True,  # accuracy: higher is better
         persist=True,
     )
     assert card.decision == EvidenceDecision.INCONCLUSIVE
@@ -133,6 +135,13 @@ def test_compare_capability_builds_card(tmp_path: Path) -> None:
     paths = ResearchPaths(knowledge, competition).ensure()
     ws = tmp_path / "workspace"
     ws.mkdir()
+    # The run's own competition.json is where the COMPARE path reads metric
+    # direction from. Writing it here is not fixture noise: omitting it is
+    # exactly what left every rogii card oriented the wrong way.
+    (ws / "competition.json").write_text(
+        json.dumps({"slug": competition, "metric": {"name": "accuracy", "direction": "maximize"}}),
+        encoding="utf-8",
+    )
     (ws / "metrics.json").write_text(
         json.dumps(
             {

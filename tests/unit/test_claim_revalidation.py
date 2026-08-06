@@ -384,3 +384,45 @@ def test_the_rogii_vit_claim_is_contested_end_to_end(promoter, evidence):
     by_statement = {c["statement"]: c for c in promoter._reflection.list_claims()}
     assert by_statement["vit improves the primary metric"]["status"] == "contested"
     assert by_statement["vit appears to be unknown on rogii"]["status"] == "candidate"
+
+
+# --- review findings: PR #95 ------------------------------------------------
+
+
+def test_claim_phrasing_is_shared_with_the_writer():
+    """A wording change in the attribution writer must not silently disable
+    revalidation. Importing the constants makes that impossible."""
+    from labpilot.research_engine.evidence.builder import CLAIM_HURTS, CLAIM_IMPROVES
+    from labpilot.research_engine.reflection.claims.promoter import ClaimPromoter as CP
+
+    assert CP.asserts_an_effect({"statement": f"vit {CLAIM_IMPROVES}", "effect": ""})
+    assert CP.asserts_an_effect({"statement": f"vit {CLAIM_HURTS}", "effect": ""})
+
+
+def test_a_perfect_treatment_score_is_not_discarded(promoter, evidence):
+    """`bool(treatment)` would reject a perfect MSE of 0.0 — a real result, not
+    a placeholder. Only a zero *control* signals a missing baseline."""
+    _card_full(evidence, "EV-E", {"x": -194.8}, parent=194.8, treatment=0.0)
+    assert promoter.measured_effect("x")[0] == 1
+
+
+def test_a_zero_control_is_still_refused(promoter, evidence):
+    """The narrow case that matters: gain equals the entire treatment score,
+    so there was no baseline to improve on."""
+    _card_full(evidence, "EV-F", {"vit": 194.8}, parent=0.0, treatment=194.8)
+    assert promoter.measured_effect("vit") == (0, 0.0)
+
+
+def test_stub_treatment_scores_are_not_caught_here(promoter, evidence):
+    """Pins the boundary of this layer, so the docstring cannot overclaim.
+
+    A `treatment_cv=0.5` stub against a 194.8 baseline is indistinguishable
+    from a real result *from its scores alone*, so it still counts here. That
+    is not the system's only defence: `is_placeholder_metrics` now stops such a
+    card being minted, and `repair_card_directions` retires the ones already
+    written (see tests/unit/test_placeholder_metrics.py). This test exists so
+    that if someone deletes the upstream guard, its absence is visible rather
+    than silently covered by a heuristic that was never able to do the job.
+    """
+    _card_full(evidence, "EV-G", {"stub": -194.3}, parent=194.8, treatment=0.5)
+    assert promoter.measured_effect("stub")[0] == 1

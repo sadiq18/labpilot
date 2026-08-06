@@ -18,6 +18,8 @@ from labpilot.research_engine.evidence.models import (
     StabilityOutcome,
 )
 from labpilot.research_engine.evidence.store import EvidenceCardStore
+from labpilot.research_engine.intelligence.competition.direction import resolve_maximize
+from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import Experiment, Hypothesis
 from labpilot.research_engine.shared.labels import is_record_reference
@@ -27,7 +29,35 @@ logger = logging.getLogger(__name__)
 _NOISE = 0.001
 
 
-def _primary_cv(metrics: dict[str, Any]) -> float | None:
+#: Statuses a run writes into metrics.json when it did not actually train.
+#: `dry_run_stub` comes from `training/capability.py` (dry run or `train_stub`),
+#: `last_resort_scaffold` from the generated fallback script. Both write a
+#: plausible-looking number — 0.5 and 0.0 — which is why they fooled every
+#: downstream check that only asked whether a score was present.
+PLACEHOLDER_STATUSES = frozenset({"dry_run_stub", "last_resort_scaffold"})
+
+
+def is_placeholder_metrics(metrics: dict[str, Any] | None) -> bool:
+    """Whether these metrics came from a run that did not train a model.
+
+    The marker is explicit and has been there the whole time; nothing read it.
+    Measured on rogii 2026-08-07, seven of fifteen evidence cards were built
+    from placeholder runs — including EV-001, the sole basis of the false claim
+    "vit improves the primary metric".
+    """
+    return str((metrics or {}).get("status") or "").strip().lower() in PLACEHOLDER_STATUSES
+
+
+def _primary_cv_keyed(metrics: dict[str, Any]) -> tuple[float, str] | None:
+    """The primary score *and the key it came from*.
+
+    The key is not bookkeeping. This list mixes metrics that move in opposite
+    directions (`cv_accuracy`, `cv_rmse`), so two runs can each yield a number
+    from a different key and `treatment - parent` then subtracts an accuracy
+    from an RMSE. Measured on rogii 2026-08-07: six cards recorded a "gain" of
+    -194.30 by comparing a stub's `cv_accuracy` of 0.5 against a real run's
+    `cv_rmse` of 194.80. The caller uses the key to refuse that comparison.
+    """
     for key in (
         "cv_score",
         "cv_balanced_accuracy",
@@ -40,13 +70,18 @@ def _primary_cv(metrics: dict[str, Any]) -> float | None:
         "score",
     ):
         if isinstance(metrics.get(key), (int, float)):
-            return float(metrics[key])
+            return float(metrics[key]), key
     for key, val in metrics.items():
         if key.startswith("cv_") and isinstance(val, (int, float)):
             if key in {"cv_folds", "cv_std", "cv_mean"}:
                 continue
-            return float(val)
+            return float(val), key
     return None
+
+
+def _primary_cv(metrics: dict[str, Any]) -> float | None:
+    found = _primary_cv_keyed(metrics)
+    return found[0] if found else None
 
 
 def _float(metrics: dict[str, Any], *keys: str) -> float | None:
@@ -128,11 +163,38 @@ def _decide(
     return EvidenceDecision.REJECTED, "cv_gain_negative"
 
 
+#: The sentence a claim uses to assert an effect. Shared so `ClaimPromoter`
+#: can recognise these claims without duplicating the wording — a drift here
+#: would silently disable revalidation for every new claim.
+CLAIM_IMPROVES = "improves the primary metric"
+CLAIM_HURTS = "hurts the primary metric"
+
+
 def _claim_updates_from_attribution(
     attribution: dict[str, float],
     *,
     decision: EvidenceDecision,
+    maximize: bool = True,
 ) -> list[ClaimUpdate]:
+    """Turn per-technique credit into claim updates.
+
+    ``maximize`` is required, not cosmetic. Credit is ``treatment - parent``,
+    so on a *minimised* metric a negative credit is an **improvement**. Without
+    the flip, every verb is inverted for MSE/RMSE — measured on rogii
+    2026-08-07:
+
+    ======================  ========  =====================  ================
+    technique               credit    reality (MSE)          claim said
+    ======================  ========  =====================  ================
+    SWA                     -3.83     improved 194.8->191.0  "hurts"
+    vit                     +194.80   worsened               "improves"
+    ======================  ========  =====================  ================
+
+    `_decide` already flips on ``maximize``; this function did not, so the
+    verdict and the sentence disagreed. "vit improves the primary metric" —
+    the claim that started the revalidation work — was wrong for this reason as
+    well as for its missing control.
+    """
     updates: list[ClaimUpdate] = []
     for tech, credit in attribution.items():
         if abs(credit) < 1e-9:
@@ -146,10 +208,13 @@ def _claim_updates_from_attribution(
         else:
             kind = ClaimEvidenceKind.NEUTRAL
             delta = 0.0
-        verb = "improves" if credit >= 0 else "hurts"
+        # Signed toward "better": positive means the metric moved the way we
+        # want, whichever direction that is.
+        signed = credit if maximize else -credit
+        verb = CLAIM_IMPROVES if signed >= 0 else CLAIM_HURTS
         updates.append(
             ClaimUpdate(
-                claim=f"{tech} {verb} the primary metric",
+                claim=f"{tech} {verb}",
                 evidence=kind,
                 confidence_delta=delta,
                 technique=tech,
@@ -191,6 +256,28 @@ def _reusable_for(competition: str, plan_meta: dict[str, Any]) -> list[str]:
     return out[:12]
 
 
+def _resolve_direction(
+    knowledge_dir: Path, competition: str, workspace_root: Path | None
+) -> bool:
+    """Metric direction for this competition, or raise saying how to fix it."""
+    paths = ResearchPaths(Path(knowledge_dir), competition)
+    resolved = resolve_maximize(
+        competition=competition,
+        workspace_root=workspace_root,
+        knowledge_root=paths.root,
+        extracted_dir=paths.extracted_dir,
+    )
+    if resolved is None:
+        raise ValueError(
+            f"cannot determine whether {competition!r} maximises or minimises its "
+            "metric, so the sign of every conclusion on this card would be a "
+            "guess. Set metric.direction in the workspace competition.json, or "
+            "run analyze to produce the competition profile. Pass maximize= "
+            "explicitly only when the caller genuinely knows better."
+        )
+    return resolved
+
+
 def build_evidence_card(
     *,
     knowledge_dir: Path,
@@ -203,21 +290,51 @@ def build_evidence_card(
     control_metrics: dict[str, Any] | None = None,
     control_hypothesis_id: str | None = None,
     plan_metadata: dict[str, Any] | None = None,
-    maximize: bool = True,
+    maximize: bool | None = None,
+    workspace_root: Path | None = None,
     lb_gain: float | None = None,
     overfitting: bool = False,
     belief_priors: dict[str, float] | None = None,
     persist: bool = True,
 ) -> EvidenceCard:
-    """Build (and optionally persist) an Evidence Card for one treatment run."""
+    """Build (and optionally persist) an Evidence Card for one treatment run.
+
+    ``maximize`` is resolved from the competition profile when not given, and a
+    direction that cannot be resolved raises. It used to default to ``True``,
+    which no caller overrode: on rogii, an MSE competition, that recorded the
+    one real improvement the system produced (SWA, 194.80 -> 190.97) as
+    ``rejected`` and a regression as ``accepted``. A card is a signed, durable
+    conclusion; writing one whose sign is a guess is worse than writing none.
+    """
+    if maximize is None:
+        maximize = _resolve_direction(knowledge_dir, competition, workspace_root)
     plan_meta = dict(plan_metadata or {})
     control_metrics = dict(control_metrics or {})
     missing_control = not control_metrics and not control_execution_id
 
-    parent_cv = _primary_cv(control_metrics) if control_metrics else None
-    treatment_cv = _primary_cv(treatment_metrics)
+    parent_found = _primary_cv_keyed(control_metrics) if control_metrics else None
+    treatment_found = _primary_cv_keyed(treatment_metrics)
+    parent_cv = parent_found[0] if parent_found else None
+    treatment_cv = treatment_found[0] if treatment_found else None
+
+    # Two runs scored on different metrics are not comparable, and the
+    # subtraction that follows would invent a gain out of a unit mismatch.
+    # Treated as a missing control rather than a small gain: we do not know what
+    # the control scored *on this metric*, which is precisely `missing_control`.
+    mismatched_metric = (
+        parent_found is not None
+        and treatment_found is not None
+        and parent_found[1] != treatment_found[1]
+    )
+    # A run that never trained has nothing to compare. Refusing here is the
+    # upstream fix that `ClaimPromoter._card_compared_something_real` could only
+    # describe: at that layer a stub score is indistinguishable from a real one,
+    # but at this one the run itself says so.
+    placeholder_treatment = is_placeholder_metrics(treatment_metrics)
+    placeholder_control = is_placeholder_metrics(control_metrics)
+    uncomparable = mismatched_metric or placeholder_treatment or placeholder_control
     cv_gain = None
-    if parent_cv is not None and treatment_cv is not None:
+    if parent_cv is not None and treatment_cv is not None and not uncomparable:
         cv_gain = treatment_cv - parent_cv
 
     parent_std = _float(control_metrics, "cv_std")
@@ -268,9 +385,18 @@ def build_evidence_card(
         lb_gain=lb_gain,
         stability=stability,
         maximize=maximize,
-        missing_control=missing_control or parent_cv is None,
+        missing_control=missing_control or parent_cv is None or uncomparable,
         overfitting=overfitting,
     )
+    if placeholder_treatment or placeholder_control:
+        which = "treatment" if placeholder_treatment else "control"
+        status = (treatment_metrics if placeholder_treatment else control_metrics).get("status")
+        reason = f"placeholder_metrics: {which} run reported {status!r}, no model was trained"
+    elif mismatched_metric:
+        reason = (
+            f"metric_key_mismatch: control scored {parent_found[1]!r}, "
+            f"treatment scored {treatment_found[1]!r}"
+        )
 
     impact_error = None
     if cv_gain is not None and expected_cv is not None:
@@ -298,7 +424,9 @@ def build_evidence_card(
             peak_memory_mb=_float(treatment_metrics, "peak_memory_mb"),
         ),
         technique_attribution=attribution,
-        claim_updates=_claim_updates_from_attribution(attribution, decision=decision),
+        claim_updates=_claim_updates_from_attribution(
+            attribution, decision=decision, maximize=maximize
+        ),
         decision=decision,
         decision_reason=reason,
         reusable_for=_reusable_for(competition, plan_meta),

@@ -56,9 +56,93 @@ finer grain, and it is worth naming as a pattern rather than five bugs.
 
 | 6 | `revalidate_claims` | counted attribution computed from placeholder scores (`parent_cv=0.0`, `treatment_cv=0.5`) | a +194.8 "improvement" against a control that never ran, which is the whole basis of the vit claim |
 
+| 7 | `build_evidence_card` | `maximize: bool = True` — a default **no call site overrode**, on a competition whose profile said `minimize` | every accept/reject verdict inverted; the one genuine improvement recorded as `rejected` |
+
 Defect 1 is the one that mattered most: **the LLM reached the Conductor's policy
 but not its hands.** Defect 6 is mine, and is the reason the repair took three
-attempts.
+attempts. Defect 7 was found while addressing review comments on the fix for
+defect 6, and is the most consequential of the seven — see below.
+
+### Defect 7: the compass pointed the wrong way
+
+Every conclusion the engine draws is signed. `cv_gain` is `treatment - parent`,
+and whether that number is good news depends entirely on the metric's direction.
+`build_evidence_card` took the direction as a keyword argument with a default of
+`True`, and neither of its two call sites passed one. rogii minimises MSE.
+
+The result, across all 15 cards on disk:
+
+| Card | Measured | Recorded | Should have been |
+|---|---|---|---|
+| EV-012 | `SWA` cut MSE 194.80 → 190.97 | `rejected` | **`accepted`** — the only genuine improvement the system ever produced |
+| EV-015 | MSE rose 194.34 → 194.80 | `accepted` | `rejected` |
+
+The direction was never missing. `metadata.profile.metric.direction = "minimize"`
+sat in the Analyze profile artifact the whole time; nothing read it. The
+workspace's own `competition.json` has `metric: null`, so the profile artifact is
+not a nicety — it is the only source that had the answer.
+
+Fixed by making the default impossible: `maximize` is now `None`, resolved from
+the competition profile (workspace copy → knowledge copy → profile artifact), and
+**a direction that cannot be resolved raises** rather than assuming. A card is a
+durable, signed conclusion; writing one whose sign is a guess is worse than
+writing none.
+
+### What defect 7 exposed
+
+Re-orienting the cards flipped six of them from `rejected` to `accepted` — the
+`0.50` stub runs, which against a 194.80 baseline now looked like a spectacular
+MSE improvement. They had been rejected for the wrong reason, and correcting the
+reason made them worse.
+
+The runs themselves said so all along:
+
+```
+E-004: {'cv_accuracy': 0.5, 'status': 'dry_run_stub'}
+E-001: {'cv_accuracy': 0.0, 'status': 'last_resort_scaffold'}
+```
+
+`training/capability.py` stamps `dry_run_stub` on a dry run and the fallback
+script stamps `last_resort_scaffold`. Both markers were explicit, machine
+readable, and unread — which is why they defeated every downstream check that
+only asked whether *a* score was present. Seven of fifteen cards were built from
+runs that trained no model, including EV-001, the sole basis of
+`"vit improves the primary metric"`.
+
+Two guards now sit at the point cards are minted:
+
+- **`is_placeholder_metrics`** — a run reporting one of those statuses produces
+  no verdict and no claim updates.
+- **metric-key mismatch** — `_primary_cv` scans a list mixing `cv_accuracy` and
+  `cv_rmse` and returns the first hit, so two runs could each answer from a
+  different key and the builder would subtract an accuracy from an RMSE. It now
+  records *which key* each side used and refuses the comparison when they differ.
+
+This is the upstream fix that `_card_compared_something_real` could only describe.
+At the claim layer a stub score is indistinguishable from a real one; at the
+build layer the run itself declares what it is.
+
+### The repair, measured
+
+`repair_card_directions` runs at campaign start, immediately before claim
+revalidation — cards first, because revalidation reads their verdicts and would
+otherwise re-confirm an inverted one. Legacy stub cards are identified by looking
+up their execution artifacts, which still hold the original metrics, so the
+retirement is evidence-driven rather than a guess from the scores.
+
+Against a sandbox copy of rogii's 15 cards:
+
+| | Before | After |
+|---|---|---|
+| EV-001 (`vit`) | `accepted`, +194.80 | `inconclusive` — placeholder control |
+| EV-002…007, EV-014 | `rejected` / `accepted` | `inconclusive` — placeholder runs |
+| EV-012 (`SWA`) | `rejected` | **`accepted`** |
+| EV-015 | `accepted` | `rejected` |
+| `hyp:H-010` support | obs=5, net −971.50 | **obs=0** |
+| `SWA` support | obs=1, net −3.83 | unchanged — a real result, kept |
+
+Four claims contested. No workspace artifact was edited by hand: the campaign
+heals its own memory on the next run, which is the standing rule for this system.
 
 ### Guards that looked protective and were not
 

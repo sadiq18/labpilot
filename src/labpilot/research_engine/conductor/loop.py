@@ -187,7 +187,21 @@ def run_until_stop(
     # Measured 2026-08-07: a full campaign ran with 45 false `vit` claims intact
     # because revalidation only fired from `record_successful_execution`.
     try:
+        from labpilot.research_engine.evidence.repair import repair_card_directions
         from labpilot.research_engine.execution.outcome import revalidate_outcome_claims
+
+        # Cards first: revalidation reads their verdicts, so an inverted card
+        # would otherwise have its inverted conclusion re-confirmed. Measured
+        # 2026-08-07, all 15 rogii cards were built as `maximize=True` on an MSE
+        # competition, which recorded the one real improvement as `rejected`.
+        reoriented = repair_card_directions(
+            workspace.knowledge_dir, workspace.competition
+        )
+        if reoriented:
+            _progress(
+                f"Re-oriented {len(reoriented)} evidence card(s) built with the "
+                "wrong metric direction"
+            )
 
         contested = revalidate_outcome_claims(
             knowledge_dir=workspace.knowledge_dir, competition=workspace.competition
