@@ -16,16 +16,16 @@ from torch.utils.data import DataLoader, Dataset
 
 from labpilot.research_engine.execution.metrics import compute_metric
 
-DATA_DIR = Path({{ data_dir | tojson }})
-OUTPUT_DIR = Path({{ output_dir | tojson }})
-TRAIN_FILE = {{ choice.train_file | tojson }}
-TEST_FILE = {{ choice.test_file | tojson }}
-SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
-TARGET_COLUMN = {{ choice.target_column | tojson }}
-ID_COLUMN = {{ choice.id_column | tojson }}
-IMAGE_DIR = {{ choice.image_dir | tojson }}
-IMAGE_COLUMN = {{ choice.image_column | tojson }}
-METRIC_NAME = {{ choice.metric_name | tojson }}
+DATA_DIR = Path({{ data_dir | py }})
+OUTPUT_DIR = Path({{ output_dir | py }})
+TRAIN_FILE = {{ choice.train_file | py }}
+TEST_FILE = {{ choice.test_file | py }}
+SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | py }}
+TARGET_COLUMN = {{ choice.target_column | py }}
+ID_COLUMN = {{ choice.id_column | py }}
+IMAGE_DIR = {{ choice.image_dir | py }}
+IMAGE_COLUMN = {{ choice.image_column | py }}
+METRIC_NAME = {{ choice.metric_name | py }}
 MAX_EPOCHS = {{ deep.max_epochs }}
 MAX_TRAIN_SAMPLES = {{ deep.max_train_samples }}
 BATCH_SIZE = {{ deep.batch_size }}

@@ -111,14 +111,11 @@ def test_recipe_backed_techniques_name_their_gate_requirement():
         {r for spec in EXECUTABLE_TECHNIQUES for r in spec.feature_recipes} - tabular
     )
     assert ungated == [
-        "aggregation_features",
         "binning",
         "feature_interactions",
         "frequency_encoding",
-        "lag_features",
         "one_hot_encoding",
         "polynomial_features",
-        "rolling_features",
     ], "update this list as template gates are added, so the gap stays visible"
 
 

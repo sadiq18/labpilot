@@ -14,15 +14,15 @@ from sklearn.preprocessing import LabelEncoder
 
 from labpilot.research_engine.execution.metrics import compute_metric
 
-DATA_DIR = Path({{ data_dir | tojson }})
-OUTPUT_DIR = Path({{ output_dir | tojson }})
-TRAIN_FILE = {{ choice.train_file | tojson }}
-TEST_FILE = {{ choice.test_file | tojson }}
-SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
-TARGET_COLUMN = {{ choice.target_column | tojson }}
-ID_COLUMN = {{ choice.id_column | tojson }}
-TEXT_COLUMN = {{ choice.text_column | tojson }}
-METRIC_NAME = {{ choice.metric_name | tojson }}
+DATA_DIR = Path({{ data_dir | py }})
+OUTPUT_DIR = Path({{ output_dir | py }})
+TRAIN_FILE = {{ choice.train_file | py }}
+TEST_FILE = {{ choice.test_file | py }}
+SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | py }}
+TARGET_COLUMN = {{ choice.target_column | py }}
+ID_COLUMN = {{ choice.id_column | py }}
+TEXT_COLUMN = {{ choice.text_column | py }}
+METRIC_NAME = {{ choice.metric_name | py }}
 CV_FOLDS = {{ cv_folds }}
 RANDOM_SEED = {{ random_seed }}
 

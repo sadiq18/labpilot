@@ -15,20 +15,20 @@ from sklearn.preprocessing import OrdinalEncoder
 
 from labpilot.research_engine.execution.metrics import compute_metric
 
-DATA_DIR = Path({{ data_dir | tojson }})
-OUTPUT_DIR = Path({{ output_dir | tojson }})
-TRAIN_FILE = {{ choice.train_file | tojson }}
-TEST_FILE = {{ choice.test_file | tojson }}
-SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
-TARGET_COLUMN = {{ choice.target_column | tojson }}
-ID_COLUMN = {{ choice.id_column | tojson }}
-METRIC_NAME = {{ choice.metric_name | tojson }}
+DATA_DIR = Path({{ data_dir | py }})
+OUTPUT_DIR = Path({{ output_dir | py }})
+TRAIN_FILE = {{ choice.train_file | py }}
+TEST_FILE = {{ choice.test_file | py }}
+SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | py }}
+TARGET_COLUMN = {{ choice.target_column | py }}
+ID_COLUMN = {{ choice.id_column | py }}
+METRIC_NAME = {{ choice.metric_name | py }}
 CV_FOLDS = {{ cv_folds }}
 RANDOM_SEED = {{ random_seed }}
-MODEL_PARAMS = {{ model_params | tojson }}
-FEATURE_RECIPES = {{ feature_recipes | tojson }}
-TARGET_ENCODING_COLUMNS = {{ target_encoding_columns | tojson }}
-LOG_NUMERIC_COLUMNS = {{ log_numeric_columns | tojson }}
+MODEL_PARAMS = {{ model_params | py }}
+FEATURE_RECIPES = {{ feature_recipes | py }}
+TARGET_ENCODING_COLUMNS = {{ target_encoding_columns | py }}
+LOG_NUMERIC_COLUMNS = {{ log_numeric_columns | py }}
 
 
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:

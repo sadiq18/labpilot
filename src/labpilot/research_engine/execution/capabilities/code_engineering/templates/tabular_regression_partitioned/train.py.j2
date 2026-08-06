@@ -19,17 +19,18 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_squared_error
 
-DATA_DIR = Path({{ data_dir | tojson }})
-OUTPUT_DIR = Path({{ output_dir | tojson }})
-TARGET_COLUMN = {{ choice.target_column | tojson }}
-ID_COLUMN = {{ choice.id_column | tojson }}
-METRIC_NAME = {{ choice.metric_name | tojson }}
-SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | tojson }}
+DATA_DIR = Path({{ data_dir | py }})
+OUTPUT_DIR = Path({{ output_dir | py }})
+TARGET_COLUMN = {{ choice.target_column | py }}
+ID_COLUMN = {{ choice.id_column | py }}
+METRIC_NAME = {{ choice.metric_name | py }}
+SAMPLE_SUBMISSION_FILE = {{ choice.sample_submission_file | py }}
 RANDOM_SEED = {{ random_seed }}
-MODEL_PARAMS = {{ model_params | tojson }}
-EXCLUDE_FEATURES = {{ choice.validation.exclude_features | tojson }}
+MODEL_PARAMS = {{ model_params | py }}
+FEATURE_RECIPES = {{ feature_recipes | py }}
+EXCLUDE_FEATURES = {{ choice.validation.exclude_features | py }}
 HOLDOUT_FRACTION = {{ choice.validation.holdout_fraction }}
-PRIMARY_KIND = {{ primary_kind | tojson }}
+PRIMARY_KIND = {{ primary_kind | py }}
 SMOKE_PARTITIONS = 40
 
 
@@ -46,6 +47,28 @@ def _partition_files(split: str) -> dict[str, Path]:
             continue
         out[entity] = path
     return out
+
+
+def _driver_columns(frame: pd.DataFrame) -> list[str]:
+    """Numeric columns a recipe may derive from, within one partition.
+
+    The target is excluded on purpose, and not only because it is the label:
+    this is a **predict-forward** split, so past ``known_rows`` the target does
+    not exist. A lag or rolling statistic over it would read observed values
+    during training and produce NaN for exactly the rows being scored — a leak
+    that flatters validation and cannot transfer.
+
+    ``EXCLUDE_FEATURES`` is honoured for the same reason the delta-feature loop
+    honours it: a derived feature inherits its parents' availability, so
+    deriving from an excluded column smuggles a train-only signal back under a
+    new name. This is where F7 is actually enforced.
+    """
+    drop = set(EXCLUDE_FEATURES) | {TARGET_COLUMN, ID_COLUMN, "__entity__", "__is_holdout__"}
+    return [
+        column
+        for column in frame.columns
+        if column not in drop and pd.api.types.is_numeric_dtype(frame[column])
+    ]
 
 
 def _add_partition_features(frame: pd.DataFrame, known_rows: int) -> pd.DataFrame:
@@ -106,6 +129,38 @@ def _add_partition_features(frame: pd.DataFrame, known_rows: int) -> pd.DataFram
         name = f"{column}__delta_from_anchor"
         out[name] = frame[column].to_numpy() - float(base)
         delta_columns.append(name)
+
+    # --- technique gates -----------------------------------------------------
+    # Driven by `feature_recipes`, which the resolver derives from the plan's
+    # technique. Every gate below iterates `_driver_columns` and never touches
+    # the target, so each stays valid past the known/scored boundary.
+{% if "lag_features" in feature_recipes %}
+    # Earlier driver values within the same partition. Leading rows are NaN by
+    # construction; LightGBM handles that natively, and imputing would invent a
+    # history this partition does not have.
+    for column in _driver_columns(frame):
+        for lag in (1, 5, 20):
+            out[f"{column}__lag{lag}"] = frame[column].shift(lag)
+{% endif %}
+{% if "rolling_features" in feature_recipes %}
+    # Rolling driver statistics. `min_periods=1` keeps the partition head
+    # usable rather than discarding the rows nearest the anchor.
+    for column in _driver_columns(frame):
+        for window in (5, 20):
+            rolled = frame[column].rolling(window, min_periods=1)
+            out[f"{column}__roll{window}_mean"] = rolled.mean()
+            out[f"{column}__roll{window}_std"] = rolled.std()
+{% endif %}
+{% if "aggregation_features" in feature_recipes %}
+    # Partition-level driver statistics broadcast back to every row. Computed
+    # over the whole partition *including* the scored tail, which is legitimate
+    # precisely because drivers are observed there — the target is not, and
+    # never enters this calculation.
+    for column in _driver_columns(frame):
+        values = frame[column]
+        out[f"{column}__part_mean"] = float(values.mean())
+        out[f"{column}__part_std"] = float(values.std()) if len(values) > 1 else 0.0
+{% endif %}
 
     # A per-partition Ridge calibration was tried here (fit the head, project
     # forward). It made things markedly worse: the observed head and the scored
