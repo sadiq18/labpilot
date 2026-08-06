@@ -55,6 +55,8 @@ class ClaimPromoter:
         except Exception:  # noqa: BLE001 — absent store means "nothing measured"
             return 0, 0.0
         for card in cards:
+            if not self._card_compared_something_real(card):
+                continue
             for name, credit in (card.technique_attribution or {}).items():
                 if str(name).strip().lower() != label:
                     continue
@@ -64,6 +66,80 @@ class ClaimPromoter:
                 except (TypeError, ValueError):
                     continue
         return observations, net
+
+    @staticmethod
+    def _card_compared_something_real(card: Any) -> bool:
+        """Whether this card's gain came from comparing two genuine runs.
+
+        Requires a real verdict (`accepted`/`rejected`) and both scores present.
+        `inconclusive` is the builder's own label for a missing control.
+
+        **This does not catch every fabricated score, and must not claim to.**
+        An earlier version used ``bool(parent) and bool(treatment)``, which was
+        wrong in both directions: it rejected a legitimate `0.0` **treatment**
+        (a perfect MSE), and it let `treatment_cv=0.5` stub runs through, since
+        `bool(0.5)` is true. The zero-*control* rejection survives on its merits
+        and is now scoped to that case alone.
+
+        A stub run that writes a plausible-looking metric is indistinguishable
+        from a real one *at this layer*, so the real defence is upstream and now
+        exists: `evidence/builder.py::is_placeholder_metrics` refuses to mint a
+        card from a run whose metrics say no model was trained, and
+        `evidence/repair.py` retires cards already written that way. On rogii
+        that moved seven of fifteen cards to `inconclusive`, including the five
+        that had been supporting `"hyp:H-010 hurts the primary metric"` — a
+        claim about a technique that never existed — with a net credit of
+        -971.5.
+
+        This check is the second line: it removes cards that are provably
+        uncomparable from their own scores. It does not launder the rest, and a
+        workspace whose stub runs left no status marker would still get past it.
+        """
+        decision = str(getattr(card, "decision", "") or "").lower()
+        # Only a card that reached a verdict compared two real runs.
+        # `inconclusive` is the builder's own label for a missing control.
+        if not ("accepted" in decision or "rejected" in decision):
+            return False
+        observed = getattr(card, "observed", None)
+        parent = getattr(observed, "parent_cv", None)
+        treatment = getattr(observed, "treatment_cv", None)
+        if parent is None or treatment is None:
+            return False
+        # A control of exactly zero against a non-zero treatment means the
+        # "gain" *is* the entire treatment score — there was no baseline to
+        # improve on. rogii's EV-001 credits vit +194.80 that way. Narrowed to
+        # the control only: an earlier version also rejected `treatment == 0`,
+        # which would discard a perfect MSE.
+        return not (parent == 0.0 and treatment != 0.0)
+
+    @staticmethod
+    def asserts_an_effect(claim: dict[str, Any]) -> bool:
+        """Whether this claim says a technique *did something*.
+
+        Checks the statement as well as the ``effect`` column, because the two
+        claim writers disagree about where the assertion lives:
+
+        * `promote_from_belief` sets ``effect`` and writes "X appears to be
+          <effect> on <competition>";
+        * `_claim_updates_from_attribution` leaves ``effect`` **empty** and puts
+          the verb in the statement — "X improves the primary metric".
+
+        Keying on the column alone was a real defect: measured 2026-08-07, all
+        seven effect-asserting claims on rogii had ``effect=''``, so a guard
+        reading only the column could touch 14 of 417 claims and none of the
+        false ones. Including the one that started this: *"vit improves the
+        primary metric"*, status `supported`.
+        """
+        from labpilot.research_engine.evidence.builder import CLAIM_HURTS, CLAIM_IMPROVES
+
+        effect = str(claim.get("effect") or "").strip().lower()
+        if effect and effect not in {"unknown", "none"}:
+            return True
+        # Imported from the writer rather than duplicated: a wording change in
+        # `_claim_updates_from_attribution` would otherwise silently disable
+        # revalidation for every new claim, and nothing would report it.
+        statement = str(claim.get("statement") or "").lower()
+        return CLAIM_IMPROVES in statement or CLAIM_HURTS in statement
 
     def effect_is_measured(self, technique: str) -> tuple[bool, str]:
         """Whether any run actually attributed a change to ``technique``.
@@ -124,6 +200,11 @@ class ClaimPromoter:
         # A belief asserting an effect must be backed by a measured one. Without
         # this, confidence alone promotes — and confidence is produced by the
         # same loop that would consume the claim.
+        # Deliberately the column, not `asserts_an_effect`: this path always
+        # sets `effect`, and the statement it builds is "appears to be <effect>"
+        # rather than the attribution writer's phrasing. Do not "simplify" the
+        # two to share one predicate — revalidation must read both, promotion
+        # only needs this one.
         if effect and effect.lower() not in {"unknown", ""} and not contradicting_evidence_id:
             measured, why = self.effect_is_measured(technique)
             if not measured:
@@ -181,7 +262,7 @@ class ClaimPromoter:
             status = str(claim.get("status") or "")
             if not technique or status == "contested":
                 continue
-            if effect.lower() in {"", "unknown"}:
+            if not self.asserts_an_effect(claim):
                 continue
             measured, why = self.effect_is_measured(technique)
             if measured:

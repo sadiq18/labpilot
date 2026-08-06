@@ -95,6 +95,7 @@ def _card_for(tmp_path, *, tags, technique=""):
         hypothesis_id=hyp.id,
         plan_id="P-004",
         plan_metadata={"change_category": "other", "tags": tags},
+        maximize=True,  # accuracy: higher is better
         persist=False,
     )
 

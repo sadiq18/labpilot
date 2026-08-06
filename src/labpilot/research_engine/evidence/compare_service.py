@@ -158,6 +158,11 @@ def run_compare_and_build_card(context: TaskContext) -> EvidenceCard:
         control_hypothesis_id=control_hyp,
         plan_metadata=plan_meta,
         belief_priors=_belief_priors(knowledge_dir, context.competition),
+        # The run's own competition.json is the nearest record of which way is
+        # better; `build_evidence_card` falls back to the knowledge copy and the
+        # Analyze profile. Not passing anything here is what inverted every
+        # decision on rogii.
+        workspace_root=root,
         persist=True,
     )
     write_comparison_files(root, card)

@@ -180,6 +180,43 @@ def run_until_stop(
         "offline_fallback_prompt": offline_fallback_prompt,
     }
 
+    # Repair research memory before acting on it. A claim no measurement
+    # supports steers every decision this loop is about to make, and the repair
+    # must not wait for a *successful experiment* — a campaign that completes
+    # none is exactly when memory is most likely to be leading it astray.
+    # Measured 2026-08-07: a full campaign ran with 45 false `vit` claims intact
+    # because revalidation only fired from `record_successful_execution`.
+    try:
+        from labpilot.research_engine.evidence.repair import repair_card_directions
+        from labpilot.research_engine.execution.outcome import revalidate_outcome_claims
+
+        # Cards first: revalidation reads their verdicts, so an inverted card
+        # would otherwise have its inverted conclusion re-confirmed. Measured
+        # 2026-08-07, all 15 rogii cards were built as `maximize=True` on an MSE
+        # competition, which recorded the one real improvement as `rejected`.
+        # `workspace.root` matters for a workspace whose only `metric.direction`
+        # is on the run's own competition.json: without it repair falls back to
+        # the knowledge copy and the Analyze profile, and silently no-ops when
+        # neither carries a direction.
+        reoriented = repair_card_directions(
+            workspace.knowledge_dir,
+            workspace.competition,
+            workspace_root=workspace.root,
+        )
+        if reoriented:
+            _progress(
+                f"Re-oriented {len(reoriented)} evidence card(s) built with the "
+                "wrong metric direction"
+            )
+
+        contested = revalidate_outcome_claims(
+            knowledge_dir=workspace.knowledge_dir, competition=workspace.competition
+        )
+        if contested:
+            _progress(f"Contested {len(contested)} claim(s) no measurement supports")
+    except Exception as exc:  # noqa: BLE001 — never block a campaign on repair
+        logger.warning("Claim revalidation at session start failed: %s", exc)
+
     for step in range(max_steps):
         # Refresh each iteration so mid-session registration is visible.
         allowlist = set(registry.names())

@@ -1035,6 +1035,33 @@ def record_combo_avoid_on_loss(
     )
 
 
+def revalidate_outcome_claims(
+    *,
+    knowledge_dir: Path,
+    competition: str,
+) -> list[dict[str, Any]]:
+    """Contest claims no measurement supports. Safe to call at any time.
+
+    Separate from :func:`promote_outcome_claims` because repair must not depend
+    on a *successful experiment*. Revalidation previously ran only inside
+    `record_successful_execution`, so a campaign that completed no experiment —
+    precisely when memory is most likely to be steering badly — never repaired
+    itself. Measured 2026-08-07: a full campaign ran with 45 false `vit` claims
+    intact because no execution succeeded to trigger the repair.
+    """
+    try:
+        from labpilot.research_engine.reflection.claims.promoter import ClaimPromoter
+
+        promoter = ClaimPromoter(knowledge_dir, competition)
+        try:
+            return promoter.revalidate_claims()
+        finally:
+            promoter.close()
+    except Exception as exc:  # noqa: BLE001 — repair must never break a run
+        logger.warning("Claim revalidation skipped: %s", exc)
+        return []
+
+
 def promote_outcome_claims(
     *,
     knowledge_dir: Path,
