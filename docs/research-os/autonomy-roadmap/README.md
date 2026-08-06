@@ -37,7 +37,7 @@ asserted.
 | Phase | Work | Why here |
 |-------|------|----------|
 | **0** | ~~M14 phase 1~~ **done** — stamps + refusal (2a) | Made every later phase observable, and fixed provenance that recorded `llm` for deterministic output |
-| **1** | ~~M10 wiring~~ **shipped (v0.1)** ⇄ **thin M7 slice** ← *next* | Mutual, not sequential — see below. The wiring half is done; the slice that proves it is not |
+| **1** | ~~M10 wiring ⇄ thin M7 slice~~ **both done 2026-08-07** | The cycle closed: a real codegen call produced working training code, and two hypotheses produced different scores. [Evidence](evidence-log-2026-08-07.md) |
 | **2** | **M7** full · adopt **M15**'s contract test | M15's "different input ⇒ different artifact" *is* M7's exit criterion generalised, so the practice starts here |
 | **3** | **M8 + M17** together | Both need the same missing writer: `metric_history` / `last_metric` are read in four places and written in none |
 | **4** | **M13** (needs M7+M8) · **M11** (needs M7 only) | M11 does **not** need M8 and can start as soon as M7 lands |
@@ -60,14 +60,20 @@ dataset) validates it, then M7 in full.** Shipping M10 on unit tests alone would
 repeat the mistake review already caught, where `select_route` was tested,
 unwired, and called done.
 
-**Where this stands (2026-08-06).** The wiring half shipped as
-[fitroute](../../smart-router/DESIGN.md) v0.1: roles are declared by the agents
-that do the work, resolution happens per call, and every call is cached and
-metered. What has *not* happened is the proof — no codegen call has yet been
-served by a model capable of writing training code, because that needs a
-provider key this workspace does not have. So M10 is **wired, not validated**,
-and the second half of the cycle is now the critical path. Recording it as done
-would be the same mistake in a new place.
+**Resolved (2026-08-07).** The cycle closed. With a capable provider
+configured, a real codegen call produced a `train.py` that ran and wrote
+metrics, and a campaign produced **MSE 194.80 → 190.97** — the first time two
+experiments in this system have differed. Both halves are validated by the same
+run rather than by unit tests, which is what the cycle demanded.
+
+Worth recording *how* it was unblocked: four separate wiring defects stood
+between "routing configured" and "codegen runs", and all four were invisible
+until M14 phase 2a made a missing LLM a refusal rather than a silent degrade.
+The full account is in [evidence-log-2026-08-07.md](evidence-log-2026-08-07.md).
+
+What is still unproven: the **recipe** path. Every template gate is built and
+tested, and no campaign has applied one — the improvement came through LLM
+codegen. M7's gate contract holds in tests only.
 
 ### Corrections to an earlier statement of this order
 
@@ -78,14 +84,14 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 
 | # | Plan | Unlocks | Status |
 |---|------|---------|--------|
-| **M10** | [LLM tiering & routing](04-llm-tiering.md) | **A trustworthy reasoning substrate. Everything downstream inherits its quality.** | **v0.1 shipped** — role routing on the live path via [fitroute](../../smart-router/DESIGN.md); exit criterion 3 still open |
-| **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | [Designed](design/01-technique-to-model.md) — **unblocked**; the thin slice is next |
+| **M10** | [LLM tiering & routing](04-llm-tiering.md) | **A trustworthy reasoning substrate. Everything downstream inherits its quality.** | **v0.1 shipped + exit criterion 3 met 2026-08-07** — a real codegen call produced a working `train.py` that ran and wrote metrics ([evidence](evidence-log-2026-08-07.md)) |
+| **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | **Exit criterion 4 met 2026-08-07: MSE 194.80 → 190.97**, the first distinct scores. Delivered via the *LLM* path; the recipe path is built and tested but unexercised ([evidence](evidence-log-2026-08-07.md)) |
 | **M8** | [Objective feedback loop](02-objective-loop.md) | The system noticing it is making no progress | Not started |
 | **M9** | [Verification-first execution](03-verification-first.md) | Trusting any result | Partly done |
 | **M11** | [Parallel branches](05-parallel-branches.md) | Iteration speed | Not started |
 | **M12** | [Beyond Kaggle](06-beyond-kaggle.md) | The actual product thesis | Not started |
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
-| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **Phases 1 + 2a shipped**; 2b's blocker cleared 2026-08-06 (capable model configured) — both 2b and 3 now await **one campaign**, which no longer has any prerequisite |
+| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **Phases 1 + 2a shipped, and earning their keep**: 2a's refusal surfaced four silent degradations on 2026-08-07 that were previously invisible. 2b/3 await a campaign that completes more than 10 of 60 steps |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
 | **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
@@ -154,9 +160,16 @@ Each plan carries:
 - **Exit criteria** — a check that cannot be satisfied by accident
 - **Traps** — approaches already tried and rejected, so they are not retried
 
-[evidence-log.md](evidence-log.md) records every defect found in the session,
-how it was found, and what it cost. When a plan's rationale seems excessive,
-the evidence log is why.
+Two evidence logs record every defect found, how it was found, and what it
+cost. When a plan's rationale seems excessive, they are why.
+
+- [evidence-log.md](evidence-log.md) — 2026-08-02, the day that produced this
+  roadmap.
+- [evidence-log-2026-08-07.md](evidence-log-2026-08-07.md) — taking M10 routing
+  live and driving the loop to its **first distinct experiment scores**
+  (194.80 → 190.97). Also records five wiring defects of one shape, three
+  guards that looked protective and were not, and three corrections to
+  diagnoses stated too confidently.
 
 ---
 
