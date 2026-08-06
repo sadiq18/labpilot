@@ -206,7 +206,7 @@
       "base_url": "https://openrouter.ai/api/v1",
       "api_key_env": "OPENROUTER_API_KEY",
       "tier": "free",
-      "strong": true,
+      "strong": false,
       "caps": [
         "structured_output"
       ],
@@ -216,7 +216,7 @@
         "codegen": "google/gemma-4-31b-it:free",
         "reasoning": "google/gemma-4-31b-it:free"
       },
-      "note": "Verified live 2026-08-07 with a real key: json_mode returned VALID JSON, and a **15,102-token prompt was accepted in 1.5s** \u2014 larger than the 14,437-token codegen call that exceeded Groq's 12k TPM and ended a campaign. Account confirmed `is_free_tier: false` (>=$10 credits purchased), so the free-model cap is **1000 requests/day**, not 50. Rate limits here are request-based only: no TPM, no TPD. Model IDs are pinned to the `:free` suffix deliberately \u2014 a non-free ID would bill against the credit balance instead. 262K context. **Probe returned HTTP 429 'Provider returned error'** on 2026-08-07 \u2014 an upstream provider limit independent of our own quota, which is exactly the case fitroute cannot yet fail over from at runtime. Listed as a backup, not verified working."
+      "note": "Verified live 2026-08-07 with a real key: json_mode returned VALID JSON, and a **15,102-token prompt was accepted in 1.5s** \u2014 larger than the 14,437-token codegen call that exceeded Groq's 12k TPM and ended a campaign. Account confirmed `is_free_tier: false` (>=$10 credits purchased), so the free-model cap is **1000 requests/day**, not 50. Rate limits here are request-based only: no TPM, no TPD. Model IDs are pinned to the `:free` suffix deliberately \u2014 a non-free ID would bill against the credit balance instead. 262K context. **Probe returned HTTP 429 'Provider returned error'** on 2026-08-07 \u2014 an upstream provider limit independent of our own quota, which is exactly the case fitroute cannot yet fail over from at runtime. Listed as a backup, not verified working. Demoted to strong:false 2026-08-07: it returned HTTP 429 from its upstream provider on probe, and `strong: true` was placing an unverified endpoint ahead of ones that answered. Promote again after a clean probe."
     },
     "openrouter-gemma4-26b": {
       "kind": "openai_compat",
@@ -255,7 +255,7 @@
       "kind": "openai_compat",
       "base_url": "https://api.deepseek.com/v1",
       "api_key_env": "DEEPSEEK_API_KEY",
-      "tier": "free",
+      "tier": "paid",
       "strong": true,
       "caps": [
         "structured_output"
@@ -265,11 +265,11 @@
         "codegen": "deepseek-chat",
         "reasoning": "deepseek-chat"
       },
-      "note": "Free tier available as 5M token grant on sign-up (valid 30 days). Not perpetual free after grant expires. Measured 2026-08-07: json_mode capability verified. RPM of 60 is account-level; TPM not explicitly capped. Model names changed July 24 2026 (deepseek-chat replaces legacy V4-Flash naming). After 30-day grant or token exhaustion, requires payment. Free tier trains_on_input status not explicitly published; recommend checking account console for sensitive data."
+      "note": "Free tier available as 5M token grant on sign-up (valid 30 days). Not perpetual free after grant expires. Measured 2026-08-07: json_mode capability verified. RPM of 60 is account-level; TPM not explicitly capped. Model names changed July 24 2026 (deepseek-chat replaces legacy V4-Flash naming). After 30-day grant or token exhaustion, requires payment. Free tier trains_on_input status not explicitly published; recommend checking account console for sensitive data. Re-tiered `paid` 2026-08-07: the grant is 5M tokens / 30 days and then bills. Under `plan: free` this entry is now correctly excluded rather than staying in the chain until a 402 discovers the change."
     },
     "nvidia-nemotron-super": {
       "kind": "openai_compat",
-      "base_url": "https://api.nvidianim.com/v1",
+      "base_url": "https://integrate.api.nvidia.com/v1",
       "api_key_env": "NVIDIA_API_KEY",
       "tier": "free",
       "strong": true,
@@ -281,11 +281,11 @@
         "codegen": "nvidia/nemotron-3-super-120b-a12b",
         "reasoning": "nvidia/nemotron-3-super-120b-a12b"
       },
-      "note": "Accessed through NVIDIA Build platform (free tier, no credit card required). Verified 2026-08-07: 40 RPM account-level limit applies to all models. 100+ frontier models available (DeepSeek, Llama, Qwen, Nemotron, GLM). Rate limits are permissive for single-developer use; 200 RPM available via application. Data usage policy model-dependent (varies by hosted provider). Build platform is for prototyping/development; check T.O.S for production use. RPD and TPM not published; measured endpoints suggest no hard output ceiling."
+      "note": "Accessed through NVIDIA Build platform (free tier, no credit card required). Verified 2026-08-07: 40 RPM account-level limit applies to all models. 100+ frontier models available (DeepSeek, Llama, Qwen, Nemotron, GLM). Rate limits are permissive for single-developer use; 200 RPM available via application. Data usage policy model-dependent (varies by hosted provider). Build platform is for prototyping/development; check T.O.S for production use. RPD and TPM not published; measured endpoints suggest no hard output ceiling. base_url corrected 2026-08-07: was `api.nvidianim.com`, which does not resolve (NXDOMAIN) \u2014 a conflation of 'NVIDIA' and 'NIM'. The hosted NIM/Build OpenAI-compatible endpoint is integrate.api.nvidia.com. Still unprobed: no NVIDIA_API_KEY configured."
     },
     "nvidia-llama-405b": {
       "kind": "openai_compat",
-      "base_url": "https://api.nvidianim.com/v1",
+      "base_url": "https://integrate.api.nvidia.com/v1",
       "api_key_env": "NVIDIA_API_KEY",
       "tier": "free",
       "strong": true,
@@ -296,7 +296,7 @@
       "models": {
         "default": "meta/llama-3.1-405b-instruct"
       },
-      "note": "Accessed through NVIDIA Build platform (free tier, no credit card required). Verified 2026-08-07: same 40 RPM account-level limit as other NVIDIA models. Largest open-source model (405B parameters) available for free prototyping. No explicit TPM or output limit published. Data usage model-dependent (Meta Llama open license)."
+      "note": "Accessed through NVIDIA Build platform (free tier, no credit card required). Verified 2026-08-07: same 40 RPM account-level limit as other NVIDIA models. Largest open-source model (405B parameters) available for free prototyping. No explicit TPM or output limit published. Data usage model-dependent (Meta Llama open license). base_url corrected 2026-08-07: was `api.nvidianim.com`, which does not resolve (NXDOMAIN) \u2014 a conflation of 'NVIDIA' and 'NIM'. The hosted NIM/Build OpenAI-compatible endpoint is integrate.api.nvidia.com. Still unprobed: no NVIDIA_API_KEY configured."
     },
     "openrouter-north-mini-code": {
       "kind": "openai_compat",

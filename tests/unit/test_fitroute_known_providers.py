@@ -158,3 +158,53 @@ def test_every_entry_serves_at_least_one_role():
         if not any(spec.model_for(role) for role in KNOWN_ROLES)
     ]
     assert not dead, f"entries that serve no role at all: {dead}"
+
+
+# --- base_url must point at a host that exists ------------------------------
+
+#: Hosts the catalog is allowed to name. Not a security control — a typo guard.
+#: Measured 2026-08-07: two entries shipped `https://api.nvidianim.com/v1`, a
+#: conflation of "NVIDIA" and "NIM" that does not resolve (NXDOMAIN). Those
+#: entries were dead the moment routing selected them, and nothing before this
+#: test would have said so. The real hosted NIM endpoint is
+#: `integrate.api.nvidia.com`.
+KNOWN_HOSTS = frozenset(
+    {
+        "api.groq.com",
+        "api.openai.com",
+        "api.deepseek.com",
+        "generativelanguage.googleapis.com",
+        "openrouter.ai",
+        "integrate.api.nvidia.com",
+        "127.0.0.1",
+        "localhost",
+    }
+)
+
+
+def test_every_base_url_names_a_known_vendor_host():
+    """A misspelled host fails at call time, deep inside a campaign, looking
+    like a network fault rather than a config error."""
+    from urllib.parse import urlparse
+
+    offenders = {}
+    for name, spec in known_providers().items():
+        if not spec.base_url:
+            continue
+        host = urlparse(spec.base_url).hostname or ""
+        if host not in KNOWN_HOSTS:
+            offenders[name] = host
+    assert not offenders, (
+        f"unrecognised base_url host(s): {offenders}. Add the host to KNOWN_HOSTS "
+        f"if it is genuinely new — the point is that a typo cannot pass silently."
+    )
+
+
+def test_remote_base_urls_are_https():
+    """Keys travel in the Authorization header; only loopback may be plain."""
+    for name, spec in known_providers().items():
+        if not spec.base_url or spec.tier == "local":
+            continue
+        assert spec.base_url.startswith("https://"), (
+            f"{name} sends credentials over {spec.base_url}"
+        )

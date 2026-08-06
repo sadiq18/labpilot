@@ -68,7 +68,7 @@ def test_zero_credit_is_not_an_effect(promoter, evidence):
 
     ok, why = promoter.effect_is_measured("vit")
     assert ok is False
-    assert "no measurable change" in why
+    assert "~0" in why, "with several runs the reason should say the net is zero"
     assert "2 run(s)" in why, "the reason should say how much evidence was weighed"
 
 
@@ -85,10 +85,17 @@ def test_a_real_change_counts_whichever_direction_it_points(promoter, evidence):
 
 
 def test_offsetting_runs_net_to_no_effect(promoter, evidence):
-    """Two runs that cancel out have measured nothing about the technique."""
+    """Two runs that cancel out have measured nothing about the technique.
+
+    The reason must not say "changed nothing" — these runs each measured a real
+    change, and they disagree. Overstating that would be its own false finding.
+    """
     _card(evidence, "EV-5", {"x": 1.5})
     _card(evidence, "EV-6", {"x": -1.5})
-    assert promoter.effect_is_measured("x")[0] is False
+    ok, why = promoter.effect_is_measured("x")
+    assert ok is False
+    assert "~0" in why and "2 run(s)" in why
+    assert "no run measured any change" not in why
 
 
 # --- the gate ---------------------------------------------------------------

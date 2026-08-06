@@ -131,3 +131,27 @@ def test_a_transport_failure_does_not_pollute_the_rejected_list():
         _observe(), ALLOWLIST, _Broken(), auto_offline_fallback=True, max_llm_retries=1
     )
     assert action.tool in ALLOWLIST or action.stop
+
+
+def test_an_invented_tool_is_described_differently_from_a_gated_one():
+    """Telling a model that a hallucinated tool "failed a precondition" invites
+    it to wait for that precondition to clear. It never will."""
+    client = _RecordsPrompts()
+    client.__class__.complete = lambda self, system, user: (  # noqa: ARG005
+        self.prompts.append(user)
+        or __import__("json").dumps(
+            {
+                "tool": "teleport_model" if len(self.prompts) == 1 else "run_plan",
+                "args": {}, "rationale": "r", "stop": False,
+            }
+        )
+    )
+    action = llm_next_action(
+        _observe(), ALLOWLIST, client, all_tools=ALLOWLIST,
+        auto_offline_fallback=True, max_llm_retries=3,
+    )
+    assert action.tool == "run_plan"
+    retry = client.prompts[1]
+    assert "not_real" in retry, "an invented tool must be reported as non-existent"
+    assert "teleport_model" in retry
+    assert "gated" not in retry, "nothing was gated here"

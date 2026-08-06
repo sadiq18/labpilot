@@ -79,9 +79,18 @@ class ClaimPromoter:
         if observations == 0:
             return False, f"no evidence card attributes any result to {technique!r}"
         if abs(net) < _NO_EFFECT_EPSILON:
+            # Two different situations share this branch and the message must
+            # not overstate either: every run measured zero, or runs measured
+            # opposing effects that cancel. Both mean the evidence does not
+            # support an effect claim; only the first means "changed nothing".
+            detail = (
+                "no run measured any change"
+                if observations == 1
+                else f"net attribution across {observations} run(s) is ~0"
+            )
             return False, (
-                f"{observations} run(s) attributed to {technique!r} produced no "
-                "measurable change; an effect claim would be a false finding"
+                f"{detail} for {technique!r}; the evidence does not support an "
+                "effect claim"
             )
         return True, ""
 
