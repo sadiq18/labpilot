@@ -1,6 +1,6 @@
 # Design — a budget-aware, outcome-learning LLM router
 
-**Working name:** `fitroute` (placeholder — see §13.6) ·
+**Working name:** `fitroute` (placeholder — see §13.7) ·
 **Status:** design · **License intent:** Apache-2.0 ·
 **First consumer:** labpilot ([M10](../research-os/autonomy-roadmap/04-llm-tiering.md))
 
@@ -987,7 +987,63 @@ Everything above is v1 or v2. Beyond it, in the order that would matter:
 8. **Local capacity awareness** — queue depth and VRAM on the local box as a
    routing input, so §8.10 does not send twenty concurrent calls to one GPU.
 
-### 13.6 Name
+### 13.6 Gap register — v0.1 does not profile models
+
+Recorded here because the shipped router looks smarter than it is, and the gap
+is easy to forget once `doctor` prints a provider per role.
+
+**What v0.1 actually does:**
+
+```
+role → filter (entitlement ∩ data policy ∩ declared caps ∩ budget)
+     → take the FIRST survivor, in catalog order
+```
+
+Static preference. It answers *"which listed model is capable and affordable
+right now"*, never *"which model works best for this work"*. There is no
+measurement, no score, and no learning. "Best" is not defined anywhere in the
+code — order is whatever the operator typed in YAML.
+
+Two limits worth stating plainly:
+
+- **`caps` are declarations, not measurements.** If the config says a provider
+  supports `structured_output`, the router believes it. An endpoint that
+  advertises OpenAI compatibility and ignores `response_format` passes preflight
+  and then fails in exactly the way preflight exists to prevent. `router probe`
+  (§8.11) is what makes preflight real.
+- **A degraded-but-working model and a capable-but-failing one are
+  indistinguishable** to v0.1, because nothing looks at outcomes.
+
+**Substrate that already exists and nothing consumes:**
+
+| Recorded today | By |
+|---|---|
+| which provider/model served a call | `ServedBy` on `RoleBoundClient.last_served` |
+| whether the LLM or a rule engine produced a result | `BaseMicroAgent.last_generated_by` (M14) |
+
+Those are the "who did what" half of outcome learning. They are written on every
+call and read by nothing.
+
+**What closing the gap needs, in order:**
+
+| Step | Hooks into |
+|---|---|
+| 1. Verdict API — caller reports `OK` / `SCHEMA_INVALID` / `REFUSED` / `DOWNSTREAM_FAILED` | §8.3; `RoleBoundClient.complete` returns a handle |
+| 2. Verdict store — `(role, model, verdict, ts)` beside the budget ledger | `fitroute/budget.py` schema |
+| 3. Beta posterior per (role, model), seeded from capability tier | §8.2 |
+| 4. Swap ranking from catalog order to posterior × cost × latency, Thompson-sampled | `eligible_providers` ordering + `select_route` |
+
+Step 4 is a small diff. Steps 1–2 are the work, and they are blocked on
+something no amount of code fixes: **real verdicts**, which require a strong
+provider configured and labpilot's codegen actually running. Building the
+posterior first produces a learner with nothing to learn from — which is the
+`select_route` failure again, one level up.
+
+Before writing step 3, read [BaRP](https://arxiv.org/pdf/2510.07429) (§2.1a). It
+is bandit-feedback routing under deployment's partial-feedback restriction and
+may already do this better.
+
+### 13.7 Name
 
 `fitroute` is a placeholder chosen to keep this document readable. Others worth
 considering: `aptly`, `modelfit`, `tokenwise`, `rightsize`. The name should say
