@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "updated": "2026-08-06",
+  "note": "Known routable endpoints and their limits. Vendor facts, not user facts: which of these a deployment enables is its own choice (routing.use), and keys never live here. Every entry below was probed through fitroute's own adapter with json_mode on; `note` records what was measured and when. Limits marked 'published' come from the vendor's docs and are not independently verified. JSON rather than YAML because fitroute depends on stdlib + pydantic only, and because this file is intended to be machine-generated once discovery lands (DESIGN.md 8.15).",
+  "providers": {
+    "groq-llama70b": {
+      "kind": "openai_compat",
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": ["structured_output"],
+      "rpm": 30,
+      "rpd": 1000,
+      "tpm": 12000,
+      "models": {
+        "codegen": "llama-3.3-70b-versatile",
+        "reasoning": "llama-3.3-70b-versatile"
+      },
+      "note": "Measured 2026-08-06: json_mode VALID, 87 tokens. Most TPM headroom of the strong free models, which is what codegen needs - the rendered codegen prompt is ~6.4k tokens, so an 8k-TPM model has almost no room left for the generated file. Limits published."
+    },
+    "groq-gptoss120b": {
+      "kind": "openai_compat",
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": ["structured_output"],
+      "rpm": 30,
+      "rpd": 1000,
+      "tpm": 8000,
+      "models": {
+        "codegen": "openai/gpt-oss-120b",
+        "reasoning": "openai/gpt-oss-120b"
+      },
+      "note": "Measured 2026-08-06: json_mode VALID, 223 tokens. Largest open model on Groq's free tier, but 8k TPM is tight against a 6.4k-token codegen prompt - listed after groq-llama70b for that reason, not for quality. Limits published."
+    },
+    "groq-llama8b": {
+      "kind": "openai_compat",
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "tier": "free",
+      "strong": false,
+      "caps": ["structured_output"],
+      "rpm": 30,
+      "rpd": 14400,
+      "tpm": 6000,
+      "models": {"default": "llama-3.1-8b-instant"},
+      "note": "Measured 2026-08-06: json_mode VALID, 87 tokens. 14.4k requests/day - by far the largest free daily budget measured, which makes it the right home for high-volume summarisation. Limits published."
+    },
+    "groq-qwen27b": {
+      "kind": "openai_compat",
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": ["structured_output"],
+      "rpm": 30,
+      "rpd": 1000,
+      "tpm": 8000,
+      "models": {"default": "qwen/qwen3.6-27b"},
+      "note": "Measured 2026-08-06: json_mode VALID but 691 tokens for a trivial prompt - it emits reasoning traces, so it burns TPM far faster than its size suggests. Usable, but not a default. Limits published."
+    },
+    "groq-compound-mini": {
+      "kind": "openai_compat",
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "tier": "free",
+      "strong": false,
+      "caps": ["structured_output"],
+      "rpm": 30,
+      "rpd": 250,
+      "tpm": 70000,
+      "models": {"default": "groq/compound-mini"},
+      "note": "Measured 2026-08-06: json_mode VALID, 589 tokens. 70k TPM is an order of magnitude above the rest, but it is an agentic system with built-in tool use rather than a plain model, so output is less predictable for structured codegen. Limits published."
+    },
+    "gemini-flash": {
+      "kind": "openai_compat",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "api_key_env": "GEMINI_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "trains_on_input": true,
+      "caps": ["structured_output"],
+      "rpm": 10,
+      "rpd": 200,
+      "models": {"default": "gemini-3.6-flash"},
+      "note": "Measured 2026-08-06: json_mode VALID, 34 tokens. RPM measured (429 after ~6 rapid calls); RPD is a conservative guess - measuring it would cost a day's quota. Gemini emits no X-RateLimit headers, so limits cannot be learned from responses. Pro models are hard-blocked on the free tier at 'limit: 0' regardless of rate, so only the flash family is reachable without billing. trains_on_input: the free tier is the data-sharing tier."
+    },
+    "gemini-flash-lite": {
+      "kind": "openai_compat",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "api_key_env": "GEMINI_API_KEY",
+      "tier": "free",
+      "strong": false,
+      "trains_on_input": true,
+      "caps": ["structured_output"],
+      "rpm": 10,
+      "rpd": 200,
+      "models": {"default": "gemini-3.5-flash-lite"},
+      "note": "Measured 2026-08-06: json_mode VALID, 40 tokens, 8/8 calls with no 429 - the most permissive Gemini model probed. gemini-3.5-flash was notably degraded the same day (one 503, 59s for 8 calls), so it is deliberately not listed."
+    },
+    "openai-mini": {
+      "kind": "openai_compat",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "trains_on_input": true,
+      "caps": ["structured_output"],
+      "rpm": 3,
+      "rpd": 50,
+      "models": {"default": "gpt-4.1-mini"},
+      "note": "NOT verified working. Probed 2026-08-06: the key authenticates and /v1/models returns 200, but every completion returns HTTP 429 'You have no credits remaining' - a zero balance, not a rate limit. structured_output is declared from vendor docs, not observed. Free tier limits (3 rpm / 50 rpd) require sharing prompts with OpenAI, hence trains_on_input."
+    },
+    "ollama-local": {
+      "kind": "ollama",
+      "base_url": "http://127.0.0.1:11434",
+      "tier": "local",
+      "strong": false,
+      "caps": ["structured_output"],
+      "models": {"default": "gemma4:12b"},
+      "note": "Measured 2026-08-06: json_mode VALID, 54 tokens. Free, unmetered and private, so no rpm/rpd. Note fitroute has no reachability probe yet - a local entry is always considered credentialed, so a stopped Ollama fails at call time rather than being skipped (DESIGN.md 8.11)."
+    },
+    "ollama-coder": {
+      "kind": "ollama",
+      "base_url": "http://127.0.0.1:11434",
+      "tier": "local",
+      "strong": false,
+      "caps": ["structured_output"],
+      "models": {"default": "qwen2.5-coder:14b"},
+      "note": "Measured 2026-08-06: json_mode VALID, 50 tokens. Worth recording that this is the model that produced prose for JSON-only prompts in 3 of 3 rogii campaigns; under constrained decoding it now returns valid JSON. That fixes the format, not the reasoning - it stays strong: false."
+    }
+  }
+}

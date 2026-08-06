@@ -109,6 +109,37 @@ Phase 2 splits in two, with different blockers (the design conflated them):
 Phase 3 is blocked by phase-1 telemetry — fire-rate data from real campaigns —
 not by M10.
 
+### Status 2026-08-06 — 2b's blocker is cleared; its evidence is not
+
+The condition above ("a 14B model failed 3 of 3 campaigns") no longer describes
+the system. `codegen` and `reasoning` now resolve to
+`llama-3.3-70b-versatile` on Groq's free tier, verified live returning valid
+JSON under constrained decoding, and `requires: [structured_output]` makes a
+model that cannot produce JSON ineligible rather than merely disfavoured. Groq's
+1k requests/day also removes the risk that exhaustion stalls a run.
+
+Blast radius is smaller than the design feared, in one specific way worth
+recording: `_is_transient_llm_error` matches `429`, `503`, `UNAVAILABLE`,
+`RESOURCE_EXHAUSTED`, `RATE LIMIT`, `HIGH DEMAND`, `TEMPORARY` and `TIMEOUT`, so
+rate limits and provider overload are **retried three times, not fatal**, under
+2b. Only `Response did not contain a JSON object`
+(`llm/json_utils.py:90`) escapes that classification — so a genuine prose reply
+is still an immediate abort with no retry.
+
+**What 2b now waits on is a number, not a capability.** The rate at which that
+one error occurs under the new routing is unmeasured, because no campaign has
+run since phase 1 shipped — every stamped record in the rogii workspace predates
+it. That rate is exactly 2b's risk input, and the same campaign produces phase
+3's fire-rate triage data. One run unblocks both; nothing else blocks that run.
+
+**One thing 2b will still not do.** It closes *failed call ⇒ template*, not
+*empty result ⇒ template*. A successful, schema-valid reply carrying
+`{"files": []}` is not an LLM failure by 2a/2b's definition and still reaches
+`_render_template_fallback` (`code_engineering/capability.py:242`). Treating
+"produced no usable output" as a failure regardless of how the call exited is a
+separate gate, and it is the one that matches what "disable the fallback"
+usually means when someone asks for it.
+
 ## Exit criteria
 
 1. With Ollama stopped, `research analyze` and `research conduct` **fail** with

@@ -55,8 +55,8 @@ def test_fitroute_uses_only_the_standard_library_and_pydantic():
     """Keeping the dependency surface tiny is what makes it adoptable."""
     allowed = {"fitroute", "pydantic", "__future__"}
     stdlib = {
-        "ast", "collections", "dataclasses", "hashlib", "json", "logging", "os",
-        "pathlib", "sqlite3", "time", "typing", "urllib",
+        "ast", "collections", "dataclasses", "functools", "hashlib", "json",
+        "logging", "os", "pathlib", "sqlite3", "time", "typing", "urllib",
     }
     for module in _MODULES:
         extra = _imported_roots(_ROOT / f"{module}.py") - allowed - stdlib

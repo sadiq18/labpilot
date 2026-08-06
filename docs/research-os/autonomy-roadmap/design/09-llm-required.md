@@ -438,8 +438,8 @@ needs phase 1's telemetry.
 |---|---|---|---|
 | 1 | **done** | — | — |
 | 2a | **done** | — | — |
-| **2b** | deferred by decision | after [M10](../04-llm-tiering.md) is live | M10, measured by §11.3 run C |
-| **3** | deferred by decision | after M10 + several stamped campaigns | phase-1 telemetry |
+| **2b** | trigger met 2026-08-06 | ~~after [M10](../04-llm-tiering.md) is live~~ — it is, with a capable model | **one campaign**: the rate of `did not contain a JSON object` under the new routing is unmeasured |
+| **3** | trigger met 2026-08-06 | ~~after M10 + several stamped campaigns~~ | **the same campaign** — no stamped campaign exists yet; every record predates phase 1 |
 
 **Decision (2026-08-03).** 2b waits for M10 entirely rather than shipping
 opt-in behind a flag. An opt-in build was offered and declined, on the grounds

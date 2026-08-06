@@ -433,6 +433,51 @@ staleness beyond a threshold warns rather than fails; a model past
 *Rejected:* scraping provider docs for quota numbers. Fragile, adversarial to
 the providers, and unnecessary once limits are learned (§8.4).
 
+#### 8.7a The catalog ships with the router; the *choice* does not
+
+**Shipped in v0.1** as `fitroute/known_providers.json`, ahead of sync, because
+the boundary matters more than the automation.
+
+The catalog was first written into labpilot's `configs/default.yaml`. That was
+wrong, and the reason is worth keeping: it put vendor facts — endpoints, model
+names, measured limits — inside the framework that *consumes* routing, coupling
+labpilot to Groq/Gemini/OpenAI and pushing those choices onto every workspace.
+It also contradicts §7's own table, where the catalog is data that changes
+weekly and the role requirement is code that changes rarely.
+
+Three owners, and nothing crosses:
+
+| Artifact | Owner | Example |
+|---|---|---|
+| Vendor facts | **the router** (`known_providers.json`) | `groq-llama70b` is at `api.groq.com`, 12k TPM, needs `GROQ_API_KEY` |
+| The choice | **the deployment** (`routing.use`) | "these five, in this order" |
+| The keys | **the workspace** (`.env`) | never in either file above |
+| Role requirements | **the calling code** | `codegen` needs `structured_output` and a strong model |
+
+Two rules make this hold:
+
+- **Nothing is enabled by installing the router.** `use` is empty by default, so
+  merely depending on fitroute never changes which model answers. (In labpilot
+  this was caught by a test: auto-enabling adds a `research doctor` row per
+  role, and three diagnostics tests asserting an exact check set failed.)
+- **An unknown name in `use` raises.** A silently dropped provider is one the
+  operator believes is configured; the symptom otherwise appears much later, and
+  much vaguer, as "no eligible provider".
+
+An inline `providers` entry whose name matches a `use` entry replaces it *in
+place*, so adjusting one field of a known provider does not cost it its position
+in the preference order. Inline entries with new names append — that is the
+bring-your-own-inference path (§8.11).
+
+**Evidence for §8.7 arriving from the field, immediately.** Probing on
+2026-08-06 found **GitHub Models retired** — `HTTP 410
+github_models_retirement_brownout` — a provider this very design named as a free
+option a day earlier. Catalog rot is not a hypothetical justifying sync; it
+happened between writing the design and building it. The `note` field on each
+entry exists for the same reason: a limit with no recorded source and date is
+indistinguishable from a guess, and this file will be machine-generated once
+§8.15 lands.
+
 ### 8.8 Local models are first-class citizens
 
 Ollama, vLLM and llama.cpp sit in the same candidate pool as hosted providers,

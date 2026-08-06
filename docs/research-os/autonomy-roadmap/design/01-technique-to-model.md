@@ -1,7 +1,13 @@
 # Design — M7: Technique → Model
 
 **Plan:** [../01-technique-to-model.md](../01-technique-to-model.md) ·
-**Status:** design · **Owner:** unassigned
+**Status:** design · **Owner:** unassigned · **Build phase:** 1–2
+
+> **Unblocked (2026-08-06).** M10 v0.1 shipped, so `codegen` is a routed role
+> rather than whatever provider answered first. M7's thin slice — one technique,
+> one dataset, a `train.py` that runs — is now the critical path, and it is also
+> [M10's](../04-llm-tiering.md) own exit criterion. Where this document says
+> "needs M10", read it as "needs a capable provider configured".
 
 ---
 
@@ -39,6 +45,29 @@ Consequence beyond the wasted cycle: reflection records "technique X did not
 help" for a run in which technique X was never applied. That is a **false
 negative written into durable research memory**, and it is indistinguishable
 from a real one.
+
+### Two different fallbacks share a name
+
+Re-verified 2026-08-06, because "the template fallback is disabled now" is an
+easy and reasonable misreading. Two layers, and only the lower one was disabled:
+
+| Layer | What it does | State |
+|---|---|---|
+| `CodeEngineerAgent._run_rule_engine` (`code_engineer/agent.py:75`) | *Was* an offline Jinja scaffold pack; now returns `files=[]` — "Jinja scaffolds disabled" | **disabled** |
+| `CodeEngineeringCapability._render_template_fallback` (`capability.py:242`) | Renders the registered baseline template when the proposal has no files | **live** |
+
+Disabling the first did not remove the template path — it **relocated the
+trigger**. `files=[]` is exactly the condition that fires the second, so the
+capability's template render now runs *more* reliably than before, not less. All
+three breaks above were re-checked against the current tree and still reproduce
+(`grep -c feature_recipes` on the partitioned template returns **0**).
+
+[M14](../09-llm-required.md) phase 2a does not close this either. It made a
+**missing client** raise; a **failed call** still soft-fails to the rule engine
+(`micro_agents.py:212`) — that is phase 2b, deferred. A model that answers a
+JSON-only prompt in prose is a failed call, not a missing client. So the rogii
+sequence is unchanged: prose → `files=[]` → baseline template → the same model
+for every hypothesis.
 
 ### What already exists (and changes the design)
 
@@ -192,6 +221,13 @@ and once [M10](../04-llm-tiering.md) routes `codegen` to a frontier model, the
 LLM path becomes the stronger of the two for anything a registry entry does not
 cover.
 
+**M10 v0.1 has since shipped that route.** `CodeEngineerAgent` declares
+`llm_role = "codegen"` (`code_engineer/agent.py:27`) and the gateway resolves a
+provider per call. What routing cannot supply is a capable model: with
+`llm.routing.providers` empty — the default — codegen still lands wherever the
+legacy path lands it. The mechanism exists; pointing it at a strong provider is
+a config line and a key.
+
 It is also worth being clear that **the LLM path is not broken**. It already
 receives `technique`, `technique_stack` and `combo_techniques` in full
 (`capability.py:214-220` → `code_engineer_user.j2:7-9`). The defect this design
@@ -203,7 +239,7 @@ fixes is entirely in the *fallback*.
 | Determinism | byte-identical (N3) | not reproducible |
 | Cost | none | tokens, latency |
 | Testability | golden snapshot + digest | behavioural only |
-| Available today | yes | needs M10 |
+| Available today | yes | routed (M10 v0.1); needs a capable provider configured |
 
 **Routing rule:** use a recipe when one exists for the technique; use LLM codegen
 when none does. Recipes are cheap, tested and reproducible; the LLM covers the
@@ -214,12 +250,17 @@ question the eval answers** (§11.3), not one to settle here. If it consistently
 wins, the routing rule should change — and the provenance in §9.6 is what makes
 that measurable.
 
-**Sequencing: [M10](../04-llm-tiering.md) lands first.** An earlier draft argued
-recipes should go first because they are unblocked. That was reasoning from the
-development environment, not the product. Model capability is a **product tier,
-not an architectural constraint** — a paying customer supplies a frontier model,
-and building around a 14B local model would permanently cap the system at what a
-registry can enumerate.
+**Sequencing: [M10](../04-llm-tiering.md) lands first — and has.** An earlier
+draft argued recipes should go first because they are unblocked. That was
+reasoning from the development environment, not the product. Model capability is
+a **product tier, not an architectural constraint** — a paying customer supplies
+a frontier model, and building around a 14B local model would permanently cap
+the system at what a registry can enumerate.
+
+M10 v0.1 shipped on 2026-08-06, so **M7 is unblocked and is now the critical
+path** — in both directions. M10's own exit criterion is a real codegen call
+that produces a working `train.py`, which is precisely M7's thin slice. Neither
+milestone can close without it.
 
 It also makes M7's evaluation incomplete: §11's *path efficacy* metric compares
 registry against LLM implementations, and cannot be measured at all without a
@@ -248,6 +289,13 @@ technique badly is worse than not running it, because the failure is recorded as
 evidence against the technique. That risk is real but is handled by
 [M10](../04-llm-tiering.md)'s wait-rather-than-degrade rule for the `codegen`
 role plus the provenance in §9.6 — not by declining to use an LLM.
+
+Both halves now exist. The `codegen` role is configured `on_exhaustion: wait`,
+and capability requirements (`requires: [structured_output]`) are a hard
+precondition that degrading never relaxes — a weak model is not merely
+disfavoured, it is not a candidate. The gap that remains is that "capable" is
+still declared in config rather than measured from outcomes; see
+[the router's gap register](../../../smart-router/DESIGN.md) §13.6.
 
 ### 8.3 Reject at plan time, not train time
 
@@ -376,6 +424,21 @@ delta-feature guard that already skips excluded columns.
   `technique_origin` (`llm` | `registry` | `none`)
 - The experiment record carries the technique, so reflection can attribute a
   result to it
+
+**Layering with M10's stamp.** Two different questions need two different
+fields, and collapsing them loses the one that matters:
+
+| Field | Owner | Answers |
+|---|---|---|
+| `last_generated_by` | M14 | *What kind of thing* produced this — llm, rule engine, template |
+| `technique_origin` | M7 (this design) | *Which path* implemented the technique — registry or llm |
+| `ServedBy` (`fitroute.gateway`) | M10 | *Which model* did it — provider, model, tier, cache hit |
+
+M10 v0.1 produces the third: `BaseMicroAgent.last_served` is populated after
+every LLM call (`micro_agents.py:210`). It is **not yet threaded into the
+experiment record** — that wiring is M10's open exit criterion 4, and §11.1's
+path-efficacy split needs it. Without it, "`target_encoding` did not help" still
+cannot distinguish a weak writer from a weak idea.
 
 ## 10. Testing strategy
 
@@ -551,6 +614,12 @@ Misattribution is the one that gates a release, because it is the bug.
 **Prerequisite: [M10](../04-llm-tiering.md) is live.** Criterion 5 below cannot
 be measured without a competent model on the `codegen` role, and criteria 1–4
 would otherwise describe a system whose LLM path was never exercised.
+
+*Status:* M10 v0.1 routes `codegen` and `research doctor` reports what each role
+resolves to. Two things are still needed before criterion 5 is measurable: a
+provider capable of the work in `llm.routing.providers`, and the served model
+carried onto the experiment record (§9.6). Criteria 1–4 are measurable on the
+recipe path today and should not wait.
 
 Sufficient to call M7 done:
 
