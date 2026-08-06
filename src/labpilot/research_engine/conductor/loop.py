@@ -157,7 +157,7 @@ def run_until_stop(
     using the deterministic offline order — unless ``prefer_offline`` or
     ``auto_approve`` (``--yes``) is set.
     """
-    scheduler = Scheduler(store, registry, workspace)
+    scheduler = Scheduler(store, registry, workspace, llm_client=llm_client)
     decisions: list[DecisionRecord] = []
     session = store.get_session(session_id)
     if session is None:

@@ -1061,8 +1061,15 @@ def update_hypothesis_from_local(
     competition: str,
     summary: ExecutionOutcomeSummary,
     reflection: dict[str, Any] | None = None,
+    llm_client: Any | None = None,
 ) -> str | None:
-    """Update linked + proposed hyps from local outcome; mint only if worth trying."""
+    """Update linked + proposed hyps from local outcome; mint only if worth trying.
+
+    ``llm_client`` is threaded through to combo minting. Without it,
+    ``ComboPortfolioAgent`` is built with no client and — since M14 phase 2a —
+    raises rather than silently degrading, which aborts the whole
+    learn-from-outcome step after a *successful* experiment.
+    """
     store = HypothesisStore(knowledge_dir, competition)
     actual = (summary.hypothesis_outcome or {}).get("actual_outcome")
     hyp_eval = (reflection or {}).get("hypothesis") or {}
@@ -1132,6 +1139,7 @@ def update_hypothesis_from_local(
         knowledge_dir=knowledge_dir,
         competition=competition,
         summary=summary,
+        llm_client=llm_client,
     )
     stacked_ids = maybe_mint_stacked_from_success(
         knowledge_dir=knowledge_dir,
@@ -1216,6 +1224,7 @@ def record_successful_execution(
         competition=competition,
         summary=summary,
         reflection=reflection,
+        llm_client=llm_client,
     )
     summary.follow_up_hypothesis_id = follow_id
     summary.updated_at = datetime.now(UTC).isoformat()

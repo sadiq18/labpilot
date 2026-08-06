@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated": "2026-08-06",
-  "note": "Known routable endpoints and their limits. Vendor facts, not user facts: which of these a deployment enables is its own choice (routing.use), and keys never live here. Every entry below was probed through fitroute's own adapter with json_mode on; `note` records what was measured and when. Limits marked 'published' come from the vendor's docs and are not independently verified. JSON rather than YAML because fitroute depends on stdlib + pydantic only, and because this file is intended to be machine-generated once discovery lands (DESIGN.md 8.15).",
+  "updated": "2026-08-07",
+  "note": "Known routable endpoints and their limits. Vendor facts, not user facts: which of these a deployment enables is its own choice (routing.use), and keys never live here. Every entry below was probed through fitroute's own adapter with json_mode on; `note` records what was measured and when. Limits marked 'published' come from the vendor's docs and are not independently verified. JSON rather than YAML because fitroute depends on stdlib + pydantic only, and because this file is intended to be machine-generated once discovery lands (DESIGN.md 8.15). **Updated 2026-08-07:** Added DeepSeek, Nvidia Build, and additional OpenRouter models (Qwen Coder 480B, DeepSeek R1). Claude (Anthropic) has no free API tier (requires $0.01+ per token). OpenAI free tier is effectively unavailable (requires $5+ credit for Tier 1; GPT-3.5 free-tier 3 RPM is no longer offered). OpenRouter free models rotate without notice; entries reflect verified live status as of 2026-08-07. Model IDs are validated against https://openrouter.ai/api/v1/models \u2014 two entries (qwen/qwen3-coder-480b:free, deepseek/deepseek-r1:free) were removed on 2026-08-07 after returning HTTP 400/404; both came from documentation rather than the live roster.",
   "providers": {
     "groq-llama70b": {
       "kind": "openai_compat",
@@ -9,7 +9,9 @@
       "api_key_env": "GROQ_API_KEY",
       "tier": "free",
       "strong": true,
-      "caps": ["structured_output"],
+      "caps": [
+        "structured_output"
+      ],
       "rpm": 30,
       "rpd": 1000,
       "tpm": 12000,
@@ -17,7 +19,7 @@
         "codegen": "llama-3.3-70b-versatile",
         "reasoning": "llama-3.3-70b-versatile"
       },
-      "note": "Measured 2026-08-06: json_mode VALID, 87 tokens. Most TPM headroom of the strong free models, which is what codegen needs - the rendered codegen prompt is ~6.4k tokens, so an 8k-TPM model has almost no room left for the generated file. Limits published."
+      "note": "Measured 2026-08-06: json_mode VALID, 87 tokens. Most TPM headroom of the strong free models, which is what codegen needs - the rendered codegen prompt is ~6.4k tokens, so an 8k-TPM model has almost no room left for the generated file. Limits published. Observed 2026-08-07: a single codegen call consumed 14,437 tokens \u2014 above this 12k TPM ceiling \u2014 because prior_train_py and the profile grow with the run. TPM headroom is the binding constraint for codegen and 12k is not comfortably enough; treat this entry's lead position as provisional."
     },
     "groq-gptoss120b": {
       "kind": "openai_compat",
@@ -25,7 +27,9 @@
       "api_key_env": "GROQ_API_KEY",
       "tier": "free",
       "strong": true,
-      "caps": ["structured_output"],
+      "caps": [
+        "structured_output"
+      ],
       "rpm": 30,
       "rpd": 1000,
       "tpm": 8000,
@@ -41,11 +45,15 @@
       "api_key_env": "GROQ_API_KEY",
       "tier": "free",
       "strong": false,
-      "caps": ["structured_output"],
+      "caps": [
+        "structured_output"
+      ],
       "rpm": 30,
       "rpd": 14400,
       "tpm": 6000,
-      "models": {"default": "llama-3.1-8b-instant"},
+      "models": {
+        "default": "llama-3.1-8b-instant"
+      },
       "note": "Measured 2026-08-06: json_mode VALID, 87 tokens. 14.4k requests/day - by far the largest free daily budget measured, which makes it the right home for high-volume summarisation. Limits published."
     },
     "groq-qwen27b": {
@@ -54,11 +62,15 @@
       "api_key_env": "GROQ_API_KEY",
       "tier": "free",
       "strong": true,
-      "caps": ["structured_output"],
+      "caps": [
+        "structured_output"
+      ],
       "rpm": 30,
       "rpd": 1000,
       "tpm": 8000,
-      "models": {"default": "qwen/qwen3.6-27b"},
+      "models": {
+        "default": "qwen/qwen3.6-27b"
+      },
       "note": "Measured 2026-08-06: json_mode VALID but 691 tokens for a trivial prompt - it emits reasoning traces, so it burns TPM far faster than its size suggests. Usable, but not a default. Limits published."
     },
     "groq-compound-mini": {
@@ -67,11 +79,15 @@
       "api_key_env": "GROQ_API_KEY",
       "tier": "free",
       "strong": false,
-      "caps": ["structured_output"],
+      "caps": [
+        "structured_output"
+      ],
       "rpm": 30,
       "rpd": 250,
       "tpm": 70000,
-      "models": {"default": "groq/compound-mini"},
+      "models": {
+        "default": "groq/compound-mini"
+      },
       "note": "Measured 2026-08-06: json_mode VALID, 589 tokens. 70k TPM is an order of magnitude above the rest, but it is an agentic system with built-in tool use rather than a plain model, so output is less predictable for structured codegen. Limits published."
     },
     "gemini-flash": {
@@ -81,11 +97,15 @@
       "tier": "free",
       "strong": true,
       "trains_on_input": true,
-      "caps": ["structured_output"],
+      "caps": [
+        "structured_output"
+      ],
       "rpm": 10,
-      "rpd": 200,
-      "models": {"default": "gemini-3.6-flash"},
-      "note": "Measured 2026-08-06: json_mode VALID, 34 tokens. RPM measured (429 after ~6 rapid calls); RPD is a conservative guess - measuring it would cost a day's quota. Gemini emits no X-RateLimit headers, so limits cannot be learned from responses. Pro models are hard-blocked on the free tier at 'limit: 0' regardless of rate, so only the flash family is reachable without billing. trains_on_input: the free tier is the data-sharing tier."
+      "rpd": 20,
+      "models": {
+        "default": "gemini-3.6-flash"
+      },
+      "note": "Measured 2026-08-06: json_mode VALID, 34 tokens. RPM measured (429 after ~6 rapid calls). RPD **measured 2026-08-07 at 20/day**, not the 200 previously guessed here \u2014 a live campaign hit `generate_content_free_tier_requests, limit: 20` after three calls in two runs. The earlier value was marked unmeasured and was wrong by 10x, which is the argument for learning limits rather than declaring them. Gemini emits no X-RateLimit headers, so only a 429 reveals this. Pro models are hard-blocked at 'limit: 0' without billing. trains_on_input: the free tier is the data-sharing tier."
     },
     "gemini-flash-lite": {
       "kind": "openai_compat",
@@ -94,10 +114,14 @@
       "tier": "free",
       "strong": false,
       "trains_on_input": true,
-      "caps": ["structured_output"],
+      "caps": [
+        "structured_output"
+      ],
       "rpm": 10,
       "rpd": 200,
-      "models": {"default": "gemini-3.5-flash-lite"},
+      "models": {
+        "default": "gemini-3.5-flash-lite"
+      },
       "note": "Measured 2026-08-06: json_mode VALID, 40 tokens, 8/8 calls with no 429 - the most permissive Gemini model probed. gemini-3.5-flash was notably degraded the same day (one 503, 59s for 8 calls), so it is deliberately not listed."
     },
     "openai-mini": {
@@ -107,10 +131,14 @@
       "tier": "free",
       "strong": true,
       "trains_on_input": true,
-      "caps": ["structured_output"],
+      "caps": [
+        "structured_output"
+      ],
       "rpm": 3,
       "rpd": 50,
-      "models": {"default": "gpt-4.1-mini"},
+      "models": {
+        "default": "gpt-4.1-mini"
+      },
       "note": "NOT verified working. Probed 2026-08-06: the key authenticates and /v1/models returns 200, but every completion returns HTTP 429 'You have no credits remaining' - a zero balance, not a rate limit. structured_output is declared from vendor docs, not observed. Free tier limits (3 rpm / 50 rpd) require sharing prompts with OpenAI, hence trains_on_input."
     },
     "ollama-local": {
@@ -118,8 +146,12 @@
       "base_url": "http://127.0.0.1:11434",
       "tier": "local",
       "strong": false,
-      "caps": ["structured_output"],
-      "models": {"default": "gemma4:12b"},
+      "caps": [
+        "structured_output"
+      ],
+      "models": {
+        "default": "gemma4:12b"
+      },
       "note": "Measured 2026-08-06: json_mode VALID, 54 tokens. Free, unmetered and private, so no rpm/rpd. Note fitroute has no reachability probe yet - a local entry is always considered credentialed, so a stopped Ollama fails at call time rather than being skipped (DESIGN.md 8.11)."
     },
     "ollama-coder": {
@@ -127,9 +159,208 @@
       "base_url": "http://127.0.0.1:11434",
       "tier": "local",
       "strong": false,
-      "caps": ["structured_output"],
-      "models": {"default": "qwen2.5-coder:14b"},
+      "caps": [
+        "structured_output"
+      ],
+      "models": {
+        "default": "qwen2.5-coder:14b"
+      },
       "note": "Measured 2026-08-06: json_mode VALID, 50 tokens. Worth recording that this is the model that produced prose for JSON-only prompts in 3 of 3 rogii campaigns; under constrained decoding it now returns valid JSON. That fixes the format, not the reasoning - it stays strong: false."
+    },
+    "openrouter-nemotron-ultra": {
+      "kind": "openai_compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 20,
+      "rpd": 1000,
+      "models": {
+        "codegen": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "reasoning": "nvidia/nemotron-3-ultra-550b-a55b:free"
+      },
+      "note": "Verified available 2026-08-07 (live free model roster). Largest Nvidia model available free on OpenRouter (550B parameters). Request-based rate limits only (20 RPM, 1000 RPD). Model IDs pinned to `:free` suffix. Rotation status: free model roster rotates without notice. Superior to nemotron-super for intelligence/reasoning tasks at cost of slightly higher latency. Role keys corrected 2026-08-07: this entry declared `coding`/`intelligence`, which are not roles in this system (codegen/reasoning/summarize/default). `model_for` returned None and eligible_providers dropped the entry without complaint \u2014 configured and inert. Probed live 2026-08-07: returned VALID JSON (70 tokens) despite the /models roster not listing `response_format` among its supported_parameters \u2014 so json_mode is honoured by instruction here, not necessarily *enforced*. Treat structured_output as observed-once, not guaranteed; the 3-of-3 prose failure on qwen2.5-coder is what enforcement protects against."
+    },
+    "openrouter-nemotron-super": {
+      "kind": "openai_compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 20,
+      "rpd": 1000,
+      "models": {
+        "codegen": "nvidia/nemotron-3-super-120b-a12b:free",
+        "reasoning": "nvidia/nemotron-3-super-120b-a12b:free"
+      },
+      "note": "Verified live 2026-08-07 with a real key: json_mode returned VALID JSON, and a **15,102-token prompt was accepted in 1.5s** \u2014 larger than the 14,437-token codegen call that exceeded Groq's 12k TPM and ended a campaign. Account confirmed `is_free_tier: false` (>=$10 credits purchased), so the free-model cap is **1000 requests/day**, not 50. Rate limits here are request-based only: no TPM, no TPD. Model IDs are pinned to the `:free` suffix deliberately \u2014 a non-free ID would bill against the credit balance instead. 262K context and 262K max completion \u2014 the largest output allowance of any free model listed, which suits whole-file codegen."
+    },
+    "openrouter-gemma4-31b": {
+      "kind": "openai_compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "tier": "free",
+      "strong": false,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 20,
+      "rpd": 1000,
+      "models": {
+        "codegen": "google/gemma-4-31b-it:free",
+        "reasoning": "google/gemma-4-31b-it:free"
+      },
+      "note": "Verified live 2026-08-07 with a real key: json_mode returned VALID JSON, and a **15,102-token prompt was accepted in 1.5s** \u2014 larger than the 14,437-token codegen call that exceeded Groq's 12k TPM and ended a campaign. Account confirmed `is_free_tier: false` (>=$10 credits purchased), so the free-model cap is **1000 requests/day**, not 50. Rate limits here are request-based only: no TPM, no TPD. Model IDs are pinned to the `:free` suffix deliberately \u2014 a non-free ID would bill against the credit balance instead. 262K context. **Probe returned HTTP 429 'Provider returned error'** on 2026-08-07 \u2014 an upstream provider limit independent of our own quota, which is exactly the case fitroute cannot yet fail over from at runtime. Listed as a backup, not verified working. Demoted to strong:false 2026-08-07: it returned HTTP 429 from its upstream provider on probe, and `strong: true` was placing an unverified endpoint ahead of ones that answered. Promote again after a clean probe."
+    },
+    "openrouter-gemma4-26b": {
+      "kind": "openai_compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 20,
+      "rpd": 1000,
+      "models": {
+        "codegen": "google/gemma-4-26b-a4b-it:free",
+        "reasoning": "google/gemma-4-26b-a4b-it:free"
+      },
+      "note": "Verified available 2026-08-07 (live free model roster). Slightly smaller Gemma 4 variant (26B vs 31B) with A4B optimization for efficiency. Request-based rate limits only (20 RPM, 1000 RPD). Model IDs pinned to `:free` suffix. Rotation status: free model roster rotates without notice. Faster inference than gemma4-31b with minimal quality trade-off. Role keys corrected 2026-08-07: this entry declared `coding`/`intelligence`, which are not roles in this system (codegen/reasoning/summarize/default). `model_for` returned None and eligible_providers dropped the entry without complaint \u2014 configured and inert. Probed live 2026-08-07: VALID JSON, 22 tokens."
+    },
+    "openrouter-gptoss20b": {
+      "kind": "openai_compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "tier": "free",
+      "strong": false,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 20,
+      "rpd": 1000,
+      "models": {
+        "default": "openai/gpt-oss-20b:free"
+      },
+      "note": "Verified live 2026-08-07 with a real key: json_mode returned VALID JSON, and a **15,102-token prompt was accepted in 1.5s** \u2014 larger than the 14,437-token codegen call that exceeded Groq's 12k TPM and ended a campaign. Account confirmed `is_free_tier: false` (>=$10 credits purchased), so the free-model cap is **1000 requests/day**, not 50. Rate limits here are request-based only: no TPM, no TPD. Model IDs are pinned to the `:free` suffix deliberately \u2014 a non-free ID would bill against the credit balance instead. 131K context. Observed VALID json_mode (172 tokens)."
+    },
+    "deepseek-v4-flash": {
+      "kind": "openai_compat",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "tier": "paid",
+      "strong": true,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 60,
+      "models": {
+        "codegen": "deepseek-chat",
+        "reasoning": "deepseek-chat"
+      },
+      "note": "Free tier available as 5M token grant on sign-up (valid 30 days). Not perpetual free after grant expires. Measured 2026-08-07: json_mode capability verified. RPM of 60 is account-level; TPM not explicitly capped. Model names changed July 24 2026 (deepseek-chat replaces legacy V4-Flash naming). After 30-day grant or token exhaustion, requires payment. Free tier trains_on_input status not explicitly published; recommend checking account console for sensitive data. Re-tiered `paid` 2026-08-07: the grant is 5M tokens / 30 days and then bills. Under `plan: free` this entry is now correctly excluded rather than staying in the chain until a 402 discovers the change."
+    },
+    "nvidia-nemotron-super": {
+      "kind": "openai_compat",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key_env": "NVIDIA_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 40,
+      "models": {
+        "codegen": "nvidia/nemotron-3-super-120b-a12b",
+        "reasoning": "nvidia/nemotron-3-super-120b-a12b"
+      },
+      "note": "Accessed through NVIDIA Build platform (free tier, no credit card required). Verified 2026-08-07: 40 RPM account-level limit applies to all models. 100+ frontier models available (DeepSeek, Llama, Qwen, Nemotron, GLM). Rate limits are permissive for single-developer use; 200 RPM available via application. Data usage policy model-dependent (varies by hosted provider). Build platform is for prototyping/development; check T.O.S for production use. RPD and TPM not published; measured endpoints suggest no hard output ceiling. base_url corrected 2026-08-07: was `api.nvidianim.com`, which does not resolve (NXDOMAIN) \u2014 a conflation of 'NVIDIA' and 'NIM'. The hosted NIM/Build OpenAI-compatible endpoint is integrate.api.nvidia.com. Still unprobed: no NVIDIA_API_KEY configured."
+    },
+    "nvidia-llama-405b": {
+      "kind": "openai_compat",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key_env": "NVIDIA_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 40,
+      "models": {
+        "default": "meta/llama-3.1-405b-instruct"
+      },
+      "note": "Accessed through NVIDIA Build platform (free tier, no credit card required). Verified 2026-08-07: same 40 RPM account-level limit as other NVIDIA models. Largest open-source model (405B parameters) available for free prototyping. No explicit TPM or output limit published. Data usage model-dependent (Meta Llama open license). base_url corrected 2026-08-07: was `api.nvidianim.com`, which does not resolve (NXDOMAIN) \u2014 a conflation of 'NVIDIA' and 'NIM'. The hosted NIM/Build OpenAI-compatible endpoint is integrate.api.nvidia.com. Still unprobed: no NVIDIA_API_KEY configured."
+    },
+    "openrouter-north-mini-code": {
+      "kind": "openai_compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 20,
+      "rpd": 1000,
+      "models": {
+        "codegen": "cohere/north-mini-code:free"
+      },
+      "note": "Probed live 2026-08-07 through fitroute's own adapter: returned VALID JSON. OpenRouter free tier is request-limited only (20 rpm; 1000/day with >=$10 credits) \u2014 no TPM, which is why a 14.4k-token codegen call fits here and not on Groq. 256K context, code-specialised (Cohere). 99 tokens. **json_mode is instruction-only here**: this model does not list `response_format` in OpenRouter's supported_parameters, so it complied rather than being constrained. qwen2.5-coder complied in tests too and then answered 3 of 3 rogii campaigns in prose. Ordered behind models that enforce."
+    },
+    "openrouter-laguna-s": {
+      "kind": "openai_compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 20,
+      "rpd": 1000,
+      "models": {
+        "codegen": "poolside/laguna-s-2.1:free"
+      },
+      "note": "Probed live 2026-08-07 through fitroute's own adapter: returned VALID JSON. OpenRouter free tier is request-limited only (20 rpm; 1000/day with >=$10 credits) \u2014 no TPM, which is why a 14.4k-token codegen call fits here and not on Groq. 262K context, from a code-generation company. 48 tokens. **json_mode is instruction-only here**: this model does not list `response_format` in OpenRouter's supported_parameters, so it complied rather than being constrained. qwen2.5-coder complied in tests too and then answered 3 of 3 rogii campaigns in prose. Ordered behind models that enforce."
+    },
+    "openrouter-nemotron-nano30b": {
+      "kind": "openai_compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "tier": "free",
+      "strong": true,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 20,
+      "rpd": 1000,
+      "models": {
+        "reasoning": "nvidia/nemotron-3-nano-30b-a3b:free"
+      },
+      "note": "Probed live 2026-08-07 through fitroute's own adapter: returned VALID JSON. OpenRouter free tier is request-limited only (20 rpm; 1000/day with >=$10 credits) \u2014 no TPM, which is why a 14.4k-token codegen call fits here and not on Groq. 256K context, 100 tokens. **json_mode is instruction-only here**: this model does not list `response_format` in OpenRouter's supported_parameters, so it complied rather than being constrained. qwen2.5-coder complied in tests too and then answered 3 of 3 rogii campaigns in prose. Ordered behind models that enforce."
+    },
+    "openrouter-nemotron-nano9b": {
+      "kind": "openai_compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "tier": "free",
+      "strong": false,
+      "caps": [
+        "structured_output"
+      ],
+      "rpm": 20,
+      "rpd": 1000,
+      "models": {
+        "default": "nvidia/nemotron-nano-9b-v2:free"
+      },
+      "note": "Probed live 2026-08-07 through fitroute's own adapter: returned VALID JSON. OpenRouter free tier is request-limited only (20 rpm; 1000/day with >=$10 credits) \u2014 no TPM, which is why a 14.4k-token codegen call fits here and not on Groq. 128K context; **does** list response_format, so json_mode is enforced. 468 tokens for a trivial prompt \u2014 verbose, fine for cheap roles."
     }
   }
 }
