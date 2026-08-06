@@ -109,24 +109,36 @@ def test_rendered_code_is_valid_python(tmp_path, recipe):
 # --- the leakage discipline -------------------------------------------------
 
 
-@pytest.mark.parametrize("recipe", GATED)
-def test_gates_never_derive_from_the_target(tmp_path, recipe):
-    """The predict-forward trap.
+def _gate_region(src: str) -> str:
+    """The rendered gate block, between its banner and the Ridge note."""
+    after = src.split("--- technique gates ---", 1)
+    assert len(after) == 2, "gate banner missing from the rendered template"
+    return after[1].split("A per-partition Ridge calibration", 1)[0]
 
-    Every gate iterates `_driver_columns`, which drops TARGET_COLUMN. If a gate
-    were ever written to loop over `frame.columns` directly it would derive
-    from the target, and this asserts against that at the source level.
+
+@pytest.mark.parametrize("recipe", GATED)
+def test_gates_iterate_driver_columns_only(tmp_path, recipe):
+    """The predict-forward trap, checked structurally rather than by substring.
+
+    An earlier version asserted `"TARGET_COLUMN" not in line`, which only
+    catches a gate that names the constant literally — `for column in
+    frame.columns` would derive from the target and sail past it. So this
+    asserts the *iteration source* instead: every loop in the gate region must
+    draw from `_driver_columns`, which is the helper that drops the target and
+    the excluded columns.
+
+    The smoke test remains the real proof; this is the cheap early warning.
     """
-    src = _render(tmp_path, feature_recipes=[recipe])
-    body = src.split("def _add_partition_features", 1)[1]
-    gate_lines = [
-        line
-        for line in body.splitlines()
-        if "__lag" in line or "__roll" in line or "__part_" in line
-    ]
-    assert gate_lines, f"{recipe} produced no feature lines to check"
-    for line in gate_lines:
-        assert "TARGET_COLUMN" not in line, f"gate derives from the target: {line.strip()}"
+    region = _gate_region(_render(tmp_path, feature_recipes=[recipe]))
+    loops = [line.strip() for line in region.splitlines() if line.strip().startswith("for ")]
+    column_loops = [line for line in loops if line.startswith("for column")]
+    assert column_loops, f"{recipe} rendered no column loop"
+    for line in column_loops:
+        assert "_driver_columns(frame)" in line, (
+            f"gate iterates something other than _driver_columns: {line}"
+        )
+    assert "frame.columns" not in region, "a gate reads frame.columns directly"
+    assert "TARGET_COLUMN" not in region, "a gate references the target"
 
 
 def test_driver_columns_excludes_target_and_excluded_features(tmp_path):
