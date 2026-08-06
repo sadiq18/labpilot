@@ -16,10 +16,20 @@ change plus a plan name, not a rewrite.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
+from functools import lru_cache
+from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+#: Vendor facts shipped with the router: endpoints, models and measured limits.
+#: Deliberately *not* enabled by default — a deployment names what it wants via
+#: ``RoutingConfig.use``. Auto-enabling would make merely installing the router
+#: change which model answers, and would put vendor choices in the hands of the
+#: package rather than the operator.
+_KNOWN_PROVIDERS_FILE = Path(__file__).with_name("known_providers.json")
 
 #: Resolves an env var name to its value. Injected so this module stays free of
 #: any ``labpilot`` import (router-core rule) while still seeing keys that live
@@ -62,6 +72,10 @@ class ProviderSpec(BaseModel):
     rpd: int | None = None
     tpm: int | None = None
     request_timeout_seconds: float = 600.0
+    # How the numbers above were arrived at — measured, published, or unverified.
+    # Carried with the spec so a stale or guessed limit is visible at the point
+    # someone is deciding whether to trust it.
+    note: str = ""
 
     def model_for(self, role: str) -> str | None:
         return self.models.get(role) or self.models.get("default")
@@ -101,6 +115,21 @@ class RoleSpec(BaseModel):
     max_wait_seconds: float = 900.0
 
 
+@lru_cache(maxsize=1)
+def known_providers() -> dict[str, ProviderSpec]:
+    """Endpoints the router ships knowledge of, by name.
+
+    Data, not policy: nothing here is active until a deployment names it in
+    ``RoutingConfig.use``. Keys never appear in this file — only the *name* of
+    the environment variable each endpoint reads.
+    """
+    raw = json.loads(_KNOWN_PROVIDERS_FILE.read_text(encoding="utf-8"))
+    return {
+        name: ProviderSpec(name=name, **fields)
+        for name, fields in raw.get("providers", {}).items()
+    }
+
+
 class RoutingConfig(BaseModel):
     """Catalog + entitlement + per-role requirements."""
 
@@ -108,8 +137,39 @@ class RoutingConfig(BaseModel):
     # Hard override, independent of plan: refuse any endpoint that may train on
     # submitted content. Workspaces holding proprietary data set this False.
     allow_training_on_inputs: bool = True
+    # Names from the shipped catalog, **in preference order**. This is how a
+    # deployment states "these providers, tried in this sequence" without
+    # restating vendor facts it does not own.
+    use: list[str] = Field(default_factory=list)
+    # Inline definitions: custom or self-hosted endpoints the shipped catalog
+    # cannot know about. An inline entry whose name matches a `use` entry
+    # replaces it *in place*, so a deployment can adjust one field of a known
+    # provider without losing its position in the preference order.
     providers: list[ProviderSpec] = Field(default_factory=list)
     roles: dict[str, RoleSpec] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _expand_use(self) -> RoutingConfig:
+        if not self.use:
+            return self
+
+        catalog = known_providers()
+        unknown = [name for name in self.use if name not in catalog]
+        if unknown:
+            # Fail loudly. A silently dropped name means a provider the operator
+            # believes is configured never gets tried, and the symptom shows up
+            # much later as "no eligible provider".
+            raise ValueError(
+                f"unknown provider(s) in routing.use: {unknown}. "
+                f"Available: {sorted(catalog)}"
+            )
+
+        overrides = {p.name: p for p in self.providers}
+        resolved = [overrides.pop(name, catalog[name]) for name in self.use]
+        # Inline entries not overriding a `use` name keep their relative order
+        # and follow, so `use` states the primary preference.
+        self.providers = resolved + [p for p in self.providers if p.name in overrides]
+        return self
 
     def role_spec(self, role: str) -> RoleSpec:
         return self.roles.get(role) or self.roles.get("default") or RoleSpec()
