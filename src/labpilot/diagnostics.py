@@ -191,10 +191,14 @@ def check_llm_roles() -> list[CheckResult]:
     on the legacy provider-priority path and has nothing to report.
     """
     try:
-        from labpilot.config import load_config
         from labpilot.llm.client import build_gateway
+        from labpilot.workspace import load_config_for_cwd
 
-        config = load_config().llm
+        # Workspace-aware on purpose. `load_config()` alone reads only the
+        # package default, where `routing` is deliberately empty — so doctor
+        # would report nothing about roles precisely in the workspaces that
+        # configure them, which is the only place the answer matters.
+        config = load_config_for_cwd()[0].llm
     except Exception as exc:  # noqa: BLE001 — config errors are reported, not raised
         return [CheckResult("LLM routing", False, f"config load failed: {exc}", "")]
 
