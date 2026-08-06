@@ -22,7 +22,10 @@ from labpilot.research_engine.execution.baseline.selector import BaselineChoice
 from labpilot.research_engine.execution.capabilities.code_engineering.offline_codegen.renderer import (  # noqa: E501
     CodeRenderer,
 )
-from labpilot.research_engine.execution.technique.resolver import resolve_technique
+from labpilot.research_engine.execution.technique.resolver import (
+    prompt_technique_fields,
+    resolve_technique,
+)
 
 CATEGORICAL_PROFILE = {
     "target_column": "y",
@@ -209,10 +212,36 @@ def test_stamping_never_fails_a_run(tmp_path):
     cap._stamp_technique(tmp_path / "bad", TechniqueResolution())
 
 
-def test_a_rejected_label_never_reaches_the_codegen_prompt():
-    """rogii asked codegen to implement `hyp:H-010`. The triad carries the real
-    intent, so a rejected label is strictly worse than none."""
-    res = resolve_technique({"technique": "hyp:H-010"}, {}, choice=_choice())
+def test_no_record_reference_reaches_the_codegen_prompt():
+    """rogii's exact plan metadata, through the function the capability calls.
+
+    An earlier version of this test reimplemented the scalar ternary inline,
+    which asserted the shape of the code rather than its behaviour — and would
+    have kept passing while `technique_stack` leaked. P-004..P-008 carried
+    `technique='hyp:H-010'` *and* `technique_stack=['vit', 'hyp:H-010']`.
+    """
+    plan_meta = {
+        "technique": "hyp:H-010",
+        "technique_stack": ["vit", "hyp:H-010"],
+        "combo_techniques": ["hyp:H-BASELINE", "rolling_features"],
+    }
+    res = resolve_technique(plan_meta, {}, choice=_choice())
     assert res.status == "rejected"
-    prompt_technique = None if res.status == "rejected" else res.requested or None
-    assert prompt_technique is None
+
+    fields = prompt_technique_fields(res, plan_meta, {})
+    flat = [fields["technique"], *fields["technique_stack"], *fields["combo_techniques"]]
+    assert not [v for v in flat if v and str(v).lower().startswith(("hyp:", "fork:"))], (
+        f"a record reference reached the prompt: {fields}"
+    )
+    # Real entries must survive — scrubbing everything would be its own bug.
+    assert fields["technique_stack"] == ["vit"]
+    assert fields["combo_techniques"] == ["rolling_features"]
+
+
+def test_prompt_keeps_a_valid_technique():
+    """Control: the scrub only removes record references."""
+    plan_meta = {"technique": "rolling_features", "technique_stack": ["rolling_features"]}
+    res = resolve_technique(plan_meta, {}, choice=_choice())
+    fields = prompt_technique_fields(res, plan_meta, {})
+    assert fields["technique"] == "rolling_features"
+    assert fields["technique_stack"] == ["rolling_features"]

@@ -39,6 +39,7 @@ from labpilot.research_engine.execution.schemas.code_proposal import (
 )
 from labpilot.research_engine.execution.technique.resolver import (
     TechniqueResolution,
+    prompt_technique_fields,
     resolve_technique,
 )
 from labpilot.research_engine.planner.schemas.task_types import TaskType
@@ -200,9 +201,7 @@ class CodeEngineeringCapability(BaseCapability):
         if resolution.status != "none":
             logger.info("technique %s: %s", resolution.status, resolution.reason)
         self._stamp_technique(root, resolution)
-        prompt_technique = (
-            None if resolution.status == "rejected" else resolution.requested or None
-        )
+        technique_fields = prompt_technique_fields(resolution, plan_meta, hyp_fields)
         structured = StructuredContext(
             competition=context.competition,
             question=context.plan.goal or context.task.description,
@@ -228,13 +227,7 @@ class CodeEngineeringCapability(BaseCapability):
                 "prior_train_py": prior_train[:120_000],
                 "parent_hypothesis_id": plan_meta.get("parent_hypothesis_id"),
                 "parent_metrics": plan_meta.get("parent_metrics") or {},
-                "technique": prompt_technique,
-                "technique_stack": plan_meta.get("technique_stack")
-                or hyp_fields.get("technique_stack")
-                or [],
-                "combo_techniques": plan_meta.get("combo_techniques")
-                or hyp_fields.get("combo_techniques")
-                or [],
+                **technique_fields,
                 "observation": hyp_fields.get("observation", ""),
                 "reason": hyp_fields.get("reason", ""),
                 "prediction": hyp_fields.get("prediction", ""),

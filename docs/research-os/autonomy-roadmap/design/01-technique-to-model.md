@@ -110,7 +110,7 @@ attributable to the technique.
 | F4 | A technique that resolves to *no change* fails loudly rather than silently rendering the baseline |
 | F5 | The applied technique is recorded on the experiment record and in `baseline_choice.json` — **producer side done; no consumer reads `technique_status` yet, so F5 is not closed** (see §9.6) |
 | F6 | Technique stacks (`technique_stack`, `combo_techniques`) compose without conflicting |
-| F7 | Recipes respect `validation.exclude_features` — a derived feature inherits its parents' availability |
+| F7 | Recipes respect `validation.exclude_features` — a derived feature inherits its parents' availability. **Enforced in the templates, not the resolver** — recipes declare no input columns, so the resolver cannot express the intersection (see §9.3) |
 
 ### Non-functional
 
@@ -461,8 +461,13 @@ def resolve_technique(plan_meta, choice, profile) -> TechniqueResolution:
   check today.
 - Applicability: `choice.problem_type in spec.applies_to` (or empty), and every
   `requires` satisfied by the `DatasetProfile`.
-- **Leakage guard (F7):** any recipe whose inputs intersect
-  `choice.validation.exclude_features` is rejected. A derived feature inherits
+- ~~**Leakage guard (F7):** any recipe whose inputs intersect
+  `choice.validation.exclude_features` is rejected.~~ **Not in the resolver.**
+  Recipes declare no input columns, so the intersection is not expressible
+  here; an early attempt intersected exclude lists with *recipe names*, which
+  can never match a real column list. Enforcement lives in the templates —
+  `tabular_regression_partitioned` skips `column in set(EXCLUDE_FEATURES)` when
+  deriving features, and every new gate must do the same. A derived feature inherits
   its parents' availability — this is how a technique would otherwise quietly
   reintroduce `TVT`/`ANCC` on rogii.
 
@@ -550,8 +555,8 @@ marker so the default slice stays hermetic.
   `lag_features` on a non-partitioned dataset.
 - `requires` rejects when the data lacks the precondition — `target_encoding`
   with no categorical columns.
-- **Leakage guard (F7):** a recipe whose inputs intersect
-  `choice.validation.exclude_features` is rejected. On rogii this is the test
+- **Leakage guard (F7)** — a *template-level* test, not a resolver one: the
+  rendered code must not derive from an excluded column. On rogii this is the test
   that stops a technique quietly reintroducing `TVT` or `ANCC`.
 - ~~Stack composition~~ — deferred, see §9.3.
 - ~~**An unknown technique raises**~~ → **revised by §8.7**: it resolves to
@@ -764,7 +769,7 @@ blockers are the digest contract test (§10.4), the leakage rejection test
 | Recipe with no template gate | `not_applicable` — never reported as applied |
 | Inapplicable to problem type | Reject at resolve time (F3) |
 | Recipe raises at train time | Existing `ExperimentProducedNoMetricsError` catches the no-metrics case |
-| Conflicting stack | Reject rather than silently pick |
+| Conflicting stack | ~~Reject rather than silently pick~~ — **deferred with F6/§9.3**; the resolver takes the last stack entry only |
 
 **Rollout.** Ship the registry + wiring behind the existing behaviour first: with
 no technique on the plan, nothing changes (N5). The first real signal is a rogii

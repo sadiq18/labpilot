@@ -129,6 +129,36 @@ def requested_technique(plan_meta: dict[str, Any], hyp_fields: dict[str, Any]) -
     return ""
 
 
+def prompt_technique_fields(
+    resolution: TechniqueResolution,
+    plan_meta: dict[str, Any],
+    hyp_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """What the codegen prompt should say about the technique.
+
+    Record references are stripped from *all three* fields, not just the scalar
+    one. rogii's measured case was `technique`, but `technique_stack` carried
+    `["vit", "hyp:H-010"]` on the same plans — asking a model to implement a
+    hypothesis ID is no better inside a list. The hypothesis triad already
+    carries the real intent, so dropping a meaningless label loses nothing.
+    """
+    hyp_fields = hyp_fields or {}
+
+    def _clean(key: str) -> list[str]:
+        for source in (plan_meta, hyp_fields):
+            items = [str(x).strip() for x in (source.get(key) or []) if str(x).strip()]
+            if items:
+                return [item for item in items if not is_record_reference(item)]
+        return []
+
+    scalar = None if resolution.status == "rejected" else (resolution.requested or None)
+    return {
+        "technique": scalar,
+        "technique_stack": _clean("technique_stack"),
+        "combo_techniques": _clean("combo_techniques"),
+    }
+
+
 def resolve_technique(
     plan_meta: dict[str, Any],
     hyp_fields: dict[str, Any] | None = None,
