@@ -20,6 +20,7 @@ from labpilot.research_engine.evidence.models import (
 from labpilot.research_engine.evidence.store import EvidenceCardStore
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import Experiment, Hypothesis
+from labpilot.research_engine.shared.labels import is_record_reference
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,11 @@ def _claim_updates_from_attribution(
     return updates
 
 
+#: Kept as a module-local alias so existing call sites read unchanged; the rule
+#: itself, and why it has to see the raw label, live in `shared/labels.py`.
+_is_record_reference = is_record_reference
+
+
 def _reusable_for(competition: str, plan_meta: dict[str, Any]) -> list[str]:
     tags: list[str] = []
     change = str(plan_meta.get("change_category") or "").strip()
@@ -168,7 +174,7 @@ def _reusable_for(competition: str, plan_meta: dict[str, Any]) -> list[str]:
     for tag in plan_meta.get("tags") or []:
         t = str(tag).strip()
         if t and t.lower() not in {"stacked", "combination", "improvement", "technique"}:
-            if not t.lower().startswith("fork:"):
+            if not _is_record_reference(t):
                 tags.append(t)
     # Competition slug tokens as weak modality hints.
     for part in competition.replace("_", "-").split("-"):
@@ -248,7 +254,7 @@ def build_evidence_card(
                     "improvement",
                     "technique",
                 }
-                and not t.lower().startswith("fork:")
+                and not _is_record_reference(t)
             ][:3]
 
     attribution = attribute_techniques(

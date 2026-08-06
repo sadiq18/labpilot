@@ -37,6 +37,11 @@ from labpilot.research_engine.execution.schemas.code_proposal import (
     CodeFileSpec,
     CodeProposal,
 )
+from labpilot.research_engine.execution.technique.resolver import (
+    TechniqueResolution,
+    prompt_technique_fields,
+    resolve_technique,
+)
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 logger = logging.getLogger(__name__)
@@ -186,6 +191,17 @@ class CodeEngineeringCapability(BaseCapability):
 
         hyp_fields = self._hypothesis_fields(context)
         plan_meta = dict(context.plan.metadata or {})
+        # Resolved *before* the prompt is built, not after. A rejected label is
+        # worse than no label — rogii asked codegen to implement "hyp:H-010",
+        # which no model can do, and the triad below already carries the real
+        # intent. Resolution is also needed by the fallback and by provenance.
+        resolution = resolve_technique(
+            plan_meta, hyp_fields, choice=choice, profile=profile_summary
+        )
+        if resolution.status != "none":
+            logger.info("technique %s: %s", resolution.status, resolution.reason)
+        self._stamp_technique(root, resolution)
+        technique_fields = prompt_technique_fields(resolution, plan_meta, hyp_fields)
         structured = StructuredContext(
             competition=context.competition,
             question=context.plan.goal or context.task.description,
@@ -211,13 +227,7 @@ class CodeEngineeringCapability(BaseCapability):
                 "prior_train_py": prior_train[:120_000],
                 "parent_hypothesis_id": plan_meta.get("parent_hypothesis_id"),
                 "parent_metrics": plan_meta.get("parent_metrics") or {},
-                "technique": plan_meta.get("technique") or hyp_fields.get("technique"),
-                "technique_stack": plan_meta.get("technique_stack")
-                or hyp_fields.get("technique_stack")
-                or [],
-                "combo_techniques": plan_meta.get("combo_techniques")
-                or hyp_fields.get("combo_techniques")
-                or [],
+                **technique_fields,
                 "observation": hyp_fields.get("observation", ""),
                 "reason": hyp_fields.get("reason", ""),
                 "prediction": hyp_fields.get("prediction", ""),
@@ -232,14 +242,13 @@ class CodeEngineeringCapability(BaseCapability):
         proposal = self._agent.run(structured)
         origin = "llm" if self._agent.last_used_llm else "last_resort"
 
-
         if not proposal.files:
             # Prefer the deterministic baseline template over the emergency
             # stub. The stub writes fake metrics and a wrong-header submission
             # while reporting success, so a failed LLM silently produced a
             # garbage leaderboard entry. A rendered template is real, tested
             # code that honours the derived validation plan.
-            rendered = self._render_template_fallback(root, choice)
+            rendered = self._render_template_fallback(root, choice, resolution)
             if rendered is not None:
                 proposal = rendered
                 origin = "template"
@@ -317,6 +326,19 @@ class CodeEngineeringCapability(BaseCapability):
                 "used_jinja": False,
                 "overrode_existing": bool(prior_train),
                 "backup": str(backup_path) if backup_path else None,
+                # F5. Reflection must be able to tell three outcomes apart that
+                # today all read as "technique X did not help": never applied,
+                # applied with no effect, and applied-and-worse. Only the last
+                # is evidence about the technique.
+                "technique": resolution.requested or None,
+                "technique_canonical": resolution.canonical,
+                "technique_status": resolution.status,
+                "technique_reason": resolution.reason,
+                "technique_origin": (
+                    "registry" if resolution.changes_rendering and origin == "template"
+                    else "llm" if origin == "llm"
+                    else "none"
+                ),
             },
             error=None if train_path.is_file() else "train.py missing after apply",
         )
@@ -377,13 +399,24 @@ class CodeEngineeringCapability(BaseCapability):
             "evidence": [e.model_dump(mode="json") for e in hyp.evidence],
         }
 
-    def _render_template_fallback(self, root: Path, choice: object | None) -> CodeProposal | None:
+    def _render_template_fallback(
+        self,
+        root: Path,
+        choice: object | None,
+        resolution: TechniqueResolution | None = None,
+    ) -> CodeProposal | None:
         """Render the registered baseline template as a CodeProposal, or None.
 
         Used when LLM codegen yields nothing. The template already encodes the
         validation plan derived from the dataset profile, so this fallback is a
         real baseline rather than a placeholder.
+
+        ``resolution`` carries the technique the plan is testing. Without it
+        this path renders the *same* baseline for every hypothesis, which is
+        what made twelve distinct hypotheses score identically: the run looked
+        healthy and tested nothing.
         """
+        resolution = resolution or TechniqueResolution()
         if choice is None:
             return None
         try:
@@ -399,7 +432,16 @@ class CodeEngineeringCapability(BaseCapability):
             if template is None:
                 return None
             config = load_config()
-            CodeRenderer(config.training).render(template, choice, root)
+            # The renderer has always accepted these; every one of them was
+            # dropped here, so the fallback rendered the same baseline whatever
+            # the hypothesis asked for — 12 hypotheses, MSE 194.80 identically.
+            CodeRenderer(config.training).render(
+                template,
+                choice,
+                root,
+                feature_recipes=resolution.feature_recipes or None,
+                model_params=resolution.model_params or None,
+            )
         except Exception as exc:  # noqa: BLE001 — fall through to the stub
             logger.warning("Template fallback render failed: %s", exc)
             return None
@@ -500,3 +542,28 @@ class CodeEngineeringCapability(BaseCapability):
         except Exception:
             pass
         return choice
+
+    def _stamp_technique(self, root: Path, resolution: TechniqueResolution) -> None:
+        """Record the resolution on ``baseline_choice.json`` (F5).
+
+        Written after the fact rather than by the selector, which derives from
+        **data only** and never sees a plan — a property worth keeping
+        (design §8.5). This is the artifact an operator reads to answer "what
+        did this run actually apply?" without replaying the log.
+        """
+        path = root / "baseline_choice.json"
+        if not path.is_file():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["applied_technique"] = {
+                "requested": resolution.requested,
+                "canonical": resolution.canonical,
+                "status": resolution.status,
+                "reason": resolution.reason,
+                "feature_recipes": list(resolution.feature_recipes),
+                "model_params": dict(resolution.model_params),
+            }
+            path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 — provenance must not fail a run
+            logger.warning("Could not stamp applied_technique: %s", exc)

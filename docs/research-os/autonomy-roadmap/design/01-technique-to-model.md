@@ -108,9 +108,9 @@ attributable to the technique.
 | F2 | A technique resolves to a declarative spec: feature recipes, model family, model params |
 | F3 | A technique that cannot apply to the problem type / data is rejected **at plan time**, not discovered at train time |
 | F4 | A technique that resolves to *no change* fails loudly rather than silently rendering the baseline |
-| F5 | The applied technique is recorded on the experiment record and in `baseline_choice.json` |
+| F5 | The applied technique is recorded on the experiment record and in `baseline_choice.json` — **producer side done; no consumer reads `technique_status` yet, so F5 is not closed** (see §9.6) |
 | F6 | Technique stacks (`technique_stack`, `combo_techniques`) compose without conflicting |
-| F7 | Recipes respect `validation.exclude_features` — a derived feature inherits its parents' availability |
+| F7 | Recipes respect `validation.exclude_features` — a derived feature inherits its parents' availability. **Enforced in the templates, not the resolver** — recipes declare no input columns, so the resolver cannot express the intersection (see §9.3) |
 
 ### Non-functional
 
@@ -119,7 +119,7 @@ attributable to the technique.
 | N1 | Recipes execute **without an LLM** — not so M7 can dodge M10, but because a reproducible path is required for research (see §8.2) |
 | N2 | Adding a technique is a registry entry + a template gate — no changes to Conductor, planner or capability |
 | N3 | **Recipe-path** rendering is deterministic: same (choice, technique) → byte-identical `train.py`. LLM-authored code is not reproducible and is not held to this |
-| N4 | Unknown techniques degrade to an explicit, recorded rejection — never a silent baseline |
+| N4 | ~~Unknown techniques degrade to an explicit, recorded rejection~~ → **revised by §8.7**: an unknown name is a recorded `candidate`, not a rejection. Never a *silent* baseline either way |
 | N5 | Backward compatible: a plan with no technique renders exactly what it renders today |
 
 Every requirement above has a corresponding check in [§10](#10-testing-strategy)
@@ -337,6 +337,76 @@ Bridging names gives most of the value (the vocabulary already matches) at none
 of that risk. Executing mined transforms is a later, separately-justified
 milestone.
 
+### 8.7 Description is the payload; identity is for the ledger
+
+**Chosen (2026-08-06).** A technique travels as a *description*, and carries a
+*canonical identity* alongside it. Not one or the other.
+
+The question that forced this: do we need a technique registry at all, if the
+hypothesis triad could just be passed through to code generation? The answer
+turned out to be in the prompt template — codegen **already** receives the
+description:
+
+```jinja
+Technique: {{ technique }}                    <- the name
+Hypothesis triad:
+- observation: {{ observation }}              <- the description
+- reason: {{ reason }}
+- prediction: {{ prediction }}
+```
+
+So for the writer, the name was never load-bearing. On rogii its only
+contribution was the line `Technique: hyp:H-010` — worse than absent.
+
+| Dimension | Descriptive only | Named registry only | **Hybrid (chosen)** |
+|---|---|---|---|
+| LLM codegen quality | best — rich intent | thin — a bare token loses specifics | best; description is the payload |
+| Template / recipe path | impossible — `{% if %}` needs a discrete switch | native | works where identity maps to a gate |
+| Evidence accumulation | **fatal** — three phrasings of one idea are three findings, n=1 each | groups cleanly | groups on identity |
+| "Have we tried this?" | re-runs forever under new wording | exact dedup | dedup on identity |
+| Novel techniques | anything expressible works | closed set; a new method is unrepresentable until someone edits code | new name becomes a `candidate`, never dropped |
+| Maintenance | none | open-world set in a code constant — does not scale | only the *executable* subset is hand-maintained |
+| Reproducibility | none — output differs per run | byte-identical | deterministic where a recipe exists |
+| Failure mode | silent fragmentation: looks healthy, learns nothing | silent rejection: good techniques discarded as unknown | candidate backlog grows if nobody adjudicates |
+
+**The distinction that settles it: the name is not for the code generator, it
+is for the memory.** "Learn which techniques work" is the product premise, and
+free text cannot aggregate — *rolling features*, *rolling-window statistics*
+and *moving averages within each partition* would be three separate beliefs
+that never reach significance. Identity exists so the ledger can group, dedupe
+and answer "does target encoding help?".
+
+Three consumers, three different needs:
+
+| Consumer | Needs | State |
+|---|---|---|
+| LLM codegen | description | already wired |
+| Template fallback | discrete recipe token | **receives nothing — the measured bug** |
+| Attribution / beliefs / dedup | stable identity | received `hyp:H-010` |
+
+**Consequences for this design.**
+
+- The registry shrinks to `EXECUTABLE_TECHNIQUES`: only what a template gate
+  can run. That set is bounded by gates — which are code — so a code-side
+  constant is correct *there* and nowhere else.
+- The **vocabulary** (is this a technique at all?) must not be a code constant.
+  It lives in the `techniques` store with a status: `confirmed` / `candidate` /
+  `rejected`, generalising the quarantine mark applied to the fabricated
+  `hyp:*` records.
+- **This revises F4 and §8.4.** "Unknown technique fails loudly" was written
+  assuming a closed vocabulary. Under the hybrid an unrecognised name is a
+  *candidate*, and the run still proceeds via the LLM path on its description —
+  because rejecting it would discard exactly the novel techniques the system
+  exists to find. What still fails loudly is a *no-op resolution*: a technique
+  that resolved to a recipe path and changed nothing.
+
+*Rejected:* descriptive-only. It cannot drive template gates, and it makes
+research memory unaggregatable — the more expensive failure, because it looks
+healthy while learning nothing.
+
+*Rejected:* named-only. It is the maintenance trap: an open-world set in a hand
+-edited constant, whose failure mode is silently discarding good techniques.
+
 ## 9. Low-level design
 
 ### 9.1 `TechniqueSpec`
@@ -383,12 +453,21 @@ def resolve_technique(plan_meta, choice, profile) -> TechniqueResolution:
 
 - Reads `technique`, then `technique_stack`, then `combo_techniques` — the same
   precedence `capability.py:214-220` already uses for the LLM prompt.
-- Composes a stack by union of `feature_recipes` and last-wins on `model_params`;
-  a conflicting `model_family` is a rejection, not a silent pick.
+- ~~Composes a stack by union of `feature_recipes` and last-wins on
+  `model_params`; a conflicting `model_family` is a rejection.~~ **Not built.**
+  The resolver takes the last entry of `technique_stack` only. Stack
+  composition is deferred until single techniques demonstrably work — composing
+  two techniques that neither apply nor render is untestable, and F6 has no
+  check today.
 - Applicability: `choice.problem_type in spec.applies_to` (or empty), and every
   `requires` satisfied by the `DatasetProfile`.
-- **Leakage guard (F7):** any recipe whose inputs intersect
-  `choice.validation.exclude_features` is rejected. A derived feature inherits
+- ~~**Leakage guard (F7):** any recipe whose inputs intersect
+  `choice.validation.exclude_features` is rejected.~~ **Not in the resolver.**
+  Recipes declare no input columns, so the intersection is not expressible
+  here; an early attempt intersected exclude lists with *recipe names*, which
+  can never match a real column list. Enforcement lives in the templates —
+  `tabular_regression_partitioned` skips `column in set(EXCLUDE_FEATURES)` when
+  deriving features, and every new gate must do the same. A derived feature inherits
   its parents' availability — this is how a technique would otherwise quietly
   reintroduce `TVT`/`ANCC` on rogii.
 
@@ -476,12 +555,13 @@ marker so the default slice stays hermetic.
   `lag_features` on a non-partitioned dataset.
 - `requires` rejects when the data lacks the precondition — `target_encoding`
   with no categorical columns.
-- **Leakage guard (F7):** a recipe whose inputs intersect
-  `choice.validation.exclude_features` is rejected. On rogii this is the test
+- **Leakage guard (F7)** — a *template-level* test, not a resolver one: the
+  rendered code must not derive from an excluded column. On rogii this is the test
   that stops a technique quietly reintroducing `TVT` or `ANCC`.
-- Stack composition: `technique_stack` unions feature recipes; conflicting
-  `model_family` entries produce a rejection, not a silent pick.
-- **An unknown technique raises** rather than resolving empty (F4).
+- ~~Stack composition~~ — deferred, see §9.3.
+- ~~**An unknown technique raises**~~ → **revised by §8.7**: it resolves to
+  `candidate` and the run proceeds on its description. What still fails is a
+  technique that reached the recipe path and changed nothing.
 
 ### 10.3 Golden — rendered code
 
@@ -685,10 +765,11 @@ blockers are the digest contract test (§10.4), the leakage rejection test
 
 | Mode | Handling |
 |---|---|
-| Unknown technique | Reject, record suggestion, fail the step (F4) |
+| Unknown technique | Record as `candidate`, proceed via LLM codegen (§8.7 revises F4) |
+| Recipe with no template gate | `not_applicable` — never reported as applied |
 | Inapplicable to problem type | Reject at resolve time (F3) |
 | Recipe raises at train time | Existing `ExperimentProducedNoMetricsError` catches the no-metrics case |
-| Conflicting stack | Reject rather than silently pick |
+| Conflicting stack | ~~Reject rather than silently pick~~ — **deferred with F6/§9.3**; the resolver takes the last stack entry only |
 
 **Rollout.** Ship the registry + wiring behind the existing behaviour first: with
 no technique on the plan, nothing changes (N5). The first real signal is a rogii

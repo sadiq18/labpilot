@@ -15,6 +15,7 @@ from labpilot.research_engine.shared.experiments.hypothesis import (
     HypothesisStore,
 )
 from labpilot.research_engine.shared.experiments.models import Hypothesis, HypothesisStatus
+from labpilot.research_engine.shared.labels import is_record_reference
 
 _META_TAGS = frozenset(
     {
@@ -238,7 +239,10 @@ def _index_technique(
     label = normalize_label(name)
     if not label or label in _META_TAGS or name.strip().lower() in _META_TAGS:
         return
-    if label.startswith("hyp:") or label.startswith("fork:"):
+    # Checked against the *raw* name: `normalize_label` strips the colon these
+    # prefixes depend on, so testing the normalised label — as this did — can
+    # never match. That is why five `hyp:*` rows reached `techniques.name`.
+    if is_record_reference(name):
         return
     existing = index.get(label)
     if existing is None:
