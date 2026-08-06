@@ -337,6 +337,76 @@ Bridging names gives most of the value (the vocabulary already matches) at none
 of that risk. Executing mined transforms is a later, separately-justified
 milestone.
 
+### 8.7 Description is the payload; identity is for the ledger
+
+**Chosen (2026-08-06).** A technique travels as a *description*, and carries a
+*canonical identity* alongside it. Not one or the other.
+
+The question that forced this: do we need a technique registry at all, if the
+hypothesis triad could just be passed through to code generation? The answer
+turned out to be in the prompt template — codegen **already** receives the
+description:
+
+```jinja
+Technique: {{ technique }}                    <- the name
+Hypothesis triad:
+- observation: {{ observation }}              <- the description
+- reason: {{ reason }}
+- prediction: {{ prediction }}
+```
+
+So for the writer, the name was never load-bearing. On rogii its only
+contribution was the line `Technique: hyp:H-010` — worse than absent.
+
+| Dimension | Descriptive only | Named registry only | **Hybrid (chosen)** |
+|---|---|---|---|
+| LLM codegen quality | best — rich intent | thin — a bare token loses specifics | best; description is the payload |
+| Template / recipe path | impossible — `{% if %}` needs a discrete switch | native | works where identity maps to a gate |
+| Evidence accumulation | **fatal** — three phrasings of one idea are three findings, n=1 each | groups cleanly | groups on identity |
+| "Have we tried this?" | re-runs forever under new wording | exact dedup | dedup on identity |
+| Novel techniques | anything expressible works | closed set; a new method is unrepresentable until someone edits code | new name becomes a `candidate`, never dropped |
+| Maintenance | none | open-world set in a code constant — does not scale | only the *executable* subset is hand-maintained |
+| Reproducibility | none — output differs per run | byte-identical | deterministic where a recipe exists |
+| Failure mode | silent fragmentation: looks healthy, learns nothing | silent rejection: good techniques discarded as unknown | candidate backlog grows if nobody adjudicates |
+
+**The distinction that settles it: the name is not for the code generator, it
+is for the memory.** "Learn which techniques work" is the product premise, and
+free text cannot aggregate — *rolling features*, *rolling-window statistics*
+and *moving averages within each partition* would be three separate beliefs
+that never reach significance. Identity exists so the ledger can group, dedupe
+and answer "does target encoding help?".
+
+Three consumers, three different needs:
+
+| Consumer | Needs | State |
+|---|---|---|
+| LLM codegen | description | already wired |
+| Template fallback | discrete recipe token | **receives nothing — the measured bug** |
+| Attribution / beliefs / dedup | stable identity | received `hyp:H-010` |
+
+**Consequences for this design.**
+
+- The registry shrinks to `EXECUTABLE_TECHNIQUES`: only what a template gate
+  can run. That set is bounded by gates — which are code — so a code-side
+  constant is correct *there* and nowhere else.
+- The **vocabulary** (is this a technique at all?) must not be a code constant.
+  It lives in the `techniques` store with a status: `confirmed` / `candidate` /
+  `rejected`, generalising the quarantine mark applied to the fabricated
+  `hyp:*` records.
+- **This revises F4 and §8.4.** "Unknown technique fails loudly" was written
+  assuming a closed vocabulary. Under the hybrid an unrecognised name is a
+  *candidate*, and the run still proceeds via the LLM path on its description —
+  because rejecting it would discard exactly the novel techniques the system
+  exists to find. What still fails loudly is a *no-op resolution*: a technique
+  that resolved to a recipe path and changed nothing.
+
+*Rejected:* descriptive-only. It cannot drive template gates, and it makes
+research memory unaggregatable — the more expensive failure, because it looks
+healthy while learning nothing.
+
+*Rejected:* named-only. It is the maintenance trap: an open-world set in a hand
+-edited constant, whose failure mode is silently discarding good techniques.
+
 ## 9. Low-level design
 
 ### 9.1 `TechniqueSpec`
