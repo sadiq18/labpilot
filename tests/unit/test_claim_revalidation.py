@@ -29,12 +29,29 @@ COMPETITION = "revalidation-demo"
 
 
 def _card(store: EvidenceCardStore, card_id: str, attribution: dict[str, float]) -> None:
+    """An evidence card from a *genuine* comparison.
+
+    Both `parent_cv` and `treatment_cv` are set, because attribution without
+    two real scores is not evidence — see `_card_compared_something_real`. An
+    earlier version of this helper omitted them, which made every test here
+    exercise a card shape that cannot occur in practice.
+    """
+    from labpilot.research_engine.evidence.models import EvidenceDecision, ObservedOutcomes
+
+    credit = next(iter(attribution.values()), 0.0)
+    parent = 194.80084243002463
     store.save(
         EvidenceCard(
             id=card_id,
             competition=COMPETITION,
             treatment_experiment="E-1",
             technique_attribution=attribution,
+            # `decision` defaults to `inconclusive`; a card from a real
+            # comparison carries a verdict, and the check keys on it.
+            decision=EvidenceDecision.ACCEPTED,
+            observed=ObservedOutcomes(
+                parent_cv=parent, treatment_cv=parent + credit, cv_gain=credit
+            ),
         )
     )
 
@@ -187,3 +204,183 @@ def test_promotion_repairs_before_it_adds(promoter, evidence):
 
     claims = {c["statement"]: c for c in promoter._reflection.list_claims()}
     assert claims["vit improves the primary metric"]["status"] == "contested"
+
+
+# --- the assertion is not always in the `effect` column ----------------------
+
+
+def test_effect_asserted_in_the_statement_is_recognised():
+    """The defect that made the first version of this guard useless.
+
+    Two writers disagree about where the assertion lives. Measured 2026-08-07:
+    all seven effect-asserting claims on rogii had `effect=''`, so keying on the
+    column reached 14 of 417 claims and none of the false ones.
+    """
+    from labpilot.research_engine.reflection.claims.promoter import ClaimPromoter as CP
+
+    # `_claim_updates_from_attribution` shape — verb in the statement.
+    assert CP.asserts_an_effect(
+        {"statement": "vit improves the primary metric", "effect": ""}
+    )
+    assert CP.asserts_an_effect(
+        {"statement": "feature_engineering hurts the primary metric", "effect": ""}
+    )
+    # `promote_from_belief` shape — assertion in the column.
+    assert CP.asserts_an_effect(
+        {"statement": "SWA appears to be positive on rogii", "effect": "positive"}
+    )
+
+
+def test_a_claim_asserting_nothing_is_left_alone():
+    """"appears to be unknown" is 352 of rogii's 417 claims. Contesting those
+    would be noise, and would bury the ones that matter."""
+    from labpilot.research_engine.reflection.claims.promoter import ClaimPromoter as CP
+
+    assert not CP.asserts_an_effect(
+        {"statement": "vit appears to be unknown on rogii", "effect": "unknown"}
+    )
+    assert not CP.asserts_an_effect({"statement": "", "effect": ""})
+
+
+def test_the_real_false_claim_is_now_contested(promoter, evidence):
+    """rogii's actual row, verbatim: effect empty, assertion in the statement,
+    status supported, and both vit runs scored identically to baseline."""
+    promoter._reflection.upsert_claim_by_statement(
+        statement="vit improves the primary metric",
+        technique="vit",
+        confidence=0.62,
+        status="supported",
+        effect="",
+    )
+    _card(evidence, "EV-20", {"vit": 0.0})
+    _card(evidence, "EV-21", {"vit": 0.0})
+
+    contested = promoter.revalidate_claims()
+
+    assert [c["technique"] for c in contested] == ["vit"]
+    claims = {c["statement"]: c for c in promoter._reflection.list_claims()}
+    assert claims["vit improves the primary metric"]["status"] == "contested"
+
+
+def test_a_statement_claim_with_real_evidence_survives(promoter, evidence):
+    """Control: the broader rule must not sweep up claims that are true."""
+    promoter._reflection.upsert_claim_by_statement(
+        statement="SWA improves the primary metric",
+        technique="SWA",
+        confidence=0.8,
+        status="supported",
+        effect="",
+    )
+    _card(evidence, "EV-22", {"SWA": -3.826122970779892})
+    assert promoter.revalidate_claims() == []
+
+
+def test_repair_is_reachable_without_a_successful_experiment(tmp_path):
+    """The second defect: repair ran only from `record_successful_execution`,
+    so a campaign that completed no experiment never repaired itself."""
+    from labpilot.research_engine.execution.outcome import revalidate_outcome_claims
+
+    p = ClaimPromoter(tmp_path, COMPETITION)
+    p._reflection.upsert_claim_by_statement(
+        statement="vit improves the primary metric",
+        technique="vit",
+        confidence=0.9,
+        status="supported",
+        effect="",
+    )
+    p.close()
+    EvidenceCardStore(tmp_path, COMPETITION).save(
+        EvidenceCard(
+            id="EV-23",
+            competition=COMPETITION,
+            treatment_experiment="E-1",
+            technique_attribution={"vit": 0.0},
+        )
+    )
+
+    contested = revalidate_outcome_claims(knowledge_dir=tmp_path, competition=COMPETITION)
+    assert [c["technique"] for c in contested] == ["vit"]
+
+
+def test_repair_never_raises_on_a_broken_store(tmp_path):
+    """It runs at campaign start; a failure there must not stop the campaign."""
+    from labpilot.research_engine.execution.outcome import revalidate_outcome_claims
+
+    assert revalidate_outcome_claims(knowledge_dir=tmp_path / "nope", competition="x") == []
+
+
+# --- attribution is only as good as the two scores behind it ----------------
+
+
+def _card_full(store, card_id, attribution, *, parent, treatment, decision="accepted"):
+    from labpilot.research_engine.evidence.models import EvidenceDecision, ObservedOutcomes
+
+    store.save(
+        EvidenceCard(
+            id=card_id,
+            competition=COMPETITION,
+            treatment_experiment="E-1",
+            technique_attribution=attribution,
+            decision=EvidenceDecision(decision),
+            observed=ObservedOutcomes(
+                parent_cv=parent, treatment_cv=treatment,
+                cv_gain=(treatment - parent) if None not in (parent, treatment) else None,
+            ),
+        )
+    )
+
+
+def test_a_control_of_zero_is_a_placeholder_not_a_score(promoter, evidence):
+    """rogii's EV-001, verbatim. vit was credited +194.80 — the entire score —
+    against `parent_cv=0.0`. No model scores 0.0 on a metric whose baseline is
+    ~195; that is a stub run, and it is the sole reason the vit claim read
+    `supported`."""
+    _card_full(
+        evidence, "EV-A", {"vit": 194.80084243002463},
+        parent=0.0, treatment=194.80084243002463,
+    )
+
+    observations, net = promoter.measured_effect("vit")
+    assert (observations, net) == (0, 0.0), "a zero control must not count as evidence"
+    assert promoter.effect_is_measured("vit")[0] is False
+
+
+def test_an_inconclusive_card_does_not_count(promoter, evidence):
+    """The evidence builder already labels missing-control comparisons; reuse
+    its verdict rather than inventing a second notion of 'real'."""
+    _card_full(
+        evidence, "EV-B", {"x": 5.0}, parent=194.8, treatment=199.8, decision="inconclusive"
+    )
+    assert promoter.measured_effect("x") == (0, 0.0)
+
+
+def test_a_genuine_comparison_still_counts(promoter, evidence):
+    """Control: both sides scored, so the gain means something."""
+    _card_full(
+        evidence, "EV-C", {"SWA": -3.826122970779892},
+        parent=194.80084243002463, treatment=190.97471945924474,
+    )
+    observations, net = promoter.measured_effect("SWA")
+    assert observations == 1
+    assert net == pytest.approx(-3.826122970779892)
+    assert promoter.effect_is_measured("SWA")[0] is True
+
+
+def test_the_rogii_vit_claim_is_contested_end_to_end(promoter, evidence):
+    """Everything together, on the shape the live workspace actually holds."""
+    promoter._reflection.upsert_claim_by_statement(
+        statement="vit improves the primary metric",
+        technique="vit", confidence=0.62, status="supported", effect="",
+    )
+    promoter._reflection.upsert_claim_by_statement(
+        statement="vit appears to be unknown on rogii", technique="vit",
+        confidence=0.4, status="candidate", effect="unknown",
+    )
+    _card_full(evidence, "EV-D", {"vit": 194.8}, parent=0.0, treatment=194.8)
+
+    contested = promoter.revalidate_claims()
+
+    assert len(contested) == 1, "only the claim that asserts an effect"
+    by_statement = {c["statement"]: c for c in promoter._reflection.list_claims()}
+    assert by_statement["vit improves the primary metric"]["status"] == "contested"
+    assert by_statement["vit appears to be unknown on rogii"]["status"] == "candidate"

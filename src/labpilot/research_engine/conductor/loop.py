@@ -180,6 +180,23 @@ def run_until_stop(
         "offline_fallback_prompt": offline_fallback_prompt,
     }
 
+    # Repair research memory before acting on it. A claim no measurement
+    # supports steers every decision this loop is about to make, and the repair
+    # must not wait for a *successful experiment* — a campaign that completes
+    # none is exactly when memory is most likely to be leading it astray.
+    # Measured 2026-08-07: a full campaign ran with 45 false `vit` claims intact
+    # because revalidation only fired from `record_successful_execution`.
+    try:
+        from labpilot.research_engine.execution.outcome import revalidate_outcome_claims
+
+        contested = revalidate_outcome_claims(
+            knowledge_dir=workspace.knowledge_dir, competition=workspace.competition
+        )
+        if contested:
+            _progress(f"Contested {len(contested)} claim(s) no measurement supports")
+    except Exception as exc:  # noqa: BLE001 — never block a campaign on repair
+        logger.warning("Claim revalidation at session start failed: %s", exc)
+
     for step in range(max_steps):
         # Refresh each iteration so mid-session registration is visible.
         allowlist = set(registry.names())

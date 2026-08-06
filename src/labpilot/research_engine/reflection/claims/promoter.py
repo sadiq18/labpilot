@@ -55,6 +55,8 @@ class ClaimPromoter:
         except Exception:  # noqa: BLE001 — absent store means "nothing measured"
             return 0, 0.0
         for card in cards:
+            if not self._card_compared_something_real(card):
+                continue
             for name, credit in (card.technique_attribution or {}).items():
                 if str(name).strip().lower() != label:
                     continue
@@ -64,6 +66,69 @@ class ClaimPromoter:
                 except (TypeError, ValueError):
                     continue
         return observations, net
+
+    @staticmethod
+    def _card_compared_something_real(card: Any) -> bool:
+        """Whether this card's gain came from comparing two genuine runs.
+
+        Attribution arithmetic is only as good as the two scores behind it, and
+        rogii's cards show what happens when they are not. Measured 2026-08-07:
+
+        =========  ==========  =============  ==================================
+        card       parent_cv   treatment_cv   attribution
+        =========  ==========  =============  ==================================
+        EV-001     **0.0**     194.80         vit **+194.80**
+        EV-002-07  194.80      **0.5**        -194.30
+        EV-008-10  194.80      194.80         0.0
+        =========  ==========  =============  ==================================
+
+        `0.0` and `0.5` are placeholder metrics from stub or failed runs, so the
+        first two groups measure nothing about the technique — yet EV-001 is
+        the sole reason "vit improves the primary metric" reads `supported`.
+        A +194.8 improvement against a control of zero is not evidence.
+
+        `decision` is the evidence builder's own verdict and already encodes
+        this: `inconclusive` covers missing controls, and a card is only
+        `accepted`/`rejected` when both sides scored. Deliberately reusing it
+        rather than adding a second, drifting notion of "real".
+        """
+        decision = str(getattr(card, "decision", "") or "").lower()
+        if "inconclusive" in decision:
+            return False
+        observed = getattr(card, "observed", None)
+        parent = getattr(observed, "parent_cv", None)
+        treatment = getattr(observed, "treatment_cv", None)
+        if parent is None or treatment is None:
+            return False
+        # A control of exactly zero is a placeholder, not a score: no model
+        # scores 0.0 on a metric whose baseline is ~195.
+        return bool(parent) and bool(treatment)
+
+    @staticmethod
+    def asserts_an_effect(claim: dict[str, Any]) -> bool:
+        """Whether this claim says a technique *did something*.
+
+        Checks the statement as well as the ``effect`` column, because the two
+        claim writers disagree about where the assertion lives:
+
+        * `promote_from_belief` sets ``effect`` and writes "X appears to be
+          <effect> on <competition>";
+        * `_claim_updates_from_attribution` leaves ``effect`` **empty** and puts
+          the verb in the statement — "X improves the primary metric".
+
+        Keying on the column alone was a real defect: measured 2026-08-07, all
+        seven effect-asserting claims on rogii had ``effect=''``, so a guard
+        reading only the column could touch 14 of 417 claims and none of the
+        false ones. Including the one that started this: *"vit improves the
+        primary metric"*, status `supported`.
+        """
+        effect = str(claim.get("effect") or "").strip().lower()
+        if effect and effect not in {"unknown", "none"}:
+            return True
+        statement = str(claim.get("statement") or "").lower()
+        return " improves the primary metric" in statement or (
+            " hurts the primary metric" in statement
+        )
 
     def effect_is_measured(self, technique: str) -> tuple[bool, str]:
         """Whether any run actually attributed a change to ``technique``.
@@ -181,7 +246,7 @@ class ClaimPromoter:
             status = str(claim.get("status") or "")
             if not technique or status == "contested":
                 continue
-            if effect.lower() in {"", "unknown"}:
+            if not self.asserts_an_effect(claim):
                 continue
             measured, why = self.effect_is_measured(technique)
             if measured:
