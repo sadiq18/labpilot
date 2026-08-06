@@ -37,6 +37,10 @@ from labpilot.research_engine.execution.schemas.code_proposal import (
     CodeFileSpec,
     CodeProposal,
 )
+from labpilot.research_engine.execution.technique.resolver import (
+    TechniqueResolution,
+    resolve_technique,
+)
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 logger = logging.getLogger(__name__)
@@ -232,6 +236,16 @@ class CodeEngineeringCapability(BaseCapability):
         proposal = self._agent.run(structured)
         origin = "llm" if self._agent.last_used_llm else "last_resort"
 
+        # Resolved even when the LLM path succeeds, because the resolution is
+        # what makes a result attributable: "technique X did not help" is only
+        # evidence about X if X was actually applied.
+        resolution = resolve_technique(
+            plan_meta, hyp_fields, choice=choice, profile=profile_summary
+        )
+        if resolution.status in {"rejected", "not_applicable", "candidate"}:
+            logger.info(
+                "technique %s: %s", resolution.status, resolution.reason
+            )
 
         if not proposal.files:
             # Prefer the deterministic baseline template over the emergency
@@ -239,7 +253,7 @@ class CodeEngineeringCapability(BaseCapability):
             # while reporting success, so a failed LLM silently produced a
             # garbage leaderboard entry. A rendered template is real, tested
             # code that honours the derived validation plan.
-            rendered = self._render_template_fallback(root, choice)
+            rendered = self._render_template_fallback(root, choice, resolution)
             if rendered is not None:
                 proposal = rendered
                 origin = "template"
@@ -317,6 +331,19 @@ class CodeEngineeringCapability(BaseCapability):
                 "used_jinja": False,
                 "overrode_existing": bool(prior_train),
                 "backup": str(backup_path) if backup_path else None,
+                # F5. Reflection must be able to tell three outcomes apart that
+                # today all read as "technique X did not help": never applied,
+                # applied with no effect, and applied-and-worse. Only the last
+                # is evidence about the technique.
+                "technique": resolution.requested or None,
+                "technique_canonical": resolution.canonical,
+                "technique_status": resolution.status,
+                "technique_reason": resolution.reason,
+                "technique_origin": (
+                    "registry" if resolution.changes_rendering and origin == "template"
+                    else "llm" if origin == "llm"
+                    else "none"
+                ),
             },
             error=None if train_path.is_file() else "train.py missing after apply",
         )
@@ -377,13 +404,24 @@ class CodeEngineeringCapability(BaseCapability):
             "evidence": [e.model_dump(mode="json") for e in hyp.evidence],
         }
 
-    def _render_template_fallback(self, root: Path, choice: object | None) -> CodeProposal | None:
+    def _render_template_fallback(
+        self,
+        root: Path,
+        choice: object | None,
+        resolution: TechniqueResolution | None = None,
+    ) -> CodeProposal | None:
         """Render the registered baseline template as a CodeProposal, or None.
 
         Used when LLM codegen yields nothing. The template already encodes the
         validation plan derived from the dataset profile, so this fallback is a
         real baseline rather than a placeholder.
+
+        ``resolution`` carries the technique the plan is testing. Without it
+        this path renders the *same* baseline for every hypothesis, which is
+        what made twelve distinct hypotheses score identically: the run looked
+        healthy and tested nothing.
         """
+        resolution = resolution or TechniqueResolution()
         if choice is None:
             return None
         try:
@@ -399,7 +437,16 @@ class CodeEngineeringCapability(BaseCapability):
             if template is None:
                 return None
             config = load_config()
-            CodeRenderer(config.training).render(template, choice, root)
+            # The renderer has always accepted these; every one of them was
+            # dropped here, so the fallback rendered the same baseline whatever
+            # the hypothesis asked for — 12 hypotheses, MSE 194.80 identically.
+            CodeRenderer(config.training).render(
+                template,
+                choice,
+                root,
+                feature_recipes=resolution.feature_recipes or None,
+                model_params=resolution.model_params or None,
+            )
         except Exception as exc:  # noqa: BLE001 — fall through to the stub
             logger.warning("Template fallback render failed: %s", exc)
             return None
