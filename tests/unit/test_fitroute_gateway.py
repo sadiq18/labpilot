@@ -77,24 +77,52 @@ def test_model_without_structured_output_is_not_a_candidate(ledger):
     assert "structured_output" in decision.reason, "must name the capability that rejected it"
 
 
-def test_capability_is_never_relaxed_by_degrading(ledger):
-    """Strength may be relaxed on exhaustion; capability may not — degrading to
-    a model that cannot do the job is not a degraded result."""
-    routing = RoutingConfig(
+def _degrade_routing(*providers):
+    return RoutingConfig(
         plan="free",
-        providers=[
-            _ollama(name="strong", tier="free", api_key_env="", strong=True, rpm=1),
-            _ollama(name="weak_no_json", tier="free", api_key_env="", caps=set()),
-        ],
+        providers=list(providers),
         roles={
             "summarize": RoleSpec(
                 requires_strong=True, requires={"structured_output"}, on_exhaustion="degrade"
             )
         },
     )
+
+
+def test_degrading_relaxes_strength(ledger):
+    """The control for the test below: degrading works when the weak provider
+    is capable. Without this, that test could pass for any reason at all."""
+    routing = _degrade_routing(
+        _ollama(name="strong", strong=True, rpm=1),
+        _ollama(name="weak_but_capable"),
+    )
     ledger.record("strong")
     decision = select_route(routing, "summarize", ledger)
+    assert decision.provider.name == "weak_but_capable"
+    assert decision.degraded is True
+
+
+def test_capability_is_never_relaxed_by_degrading(ledger):
+    """Strength may be relaxed on exhaustion; capability may not — degrading to
+    a model that cannot do the job is not a degraded result.
+
+    Both providers are `tier="local"` so credentials cannot be the reason the
+    candidate list is empty. An earlier version used `tier="free"` with no
+    api_key_env, which made *both* ineligible for lack of credentials — so a
+    regression that degraded onto the incapable model would still have passed.
+    """
+    routing = _degrade_routing(
+        _ollama(name="strong", strong=True, rpm=1),
+        _ollama(name="weak_no_json", caps=set()),
+    )
+    ledger.record("strong")
+    decision = select_route(routing, "summarize", ledger)
+
     assert decision.provider is None, "must not degrade onto a model lacking the capability"
+    # The reason is the strong provider's rate limit, not a capability message:
+    # a capable provider does exist, it is merely exhausted, so waiting for it
+    # is the correct outcome.
+    assert decision.wait_seconds > 0
 
 
 def test_no_candidate_reason_names_the_filter(ledger):
@@ -230,6 +258,31 @@ def test_unavailable_role_raises_rather_than_hanging(monkeypatch, ledger):
 
 
 # --- adapters ----------------------------------------------------------------
+
+
+def test_fail_raises_immediately_instead_of_waiting(ledger):
+    """`fail` reports no wait, so a caller pacing on wait_seconds raises now.
+
+    Otherwise `fail` sleeps up to max_wait_seconds first and is indistinguishable
+    from `wait`.
+    """
+    routing = RoutingConfig(
+        plan="free",
+        providers=[_ollama(rpm=1)],
+        roles={"strict": RoleSpec(on_exhaustion="fail", max_wait_seconds=900.0)},
+    )
+    ledger.record("ollama")
+    decision = select_route(routing, "strict", ledger)
+
+    assert decision.provider is None
+    assert decision.wait_seconds == 0.0, "fail must not ask the caller to wait"
+
+    waiting = RoutingConfig(
+        plan="free",
+        providers=[_ollama(rpm=1)],
+        roles={"patient": RoleSpec(on_exhaustion="wait")},
+    )
+    assert select_route(waiting, "patient", ledger).wait_seconds > 0
 
 
 def test_build_adapter_rejects_unknown_kind():

@@ -103,12 +103,11 @@ def select_route(
                     reason=f"degraded to {provider.tier} tier: {best_reason}",
                 )
 
-    return RouteDecision(
-        provider=None,
-        role=role,
-        wait_seconds=best_wait or 0.0,
-        reason=best_reason,
-    )
+    # `fail` means raise now, so no wait is reported — a caller that paces on
+    # wait_seconds would otherwise sleep first and make `fail` behave like
+    # `wait`.
+    wait = 0.0 if spec.on_exhaustion == "fail" else (best_wait or 0.0)
+    return RouteDecision(provider=None, role=role, wait_seconds=wait, reason=best_reason)
 
 
 def _no_candidate_reason(

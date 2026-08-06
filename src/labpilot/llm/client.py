@@ -166,20 +166,47 @@ def create_llm_client(config: LLMConfig) -> LLMClient | None:
 
 
 def settings_credential_resolver(settings: Settings | None = None) -> CredentialResolver:
-    """Look a key up in ``Settings`` (which reads the workspace ``.env``).
+    """Resolve a provider key name to its value from the workspace ``.env``.
 
     pydantic-settings loads ``.env`` into a Settings object and never exports to
     ``os.environ``, so a catalog that only reads the environment cannot see a
-    key the user just put in their ``.env`` — and routing then reports "no
-    eligible provider" with the key sitting in the file they edited.
+    key the user just put in their ``.env``.
+
+    ``Settings`` alone is not enough: it declares a fixed set of fields and uses
+    ``extra="ignore"``, so a provider key it does not know about — ``GROQ_API_KEY``,
+    for instance — is discarded on load. Since ``ProviderSpec.api_key_env`` is
+    config-driven by design, the resolver has to read **arbitrary** names, which
+    means parsing the ``.env`` files directly.
     """
     resolved = settings or Settings()
 
     def resolve(env_name: str) -> str:
-        value = getattr(resolved, env_name.lower(), "")
-        return str(value or "")
+        known = getattr(resolved, env_name.lower(), "")
+        if known:
+            return str(known)
+        return _dotenv_value(env_name)
 
     return resolve
+
+
+def _dotenv_value(env_name: str) -> str:
+    """Read one key from the workspace ``.env`` files, nearest file winning."""
+    from dotenv import dotenv_values
+
+    from labpilot.config import resolve_env_files
+
+    try:
+        env_files = resolve_env_files()
+    except Exception:  # noqa: BLE001 — credential lookup must never raise
+        return ""
+    for path in env_files:
+        try:
+            value = dotenv_values(path).get(env_name)
+        except Exception:  # noqa: BLE001 — an unreadable .env is not fatal
+            continue
+        if value:
+            return str(value).strip()
+    return ""
 
 
 def build_gateway(config: LLMConfig, *, settings: Settings | None = None) -> LLMGateway | None:
