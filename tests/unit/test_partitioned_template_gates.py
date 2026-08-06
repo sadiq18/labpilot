@@ -140,9 +140,15 @@ def test_driver_columns_excludes_target_and_excluded_features(tmp_path):
 
 def test_excluded_columns_are_named_in_the_rendered_constant(tmp_path):
     """The validation plan's exclusions must reach the file, or the drop set
-    above has nothing to act on."""
+    above has nothing to act on.
+
+    Quote-agnostic on purpose: the constant is rendered by a Jinja filter, and
+    whether it emits JSON or a Python literal is that filter's business. An
+    earlier version asserted double quotes and broke when the templates moved
+    to `| py` — testing the serialiser's punctuation rather than the property.
+    """
     src = _render(tmp_path, feature_recipes=GATED)
-    assert '"ANCC"' in src and '"BUDA"' in src
+    assert "ANCC" in src and "BUDA" in src
 
 
 # --- resolver → renderer, end to end on rogii's shape -----------------------
