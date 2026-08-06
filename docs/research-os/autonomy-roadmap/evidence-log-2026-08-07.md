@@ -149,10 +149,25 @@ record of what was actually blocking.
 
 ## Open, not fixed
 
-- **Claim revalidation does not fire.** It runs only via
-  `record_successful_execution`, so a campaign that completes no experiment —
-  exactly when memory is most likely poisoned — never repairs itself. And it
-  keys on the wrong field (above).
+- ~~**Claim revalidation does not fire.**~~ **Fixed.** Three defects, not the
+  two first identified, and the third was the one actually blocking:
+  1. it keyed on the `effect` column, while all seven effect-asserting claims
+     carry `effect=''` and put the assertion in the *statement*;
+  2. it ran only via `record_successful_execution`, so a campaign completing no
+     experiment never repaired itself — it now also runs at campaign start;
+  3. **it counted attribution computed from placeholder scores.** EV-001
+     credits `vit` **+194.80** against `parent_cv=0.0`; EV-002–007 credit
+     −194.30 against `treatment_cv=0.5`. A control of zero on a metric whose
+     baseline is ~195 is a stub run, and EV-001 alone is why the vit claim read
+     `supported`. Now gated on the evidence builder's own `decision` plus a
+     zero-control check.
+
+  Verified against a *copy* of the live workspace: contests exactly one claim —
+  the false one — with all 417 preserved. Worth recording that the guard was
+  written three times before it worked, and each failure was the same mistake
+  this log documents elsewhere: **the check was sound, its input was not.**
+  Tests built on invented fixtures passed throughout; only running it against
+  real data exposed them.
 - **The modality filter is too blunt.** `_MODALITY_TOKENS["vision"]` contains
   `cnn`, and tabular allows no vision tokens, so convolution is now blocked on
   every tabular problem. rogii is geosteering; convolution over a depth sequence
