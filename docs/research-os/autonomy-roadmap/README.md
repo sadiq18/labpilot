@@ -37,7 +37,7 @@ asserted.
 | Phase | Work | Why here |
 |-------|------|----------|
 | **0** | ~~M14 phase 1~~ **done** — stamps + refusal (2a) | Made every later phase observable, and fixed provenance that recorded `llm` for deterministic output |
-| **1** | **M10** wiring **⇄ thin M7 slice** | Mutual, not sequential — see below |
+| **1** | ~~M10 wiring~~ **shipped (v0.1)** ⇄ **thin M7 slice** ← *next* | Mutual, not sequential — see below. The wiring half is done; the slice that proves it is not |
 | **2** | **M7** full · adopt **M15**'s contract test | M15's "different input ⇒ different artifact" *is* M7's exit criterion generalised, so the practice starts here |
 | **3** | **M8 + M17** together | Both need the same missing writer: `metric_history` / `last_metric` are read in four places and written in none |
 | **4** | **M13** (needs M7+M8) · **M11** (needs M7 only) | M11 does **not** need M8 and can start as soon as M7 lands |
@@ -60,6 +60,15 @@ dataset) validates it, then M7 in full.** Shipping M10 on unit tests alone would
 repeat the mistake review already caught, where `select_route` was tested,
 unwired, and called done.
 
+**Where this stands (2026-08-06).** The wiring half shipped as
+[fitroute](../../smart-router/DESIGN.md) v0.1: roles are declared by the agents
+that do the work, resolution happens per call, and every call is cached and
+metered. What has *not* happened is the proof — no codegen call has yet been
+served by a model capable of writing training code, because that needs a
+provider key this workspace does not have. So M10 is **wired, not validated**,
+and the second half of the cycle is now the critical path. Recording it as done
+would be the same mistake in a new place.
+
 ### Corrections to an earlier statement of this order
 
 The chain "M10 → M7 → M8 → M13" was accurate but incomplete. It hid the M10⇄M7
@@ -69,14 +78,14 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 
 | # | Plan | Unlocks | Status |
 |---|------|---------|--------|
-| **M10** | [LLM tiering & routing](04-llm-tiering.md) | **A trustworthy reasoning substrate. Everything downstream inherits its quality.** | [Designed](design/04-llm-tiering.md) — decision layer only, not wired |
-| **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | [Designed](design/01-technique-to-model.md) — blocked on M10 |
+| **M10** | [LLM tiering & routing](04-llm-tiering.md) | **A trustworthy reasoning substrate. Everything downstream inherits its quality.** | **v0.1 shipped** — role routing on the live path via [fitroute](../../smart-router/DESIGN.md); exit criterion 3 still open |
+| **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | [Designed](design/01-technique-to-model.md) — **unblocked**; the thin slice is next |
 | **M8** | [Objective feedback loop](02-objective-loop.md) | The system noticing it is making no progress | Not started |
 | **M9** | [Verification-first execution](03-verification-first.md) | Trusting any result | Partly done |
 | **M11** | [Parallel branches](05-parallel-branches.md) | Iteration speed | Not started |
 | **M12** | [Beyond Kaggle](06-beyond-kaggle.md) | The actual product thesis | Not started |
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
-| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **Phases 1 + 2a shipped**; 2b/3 await M10 |
+| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **Phases 1 + 2a shipped**; 2b's blocker cleared 2026-08-06 (capable model configured) — both 2b and 3 now await **one campaign**, which no longer has any prerequisite |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
 | **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
@@ -106,7 +115,19 @@ environment is.
   gets a model that can write training code", and the only proof is generating
   training code. Shipping it on unit tests alone would repeat the mistake review
   already caught once, where `select_route` was tested, unwired, and called
-  done.
+  done. **Now the open item**: v0.1 is wired and unit-tested, and the slice that
+  would validate it has not run.
+- **Routing lives outside labpilot.** M10 v0.1 ships as `src/fitroute/`, which
+  imports nothing from `labpilot` — a boundary enforced by a test, not by
+  intention, so it can be extracted as an open-source package later. Its own
+  roadmap is [docs/smart-router/DESIGN.md](../../smart-router/DESIGN.md);
+  outcome learning, model discovery and streaming are designed there and
+  deliberately unbuilt.
+- **Role routing is opt-in.** `llm.routing.providers` is empty in
+  `configs/default.yaml`, so an unconfigured workspace still takes the legacy
+  provider-priority path. That keeps existing workspaces working, and it means
+  "M10 shipped" does not imply "M10 is in effect here" — `research doctor`
+  reports the resolved provider per role and is the check that tells you which.
 - **M14 phase 1 is nearly free and should go early.** Merely *stamping*
   rule-engine results as degraded would have made the entire silent-failure
   class visible on day one. Phases 2–3 need a test migration (see the plan).
@@ -149,3 +170,11 @@ M7 is unglamorous — a recipe table and some plumbing — and it is worth more 
 every remaining milestone combined. If you find yourself adding a seventh
 provider adapter before a single technique has changed a CV score, that is the
 same trap wearing a new hat.
+
+**M10 v0.1 sits close to that line, and it is worth saying so.** It shipped two
+adapters and a router while no technique has yet changed a score. Two things
+keep it on the right side: it fixed capabilities that already existed and did
+nothing — one cache row across nine campaigns, a rate ledger with no callers,
+`.env` keys the router could not see — and its exit criterion is a generated
+`train.py`, not a passing unit test. Neither justification survives if the next
+change is a third adapter instead of that slice.
