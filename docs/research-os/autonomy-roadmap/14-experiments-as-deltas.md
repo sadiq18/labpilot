@@ -83,6 +83,20 @@ provenance.
    the discipline M14 phase 3 established, where a removal and the precondition
    that makes it safe must ship together.
 
+## The check that matters most
+
+A delta must do **what the hypothesis claimed** — not merely apply cleanly.
+
+*"Ensemble LightGBM with CatBoost"* can be satisfied by replacing LightGBM, by
+adding CatBoost and never averaging, or by adding CatBoost *and* quietly retuning
+LightGBM. All three run and produce a card. The third credits the whole `cv_gain`
+to "ensemble" when two things changed — a false attribution that no metric
+reveals, because the number itself is real.
+
+Deltas make this checkable for the first time: preservation, addition,
+combination and confinement are AST facts about the change, and only labpilot can
+test them because only labpilot holds the hypothesis.
+
 ## Risk worth naming
 
 A delta makes it *possible* to change validation logic; running in a copy makes

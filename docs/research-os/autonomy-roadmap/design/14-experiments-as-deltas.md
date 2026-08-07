@@ -137,7 +137,7 @@ does not fit it, and **must not be made to**.
 
 So the adapter reads the *resulting files* out of the scratch copy into
 `CodeProposal.files[].content`. The diff is computed too, but only as **evidence**
-— it feeds validation-region flagging and the delta→card linkage in §5. It is
+— it feeds the hypothesis-consistency checks in §5 and the delta→card linkage in §7. It is
 never the thing that gets applied.
 
 Stated explicitly because the obvious next move is to extend `CodeProposal` with
@@ -335,14 +335,90 @@ could be swapped without a rewrite.
 
 ---
 
-## 5. What labpilot still has to build
+## 5. The delta must match the hypothesis
+
+Validation-region flagging is one case of a larger requirement, and the larger
+one is what protects attribution.
+
+### The failure
+
+Hypothesis: *"ensemble LightGBM with CatBoost."* Three plausible outcomes, and
+**all three run, produce a score, and write an evidence card**:
+
+| What the delta actually did | What the card claims |
+|---|---|
+| *Replaced* LightGBM with CatBoost | "ensembling improved MSE" — it measured **substitution** |
+| Added CatBoost but never averaged the predictions | "ensembling" — nothing was ensembled |
+| Added CatBoost **and** retuned LightGBM | credits the whole `cv_gain` to "ensemble" — **two changes, one attribution** |
+
+The third is the deep one. `technique_attribution` assigns the full `cv_gain` to
+the named technique, so a delta that did more than the hypothesis claimed makes
+that credit **false** — and false in a way no metric reveals, because the number
+is real. Same class as the inverted direction and the placeholder cards: a
+plausible measurement of the wrong thing.
+
+Whole-file regeneration had this problem too and hid it better. Deltas make it
+checkable for the first time, because the change is a first-class object.
+
+### The checks
+
+Parent AST against child AST, tested against the claim the hypothesis already
+makes. No LLM needed — these are structural facts.
+
+| Check | Catches |
+|---|---|
+| **Preservation** — things the hypothesis says to *keep* still have call sites | substitution disguised as addition |
+| **Addition** — the named new thing actually appears (import + construction) | a no-op delta that claims a technique |
+| **Combination** — for an ensemble claim, both predictions reach the output | "added but unused", the second row above |
+| **Confinement** — the touched-function set is small and related to the claim | the third row: a second, uncredited change riding along |
+| **Validation region** — no change inside the holdout / leakage logic | the silent-leak failure of §8 |
+
+**Confinement is the one that needs judgement**, and the honest answer is that it
+is a *flag*, not a gate: a legitimate refactor can touch many functions. It goes
+on the evidence card so a reader can discount a wide delta, in the same way
+`needs_review` already works. Blocking on it would reject real work.
+
+A delta failing preservation, addition or combination is a **re-ask with the
+reason named** — the mechanism that took prose-reply failures from three-in-eight
+to 30 of 30. Failing only confinement is recorded, not refused.
+
+### Why this belongs to labpilot and not to aider
+
+aider knows whether an edit *applied*. Only labpilot knows what the experiment
+*claimed*, because only labpilot holds the hypothesis. This is the clearest case
+of the split in §3: buy the editing, build the research.
+
+## 6. Code provenance: the graph branches, the filesystem does not
+
+**A prerequisite, discovered by asking what "the parent" means.**
+
+Today there is one `pipeline/train.py`, overwritten in place, with a single-slot
+backup. But the experiment graph *branches* — H-1 and H-2 both fork from the
+baseline — so "the parent of this experiment" is not "the previous file". Under
+the current layout it is recoverable only by luck of ordering.
+
+Deltas need it exactly: a child is `parent + change`, and without an addressable
+parent there is nothing to diff against or to preserve.
+
+So step 1 also gives each execution addressable source — likely
+`runs/<execution_id>/pipeline/`, with the workspace tree as the working copy —
+so any experiment can name the exact code its parent ran.
+
+**Deliberately inside step 1, not before it.** Building the layout speculatively
+risks the wrong one; building it afterwards means step 1 stands on a foundation
+it then has to move. Driven by the requirement, it is a small change; guessed at,
+it is a migration.
+
+## 7. What labpilot still has to build
 
 The parts no coding agent knows about, because they are about *research*, not
 code:
 
 | Piece | Why only labpilot can do it |
 |---|---|
+| **Hypothesis-consistency checks** (§5) | Only labpilot holds the hypothesis, so only labpilot can ask whether the delta did what was claimed |
 | **Validation-region flagging** | Detect when a delta touches `partition_suffix_holdout`, `_driver_columns`, or the holdout construction, and record it on the evidence card |
+| **Per-execution code provenance** (§6) | A branching graph needs an addressable parent to diff against |
 | **Delta → evidence linkage** | The card already compares parent and treatment; it should carry *what changed*, so `technique_attribution` can be read against the actual diff |
 | **Baseline vs delta routing** | No parent ⇒ whole file; parent ⇒ delta. The experiment graph already knows which |
 | **Provenance capture** | Translate aider's result into an `agent_invocations` row |
@@ -350,7 +426,7 @@ code:
 
 ---
 
-## 6. Risks
+## 8. Risks
 
 **The one that would hurt.** A delta can still damage validation logic — running
 in a copy makes it *reviewable*, not impossible. Mitigation is detection, not
@@ -375,7 +451,7 @@ correctness measure.
 
 ---
 
-## 7. Testing
+## 9. Testing
 
 The failure modes are all "it looked applied and was not", so:
 
@@ -385,6 +461,12 @@ The failure modes are all "it looked applied and was not", so:
    the property that lets templates go, and the spike already demonstrates it
    twice.
 3. **A delta touching validation is flagged** on the card.
+3b. **Substitution is caught.** Parent builds LightGBM; a delta that replaces it
+    with CatBoost while the hypothesis said *ensemble* must fail preservation.
+3c. **"Added but unused" is caught.** CatBoost constructed but its predictions
+    never reach the output must fail combination.
+3d. **A wide delta is flagged, not refused** — confinement records, it does not
+    block, because a legitimate refactor touches many functions.
 4. **Provenance is recorded** — model and `generated_by` reach
    `agent_invocations`, not just the log.
 5. **No aider ⇒ whole-file path**, so a workspace without it still works.
@@ -394,7 +476,7 @@ The failure modes are all "it looked applied and was not", so:
 
 ---
 
-## 8. Rollout
+## 10. Rollout
 
 Behind `codegen.strategy: whole_file | delta`, defaulting to `whole_file`. Both
 paths coexist while the failure rate is measured on real campaigns — the standard
@@ -415,7 +497,10 @@ default-off with a number attached rather than a guess.
    A shared daemon is the right shape only once fitroute is genuinely hosted,
    which is the same trigger as the full-HTTP option below.
 1. `CodeAgent` protocol + `AiderAgent` + copy/diff/propose, pointed at the proxy.
-   Nothing calls it.
+   Includes per-execution code provenance (§6) and the hypothesis-consistency
+   checks (§5) — the checks are what make a delta trustworthy, so shipping the
+   adapter without them would produce confidently mis-attributed evidence, which
+   is worse than the whole-file path it replaces. Nothing calls it yet.
 2. Opt-in via config; measure `aider_no_edit` and `aider_syntax_fail`.
 3. Flip the default when the rate justifies it.
 4. Delete templates **in the same change** that makes delta the default — never
