@@ -123,7 +123,7 @@ class RoleSpec(BaseModel):
     max_wait_seconds: float = 900.0
 
     @model_validator(mode="after")
-    def _enforce_mandatory_caps(self) -> "RoleSpec":
+    def _enforce_mandatory_caps(self) -> RoleSpec:
         """Union in any mandatory capability the config left out or removed.
 
         Restoring silently beats raising: omitting `requires` entirely is the
