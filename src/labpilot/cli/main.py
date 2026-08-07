@@ -136,6 +136,42 @@ def main(
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive.")
     level = logging.DEBUG if verbose else logging.WARNING if quiet else logging.INFO
     logging.getLogger("labpilot").setLevel(level)
+    _install_provenance_sink()
+
+
+def _install_provenance_sink() -> None:
+    """Record micro-agent provenance for *any* command, not just campaigns.
+
+    The sink was first installed around the campaign loop, which covers the
+    Conductor but leaves `analyze`, `hypothesize`, `ingest` and `reflect`
+    unrecorded — and those exercise most of the 21 agents that implement
+    `_run_rule_engine`. Measured on rogii 2026-08-07: three campaigns produced
+    invocations for exactly two agents, so M14 phase 3's triage ("rank rule
+    engines by fire rate") had nothing to rank. A campaign is where the loop
+    runs; it is not where most agents run.
+
+    Best-effort by design: no workspace, no recording, and never an error that
+    stops the command the operator actually asked for.
+    """
+    import atexit
+
+    try:
+        from labpilot.research_engine.telemetry.agent_provenance import (
+            SqliteInvocationSink,
+        )
+        from labpilot.workspace import discover_workspace
+
+        workspace = discover_workspace()
+        if workspace is None:
+            return
+        from labpilot.accessor.common.provenance import set_run_context, set_sink
+
+        sink = SqliteInvocationSink(workspace.knowledge_dir, workspace.competition)
+        set_sink(sink)
+        set_run_context(competition=workspace.competition)
+        atexit.register(sink.close)
+    except Exception as exc:  # noqa: BLE001 — telemetry never blocks a command
+        logging.getLogger(__name__).debug("provenance sink not installed: %s", exc)
 
 
 def _validate_submit_flags(submit: bool, force_submit: bool) -> None:
