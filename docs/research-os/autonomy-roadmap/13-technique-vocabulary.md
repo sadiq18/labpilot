@@ -1,6 +1,6 @@
 # M18 — The technique vocabulary earns its entries
 
-**Status:** step 1 shipped 2026-08-07 (PR #100) · **Design:**
+**Status:** shipped 2026-08-07 (PR #100 step 1, PR #101 step 2) · **Design:**
 [design/13-technique-vocabulary.md](design/13-technique-vocabulary.md) ·
 **Blocks:** [M19](14-experiments-as-deltas.md), candidate adjudication
 
@@ -43,18 +43,33 @@ same recompute-don't-step rule that `belief_repair` needed.
 
 1. No technique reaches the planner without a status. ✅ (schema v11)
 2. Status is recomputed, not stepped, and is idempotent. ✅
-3. Promotion to a claim requires `confirmed`. ⬜ step 2
+3. Promotion to a claim requires `confirmed`. ✅
 4. The junk (`the`, `Breath Focus practice`) is unreachable by the planner,
-   **and `SWA` — the one measured improvement — still is.** ⬜ step 2
+   **and `SWA` — the one measured improvement — still is.** ✅
 
 ## Status
 
-**Step 1 shipped**: `techniques.status`, `technique_status_history`, recompute in
-the conductor repair chain, and `research techniques report`.
+**Step 1** (PR #100): `techniques.status`, `technique_status_history`, recompute
+in the conductor repair chain, `research techniques report`.
 
-**Step 2 deliberately deferred.** The first attempt shipped both steps together;
-review found the consumer filters made `dormant` a closed loop — a technique
-leaves `dormant` only by appearing on a hypothesis, and the filters removed the
-only paths that could put it there. Planner-visible count dropped 116 → 1. The
-design's step-1 review gate exists precisely to catch that, and skipping it is
-what let it through. Read the report before building step 2.
+**Step 2** (PR #101): consumers filter on status — `generate_candidates`,
+`SymbolicFetcher`, claim promotion.
+
+### What the review of the first attempt caught
+
+Step 2 was originally bundled into step 1, and the consumer filters made
+`dormant` a **closed loop**: a technique leaves `dormant` only by appearing on a
+hypothesis, and the filters removed the only two paths that could put it there.
+Measured on rogii, planner-visible dropped **116 → 1**. Every technique the miner
+ever learned would have been permanently excluded — the failure §9 of the design
+names, where a research system stops proposing novel work and looks healthy doing
+it.
+
+The design's step-1 review gate exists to catch exactly that, and skipping it is
+what let it through. The rule now ages: a freshly mined technique stays
+`candidate` and visible, verified on a sandbox copy —
+
+```
+merge_technique("gradient_boosting_dart") -> candidate
+recompute_technique_status()              -> candidate   planner-visible: True
+```
