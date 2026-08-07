@@ -1,6 +1,6 @@
-# Design — M-11: an experiment is a change to its parent
+# Design — M19: an experiment is a change to its parent
 
-**Status:** design · **Owner:** unassigned · **Supersedes:** the Jinja template pack ·
+**Plan:** [../14-experiments-as-deltas.md](../14-experiments-as-deltas.md) · **Status:** design · **Owner:** unassigned · **Supersedes:** the Jinja template pack ·
 **Subsumes:** technique registry, `applied`/`candidate` split, template→labpilot coupling
 
 ---

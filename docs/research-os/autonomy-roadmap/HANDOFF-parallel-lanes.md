@@ -125,7 +125,7 @@ whether the *emitted program* differs, not whether the prompt did.
 
 ## #25 — technique vocabulary store
 
-**Design is written:** `docs/research-os/autonomy-roadmap/design/10-technique-vocabulary.md`.
+**Design is written:** `docs/research-os/autonomy-roadmap/design/13-technique-vocabulary.md`.
 Read it first; it has the schema, the four statuses and their derivation rules,
 and the tradeoffs already decided.
 

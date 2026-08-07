@@ -1,7 +1,7 @@
-# Design — M-25: the technique vocabulary earns its entries
+# Design — M18: the technique vocabulary earns its entries
 
-**Status:** design · **Owner:** unassigned · **Depends on:** [§8.7](01-technique-to-model.md) ·
-**Blocks:** #26 (candidate adjudication)
+**Status:** design · **Owner:** unassigned · **Plan:** [../13-technique-vocabulary.md](../13-technique-vocabulary.md) · **Depends on:** [§8.7](01-technique-to-model.md) ·
+**Blocks:** M19 · candidate adjudication
 
 ---
 
