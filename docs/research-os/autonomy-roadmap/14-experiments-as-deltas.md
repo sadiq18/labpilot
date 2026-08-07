@@ -31,9 +31,11 @@ fighting its mechanism.
 
 ## The insight
 
-**Express an experiment as a delta and the validation discipline survives by
-construction.** `partition_suffix_holdout`, `_driver_columns()` and the leakage
-gates live in the parent; a delta that does not touch them cannot lose them.
+**Express an experiment as a delta and the validation discipline survives
+whenever the delta does not touch it.** `partition_suffix_holdout`,
+`_driver_columns()` and the leakage gates live in the parent and are never
+regenerated. That is not a guarantee — a delta *can* reach into them — which is
+why detection is part of the work rather than an optional extra.
 
 That is the only reason templates still looked load-bearing — a leaky score looks
 *better*, not worse, so losing that discipline fails silently. Deltas remove the
@@ -43,21 +45,62 @@ It also aligns the code artifact with the model everything else already uses:
 evidence cards compare `parent_cv` to `treatment_cv`, the graph is parent →
 child, attribution credits the difference. Only the code was a fresh object.
 
+## The edit machinery is bought, not built
+
+A spike on 2026-08-07 ran `aider` against rogii's real 331-line `train.py`, asking
+for the `SWA`-style change that produced this system's only genuine improvement:
+
+| | nemotron-super-120b | **nemotron-ultra-550b** |
+|---|---|---|
+| Delta | +55 / −8 | **+24 / −8** |
+| Self-doubt comments in code | 6 | **0** |
+| Test half correct | no | **yes** |
+| Validation discipline touched | **0 lines** | **0 lines** |
+| Cost | $0.007 | $0.02 |
+
+Both runs left `_driver_columns`, `_add_partition_features`, `_known_rows` and
+`partition_suffix_holdout` completely untouched — the core requirement above, met
+without labpilot writing a line of edit-format code. The variable is **model
+quality, not mechanism**, and that is what [M10](04-llm-tiering.md) exists to
+manage — though only if aider is pointed at fitroute rather than at the provider
+directly. Passing `--model` transfers the selection and bypasses the budget
+ledger, rate limiting and failover, so an OpenAI-compatible fitroute proxy is
+step 0 of the rollout, not a nicety.
+
+So M19 ships an *adapter*: aider runs in a workspace copy, the diff becomes a
+`CodeProposal`, and the existing validation and apply path is unchanged. That
+keeps propose-then-apply, the never-edit-the-workspace rule, and M14's
+provenance.
+
 ## Exit criteria
 
-1. A child experiment emits **anchored edits**, not a whole file.
-2. A missed anchor is detected, named, and re-asked — never half-applied.
+1. A child experiment produces a delta; a baseline still produces a whole file.
+2. The workspace is untouched when a proposal is rejected.
 3. Validation logic survives a feature-adding delta **byte-identical**.
-4. `anchor_miss` is recorded in `agent_invocations`, so making delta the default
+4. Failure rate is recorded in `agent_invocations`, so making delta the default
    is an evidence-based decision rather than a judgement call.
 5. Templates are deleted **in the same change** that makes delta the default —
    the discipline M14 phase 3 established, where a removal and the precondition
    that makes it safe must ship together.
 
+## The check that matters most
+
+A delta must do **what the hypothesis claimed** — not merely apply cleanly.
+
+*"Ensemble LightGBM with CatBoost"* can be satisfied by replacing LightGBM, by
+adding CatBoost and never averaging, or by adding CatBoost *and* quietly retuning
+LightGBM. All three run and produce a card. The third credits the whole `cv_gain`
+to "ensemble" when two things changed — a false attribution that no metric
+reveals, because the number itself is real.
+
+Deltas make this checkable for the first time: preservation, addition,
+combination and confinement are AST facts about the change, and only labpilot can
+test them because only labpilot holds the hypothesis.
+
 ## Risk worth naming
 
-Anchored edits make it *possible* to change validation logic; they do not
-prevent it. The mitigation is detection, not prohibition — flag a delta whose
-anchor falls in the validation region and record it on the evidence card. A
+A delta makes it *possible* to change validation logic; running in a copy makes
+it reviewable, not impossible. The mitigation is detection, not prohibition — flag a delta that lands in the
+validation region and record it on the evidence card. A
 hypothesis *about* validation is legitimate; one that changes validation while
 claiming to test a feature is a false result.
