@@ -439,7 +439,7 @@ needs phase 1's telemetry.
 | 1 | **done** | — | — |
 | 2a | **done** | — | — |
 | **2b** | **shipped 2026-08-07**, default off | — | — |
-| **3** | **data collected 2026-08-07**; triage deferred on coverage | 13 of 21 agents still unexercised | breadth, not judgement |
+| **3** | **shipped 2026-08-07** (PR #104) | — | — |
 
 ### 2b as shipped (2026-08-07)
 
@@ -575,9 +575,14 @@ fallback. So phase 3 should not ship as "delete 20 rule engines"; it should ship
 as **"delete the rule engines and make `structured_output` non-negotiable"** —
 one change, because the second half is what makes the first half safe.
 
-Deliberately not executed here. Removing twenty deterministic paths is
-irreversible and is the operator's call, not a conclusion to be drawn from 73
-invocations by the agent that wrote the instrument.
+**Shipped 2026-08-07 (PR #104).** All 20 `_run_rule_engine` implementations
+removed, behind the `structured_output` precondition (PR #98) that makes removal
+safe. The blocker was never production — it was that ~80 tests used the rule
+engines as their no-LLM double. They were replaced with **per-agent** doubles
+carrying meaningful content, not the single generic `output_model()` stub that
+would have turned 28 files into tests asserting empty defaults. Agents without a
+registered builder deliberately keep `llm_client=None`, so the 2a refusal tests
+still exercise refusal. Net −943 lines across 40 files.
 
 **Decision (2026-08-03).** 2b waits for M10 entirely rather than shipping
 opt-in behind a flag. An opt-in build was offered and declined, on the grounds

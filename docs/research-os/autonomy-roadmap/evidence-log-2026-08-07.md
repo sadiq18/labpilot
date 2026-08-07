@@ -414,3 +414,50 @@ evidence for deleting the rule engines and is not sufficient to act on: 13 of 21
 agents were never invoked, and zero fires under M10 routing measures the model
 rather than the engine. §11.4's run C is exactly this comparison, and we have
 one half of it.
+
+
+## Where the day ended
+
+| Milestone | Status |
+|---|---|
+| **M7** technique → model | done — MSE 194.80 → 190.97; differ-table confirms the path is sound |
+| **M10** LLM tiering | shipped and live, plus runtime failover |
+| **M14** LLM required | **complete** — phases 1, 2a, 2b, 3 |
+| **M18** technique vocabulary | shipped — status derived from evidence |
+| **M19** experiments as deltas | designed, not started — the next build |
+
+### The campaign, end to end
+
+| Run | Steps | Ended by |
+|---|---|---|
+| best before today | 10 of 60 | — |
+| S-020 | 27 | offline policy exhausted its checklist |
+| S-021 (strict mode) | **30 of 30** | max steps |
+
+### The pattern, counted
+
+Nine defects this session shared one shape: **the guard exists and its input is
+wrong.** Not nine unrelated bugs — one habit, nine times.
+
+| # | Guard | Wrong input |
+|---|---|---|
+| 1 | `ledger.py::_index_technique` | `normalize_label` strips the colon it tests for |
+| 2 | `_resolve_problem_type` | read `competition.json` while `baseline_choice.json` had the answer |
+| 3 | `revalidate_claims` | keyed on `effect`, but the false claims carry `effect=''` |
+| 4 | `_card_compared_something_real` | `bool(0.0)` rejects a legitimate zero |
+| 5 | `build_evidence_card` | `maximize=True` default no caller overrode |
+| 6 | `_claim_updates_from_attribution` | verb oriented, belief polarity not |
+| 7 | `test_campaign_runs_are_not_dry_runs` | guarded `_default_args`; the offline policy bypassed it |
+| 8 | `run_experiment` metrics check | asked "is there a file?", not "did *this run* write one?" |
+| 9 | `test_no_candidate_reason_names_the_filter` | passed on whichever filter fired first on that machine |
+
+Four were introduced by the same work that fixed the others. The countermeasure
+that generalises is in `AGENTS.md`: **feed a guard a real bad record before
+trusting it.**
+
+### Rejected three times
+
+A curated list answering an open-world question: `KNOWN_TECHNIQUES`, then a
+package allowlist, then the Jinja templates. Each time the replacement was the
+same shape — derive status from evidence, or bound the blast radius, rather than
+enumerate what is permitted in advance.

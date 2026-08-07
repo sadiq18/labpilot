@@ -1,8 +1,16 @@
 # M7 — A technique must change the model
 
-**Status:** designed · **Blocks:** everything · **Blocked by:**
-[M10](04-llm-tiering.md) — not merely "needs a model that can write code", but
-M7's evaluation is incomplete without one (path efficacy is unmeasurable)
+**Status:** **done 2026-08-07** — MSE 194.80 → 190.97, the first distinct
+scores · **Blocks:** everything · **Blocked by:** ~~[M10](04-llm-tiering.md)~~
+(shipped)
+
+> A differ-table taken 2026-08-07 confirmed the technique path is sound: every
+> `applied` technique changes the emitted code, and every `not_applicable` one
+> reports why. The campaign blocker turned out to be undeclared dependencies —
+> generated code importing `catboost`, which killed eight consecutive runs — not
+> techniques failing to reach the model. See
+> [M19](14-experiments-as-deltas.md), which retires the template path M7
+> exposed as the narrow one.
 
 **Design:** [design/01-technique-to-model.md](design/01-technique-to-model.md)
 

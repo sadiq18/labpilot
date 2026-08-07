@@ -36,10 +36,10 @@ asserted.
 
 | Phase | Work | Why here |
 |-------|------|----------|
-| **0** | ~~M14 phase 1~~ **done** — stamps + refusal (2a) | Made every later phase observable, and fixed provenance that recorded `llm` for deterministic output |
+| **0** | ~~M14~~ **complete 2026-08-07** — phases 1, 2a, 2b, 3 | Degradation is now visible *and* fatal on request; the 20 rule engines are gone |
 | **1** | ~~M10 wiring ⇄ thin M7 slice~~ **both done 2026-08-07** | The cycle closed: a real codegen call produced working training code, and two hypotheses produced different scores. [Evidence](evidence-log-2026-08-07.md) |
-| **2** | **M7** full · adopt **M15**'s contract test | M15's "different input ⇒ different artifact" *is* M7's exit criterion generalised, so the practice starts here |
-| **3** | **M8 + M17** together | Both need the same missing writer: `metric_history` / `last_metric` are read in four places and written in none |
+| **2** | ~~**M7** full~~ **done** · ~~**M18**~~ **done** | M7's differ-table showed every `applied` technique changes the emitted code; M18 gave the vocabulary derived status |
+| **3** | **M19** · then **M8 + M17** together | M19 retires the templates that M7 exposed as the narrow path; M8/M17 still need the same missing writer — `metric_history` / `last_metric` are read in four places and written in none |
 | **4** | **M13** (needs M7+M8) · **M11** (needs M7 only) | M11 does **not** need M8 and can start as soon as M7 lands |
 | **5** | **M16** (needs M11 + M14 full) · **M12** (needs M7 + M8) | Last |
 
@@ -85,15 +85,15 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 | # | Plan | Unlocks | Status |
 |---|------|---------|--------|
 | **M10** | [LLM tiering & routing](04-llm-tiering.md) | **A trustworthy reasoning substrate. Everything downstream inherits its quality.** | **v0.1 shipped + exit criterion 3 met 2026-08-07** — a real codegen call produced a working `train.py` that ran and wrote metrics ([evidence](evidence-log-2026-08-07.md)) |
-| **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | **Exit criterion 4 met 2026-08-07: MSE 194.80 → 190.97**, the first distinct scores. Delivered via the *LLM* path; the recipe path is built and tested but unexercised ([evidence](evidence-log-2026-08-07.md)) |
+| **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | **Done 2026-08-07: MSE 194.80 → 190.97**, the first distinct scores, via the LLM path. A differ-table confirmed every `applied` technique changes the emitted code and every `not_applicable` one says why — so the real blocker was undeclared dependencies, not the technique path ([evidence](evidence-log-2026-08-07.md)) |
 | **M8** | [Objective feedback loop](02-objective-loop.md) | The system noticing it is making no progress | Not started |
 | **M9** | [Verification-first execution](03-verification-first.md) | Trusting any result | Partly done |
 | **M11** | [Parallel branches](05-parallel-branches.md) | Iteration speed | Not started |
 | **M12** | [Beyond Kaggle](06-beyond-kaggle.md) | The actual product thesis | Not started |
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
-| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **1, 2a, 2b shipped 2026-08-07.** 2b ships default-off against a measured 3.2% fallback rate; a 30-step campaign completed with strict mode on. Phase 3's instrument is built and reporting — triage is deferred on agent coverage (8 of 21 exercised), not on judgement |
-| **M18** | [Technique vocabulary earns its entries](13-technique-vocabulary.md) | Attention goes somewhere defensible | **design** — 116 techniques on rogii, none with a status; a campaign asked the code engineer to implement `the` |
-| **M19** | [An experiment is a change to its parent](14-experiments-as-deltas.md) | Validation discipline survives by construction | **design** — templates cover 5 of 12 techniques on rogii; whole-file regeneration costs 46% of the prompt and can silently drop what worked |
+| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **Complete 2026-08-07.** 2b ships default-off against a measured 3.2% fallback rate; a 30-step campaign completed with strict mode on. Phase 3 retired all 20 rule engines (PR #104) behind the `structured_output` precondition (PR #98) that makes removal safe |
+| **M18** | [Technique vocabulary earns its entries](13-technique-vocabulary.md) | Attention goes somewhere defensible | **shipped 2026-08-07** (PR #100 step 1, PR #101 step 2). Status derived from evidence; the junk (`the`, `Breath Focus practice`) no longer reaches the planner and `SWA` still does |
+| **M19** | [An experiment is a change to its parent](14-experiments-as-deltas.md) | Validation discipline survives by construction | **design, not started — the next build.** Templates cover 5 of 12 techniques on rogii; whole-file regeneration costs 46% of the prompt and can silently drop what worked |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
 | **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
