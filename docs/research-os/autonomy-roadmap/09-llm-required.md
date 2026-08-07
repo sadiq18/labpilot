@@ -1,6 +1,6 @@
 # M14 — LLM is a hard dependency; delete the rule-engine fallbacks
 
-**Status:** designed · **Decision owner:** product · **Build phase:** 0
+**Status:** **complete 2026-08-07** — phases 1, 2a, 2b, 3 · **Decision owner:** product · **Build phase:** 0
 
 **Design:** [design/09-llm-required.md](design/09-llm-required.md)
 

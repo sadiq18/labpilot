@@ -8,8 +8,13 @@
 > three internal routers into one". Free-tier support stops being the design
 > and becomes one case of a general budget mechanism (`cost == 0`).
 
-**Status:** decision layer built and tested, **not wired into the live path** ·
-**Blocks:** M7 in practice
+**Status:** **v0.1 shipped and live 2026-08-07** — `research doctor` resolves a
+provider per role, and campaigns run on it · **Blocked M7; no longer does**
+
+> Since shipping: runtime failover added (a provider 429 no longer ends a
+> campaign — nine failovers across two runs that would previously have been nine
+> dead campaigns), and `BudgetLedger.cool_down`, written for this and never
+> called, is now wired.
 
 ---
 
