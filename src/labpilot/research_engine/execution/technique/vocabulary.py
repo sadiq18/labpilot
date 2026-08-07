@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from labpilot.research_engine.execution.technique.status_constants import (
     DORMANT_AFTER_CAMPAIGNS,
@@ -42,11 +43,36 @@ class TechniqueStatusDerivation:
     evidence_card_id: str | None = None
 
 
+@dataclass(frozen=True)
+class VocabularyAgingContext:
+    """Shared inputs for dormant aging — load once per CLI/report pass."""
+
+    selected: set[str]
+    session_times: tuple[datetime, ...]
+
+
 def _list_cards(promoter: ClaimPromoter) -> list[Any]:
     try:
         return list(promoter._evidence.list())  # noqa: SLF001 — shared card walk
     except Exception:  # noqa: BLE001
         return []
+
+
+def _parse_timestamp(value: str | datetime | None) -> datetime | None:
+    """Parse ISO timestamps from SQLite / pydantic, including ``Z`` suffixes."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _signed_measured_effect(
@@ -106,8 +132,8 @@ def selected_technique_names(knowledge_dir: Path, competition: str) -> set[str]:
     return names
 
 
-def campaign_created_ats(knowledge_dir: Path, competition: str) -> list[str]:
-    """Session ``created_at`` stamps for ``competition``, oldest first.
+def campaign_created_ats(knowledge_dir: Path, competition: str) -> list[datetime]:
+    """Session start times for ``competition``, oldest first.
 
     Reads ``os_sessions`` through SqliteClient — not ConductorStore — so
     ``execution/`` stays free of conductor imports (architecture boundary).
@@ -122,17 +148,38 @@ def campaign_created_ats(knowledge_dir: Path, competition: str) -> list[str]:
             "ORDER BY created_at",
             (competition,),
         ).fetchall()
-        return [str(r["created_at"]) for r in rows if r["created_at"]]
+        out: list[datetime] = []
+        for row in rows:
+            parsed = _parse_timestamp(row["created_at"])
+            if parsed is not None:
+                out.append(parsed)
+        return out
     finally:
         client.close()
 
 
-def campaigns_since(created_at: str | None, session_times: list[str]) -> int:
-    """How many campaigns started after ``created_at`` (string-ordered ISO times)."""
-    if not created_at:
+def load_aging_context(knowledge_dir: Path, competition: str) -> VocabularyAgingContext:
+    """Load selection + campaign clocks once for report/recompute callers."""
+    return VocabularyAgingContext(
+        selected=selected_technique_names(Path(knowledge_dir), competition),
+        session_times=tuple(campaign_created_ats(Path(knowledge_dir), competition)),
+    )
+
+
+def campaigns_since(
+    created_at: str | datetime | None,
+    session_times: Sequence[str | datetime],
+) -> int:
+    """How many campaigns started after ``created_at``."""
+    start = _parse_timestamp(created_at)
+    if start is None:
         return 0
-    stamp = str(created_at)
-    return sum(1 for t in session_times if t > stamp)
+    count = 0
+    for stamp in session_times:
+        parsed = _parse_timestamp(stamp)
+        if parsed is not None and parsed > start:
+            count += 1
+    return count
 
 
 def derive_technique_status(
@@ -141,8 +188,8 @@ def derive_technique_status(
     *,
     cards: list[Any] | None = None,
     selected: set[str] | None = None,
-    created_at: str | None = None,
-    session_times: list[str] | None = None,
+    created_at: str | datetime | None = None,
+    session_times: Sequence[str | datetime] | None = None,
     dormant_after: int = DORMANT_AFTER_CAMPAIGNS,
 ) -> tuple[str, str, int, float, float, str | None]:
     """Return ``(status, reason, observations, raw_net, signed_net, evidence_card_id)``.
@@ -157,7 +204,7 @@ def derive_technique_status(
     )
     if observations == 0:
         label = name.strip().lower()
-        age = campaigns_since(created_at, session_times or [])
+        age = campaigns_since(created_at, session_times or ())
         if (
             selected is not None
             and label
@@ -217,7 +264,7 @@ def derive_all_technique_statuses(
     *,
     cards: list[Any] | None = None,
     selected: set[str] | None = None,
-    session_times: list[str] | None = None,
+    session_times: Sequence[str | datetime] | None = None,
     dormant_after: int = DORMANT_AFTER_CAMPAIGNS,
 ) -> list[TechniqueStatusDerivation]:
     """Derive status for every row in ``techniques``."""
@@ -250,14 +297,18 @@ def derive_all_technique_statuses(
     return out
 
 
-def recompute_technique_status(knowledge_dir: Path, competition: str) -> list[str]:
+def recompute_technique_status(
+    knowledge_dir: Path,
+    competition: str,
+    *,
+    aging: VocabularyAgingContext | None = None,
+) -> list[str]:
     """Recompute every technique status from current cards. Returns changed ids."""
     changed: list[str] = []
     promoter = ClaimPromoter(Path(knowledge_dir), competition)
     try:
         cards = _list_cards(promoter)
-        selected = selected_technique_names(Path(knowledge_dir), competition)
-        sessions = campaign_created_ats(Path(knowledge_dir), competition)
+        ctx = aging or load_aging_context(Path(knowledge_dir), competition)
         with KnowledgeStore(Path(knowledge_dir), competition) as store:
             for row in store.list_techniques():
                 tid = str(row.get("id") or "")
@@ -269,9 +320,9 @@ def recompute_technique_status(knowledge_dir: Path, competition: str) -> list[st
                         name,
                         promoter,
                         cards=cards,
-                        selected=selected,
+                        selected=ctx.selected,
                         created_at=str(row.get("created_at") or "") or None,
-                        session_times=sessions,
+                        session_times=ctx.session_times,
                     )
                     prior = str(row.get("status") or "candidate")
                     if prior == status:
@@ -310,20 +361,21 @@ def recompute_technique_status(knowledge_dir: Path, competition: str) -> list[st
 def technique_status_report(
     knowledge_dir: Path,
     competition: str,
+    *,
+    aging: VocabularyAgingContext | None = None,
 ) -> dict[str, Any]:
     """Summarise derived statuses without writing — for review before filtering."""
     promoter = ClaimPromoter(Path(knowledge_dir), competition)
     try:
         cards = _list_cards(promoter)
-        selected = selected_technique_names(Path(knowledge_dir), competition)
-        sessions = campaign_created_ats(Path(knowledge_dir), competition)
+        ctx = aging or load_aging_context(Path(knowledge_dir), competition)
         with KnowledgeStore(Path(knowledge_dir), competition) as store:
             derived = derive_all_technique_statuses(
                 store,
                 promoter,
                 cards=cards,
-                selected=selected,
-                session_times=sessions,
+                selected=ctx.selected,
+                session_times=ctx.session_times,
             )
             stored = {
                 str(r["id"]): str(r.get("status") or "candidate")

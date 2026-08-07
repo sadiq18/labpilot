@@ -176,8 +176,9 @@ class HypothesisAssistant:
     ) -> HypothesisAssistantResult:
         notes: list[str] = []
         research_context = context
-        if research_context is None:
-            with KnowledgeStore(knowledge_dir, competition) as store:
+        technique_statuses: dict[str, str] = {}
+        with KnowledgeStore(knowledge_dir, competition) as store:
+            if research_context is None:
                 research_context = ContextBuilder(
                     store, llm_client=self.llm_client
                 ).build(
@@ -187,17 +188,16 @@ class HypothesisAssistant:
                     competition={"slug": competition},
                     progressive=progressive,
                 )
-            notes.extend(research_context.notes)
-
-        tried = load_existing_technique_tags(knowledge_dir, competition)
-        ledger = build_experiment_ledger(knowledge_dir, competition)
-        with KnowledgeStore(knowledge_dir, competition) as store:
+                notes.extend(research_context.notes)
             technique_statuses = {
                 normalize_label(str(row.get("name") or "")): str(
                     row.get("status") or "candidate"
                 )
                 for row in store.list_techniques()
             }
+
+        tried = load_existing_technique_tags(knowledge_dir, competition)
+        ledger = build_experiment_ledger(knowledge_dir, competition)
         notes.append(
             "hypothesis: ledger "
             f"artifacts={len(ledger.artifacts)} "

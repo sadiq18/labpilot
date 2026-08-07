@@ -303,9 +303,7 @@ def generate_candidates(
             )
 
     if ledger is not None:
-        candidates.extend(
-            _candidates_from_ledger(ledger, tried=tried, statuses=statuses)
-        )
+        candidates.extend(_candidates_from_ledger(ledger, tried=tried))
 
     deduped = _dedupe_candidates(candidates)
     status_kept, status_dropped = filter_by_technique_status(deduped, statuses)
@@ -361,7 +359,6 @@ def _candidates_from_ledger(
     ledger: ExperimentLedger,
     *,
     tried: set[str],
-    statuses: dict[str, str],
 ) -> list[HypothesisCandidate]:
     """Stack unused techniques/beliefs/claims onto the winning line when present."""
     from labpilot.research_engine.intelligence.hypothesis.ledger import ExperimentLedger as _L
@@ -377,8 +374,6 @@ def _candidates_from_ledger(
     def _blocked(tech: str) -> bool:
         label = normalize_label(tech)
         if not label or label in tried or ledger.is_failed(tech):
-            return True
-        if statuses.get(label, "candidate") not in PLANNER_VISIBLE_STATUSES:
             return True
         for parent_tech in stack:
             if (normalize_label(parent_tech), label) in avoid:

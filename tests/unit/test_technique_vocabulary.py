@@ -331,3 +331,23 @@ def test_selected_unmeasured_never_goes_dormant(tmp_path) -> None:
         assert status == "candidate"
     finally:
         promoter.close()
+
+
+def test_campaigns_since_parses_mixed_iso_forms() -> None:
+    """Z vs +00:00 must not invert ordering via lexicographic string compare."""
+    from labpilot.research_engine.execution.technique.vocabulary import campaigns_since
+
+    assert (
+        campaigns_since(
+            "2026-08-07T15:38:16.500000+00:00",
+            ["2026-08-07T15:38:16Z", "2026-08-07T15:38:17Z"],
+        )
+        == 1
+    )
+    assert (
+        campaigns_since(
+            "2026-08-07T15:38:16Z",
+            ["2026-08-07T15:38:16.999999+00:00"],
+        )
+        == 1
+    )
