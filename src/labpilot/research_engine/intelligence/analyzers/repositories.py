@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.llm.client import LLMClient
 from labpilot.research_engine.intelligence.analyzers.base import BaseAnalyzer
 from labpilot.research_engine.intelligence.knowledge import KnowledgeStore
@@ -159,7 +159,8 @@ class RepositoryAnalyzer(BaseAnalyzer):
         parts = [f"README:\n{repo.readme_excerpt}"]
         for path, text in repo.file_texts.items():
             parts.append(f"\nFILE {path}:\n{text}")
-        result = agent.run(
+        result = run_or_none(
+            agent,
             StructuredContext(
                 competition=context.competition,
                 text="\n".join(parts)[:120_000],
@@ -170,8 +171,17 @@ class RepositoryAnalyzer(BaseAnalyzer):
                     "interesting_files": repo.key_files,
                     "has_readme": bool(repo.readme_excerpt),
                 },
-            )
+            ),
         )
+        if result is None:
+            return RepoKnowledge(
+                repo_id=repo.id,
+                full_name=repo.full_name,
+                dependencies=list(repo.dependencies),
+                interesting_files=list(repo.key_files),
+                confidence=0.2,
+                grounded_in="readme" if repo.readme_excerpt else "deps",
+            )
         card = (
             result
             if isinstance(result, RepoKnowledge)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import HypothesisStatus
 from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
@@ -70,7 +70,8 @@ class KnowledgeSynthesizer:
         ]
         open_lines = [f"{h.id}: {h.prediction}" for h in open_hyps]
 
-        draft = self._agent.run(
+        draft = run_or_none(
+            self._agent,
             StructuredContext(
                 competition=self.competition,
                 data={
@@ -78,9 +79,21 @@ class KnowledgeSynthesizer:
                     "belief_lines": belief_lines,
                     "open_hypothesis_lines": open_lines,
                 },
-            )
+            ),
         )
-        assert isinstance(draft, EvidenceSynthesisDraft)
+        if draft is None:
+            draft = EvidenceSynthesisDraft(
+                summary=(
+                    "Current understanding: "
+                    f"strong={by_strength.get('strong', 0)}, "
+                    f"rejected={by_strength.get('rejected', 0)}, "
+                    f"beliefs={len(belief_lines)}, open_hypotheses={len(open_lines)}."
+                ),
+                open_questions=open_lines[:5] or ["No open hypotheses."],
+                key_takeaways=belief_lines[:3] or ["No validated beliefs yet."],
+            )
+        elif not isinstance(draft, EvidenceSynthesisDraft):
+            draft = EvidenceSynthesisDraft.model_validate(draft.model_dump())
 
         return {
             "competition": self.competition,
@@ -103,5 +116,5 @@ class KnowledgeSynthesizer:
             "summary": draft.summary,
             "open_questions_text": draft.open_questions,
             "key_takeaways": draft.key_takeaways,
-            "generated_by": "llm" if self._agent.last_used_llm else "rule_engine",
+            "generated_by": "llm" if self._agent.last_used_llm else "template_fallback",
         }

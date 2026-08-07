@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.llm.client import LLMClient
 from labpilot.research_engine.intelligence.analyzers.base import BaseAnalyzer
 from labpilot.research_engine.intelligence.knowledge import KnowledgeStore
@@ -161,13 +161,27 @@ class PaperAnalyzer(BaseAnalyzer):
             "benchmarks": paper.benchmarks,
             "grounded_in": "abstract" if paper.abstract else "metadata",
         }
-        result = agent.run(
+        result = run_or_none(
+            agent,
             StructuredContext(
                 competition=context.competition,
                 text=text,
                 data=data,
-            )
+            ),
         )
+        if result is None:
+            # Identity-only card — no invented extraction when the LLM fails.
+            return (
+                PaperKnowledge(
+                    paper_id=paper.id,
+                    title=paper.title,
+                    datasets_used=list(paper.datasets),
+                    code_urls=list(paper.github_urls),
+                    grounded_in="abstract" if paper.abstract else "metadata",
+                    confidence=0.2,
+                ),
+                False,
+            )
         used_llm = bool(getattr(agent, "last_used_llm", False))
         if not isinstance(result, PaperKnowledge):
             result = PaperKnowledge.model_validate(result.model_dump())

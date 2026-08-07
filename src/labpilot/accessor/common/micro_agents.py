@@ -322,3 +322,22 @@ class BaseMicroAgent:
         from labpilot.llm.json_utils import parse_json_object
 
         return self.output_model.model_validate(parse_json_object(raw))
+
+
+def run_or_none(agent: BaseMicroAgent, context: StructuredContext) -> BaseModel | None:
+    """Run ``agent``; return ``None`` on LLM unavailable/degraded.
+
+    Use where the caller has a non-LLM baseline (skip enrichment, keep a
+    template, assemble structured SoR without prose). Callers that must abort
+    the campaign should call :meth:`BaseMicroAgent.run` directly so
+    :class:`LLMDegradedError` reaches the conductor.
+    """
+    try:
+        return agent.run(context)
+    except (LLMDegradedError, LLMUnavailableError) as exc:
+        logger.warning(
+            "Micro agent %s skipped (%s).",
+            getattr(agent, "name", None) or type(agent).__name__,
+            exc,
+        )
+        return None

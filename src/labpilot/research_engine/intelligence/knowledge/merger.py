@@ -14,7 +14,7 @@ from collections import Counter
 
 from pydantic import BaseModel, Field
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.intelligence.feature_recipes import (
     FEATURE_ENGINEERING_CATEGORY,
     looks_like_feature_engineering,
@@ -182,10 +182,8 @@ class KnowledgeMerger:
 
     def _ask_agent(self, distinct: list[str]) -> tuple[str, str, str] | None:
         agent = ConceptNormalizerAgent(llm_client=self.llm_client)
-        try:
-            result = agent.run(StructuredContext(items=distinct))
-        except Exception as exc:  # normalization is an optional upgrade
-            logger.debug("concept normalization failed: %s", exc)
+        result = run_or_none(agent, StructuredContext(items=distinct))
+        if result is None:
             return None
         canonical = str(getattr(result, "canonical", "")).strip()
         # Guard: the agent may only relabel within the cluster it was given.

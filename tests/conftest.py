@@ -67,7 +67,7 @@ def _inject_per_agent_llm_doubles(monkeypatch):
     tests still raise ``LLMUnavailableError``. Explicit clients are untouched.
     """
     from labpilot.accessor.common.micro_agents import BaseMicroAgent
-    from support.agent_doubles import AgentDoubleClient, double_for, resolve_builder
+    from helpers.agent_doubles import AgentDoubleClient, double_for, resolve_builder
 
     orig_init = BaseMicroAgent.__init__
     orig_run_llm = BaseMicroAgent._run_llm

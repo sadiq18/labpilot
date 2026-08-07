@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.intelligence.brief.models import ResearchBrief
 from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
 from labpilot.research_engine.intelligence.micro_agents.research_brief.agent import (
@@ -52,15 +52,16 @@ def build_research_brief(
         "suggested_experiments": suggested[:5],
     }
     agent = ResearchBriefAgent(llm_client=llm_client)
-    narrative = agent.run(
+    narrative = run_or_none(
+        agent,
         StructuredContext(
             competition=store.competition,
             question="Write a researcher briefing before experimentation",
             text=_context_text(structured),
             data=structured,
-        )
+        ),
     )
-    generated_by = agent.last_generated_by
+    generated_by = agent.last_generated_by if narrative is not None else "template_fallback"
     problem = str(getattr(narrative, "problem_summary", "") or "").strip()
     if not problem:
         problem = _fallback_problem_summary(competition, dataset)

@@ -18,7 +18,7 @@ import json
 import logging
 from pathlib import Path
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.execution.capabilities._helpers import (
     evidence,
     file_digest,
@@ -275,7 +275,8 @@ class CodeEngineeringCapability(BaseCapability):
                 ),
             },
         )
-        proposal = self._agent.run(structured)
+        raw = run_or_none(self._agent, structured)
+        proposal = raw if isinstance(raw, CodeProposal) else CodeProposal()
         origin = "llm" if self._agent.last_used_llm else "last_resort"
 
         if not proposal.files:
