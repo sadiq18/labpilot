@@ -203,6 +203,70 @@ happened rather than what was intended.
 OpenAI-compatible HTTP shell over it, and it stays inside `fitroute`, which keeps
 the package extractable.
 
+##### Server: `http.server`, not a framework
+
+`fitroute` is stdlib + pydantic only, enforced by
+`test_fitroute_uses_only_the_standard_library_and_pydantic`. That test exists so
+extraction stays a directory move, and it decides this.
+
+| Option | Boundary | Verdict |
+|---|---|---|
+| **`http.server` in fitroute** | intact | **chosen** — ~100 lines, zero new deps |
+| FastAPI in fitroute | **broken** — starlette, anyio, uvicorn | rejected: heavy chain for a package sold on having none |
+| FastAPI in `labpilot/` | intact for fitroute | rejected *for now*: the HTTP surface leaves the extractable unit, so an adopter gets the library without the proxy |
+| `fitroute[server]` optional extra | scoped exception | rejected: two install paths, and the skipped one is the one that breaks |
+| Bare ASGI app, host supplies the server | intact | **the upgrade path** — zero deps for fitroute, a real server when concurrency matters |
+
+FastAPI would buy request validation (pydantic, already available), routing (one
+route), async (the gateway is synchronous) and OpenAPI docs (irrelevant). The
+surface is a single `POST /v1/chat/completions`, plus `GET /v1/models` if litellm
+probes, called by one local subprocess. `ThreadingHTTPServer` is adequate, and
+the parts of `http.server` people get wrong — chunked encoding, keep-alive, TLS —
+do not arise on localhost with one client.
+
+**Exit condition:** if the proxy ever becomes a hosted multi-tenant service, a
+framework earns its place — and by then it lives outside fitroute, so that is the
+ASGI row, not a weakening of the core. The boundary test makes the mistake
+self-reporting in the meantime.
+
+##### Streaming: off first, and the reason is accounting
+
+`adapters.py` hardcodes `"stream": False`. aider streams by default, so step 0
+passes `--no-stream`.
+
+**Streaming does not improve output quality** — same model, same prompt, same
+tokens. It improves *liveness*, which for a subprocess we are blocking on is
+worth only one thing: avoiding an idle timeout on a long generation. Real, but
+narrow.
+
+Against that, two costs:
+
+* **It can break the accounting the proxy exists for.** The ledger records
+  `result.total_tokens` from the response `usage` field. OpenAI-compatible
+  streaming omits `usage` unless the request sets
+  `stream_options: {"include_usage": true}`, which not every provider in the
+  catalog honours. Streaming without that silently reduces every call to an
+  unmetered one, taking TPM limits and budget with it.
+* **Failover cannot survive the first byte.** Once bytes are written to aider,
+  they cannot be recalled. So `cool_down` + re-select is available *until the
+  response starts* and not after — which is the correct behaviour, and worth
+  designing in rather than discovering.
+
+**If streaming is later wanted**, the work is four pieces, in order:
+
+1. `adapters.py`: send `stream: True` with `stream_options.include_usage`, parse
+   the provider's SSE (`data: {json}` lines, terminated by `data: [DONE]`).
+2. `gateway.py`: `complete_stream()` yielding chunks, with failover permitted
+   only before the first chunk is emitted.
+3. Ledger: read `usage` from the terminal chunk; **treat a stream that arrives
+   without it as unmetered and say so**, rather than recording zero — the same
+   rule `metered` already applies.
+4. Proxy handler: relay SSE to aider unchanged.
+
+**Gate it on evidence, not preference:** enable streaming only if idle timeouts
+are observed in practice *and* `include_usage` is confirmed on the providers
+actually in `use`. Otherwise `--no-stream` costs nothing that matters here.
+
 ##### The `structured_output` carve-out is a deliberate catalog change
 
 Today `MANDATORY_CAPS` unions `structured_output` into **every** role and cannot
