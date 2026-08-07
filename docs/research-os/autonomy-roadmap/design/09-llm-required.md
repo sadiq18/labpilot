@@ -526,6 +526,59 @@ on. Two reasons, both about what the number cannot say:
 Triage is therefore deferred on **coverage, not judgement**. The instrument
 exists and reports; it needs a workload that reaches the other thirteen.
 
+### Run C, attempted — and what it revealed instead
+
+§11.4 asks for run C: the same workload on a weaker model. *"If a frontier model
+stops a rule engine firing, it was masking a failure; if it keeps firing, it is
+doing real work."*
+
+**Run C as specified cannot be run on this system.** Every role requires
+`structured_output`:
+
+```
+codegen    requires={'structured_output'}
+reasoning  requires={'structured_output'}
+summarize  requires={'structured_output'}
+default    requires={'structured_output'}
+```
+
+The capability preflight refuses to route to a model without constrained JSON
+decoding — which is exactly the model that would make a rule engine fire. The
+first attempt pinned routing to `ollama-local` and produced 14 fallbacks, but the
+reason was `role 'reasoning' requires a strong provider and none is configured`:
+the router declining to route at all. That is phase **2a** (no client), not a
+weak answer, and counting it as run C would have been measuring the wrong thing.
+
+Re-run with `ollama-local` declared `strong: true` inline so the roles would
+actually bind to `qwen2.5-coder:14b`:
+
+| Run | Model | Invocations | Rule-engine fires |
+|---|---|---|---|
+| B | cloud, strong | 129 | 3 — all `ConductorPolicy` |
+| C | local `qwen2.5-coder:14b` | 21 | **0** |
+
+Even on the weak local model the rule engines never fire, because that model
+*also* enforces JSON. It is in the catalog at all only because it passed the
+`structured_output` probe.
+
+**This changes the argument for deleting them.** "They never fire" is weak
+evidence — it could be luck, or thin coverage. The real finding is structural:
+
+> The failure the rule engines exist to catch — a model answering a JSON-only
+> prompt in prose — is **unreachable while `structured_output` is a hard
+> precondition**. M10's preflight removed the failure class, not just its rate.
+
+That is a much better reason to delete them, and it comes with its own condition:
+deletion is safe *only while that precondition holds*. Relaxing any role's
+`requires` set brings the failure back to a system that no longer has the
+fallback. So phase 3 should not ship as "delete 20 rule engines"; it should ship
+as **"delete the rule engines and make `structured_output` non-negotiable"** —
+one change, because the second half is what makes the first half safe.
+
+Deliberately not executed here. Removing twenty deterministic paths is
+irreversible and is the operator's call, not a conclusion to be drawn from 73
+invocations by the agent that wrote the instrument.
+
 **Decision (2026-08-03).** 2b waits for M10 entirely rather than shipping
 opt-in behind a flag. An opt-in build was offered and declined, on the grounds
 of keeping the branch to what is verified.

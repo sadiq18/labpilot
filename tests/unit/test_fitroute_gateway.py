@@ -125,12 +125,27 @@ def test_capability_is_never_relaxed_by_degrading(ledger):
     assert decision.wait_seconds > 0
 
 
-def test_no_candidate_reason_names_the_filter(ledger):
+def test_no_candidate_reason_names_the_filter(ledger, monkeypatch):
     """'No eligible provider' with no cause is what sends people to read the
-    router's source."""
+    router's source.
+
+    Both fixtures below isolate the *credential* filter, which is what this test
+    is about. Without them it asserted "whatever filter fires first on this
+    machine": a dev with `GROQ_API_KEY` set passes the credential check and
+    fails on capabilities instead, and since `structured_output` became
+    mandatory the provider needs it to get that far at all.
+    """
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     routing = RoutingConfig(
         plan="free",
-        providers=[ProviderSpec(name="groq", api_key_env="GROQ_API_KEY", models={"default": "m"})],
+        providers=[
+            ProviderSpec(
+                name="groq",
+                api_key_env="GROQ_API_KEY",
+                models={"default": "m"},
+                caps={"structured_output"},
+            )
+        ],
     )
     decision = select_route(routing, "reasoning", ledger)
     assert "GROQ_API_KEY" in decision.reason

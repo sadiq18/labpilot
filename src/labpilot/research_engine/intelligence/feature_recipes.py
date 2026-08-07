@@ -164,12 +164,17 @@ def _name_from_sentence(sentence: str) -> str:
     ):
         if re.search(pattern, lower):
             return label
-    # Fallback: first TitleCase / snake-ish token near "feature"
-    match = re.search(
-        r"\b([A-Za-z][A-Za-z0-9_]{2,40})\s+feature",
-        sentence,
-        flags=re.I,
-    )
-    if match:
-        return match.group(1).strip().lower().replace(" ", "_")
+    # No scraped fallback. The previous one took the first word before
+    # "feature" — `\b([A-Za-z][A-Za-z0-9_]{2,40})\s+feature` — which matches any
+    # English word of three or more letters. "We added the features to the
+    # model" minted a technique called `the`; measured on rogii, ten beliefs
+    # existed for `the`, `add`, `built`, `computed`, `average`, `context`,
+    # `model`, `neighbour`, `tangent` and `booster`, and the Conductor asked
+    # the code engineer to implement `the`.
+    #
+    # A name we cannot stand behind is worse than no name: it becomes an
+    # identity in the ledger, accrues beliefs, and competes for attention with
+    # techniques that were actually measured. Per §8.7 the description is the
+    # payload and identity is for the ledger, so an unrecognised recipe stays
+    # generic and keeps its sentence as the description.
     return "feature_engineering"
