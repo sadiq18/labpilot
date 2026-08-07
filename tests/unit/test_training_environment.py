@@ -208,3 +208,95 @@ def test_a_ref_pointing_at_nothing_is_not_a_result(tmp_path):
 
     ref = SimpleNamespace(kind="metrics", path=str(tmp_path / "gone.json"))
     assert not _metrics_written_since(ref, 0.0)
+
+
+# --- the invariant that PR #102 review caught the hard way -------------------
+
+
+def _template_scripts():
+    from pathlib import Path
+
+    root = (
+        Path(__file__).resolve().parents[2]
+        / "src/labpilot/research_engine/execution/capabilities/code_engineering/templates"
+    )
+    return sorted(root.rglob("train.py.j2"))
+
+
+def test_templates_exist():
+    assert _template_scripts(), "no templates found — this guard would pass vacuously"
+
+
+@pytest.mark.parametrize("path", _template_scripts(), ids=lambda p: p.parent.name)
+def test_a_declaring_template_must_not_import_labpilot(path):
+    """`uv run --script` cannot see labpilot, so the two cannot coexist.
+
+    Caught in review: PEP 723 blocks were added to `tabular_regression` and
+    `tabular_classification`, both of which do
+    `from labpilot.research_engine.execution.metrics import compute_metric`.
+    With uv on PATH — the common case — those templates would have run in an
+    ephemeral env and died with ModuleNotFoundError. The templates *changed* by
+    that PR were the ones it would have broken.
+
+    A template either declares its dependencies and stands alone, or uses
+    labpilot's environment. Never both.
+    """
+    body = path.read_text(encoding="utf-8")
+    if "# /// script" not in body:
+        pytest.skip(f"{path.parent.name} does not declare dependencies")
+    assert "labpilot" not in body, (
+        f"{path.parent.name} declares PEP 723 dependencies but imports labpilot, "
+        "which the ephemeral environment cannot see"
+    )
+
+
+@pytest.mark.parametrize("path", _template_scripts(), ids=lambda p: p.parent.name)
+def test_a_declaring_template_declares_every_third_party_import(path):
+    """`joblib` was undeclared and worked only as a sklearn transitive — the
+    kind of accident that breaks when a resolver picks a different tree."""
+    import re
+
+    body = path.read_text(encoding="utf-8")
+    if "# /// script" not in body:
+        pytest.skip(f"{path.parent.name} does not declare dependencies")
+
+    declared = " ".join(declared_dependencies(body))
+    stdlib_ok = {"json", "os", "sys", "pathlib", "typing", "dataclasses", "math",
+                 "itertools", "collections", "warnings", "time", "re", "logging"}
+    alias = {"sklearn": "scikit-learn", "yaml": "pyyaml"}
+    imported = {m or n for m, n in re.findall(r"^import (\w+)|^from (\w+)", body, re.M)}
+    for mod in sorted(imported - stdlib_ok):
+        assert alias.get(mod, mod) in declared, (
+            f"{path.parent.name} imports {mod!r} without declaring it"
+        )
+
+
+def test_the_runner_uses_the_ephemeral_command_and_scrubbed_env(tmp_path, monkeypatch):
+    """Locks the integration this change exists to ship.
+
+    The unit tests cover `training_command` and `child_environment` in
+    isolation; nothing asserted `TrainingRunner.run` actually calls them.
+    """
+    import subprocess
+
+    from labpilot.research_engine.execution.training.runner import TrainingRunner
+
+    pipeline = tmp_path / "pipeline"
+    pipeline.mkdir()
+    (pipeline / "train.py").write_text(PEP723, encoding="utf-8")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-must-not-reach-generated-code")
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/uv")
+
+    seen = {}
+
+    def _fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        seen["env"] = kw.get("env")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    TrainingRunner(tmp_path).run(timeout=5)
+
+    assert seen["cmd"][:3] == ["uv", "run", "--script"]
+    assert seen["env"] is not None, "the child must not inherit the parent environment"
+    assert "OPENROUTER_API_KEY" not in seen["env"]

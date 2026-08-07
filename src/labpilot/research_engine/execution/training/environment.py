@@ -49,7 +49,10 @@ logger = logging.getLogger(__name__)
 _SCRIPT_BLOCK = re.compile(r"^# /// script\s*$", re.MULTILINE)
 
 #: Dependency entries inside the block, e.g. ``#   "catboost>=1.2",``.
-_DEP_ENTRY = re.compile(r'^#\s*"([^"]+)"\s*,?\s*$', re.MULTILINE)
+#: Both quote styles: PEP 723 metadata is TOML, single quotes are valid there,
+#: and models emit them. `uv` installs either way, so a double-quote-only parser
+#: would report no dependencies for a script that has them.
+_DEP_ENTRY = re.compile(r"""^#\s*["']([^"']+)["']\s*,?\s*$""", re.MULTILINE)
 
 #: Environment variables never passed to generated code. Prefix matching, because
 #: provider keys arrive under names this list cannot enumerate ahead of time —
@@ -83,10 +86,10 @@ def declares_dependencies(script: Path | str) -> bool:
 def declared_dependencies(script: Path | str) -> list[str]:
     """Dependency specifiers the script declares, in order.
 
-    Recorded on the evidence card so a result can be tied to the environment
-    that produced it — two runs with different library versions are not
-    straightforwardly comparable, and the card should say so rather than leave
-    the reader to assume.
+    Currently used for logging only. Writing these onto the evidence card — so a
+    result can be tied to the environment that produced it — is deferred, and
+    saying otherwise here would send the next reader hunting for a write path
+    that does not exist.
     """
     text = script.read_text(encoding="utf-8") if isinstance(script, Path) else str(script)
     match = _SCRIPT_BLOCK.search(text)
