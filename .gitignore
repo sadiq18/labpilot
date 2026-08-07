@@ -36,8 +36,20 @@ configs/competitions/*.yml
 # IDE / agent tooling
 .idea/
 .vscode/
-skills/karpathy-guidelines/
 *.swp
+
+# Local mirrors of AGENTS.md, which is the source of truth for agent guidance.
+# Tracking a copy means it drifts: someone edits AGENTS.md, the mirror keeps
+# saying the old thing, and the tool injects the stale version automatically
+# (these carry `alwaysApply: true`). Listed by name rather than as a glob so
+# `.cursor/rules/design-doc.mdc` is not swept up by accident.
+skills/karpathy-guidelines/
+.cursor/rules/growth-areas.mdc
+.cursor/rules/karpathy-guidelines.mdc
+
+# Third-party plugin manifests — local tooling, not project guidance.
+.claude-plugin/marketplace.json
+.claude-plugin/plugin.json
 
 # Local config (developer-specific, not committed)
 # .claude/settings.json - uncomment if adding local overrides
