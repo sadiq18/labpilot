@@ -569,14 +569,15 @@ class _FakeWorkspace:
 
 def _available(monkeypatch, *, has_plan, has_execution):
     import labpilot.research_engine.conductor.loop as loop_mod
+    import labpilot.research_engine.conductor.policy as policy_mod
     from labpilot.research_engine.conductor.policy import available_tools
 
-    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-001" if has_plan else None)
+    # `run_plan` is gated on a plan the Engineer would actually accept, not on
+    # "a plan exists" — patch the predicate that decides it.
+    monkeypatch.setattr(policy_mod, "has_runnable_plan", lambda ws: has_plan)
     monkeypatch.setattr(
         loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
     )
-    import labpilot.research_engine.conductor.policy as policy_mod
-
     monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 0)
     monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: None)
     monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: False)
@@ -658,7 +659,7 @@ def _available_with_backlog(monkeypatch, backlog, *, has_plan=True, has_executio
     import labpilot.research_engine.conductor.loop as loop_mod
     import labpilot.research_engine.conductor.policy as policy_mod
 
-    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-001" if has_plan else None)
+    monkeypatch.setattr(policy_mod, "has_runnable_plan", lambda ws: has_plan)
     monkeypatch.setattr(
         loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
     )
@@ -739,7 +740,7 @@ def test_unrun_plan_blocks_queuing_another(monkeypatch):
     import labpilot.research_engine.conductor.loop as loop_mod
     import labpilot.research_engine.conductor.policy as policy_mod
 
-    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-003")
+    monkeypatch.setattr(policy_mod, "has_runnable_plan", lambda ws: True)
     monkeypatch.setattr(loop_mod, "_latest_execution_id", lambda ws: "E-001")
     monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 5)
     monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 1.0)
@@ -787,7 +788,14 @@ def test_latest_plan_prefers_a_runnable_one(monkeypatch, tmp_path):
     assert loop_mod._latest_plan_id(_WS()) == "P-002"
 
 
-def test_latest_plan_falls_back_when_none_runnable(monkeypatch, tmp_path):
+def test_latest_plan_is_none_when_none_runnable(monkeypatch, tmp_path):
+    """No runnable plan means no answer — not "the newest done one".
+
+    This test previously asserted the fallback. It was encoding the bug: the
+    Engineer refuses a done plan with "need ready or in_progress", so returning
+    one made the Conductor offer `run_plan` and lose a step every time. `None`
+    lets it offer `generate_plan` instead.
+    """
     import labpilot.research_engine.conductor.loop as loop_mod
 
     class _Plan:
@@ -814,7 +822,7 @@ def test_latest_plan_falls_back_when_none_runnable(monkeypatch, tmp_path):
         knowledge_dir = tmp_path
         competition = "demo"
 
-    assert loop_mod._latest_plan_id(_WS()) == "P-008"
+    assert loop_mod._latest_plan_id(_WS()) is None
 
 
 def test_campaign_runs_are_not_dry_runs():

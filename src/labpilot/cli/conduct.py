@@ -175,6 +175,28 @@ def _resolve_session(
     return session
 
 
+def _resolve_campaign_direction(ws: Any, competition: str) -> bool | None:
+    """Whether this competition maximises its metric, or None if unknown.
+
+    None leaves `BudgetConfig`'s own default in place rather than guessing —
+    the objective checks only fire when a metric target is set, so an unknown
+    direction is better left visible than papered over.
+    """
+    from labpilot.research_engine.intelligence.competition.direction import resolve_maximize
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+
+    try:
+        paths = ResearchPaths(ws.knowledge_dir, competition)
+        return resolve_maximize(
+            competition=competition,
+            workspace_root=getattr(ws, "root", None),
+            knowledge_root=paths.root,
+            extracted_dir=paths.extracted_dir,
+        )
+    except Exception:  # noqa: BLE001 — an unknown direction must not block a run
+        return None
+
+
 def _budget_metadata(
     *,
     max_submissions: int | None,
@@ -183,6 +205,7 @@ def _budget_metadata(
     target_metric: str | None,
     target_value: float | None,
     plateau_window: int,
+    maximize: bool | None = None,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     meta = dict(existing or {})
@@ -193,6 +216,12 @@ def _budget_metadata(
         target_metric=target_metric,
         target_value=target_value,
         plateau_window=plateau_window,
+        # Resolved from the competition, not defaulted. `BudgetConfig.maximize`
+        # used to default True with nothing overriding it, so on rogii (MSE)
+        # every session stored `"maximize": true` and a metric target would have
+        # stopped the campaign on the wrong side. Latent only because rogii ran
+        # with target_metric unset. Same defect as `build_evidence_card`.
+        **({} if maximize is None else {"maximize": maximize}),
     )
     from labpilot.research_engine.conductor.budgets import BudgetState
 
@@ -259,6 +288,7 @@ def conduct_run(
             target_metric=target_metric,
             target_value=target_value,
             plateau_window=plateau_window,
+            maximize=_resolve_campaign_direction(ws, competition),
             existing={
                 "max_steps": max_steps,
                 "offline": offline,

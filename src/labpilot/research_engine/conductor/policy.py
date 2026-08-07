@@ -13,6 +13,10 @@ from labpilot.research_engine.conductor.approvals import (
 )
 from labpilot.research_engine.conductor.models import NextAction
 from labpilot.research_engine.conductor.store import ConductorStore
+from labpilot.research_engine.planner.schemas.task_types import (
+    is_runnable_plan_status,
+    is_unrun_plan_status,
+)
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
 
@@ -403,10 +407,13 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
     """
     from labpilot.research_engine.conductor.loop import (
         _latest_execution_id,
-        _latest_plan_id,
     )
 
-    has_plan = _latest_plan_id(workspace) is not None
+    # Not `_latest_plan_id(...) is not None`: that falls back to the newest
+    # plan of *any* status, so a workspace whose plans are all done still
+    # reported one. `run_plan` was then offered, the Engineer refused with
+    # "status=done; need ready or in_progress", and the campaign lost a step.
+    has_runnable = has_runnable_plan(workspace)
     has_execution = _latest_execution_id(workspace) is not None
 
     # Evidence gathering is expensive (kernels, discussions, papers, repos —
@@ -420,9 +427,9 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
     requires: dict[str, bool] = {
         # Nothing to reflect on until an experiment has produced evidence.
         "reflect": has_execution,
-        # Cannot run, or submit the result of, a plan that does not exist.
-        "run_plan": has_plan,
-        "run_experiment": has_plan,
+        # Cannot run a plan the Engineer would refuse.
+        "run_plan": has_runnable,
+        "run_experiment": has_runnable,
         "submit": has_execution,
         "submit_learn": has_execution,
         # Re-analysing with work already queued is the single most expensive
@@ -482,18 +489,26 @@ def should_gather_evidence(workspace: Workspace) -> tuple[bool, str]:
     return True, f"backlog {backlog} is thin and evidence is {age_hours:.1f}h old"
 
 
-def has_unrun_plan(workspace: Workspace) -> bool:
-    """True when a compiled plan is still waiting to be executed."""
+def _plan_statuses(workspace: Workspace) -> list[str]:
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
 
     artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
     try:
-        plans = artifacts.list()
-    except Exception:  # noqa: BLE001
-        return False
+        return [str(p.status) for p in artifacts.list()]
+    except Exception:  # noqa: BLE001 — absent store means "no plans"
+        return []
     finally:
         artifacts.close()
-    return any(str(p.status) in {"ready", "draft"} for p in plans)
+
+
+def has_unrun_plan(workspace: Workspace) -> bool:
+    """True when a plan still represents outstanding work (may not be runnable)."""
+    return any(is_unrun_plan_status(s) for s in _plan_statuses(workspace))
+
+
+def has_runnable_plan(workspace: Workspace) -> bool:
+    """True when a plan can actually be dispatched to the Engineer right now."""
+    return any(is_runnable_plan_status(s) for s in _plan_statuses(workspace))
 
 
 def untested_hypothesis_count(workspace: Workspace) -> int:

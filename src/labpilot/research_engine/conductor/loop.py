@@ -30,6 +30,7 @@ from labpilot.research_engine.conductor.models import DecisionRecord
 from labpilot.research_engine.conductor.policy import decide_next
 from labpilot.research_engine.conductor.scheduler import Scheduler
 from labpilot.research_engine.conductor.store import ConductorStore
+from labpilot.research_engine.planner.schemas.task_types import is_runnable_plan_status
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
 
@@ -50,16 +51,23 @@ def _objective_unmet(config: Any, state: Any) -> bool:
     last = getattr(state, "last_metric", None)
     if last is None:
         return True
-    return last < target if getattr(config, "maximize", False) else last > target
+    # `getattr(..., True)` matches `BudgetConfig.maximize`'s own default. This
+    # read used `False`, so the two disagreed about the same field whenever the
+    # attribute was missing — one more place where direction was assumed rather
+    # than resolved.
+    return last < target if getattr(config, "maximize", True) else last > target
 
 
 def _latest_plan_id(workspace: Workspace) -> str | None:
-    """Latest *runnable* plan, falling back to the newest of any status.
+    """Latest plan the Engineer would accept, or None.
 
     Taking the highest id outright targeted plans that had already finished —
     the Engineer then refused with "status=done; need ready or in_progress" and
-    the campaign lost a step. A plan is only a useful run target while it still
-    has work left.
+    the campaign lost a step. The first fix narrowed the *preference* but kept a
+    fallback to the newest plan of any status, so the refusal still happened
+    whenever every plan was done. There is no useful answer in that case:
+    returning None lets the caller offer `generate_plan` instead of burning a
+    step on a run that cannot succeed.
     """
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
 
@@ -72,12 +80,8 @@ def _latest_plan_id(workspace: Workspace) -> str | None:
         artifacts.close()
     if not plans:
         return None
-    runnable = sorted(
-        p.id for p in plans if str(p.status) in {"ready", "in_progress", "draft"}
-    )
-    if runnable:
-        return runnable[-1]
-    return sorted(p.id for p in plans)[-1]
+    runnable = sorted(p.id for p in plans if is_runnable_plan_status(p.status))
+    return runnable[-1] if runnable else None
 
 
 def _next_hypothesis_id(workspace: Workspace) -> str | None:

@@ -274,3 +274,70 @@ def test_a_regression_still_lowers_the_belief(tmp_path):
         beliefs = {b["technique"]: b for b in store.list_beliefs()}
     assert beliefs["vit"]["effect"] == "negative", beliefs["vit"]
     assert float(beliefs["vit"]["confidence"]) < 0.5, beliefs["vit"]
+
+
+# --- the campaign's own compass ---------------------------------------------
+
+
+def test_campaign_budget_resolves_direction_from_the_competition(tmp_path):
+    """`BudgetConfig.maximize` defaulted True with nothing overriding it.
+
+    rogii session S-018 stored `"maximize": true` on an MSE competition. Latent
+    only because that run had no metric target — with one, the campaign would
+    have stopped on the wrong side.
+    """
+    from labpilot.cli.conduct import _resolve_campaign_direction
+
+    competition = "budget-demo"
+    paths = ResearchPaths(tmp_path, competition).ensure()
+    _competition_json(paths.root, "minimize")
+
+    class _WS:
+        knowledge_dir = tmp_path
+        root = tmp_path / "ws"
+
+    assert _resolve_campaign_direction(_WS(), competition) is False
+
+
+def test_an_unknown_direction_leaves_the_budget_default_alone(tmp_path):
+    from labpilot.cli.conduct import _resolve_campaign_direction
+
+    ResearchPaths(tmp_path, "no-profile").ensure()
+
+    class _WS:
+        knowledge_dir = tmp_path
+        root = tmp_path / "ws"
+
+    assert _resolve_campaign_direction(_WS(), "no-profile") is None
+
+
+def test_objective_check_agrees_with_the_budget_default():
+    """loop.py read `maximize` defaulting False while BudgetConfig defaults True."""
+    from labpilot.research_engine.conductor.budgets import BudgetConfig
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    class _BareConfig:
+        target_metric = "mse"
+        target_value = 100.0
+
+    class _State:
+        last_metric = 50.0
+
+    default = BudgetConfig(target_metric="mse", target_value=100.0)
+    assert _objective_unmet(default, _State()) == _objective_unmet(_BareConfig(), _State())
+
+
+def test_a_minimised_target_is_met_by_going_below_it():
+    from labpilot.research_engine.conductor.budgets import BudgetConfig
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    cfg = BudgetConfig(target_metric="mse", target_value=100.0, maximize=False)
+
+    class _Below:
+        last_metric = 50.0
+
+    class _Above:
+        last_metric = 150.0
+
+    assert _objective_unmet(cfg, _Below()) is False
+    assert _objective_unmet(cfg, _Above()) is True
