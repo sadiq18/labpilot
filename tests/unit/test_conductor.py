@@ -569,14 +569,15 @@ class _FakeWorkspace:
 
 def _available(monkeypatch, *, has_plan, has_execution):
     import labpilot.research_engine.conductor.loop as loop_mod
+    import labpilot.research_engine.conductor.policy as policy_mod
     from labpilot.research_engine.conductor.policy import available_tools
 
-    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-001" if has_plan else None)
+    # `run_plan` is gated on a plan the Engineer would actually accept, not on
+    # "a plan exists" — patch the predicate that decides it.
+    monkeypatch.setattr(policy_mod, "has_runnable_plan", lambda ws: has_plan)
     monkeypatch.setattr(
         loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
     )
-    import labpilot.research_engine.conductor.policy as policy_mod
-
     monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 0)
     monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: None)
     monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: False)
@@ -658,7 +659,7 @@ def _available_with_backlog(monkeypatch, backlog, *, has_plan=True, has_executio
     import labpilot.research_engine.conductor.loop as loop_mod
     import labpilot.research_engine.conductor.policy as policy_mod
 
-    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-001" if has_plan else None)
+    monkeypatch.setattr(policy_mod, "has_runnable_plan", lambda ws: has_plan)
     monkeypatch.setattr(
         loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
     )
@@ -739,7 +740,7 @@ def test_unrun_plan_blocks_queuing_another(monkeypatch):
     import labpilot.research_engine.conductor.loop as loop_mod
     import labpilot.research_engine.conductor.policy as policy_mod
 
-    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-003")
+    monkeypatch.setattr(policy_mod, "has_runnable_plan", lambda ws: True)
     monkeypatch.setattr(loop_mod, "_latest_execution_id", lambda ws: "E-001")
     monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 5)
     monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 1.0)
@@ -787,7 +788,14 @@ def test_latest_plan_prefers_a_runnable_one(monkeypatch, tmp_path):
     assert loop_mod._latest_plan_id(_WS()) == "P-002"
 
 
-def test_latest_plan_falls_back_when_none_runnable(monkeypatch, tmp_path):
+def test_latest_plan_is_none_when_none_runnable(monkeypatch, tmp_path):
+    """No runnable plan means no answer — not "the newest done one".
+
+    This test previously asserted the fallback. It was encoding the bug: the
+    Engineer refuses a done plan with "need ready or in_progress", so returning
+    one made the Conductor offer `run_plan` and lose a step every time. `None`
+    lets it offer `generate_plan` instead.
+    """
     import labpilot.research_engine.conductor.loop as loop_mod
 
     class _Plan:
@@ -814,7 +822,7 @@ def test_latest_plan_falls_back_when_none_runnable(monkeypatch, tmp_path):
         knowledge_dir = tmp_path
         competition = "demo"
 
-    assert loop_mod._latest_plan_id(_WS()) == "P-008"
+    assert loop_mod._latest_plan_id(_WS()) is None
 
 
 def test_campaign_runs_are_not_dry_runs():
@@ -893,3 +901,57 @@ def test_intent_text_alone_would_still_be_hijacked():
         catalog,
     )
     assert [s.tool for s in hijacked.steps] != ["reflect"]
+
+
+# --- review #96: strict mode must stop the session, not just the step -------
+
+
+def test_strict_llm_abort_stops_the_campaign(tmp_path, monkeypatch):
+    """`LLMDegradedError` was caught by the generic dispatch handler, which
+    logged "Task failed" and carried on. A degraded LLM that merely costs a
+    step is the silent degradation M14 exists to remove, one level up.
+    """
+    import pytest as _pytest
+
+    from labpilot.accessor.common.micro_agents import LLMDegradedError
+    from labpilot.research_engine.conductor import loop as loop_mod
+
+    calls: list[str] = []
+
+    class _Store:
+        def append_decision(self, record):
+            calls.append("decision")
+
+        def increment_metric(self, session_id, name):
+            calls.append(f"metric:{name}")
+
+        def update_session_status(self, session_id, status):
+            calls.append(f"status:{status}")
+
+    class _Record:
+        rationale = "chose implement"
+
+    decisions: list = []
+    loop_mod._fail_session_on_degraded_llm(
+        _Store(), "S-1", _Record(), decisions, LLMDegradedError("agent: prose reply")
+    )
+
+    assert "status:failed" in calls, "the session must be marked, not left short"
+    assert "metric:tasks_failed" in calls
+    assert len(decisions) == 1
+    assert "strict LLM abort" in decisions[0].rationale
+    _ = _pytest
+
+
+def test_the_degraded_handler_precedes_the_generic_one():
+    """Ordering is the whole fix: a later `except Exception` would swallow it."""
+    import inspect
+
+    from labpilot.research_engine.conductor import loop as loop_mod
+
+    source = inspect.getsource(loop_mod.run_until_stop.__wrapped__) if hasattr(
+        loop_mod.run_until_stop, "__wrapped__"
+    ) else inspect.getsource(loop_mod._run_until_stop_inner)
+    degraded = source.index("except LLMDegradedError")
+    generic = source.index("except Exception as exc:", degraded)
+    assert degraded < generic, "LLMDegradedError must be caught before Exception"

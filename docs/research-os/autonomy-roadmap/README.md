@@ -91,7 +91,7 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 | **M11** | [Parallel branches](05-parallel-branches.md) | Iteration speed | Not started |
 | **M12** | [Beyond Kaggle](06-beyond-kaggle.md) | The actual product thesis | Not started |
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
-| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **Phases 1 + 2a shipped, and earning their keep**: 2a's refusal surfaced four silent degradations on 2026-08-07 that were previously invisible. 2b/3 await a campaign that completes more than 10 of 60 steps |
+| **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **1, 2a, 2b shipped 2026-08-07.** 2b ships default-off against a measured 3.2% fallback rate; a 30-step campaign completed with strict mode on. Phase 3's instrument is built and reporting — triage is deferred on agent coverage (8 of 21 exercised), not on judgement |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
 | **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |

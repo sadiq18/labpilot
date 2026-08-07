@@ -7,12 +7,17 @@ import logging
 import os
 from typing import Any
 
+from labpilot.accessor.common.provenance import record_invocation
 from labpilot.research_engine.conductor.approvals import (
     OfflineFallbackPrompt,
     resolve_offline_fallback,
 )
 from labpilot.research_engine.conductor.models import NextAction
 from labpilot.research_engine.conductor.store import ConductorStore
+from labpilot.research_engine.planner.schemas.task_types import (
+    is_runnable_plan_status,
+    is_unrun_plan_status,
+)
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
 
@@ -270,14 +275,36 @@ def _invoke_llm_next_action(
         already["instruction"] = "Choose a different tool from allowlist, or stop."
         payload["already_rejected"] = already
     user = json.dumps(payload, indent=2, default=str)
-    if hasattr(llm_client, "complete"):
-        text = llm_client.complete(system, user)
-    elif hasattr(llm_client, "generate"):
-        text = str(llm_client.generate(task="planning", prompt=user))
-    else:
-        raise TypeError("llm_client has no complete/generate method")
-    data = _parse_json(text)
-    action = NextAction.model_validate(data)
+    # Recorded here rather than in `decide_next`'s handler so success and
+    # failure are stamped at the same place the call happens. The Conductor
+    # policy is the highest-frequency LLM caller in the system and is *not* a
+    # micro agent, so none of this reached the provenance store — measured
+    # 2026-08-07, an 8-step campaign recorded one invocation while the policy
+    # fell back to the offline order three times. That missing number is
+    # exactly what M14 2b needs to decide whether fatal failure is safe.
+    try:
+        if hasattr(llm_client, "complete"):
+            text = llm_client.complete(system, user)
+        elif hasattr(llm_client, "generate"):
+            text = str(llm_client.generate(task="planning", prompt=user))
+        else:
+            raise TypeError("llm_client has no complete/generate method")
+        data = _parse_json(text)
+        action = NextAction.model_validate(data)
+    except Exception as exc:
+        record_invocation(
+            agent="ConductorPolicy",
+            generated_by="rule_engine",
+            llm_role="default",
+            failure_reason=str(exc),
+        )
+        raise
+    record_invocation(
+        agent="ConductorPolicy",
+        generated_by="llm",
+        llm_role="default",
+        served=getattr(llm_client, "last_served", None),
+    )
     validated = validate_next_action(action, allowlist)
     # Choosing a tool that is currently gated is a *recoverable* policy mistake,
     # not a reason to end the campaign. Measured 2026-08-07: `generate_plan` is
@@ -403,10 +430,13 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
     """
     from labpilot.research_engine.conductor.loop import (
         _latest_execution_id,
-        _latest_plan_id,
     )
 
-    has_plan = _latest_plan_id(workspace) is not None
+    # Not `_latest_plan_id(...) is not None`: that falls back to the newest
+    # plan of *any* status, so a workspace whose plans are all done still
+    # reported one. `run_plan` was then offered, the Engineer refused with
+    # "status=done; need ready or in_progress", and the campaign lost a step.
+    has_runnable = has_runnable_plan(workspace)
     has_execution = _latest_execution_id(workspace) is not None
 
     # Evidence gathering is expensive (kernels, discussions, papers, repos —
@@ -420,9 +450,9 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
     requires: dict[str, bool] = {
         # Nothing to reflect on until an experiment has produced evidence.
         "reflect": has_execution,
-        # Cannot run, or submit the result of, a plan that does not exist.
-        "run_plan": has_plan,
-        "run_experiment": has_plan,
+        # Cannot run a plan the Engineer would refuse.
+        "run_plan": has_runnable,
+        "run_experiment": has_runnable,
         "submit": has_execution,
         "submit_learn": has_execution,
         # Re-analysing with work already queued is the single most expensive
@@ -482,18 +512,26 @@ def should_gather_evidence(workspace: Workspace) -> tuple[bool, str]:
     return True, f"backlog {backlog} is thin and evidence is {age_hours:.1f}h old"
 
 
-def has_unrun_plan(workspace: Workspace) -> bool:
-    """True when a compiled plan is still waiting to be executed."""
+def _plan_statuses(workspace: Workspace) -> list[str]:
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
 
     artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
     try:
-        plans = artifacts.list()
-    except Exception:  # noqa: BLE001
-        return False
+        return [str(p.status) for p in artifacts.list()]
+    except Exception:  # noqa: BLE001 — absent store means "no plans"
+        return []
     finally:
         artifacts.close()
-    return any(str(p.status) in {"ready", "draft"} for p in plans)
+
+
+def has_unrun_plan(workspace: Workspace) -> bool:
+    """True when a plan still represents outstanding work (may not be runnable)."""
+    return any(is_unrun_plan_status(s) for s in _plan_statuses(workspace))
+
+
+def has_runnable_plan(workspace: Workspace) -> bool:
+    """True when a plan can actually be dispatched to the Engineer right now."""
+    return any(is_runnable_plan_status(s) for s in _plan_statuses(workspace))
 
 
 def untested_hypothesis_count(workspace: Workspace) -> int:

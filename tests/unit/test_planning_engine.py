@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from labpilot.research_engine.shared.experiments.models import Hypothesis
 from labpilot.research_engine.planner import compile_research_plan, validate_plan
 from labpilot.research_engine.planner.micro_agents.planning_engine import ResearchPlannerAgent
 from labpilot.research_engine.planner.schemas.draft import DraftTask, ResearchPlanDraft
 from labpilot.research_engine.planner.schemas.task_types import TaskType
+from labpilot.research_engine.shared.experiments.models import Hypothesis
 
 
 def _hypothesis(tags: list[str] | None = None) -> Hypothesis:
@@ -34,9 +34,11 @@ class _MockLLM:
     def __init__(self, payload: Any) -> None:
         self.payload = payload
         self.calls = 0
+        self.prompts: list[str] = []
 
     def complete(self, system: str, user: str) -> str:
         self.calls += 1
+        self.prompts.append(user)
         if isinstance(self.payload, str):
             return self.payload
         return json.dumps(self.payload)
@@ -151,6 +153,13 @@ def test_mock_llm_valid_draft_sets_generated_by_llm(tmp_path: Path):
 
 
 def test_mock_llm_garbage_soft_falls_to_template(tmp_path: Path):
+    """Prose is now re-asked before giving up, and only then falls back.
+
+    This previously asserted a single call. A shape failure gets no benefit
+    from waiting — nothing is busy — but it does sometimes clear when the model
+    is told what was wrong, and M14 2b turns this failure into a hard abort. One
+    unlucky prose reply must not be the end of a command.
+    """
     mock = _MockLLM("this is not json at all {{{")
     plan = compile_research_plan(
         _hypothesis(),
@@ -159,9 +168,24 @@ def test_mock_llm_garbage_soft_falls_to_template(tmp_path: Path):
         llm_client=mock,
     )
     validate_plan(plan)
-    assert mock.calls == 1
+    assert mock.calls > 1, "a shape failure must be re-asked, not accepted first time"
     assert plan.generated_by == "rule_engine"
     assert plan.metadata["template"] == "augmentation"
+
+
+def test_a_reask_names_what_was_wrong(tmp_path: Path):
+    """Repeating the identical prompt after prose mostly produces more prose."""
+    mock = _MockLLM("this is not json at all {{{")
+    compile_research_plan(
+        _hypothesis(),
+        knowledge_dir=tmp_path / "knowledge",
+        competition="demo",
+        llm_client=mock,
+    )
+    assert len(mock.prompts) > 1
+    assert mock.prompts[0] != mock.prompts[1], "the retry repeated the prompt verbatim"
+    assert "could not be parsed" in mock.prompts[1]
+    assert "single JSON object" in mock.prompts[1]
 
 
 def test_mock_llm_invalid_dag_keeps_baseline(tmp_path: Path):

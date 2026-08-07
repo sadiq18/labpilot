@@ -197,15 +197,21 @@ class ClaimPromoter:
         technique = str(belief.get("technique") or "")
         effect = str(belief.get("effect") or "")
 
-        # A belief asserting an effect must be backed by a measured one. Without
-        # this, confidence alone promotes — and confidence is produced by the
-        # same loop that would consume the claim.
-        # Deliberately the column, not `asserts_an_effect`: this path always
-        # sets `effect`, and the statement it builds is "appears to be <effect>"
-        # rather than the attribution writer's phrasing. Do not "simplify" the
-        # two to share one predicate — revalidation must read both, promotion
-        # only needs this one.
-        if effect and effect.lower() not in {"unknown", ""} and not contradicting_evidence_id:
+        # Promotion requires a measured effect. Full stop.
+        #
+        # This used to be gated on `effect` being set and not "unknown", which
+        # made it skippable by exactly the beliefs that needed it most.
+        # `KnowledgeHub._persist_belief` writes confidence from *literature
+        # mentions* (0.2 + 0.15 per citation, capped at 0.95) and leaves
+        # `effect` as "unknown" — so a technique cited five times in retrieved
+        # papers arrived at 0.95 confidence and sailed past the guard without
+        # ever being measured. That is how "vit improves the primary metric"
+        # became a supported claim on a tabular competition.
+        #
+        # Confidence answers "how often has this been mentioned"; promotion
+        # asks "what did it do here". They are different questions and only the
+        # second one licenses a claim.
+        if not contradicting_evidence_id:
             measured, why = self.effect_is_measured(technique)
             if not measured:
                 logger.info("Not promoting %r: %s", technique, why)

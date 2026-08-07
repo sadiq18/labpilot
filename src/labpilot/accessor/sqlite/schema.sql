@@ -521,3 +521,36 @@ CREATE INDEX IF NOT EXISTS idx_experience_idempotency
     ON experience_records(idempotency_key);
 
 
+
+-- Micro-agent provenance: one row per invocation.
+--
+-- M14 phase 1 made each agent *report* whether the LLM or its rule engine
+-- produced the output, but the report lived on the agent instance and died with
+-- it. The only durable trace was ``research_plans.generated_by`` — one of 21
+-- agents. Phase 2b needs the rate at which the LLM path fails (and with what
+-- error) before making failure fatal; phase 3 needs rule engines ranked by fire
+-- rate to tell dead code from load-bearing domain logic. Neither is answerable
+-- from logs after the fact, so the record has to be written as it happens.
+CREATE TABLE IF NOT EXISTS agent_invocations (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    competition_slug    TEXT NOT NULL DEFAULT '',
+    session_id          TEXT,
+    agent               TEXT NOT NULL,
+    llm_role            TEXT NOT NULL DEFAULT '',
+    generated_by        TEXT NOT NULL,
+    failure_reason      TEXT,
+    failure_kind        TEXT,
+    attempts            INTEGER NOT NULL DEFAULT 1,
+    provider            TEXT,
+    model               TEXT,
+    latency_ms          INTEGER,
+    created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_invocations_agent
+    ON agent_invocations(agent);
+CREATE INDEX IF NOT EXISTS idx_agent_invocations_generated_by
+    ON agent_invocations(generated_by);
+CREATE INDEX IF NOT EXISTS idx_agent_invocations_failure_kind
+    ON agent_invocations(failure_kind);
+CREATE INDEX IF NOT EXISTS idx_agent_invocations_competition
+    ON agent_invocations(competition_slug);

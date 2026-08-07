@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from labpilot.accessor.common.micro_agents import LLMDegradedError
 from labpilot.research_engine.conductor.actions import (
     ResearchAction,
     map_research_action,
@@ -30,6 +31,8 @@ from labpilot.research_engine.conductor.models import DecisionRecord
 from labpilot.research_engine.conductor.policy import decide_next
 from labpilot.research_engine.conductor.scheduler import Scheduler
 from labpilot.research_engine.conductor.store import ConductorStore
+from labpilot.research_engine.planner.schemas.task_types import is_runnable_plan_status
+from labpilot.research_engine.telemetry.agent_provenance import recording_provenance
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
 
@@ -42,6 +45,22 @@ ProgressCallback = Callable[[str], None]
 _MAX_STOP_OVERRIDES = 2
 
 
+def _fail_session_on_degraded_llm(store, session_id, record, decisions, exc) -> None:
+    """Record a strict-mode abort before it propagates.
+
+    The session is marked so a later `conduct continue` sees why it ended
+    rather than finding a run that simply stopped short.
+    """
+    record.rationale = f"{record.rationale} | strict LLM abort: {exc}"
+    store.append_decision(record)
+    decisions.append(record)
+    try:
+        store.increment_metric(session_id, "tasks_failed")
+        store.update_session_status(session_id, "failed")
+    except Exception:  # noqa: BLE001 — the abort matters more than the bookkeeping
+        logger.warning("could not mark session %s failed", session_id)
+
+
 def _objective_unmet(config: Any, state: Any) -> bool:
     """True when a metric target was set and the best result has not reached it."""
     target = getattr(config, "target_value", None)
@@ -50,16 +69,23 @@ def _objective_unmet(config: Any, state: Any) -> bool:
     last = getattr(state, "last_metric", None)
     if last is None:
         return True
-    return last < target if getattr(config, "maximize", False) else last > target
+    # `getattr(..., True)` matches `BudgetConfig.maximize`'s own default. This
+    # read used `False`, so the two disagreed about the same field whenever the
+    # attribute was missing — one more place where direction was assumed rather
+    # than resolved.
+    return last < target if getattr(config, "maximize", True) else last > target
 
 
 def _latest_plan_id(workspace: Workspace) -> str | None:
-    """Latest *runnable* plan, falling back to the newest of any status.
+    """Latest plan the Engineer would accept, or None.
 
     Taking the highest id outright targeted plans that had already finished —
     the Engineer then refused with "status=done; need ready or in_progress" and
-    the campaign lost a step. A plan is only a useful run target while it still
-    has work left.
+    the campaign lost a step. The first fix narrowed the *preference* but kept a
+    fallback to the newest plan of any status, so the refusal still happened
+    whenever every plan was done. There is no useful answer in that case:
+    returning None lets the caller offer `generate_plan` instead of burning a
+    step on a run that cannot succeed.
     """
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
 
@@ -72,12 +98,8 @@ def _latest_plan_id(workspace: Workspace) -> str | None:
         artifacts.close()
     if not plans:
         return None
-    runnable = sorted(
-        p.id for p in plans if str(p.status) in {"ready", "in_progress", "draft"}
-    )
-    if runnable:
-        return runnable[-1]
-    return sorted(p.id for p in plans)[-1]
+    runnable = sorted(p.id for p in plans if is_runnable_plan_status(p.status))
+    return runnable[-1] if runnable else None
 
 
 def _next_hypothesis_id(workspace: Workspace) -> str | None:
@@ -157,6 +179,46 @@ def run_until_stop(
     using the deterministic offline order — unless ``prefer_offline`` or
     ``auto_approve`` (``--yes``) is set.
     """
+    # Every micro-agent invocation in this campaign is recorded: which agent,
+    # whether the LLM or its rule engine produced the answer, and on failure
+    # what kind. M14 2b and 3 are both blocked on having that as *data* rather
+    # than log lines, and it can only be collected while the run happens.
+    with recording_provenance(
+        workspace.knowledge_dir, workspace.competition, session_id=session_id
+    ):
+        return _run_until_stop_inner(
+            store,
+            workspace,
+            session_id,
+            registry,
+            llm_client=llm_client,
+            max_steps=max_steps,
+            auto_approve=auto_approve,
+            approval_prompt=approval_prompt,
+            on_progress=on_progress,
+            autonomy=autonomy,
+            campaign_mode=campaign_mode,
+            prefer_offline=prefer_offline,
+            offline_fallback_prompt=offline_fallback_prompt,
+        )
+
+
+def _run_until_stop_inner(
+    store: ConductorStore,
+    workspace: Workspace,
+    session_id: str,
+    registry: ToolRegistry,
+    *,
+    llm_client: Any | None = None,
+    max_steps: int = 8,
+    auto_approve: bool = False,
+    approval_prompt: ApprovalPrompt | None = None,
+    on_progress: ProgressCallback | None = None,
+    autonomy: int = 0,
+    campaign_mode: bool = True,
+    prefer_offline: bool = False,
+    offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+) -> list[DecisionRecord]:
     scheduler = Scheduler(store, registry, workspace, llm_client=llm_client)
     decisions: list[DecisionRecord] = []
     session = store.get_session(session_id)
@@ -187,6 +249,9 @@ def run_until_stop(
     # Measured 2026-08-07: a full campaign ran with 45 false `vit` claims intact
     # because revalidation only fired from `record_successful_execution`.
     try:
+        from labpilot.research_engine.evidence.belief_repair import (
+            rederive_beliefs_from_cards,
+        )
         from labpilot.research_engine.evidence.repair import repair_card_directions
         from labpilot.research_engine.execution.outcome import revalidate_outcome_claims
 
@@ -208,6 +273,15 @@ def run_until_stop(
                 f"Re-oriented {len(reoriented)} evidence card(s) built with the "
                 "wrong metric direction"
             )
+
+        # Beliefs are recomputed from the repaired cards, not stepped again.
+        # Repairing a card does not retract the belief step it already caused,
+        # so without this the loop plans against the pre-repair compass.
+        rebuilt = rederive_beliefs_from_cards(
+            workspace.knowledge_dir, workspace.competition
+        )
+        if rebuilt:
+            _progress(f"Re-derived {len(rebuilt)} belief(s) from repaired evidence")
 
         contested = revalidate_outcome_claims(
             knowledge_dir=workspace.knowledge_dir, competition=workspace.competition
@@ -432,6 +506,14 @@ def run_until_stop(
                         )
                         budget_state.submissions += 1
                         persist_budgets(store, session_id, budget_cfg, budget_state)
+                except LLMDegradedError as exc:
+                    # Strict mode (M14 2b) means fatal, and the generic handler
+                    # below would reduce it to one lost step with the campaign
+                    # carrying on — which is the silent degradation M14 exists
+                    # to remove, just one level up. Stop the session and say why.
+                    _fail_session_on_degraded_llm(store, session_id, record, decisions, exc)
+                    _progress(f"Campaign stopped: {exc}")
+                    raise
                 except Exception as exc:
                     store.increment_metric(session_id, "tasks_failed")
                     record.rationale = f"{record.rationale} | dispatch error: {exc}"
@@ -501,6 +583,10 @@ def run_until_stop(
         try:
             result = scheduler.dispatch(task)
             record.artifact_refs = [r.model_dump() for r in result.refs]
+        except LLMDegradedError as exc:
+            _fail_session_on_degraded_llm(store, session_id, record, decisions, exc)
+            _progress(f"Campaign stopped: {exc}")
+            raise
         except Exception as exc:
             record.rationale = f"{record.rationale} | dispatch error: {exc}"
             store.append_decision(record)

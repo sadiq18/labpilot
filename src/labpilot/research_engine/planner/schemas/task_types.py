@@ -41,6 +41,47 @@ class PlanStatus(StrEnum):
     ABANDONED = "abandoned"
 
 
+#: Statuses the Engineer will actually accept as a run target.
+#:
+#: `Engineer._load_plan` raises "need ready or in_progress" for anything else,
+#: and reopens ABANDONED to READY before that check — so an abandoned plan is
+#: runnable and a done one is not. This constant exists because three call sites
+#: had each written their own version of this set and none of them matched:
+#: `_latest_plan_id` used {ready, in_progress, draft}, `has_unrun_plan` used
+#: {ready, draft}, and the Engineer used {ready, in_progress}. The Conductor
+#: therefore offered `run_plan` for finished plans and lost a step each time.
+RUNNABLE_PLAN_STATUSES: frozenset[PlanStatus] = frozenset(
+    {PlanStatus.READY, PlanStatus.IN_PROGRESS, PlanStatus.ABANDONED}
+)
+
+
+#: Statuses meaning "this plan has not produced a result yet".
+#:
+#: Deliberately *wider* than RUNNABLE: a DRAFT cannot be dispatched but is still
+#: outstanding work, so queuing another plan on top of it starves the one that
+#: exists. The two sets answer different questions and collapsing them is what
+#: produced the bug — "can I run this?" is not "is there work pending?".
+UNRUN_PLAN_STATUSES: frozenset[PlanStatus] = frozenset(
+    {PlanStatus.DRAFT, PlanStatus.READY, PlanStatus.IN_PROGRESS, PlanStatus.ABANDONED}
+)
+
+
+def is_runnable_plan_status(status: object) -> bool:
+    """Whether a plan in this status can still be dispatched to the Engineer."""
+    try:
+        return PlanStatus(str(status)) in RUNNABLE_PLAN_STATUSES
+    except ValueError:
+        return False
+
+
+def is_unrun_plan_status(status: object) -> bool:
+    """Whether a plan in this status still represents outstanding work."""
+    try:
+        return PlanStatus(str(status)) in UNRUN_PLAN_STATUSES
+    except ValueError:
+        return False
+
+
 class TaskStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"

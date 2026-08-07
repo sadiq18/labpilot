@@ -352,3 +352,65 @@ and fixed.
 What it did not prove: that the *recipe* path works in a campaign, that the
 improvement replicates, or that a campaign can run to completion. The furthest
 any run reached was 10 of 60 steps.
+
+
+## M14 completed to the evidence, not past it
+
+Six prerequisites shipped, then the campaign that both remaining phases were
+blocked on finally ran. What it produced is more interesting than that it ran.
+
+### The step ceiling broke
+
+| Run | Steps | Ended by |
+|---|---|---|
+| previous best | 10 of 60 | — |
+| S-020 | **27** | offline policy: catalog exhausted |
+| S-021 (strict mode) | **30 of 30** | max steps |
+
+Nine provider failovers across S-020 and S-021. Each one, before this session,
+was a campaign-ending event.
+
+### Two defects only a real run could have shown
+
+**`returned no choices`.** OpenRouter answers some free models with HTTP 200 and
+an empty `choices` array. Not an error status, not a rate limit, and nothing
+usable came back — so the failover taxonomy, written from the errors we had
+seen, let it through. It dropped the campaign to the offline policy three times
+in eight steps while eight other providers sat idle.
+
+**The policy was invisible.** `ConductorPolicy` is the highest-frequency LLM
+caller in the system and is not a micro agent, so `BaseMicroAgent.run`'s
+provenance never covered it. The first instrumented campaign recorded **one**
+invocation across eight steps. The number M14 2b was blocked on was the number
+the instrument could not see.
+
+A third, same shape: provenance was installed around the *campaign loop*, so
+`analyze` and `hypothesize` recorded nothing. Three campaigns yielded data for
+two agents. Most of the 21 rule engines never run under the Conductor at all.
+
+### `cool_down`, again
+
+`BudgetLedger.cool_down` was written, tested, complete — and called from
+nowhere. That is the fifth instance this session of *the plumbing is present and
+one connection is not made*, and the second where the unconnected piece was
+built specifically for the case it was not handling.
+
+### What the measurement says
+
+| | Invocations | Fallbacks | Rate |
+|---|---|---|---|
+| S-020, strict off | 27 | 3 (all `json_shape`) | 11% |
+| S-021, strict on | 30 | 0 | 0% |
+| cumulative | 94 | 3 | 3.2% |
+
+2b ships **default off** on that basis. The honest reading of S-021 is narrower
+than it looks: 30 of 30 invocations took the LLM path, so it proves strict mode
+does not break a clean run, not that it survives a dirty one.
+
+Phase 3's finding is sharper and also incomplete: across 37 micro-agent
+invocations, `_run_rule_engine` fired **zero** times — every fallback belongs to
+`ConductorPolicy`, which drops to the offline decision order instead. That is
+evidence for deleting the rule engines and is not sufficient to act on: 13 of 21
+agents were never invoked, and zero fires under M10 routing measures the model
+rather than the engine. §11.4's run C is exactly this comparison, and we have
+one half of it.

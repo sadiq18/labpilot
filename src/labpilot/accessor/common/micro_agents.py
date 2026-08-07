@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
+from labpilot.accessor.common.provenance import record_invocation
+
 if TYPE_CHECKING:
     from labpilot.llm.client import LLMClient
 
@@ -46,6 +48,30 @@ GeneratedBy = Literal["llm", "rule_engine", "template_fallback", "stub"]
 #: beliefs and claims.
 DETERMINISTIC_ENV = "LABPILOT_DETERMINISTIC"
 
+#: M14 phase 2b. When set, a *failed* LLM call raises instead of quietly
+#: producing rule-engine output. Phase 2a already does this for a *missing*
+#: client; 2b extends it to a client that answered badly.
+#:
+#: Default off, and the reason is measured rather than cautious. On rogii
+#: 2026-08-07, a 27-step campaign recorded 28 invocations with a **11% fallback
+#: rate, all three failures `json_shape`** — a model replying in prose, which is
+#: exactly the failure 2b converts into a hard abort. At that rate a campaign
+#: would die roughly every nine steps. Retrying with a corrective re-ask (see
+#: `_is_transient_llm_error`) is the first move; flipping this default is the
+#: second, once the recorded rate justifies it. `agent_invocations` holds the
+#: number, so this is now a decision with evidence behind it rather than a
+#: judgement call.
+STRICT_LLM_ENV = "LABPILOT_STRICT_LLM"
+
+
+class LLMDegradedError(RuntimeError):
+    """The LLM was reachable and its answer was unusable (M14 2b).
+
+    Distinct from :class:`LLMUnavailableError`, which means no client at all.
+    Separate types because the operator responses differ: one is "configure a
+    provider", the other is "this model cannot hold the contract".
+    """
+
 
 class LLMUnavailableError(RuntimeError):
     """No LLM configured, and deterministic mode was not requested.
@@ -59,6 +85,15 @@ class LLMUnavailableError(RuntimeError):
 def deterministic_allowed() -> bool:
     """True when the operator explicitly asked for deterministic operation."""
     return os.environ.get(DETERMINISTIC_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+def strict_llm() -> bool:
+    """True when a failed LLM call must raise rather than fall back (M14 2b)."""
+    if os.environ.get(STRICT_LLM_ENV, "").strip().lower() in {"1", "true", "yes"}:
+        # An explicit "be strict" outranks an explicit "deterministic is fine":
+        # the operator asking for strictness is asking about *this* run.
+        return True
+    return False
 
 
 def coerce_str_list(value: object) -> list[str]:
@@ -90,21 +125,50 @@ def _complete_json(llm_client: object, system: str, user: str) -> str:
         return llm_client.complete(system, user)  # type: ignore[attr-defined]
 
 
+#: The model answered, but not in the shape we asked for. Distinct from a rate
+#: limit in the way that matters: waiting changes nothing, because nothing about
+#: the provider is busy. Asking again — more firmly — sometimes does.
+_SHAPE_MARKERS = (
+    "DID NOT CONTAIN A JSON OBJECT",
+    "JSONDECODEERROR",
+    "EXPECTING VALUE",
+    "VALIDATION ERROR",
+)
+
+_BUSY_MARKERS = (
+    "429",
+    "503",
+    "UNAVAILABLE",
+    "RESOURCE_EXHAUSTED",
+    "RATE LIMIT",
+    "HIGH DEMAND",
+    "TEMPORARY",
+    "TIMEOUT",
+    "TIMED OUT",
+)
+
+
+def _is_shape_error(exc: BaseException) -> bool:
+    return any(marker in str(exc).upper() for marker in _SHAPE_MARKERS)
+
+
 def _is_transient_llm_error(exc: BaseException) -> bool:
-    """True for rate-limit / high-demand errors that often clear on retry."""
+    """True for failures worth another attempt.
+
+    Shape failures were excluded, which mattered more than it looked: M14 phase
+    2b makes LLM failure fatal, and ``Response did not contain a JSON object``
+    is the failure actually observed in this system. Under 2b, with no retry, a
+    single prose reply would abort a whole command. It is now retried — with a
+    corrective instruction rather than the identical prompt, since repeating
+    input that already produced prose is a poor bet.
+    """
     text = str(exc).upper()
-    markers = (
-        "429",
-        "503",
-        "UNAVAILABLE",
-        "RESOURCE_EXHAUSTED",
-        "RATE LIMIT",
-        "HIGH DEMAND",
-        "TEMPORARY",
-        "TIMEOUT",
-        "TIMED OUT",
-    )
-    return any(marker in text for marker in markers)
+    return _is_shape_error(exc) or any(marker in text for marker in _BUSY_MARKERS)
+
+
+def _retry_delay_for(exc: BaseException, configured: float) -> float:
+    """Shape failures retry immediately; busy providers get the full backoff."""
+    return 0.0 if _is_shape_error(exc) else configured
 
 
 class StructuredContext(BaseModel):
@@ -190,16 +254,19 @@ class BaseMicroAgent:
             )
         self.last_used_llm = False
         self.last_served = None
+        self._reask_reason: str | None = None
         # Default covers the silent path below: with no client configured the
         # try/except is skipped entirely and nothing is logged, so the only
         # record that this run was deterministic is the one set here.
         self.last_generated_by = "rule_engine"
         self.last_failure_reason = None if self.llm_client is not None else "no llm client"
+        used_attempts = 0
         if self.llm_client is not None:
             max_attempts = max(1, int(getattr(self, "llm_max_attempts", 3)))
             retry_delay = float(getattr(self, "llm_retry_delay_seconds", 20.0))
             last_exc: Exception | None = None
             for attempt in range(1, max_attempts + 1):
+                used_attempts = attempt
                 try:
                     result = self._run_llm(context)
                     self.last_used_llm = True
@@ -208,20 +275,25 @@ class BaseMicroAgent:
                     # Which model produced this, when the client can say. M14
                     # records *what kind of thing* ran; this records *which*.
                     self.last_served = getattr(self.llm_client, "last_served", None)
+                    self._record_provenance(used_attempts)
                     return result
                 except Exception as exc:  # noqa: BLE001 - soft-fail to deterministic path
                     last_exc = exc
                     if attempt < max_attempts and _is_transient_llm_error(exc):
+                        delay = _retry_delay_for(exc, retry_delay)
+                        if _is_shape_error(exc):
+                            self._reask_reason = str(exc)
                         logger.warning(
                             "Micro agent %s LLM path failed (%s); retrying in %.0fs "
                             "(attempt %d/%d).",
                             self.name or type(self).__name__,
                             exc,
-                            retry_delay,
+                            delay,
                             attempt,
                             max_attempts,
                         )
-                        time.sleep(retry_delay)
+                        if delay > 0:
+                            time.sleep(delay)
                         continue
                     logger.warning(
                         "Micro agent %s LLM path failed (%s); using rule_engine fallback.",
@@ -229,8 +301,29 @@ class BaseMicroAgent:
                         last_exc,
                     )
                     self.last_failure_reason = str(last_exc)
+                    if strict_llm():
+                        self._record_provenance(attempt)
+                        raise LLMDegradedError(
+                            f"{self.name or type(self).__name__}: the LLM path failed "
+                            f"after {attempt} attempt(s) and strict mode is on "
+                            f"({STRICT_LLM_ENV}=1). Last failure: {last_exc}"
+                        ) from last_exc
                     break
+        # Recorded on the fallback path too — and on the silent no-client path,
+        # which never enters the try/except above. A provenance record that only
+        # exists when something interesting happened cannot produce a *rate*.
+        self._record_provenance(used_attempts or 1)
         return self._run_rule_engine(context)
+
+    def _record_provenance(self, attempts: int) -> None:
+        record_invocation(
+            agent=self.name or type(self).__name__,
+            generated_by=self.last_generated_by,
+            llm_role=str(getattr(self, "llm_role", "") or ""),
+            failure_reason=self.last_failure_reason,
+            attempts=attempts,
+            served=self.last_served,
+        )
 
     # --- LLM path ---------------------------------------------------------
 
@@ -269,7 +362,19 @@ class BaseMicroAgent:
             )
         except Exception:  # noqa: BLE001 — skill injection must never break agents
             pass
-        raw = _complete_json(self.llm_client, system, self.user_prompt(context))
+        user = self.user_prompt(context)
+        reason = getattr(self, "_reask_reason", None)
+        if reason:
+            # Repeating the identical prompt after a prose reply mostly produces
+            # another prose reply. Naming the failure is what changes the odds.
+            user = (
+                f"{user}\n\n"
+                "Your previous reply could not be parsed: "
+                f"{reason[:200]}\n"
+                "Reply with a single JSON object and nothing else — no prose, "
+                "no explanation, no markdown fences."
+            )
+        raw = _complete_json(self.llm_client, system, user)
         return self._parse(raw)
 
     def _parse(self, raw: str) -> BaseModel:
