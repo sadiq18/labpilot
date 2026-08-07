@@ -59,8 +59,11 @@ for the `SWA`-style change that produced this system's only genuine improvement:
 Both runs left `_driver_columns`, `_add_partition_features`, `_known_rows` and
 `partition_suffix_holdout` completely untouched — the core requirement above, met
 without labpilot writing a line of edit-format code. The variable is **model
-quality, not mechanism**, and that is what [M10](04-llm-tiering.md) already
-manages.
+quality, not mechanism**, and that is what [M10](04-llm-tiering.md) exists to
+manage — though only if aider is pointed at fitroute rather than at the provider
+directly. Passing `--model` transfers the selection and bypasses the budget
+ledger, rate limiting and failover, so an OpenAI-compatible fitroute proxy is
+step 0 of the rollout, not a nicety.
 
 So M19 ships an *adapter*: aider runs in a workspace copy, the diff becomes a
 `CodeProposal`, and the existing validation and apply path is unchanged. That

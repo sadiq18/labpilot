@@ -89,10 +89,10 @@ the averaged predictions. Nothing else moved.
 **Both runs left the leakage discipline untouched** — §2's core requirement, met
 without labpilot writing a line of edit-format code.
 
-**The variable is model quality, not mechanism.** That is exactly what
-[M10](04-llm-tiering.md) already manages: `aider --model` takes whatever the
-`codegen` role resolves to, so routing, budget, failover and provenance stay in
-one place.
+**The variable is model quality, not mechanism** — which is what
+[M10](04-llm-tiering.md) exists to manage. But see §5: passing `--model` only
+transfers the *selection*. Everything else M10 does is bypassed unless aider is
+pointed at fitroute rather than at the provider.
 
 So this design specifies an **adapter**, not an edit format.
 
@@ -132,6 +132,50 @@ alternative would lose:
 * **provenance.** The adapter records `generated_by`, model, provider and
   attempt count into `agent_invocations` like every other agent, so M14's
   instrument keeps working on the most important call in the system.
+
+### The proxy — and why it is a prerequisite, not a nicety
+
+An earlier draft claimed that passing `--model` kept "routing, budget, failover
+and provenance in one place". **That is true only of routing.** aider makes its
+own HTTP calls, so:
+
+| M10 capability | With `--model` alone |
+|---|---|
+| Role → provider selection | works — we choose it |
+| Budget ledger (`record`) | **bypassed** — aider calls the provider; we never see the tokens |
+| Rate limiting (`availability`) | **bypassed** — aider makes several calls per message; the ledger counts one |
+| Runtime failover (`cool_down` + re-select) | **bypassed** — it lives in `RoleBoundClient.complete`, which aider never enters |
+| Response cache | bypassed — aider has its own |
+| `structured_output` preflight | **actively wrong** — aider needs good *editing*, not JSON mode; the precondition would exclude models that are fine for it |
+| Provenance | partial — we know what we asked for, not what aider retried |
+
+Shipping the adapter that way would quietly opt the system's most important LLM
+call out of M10 — a regression dressed as a feature, and the kind that is hard to
+see later.
+
+The fix is to make aider a *client* of fitroute rather than a peer:
+
+```
+aider --openai-api-base http://localhost:PORT
+          │
+          ▼
+   fitroute proxy  →  select_route · ledger · failover · cache · provenance
+          │
+          ▼
+   OpenRouter / Groq / ollama
+```
+
+Then **every** aider call — including its internal retries and repo-map lookups —
+goes through M10. Budget accounting becomes complete rather than an estimate
+scraped from stdout; today's failover applies to codegen; provenance records what
+happened rather than what was intended.
+
+`LLMGateway` already does all of this as a Python API, so the proxy is a thin
+OpenAI-compatible HTTP shell over it. It also lets `structured_output` become a
+**per-role** precondition — still required for the policy, not for codegen — and
+it stays inside `fitroute`, which keeps the package extractable.
+
+**Useful beyond aider:** any external tool reached for later gets M10 for free.
 
 ### The seam
 
@@ -213,7 +257,11 @@ paths coexist while the failure rate is measured on real campaigns — the stand
 M14 phase 2b set for exactly this kind of decision, and why 2b shipped
 default-off with a number attached rather than a guess.
 
-1. `CodeAgent` protocol + `AiderAgent` + copy/diff/propose. Nothing calls it.
+0. **fitroute OpenAI-compatible proxy.** Prerequisite, not optional — without
+   it steps 1-3 opt codegen out of M10 (see §4). Independently useful and
+   independently testable.
+1. `CodeAgent` protocol + `AiderAgent` + copy/diff/propose, pointed at the proxy.
+   Nothing calls it.
 2. Opt-in via config; measure `aider_no_edit` and `aider_syntax_fail`.
 3. Flip the default when the rate justifies it.
 4. Delete templates **in the same change** that makes delta the default — never
