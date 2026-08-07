@@ -207,3 +207,35 @@ def test_the_sink_is_uninstalled_afterwards(tmp_path):
         pass
     _Agent(_Client()).run(StructuredContext(data={}))
     assert invocation_totals(tmp_path, COMPETITION)["total"] == 0
+
+
+# --- shape failures: retried, not waited on (M14 2b de-risking) -------------
+
+
+def test_a_shape_failure_is_retryable():
+    """`Response did not contain a JSON object` is the failure this system
+    actually produces, and it got no retry — so under 2b one prose reply would
+    abort a whole command."""
+    from labpilot.accessor.common.micro_agents import (
+        _is_shape_error,
+        _is_transient_llm_error,
+    )
+
+    exc = ValueError("Response did not contain a JSON object. Got: 'Sure!'")
+    assert _is_shape_error(exc)
+    assert _is_transient_llm_error(exc)
+
+
+def test_a_shape_failure_does_not_wait():
+    """Nothing is busy, so backing off buys nothing but lost campaign time."""
+    from labpilot.accessor.common.micro_agents import _retry_delay_for
+
+    assert _retry_delay_for(ValueError("did not contain a JSON object"), 20.0) == 0.0
+    assert _retry_delay_for(RuntimeError("429 rate limit"), 20.0) == 20.0
+
+
+def test_a_fatal_error_is_still_not_retried():
+    from labpilot.accessor.common.micro_agents import _is_transient_llm_error
+
+    assert not _is_transient_llm_error(RuntimeError("401 Unauthorized"))
+    assert not _is_transient_llm_error(RuntimeError("model exploded"))

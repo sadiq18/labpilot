@@ -148,7 +148,9 @@ def test_a_fatal_error_does_not_burn_the_chain(gateway, monkeypatch):
 def test_the_original_exception_is_what_callers_see(gateway, monkeypatch):
     """`_is_transient_llm_error` and the provenance classifier both read the
     message, so the internal wrapper must never escape."""
-    adapters = _Adapters({name: RuntimeError("429 everywhere") for name in ("first", "second", "third")})
+    adapters = _Adapters(
+        {name: RuntimeError("429 everywhere") for name in ("first", "second", "third")}
+    )
     monkeypatch.setattr("fitroute.gateway.build_adapter", adapters)
 
     with pytest.raises(RuntimeError) as exc:

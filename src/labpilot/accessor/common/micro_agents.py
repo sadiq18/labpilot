@@ -92,21 +92,50 @@ def _complete_json(llm_client: object, system: str, user: str) -> str:
         return llm_client.complete(system, user)  # type: ignore[attr-defined]
 
 
+#: The model answered, but not in the shape we asked for. Distinct from a rate
+#: limit in the way that matters: waiting changes nothing, because nothing about
+#: the provider is busy. Asking again — more firmly — sometimes does.
+_SHAPE_MARKERS = (
+    "DID NOT CONTAIN A JSON OBJECT",
+    "JSONDECODEERROR",
+    "EXPECTING VALUE",
+    "VALIDATION ERROR",
+)
+
+_BUSY_MARKERS = (
+    "429",
+    "503",
+    "UNAVAILABLE",
+    "RESOURCE_EXHAUSTED",
+    "RATE LIMIT",
+    "HIGH DEMAND",
+    "TEMPORARY",
+    "TIMEOUT",
+    "TIMED OUT",
+)
+
+
+def _is_shape_error(exc: BaseException) -> bool:
+    return any(marker in str(exc).upper() for marker in _SHAPE_MARKERS)
+
+
 def _is_transient_llm_error(exc: BaseException) -> bool:
-    """True for rate-limit / high-demand errors that often clear on retry."""
+    """True for failures worth another attempt.
+
+    Shape failures were excluded, which mattered more than it looked: M14 phase
+    2b makes LLM failure fatal, and ``Response did not contain a JSON object``
+    is the failure actually observed in this system. Under 2b, with no retry, a
+    single prose reply would abort a whole command. It is now retried — with a
+    corrective instruction rather than the identical prompt, since repeating
+    input that already produced prose is a poor bet.
+    """
     text = str(exc).upper()
-    markers = (
-        "429",
-        "503",
-        "UNAVAILABLE",
-        "RESOURCE_EXHAUSTED",
-        "RATE LIMIT",
-        "HIGH DEMAND",
-        "TEMPORARY",
-        "TIMEOUT",
-        "TIMED OUT",
-    )
-    return any(marker in text for marker in markers)
+    return _is_shape_error(exc) or any(marker in text for marker in _BUSY_MARKERS)
+
+
+def _retry_delay_for(exc: BaseException, configured: float) -> float:
+    """Shape failures retry immediately; busy providers get the full backoff."""
+    return 0.0 if _is_shape_error(exc) else configured
 
 
 class StructuredContext(BaseModel):
@@ -192,6 +221,7 @@ class BaseMicroAgent:
             )
         self.last_used_llm = False
         self.last_served = None
+        self._reask_reason: str | None = None
         # Default covers the silent path below: with no client configured the
         # try/except is skipped entirely and nothing is logged, so the only
         # record that this run was deterministic is the one set here.
@@ -217,16 +247,20 @@ class BaseMicroAgent:
                 except Exception as exc:  # noqa: BLE001 - soft-fail to deterministic path
                     last_exc = exc
                     if attempt < max_attempts and _is_transient_llm_error(exc):
+                        delay = _retry_delay_for(exc, retry_delay)
+                        if _is_shape_error(exc):
+                            self._reask_reason = str(exc)
                         logger.warning(
                             "Micro agent %s LLM path failed (%s); retrying in %.0fs "
                             "(attempt %d/%d).",
                             self.name or type(self).__name__,
                             exc,
-                            retry_delay,
+                            delay,
                             attempt,
                             max_attempts,
                         )
-                        time.sleep(retry_delay)
+                        if delay > 0:
+                            time.sleep(delay)
                         continue
                     logger.warning(
                         "Micro agent %s LLM path failed (%s); using rule_engine fallback.",
@@ -288,7 +322,19 @@ class BaseMicroAgent:
             )
         except Exception:  # noqa: BLE001 — skill injection must never break agents
             pass
-        raw = _complete_json(self.llm_client, system, self.user_prompt(context))
+        user = self.user_prompt(context)
+        reason = getattr(self, "_reask_reason", None)
+        if reason:
+            # Repeating the identical prompt after a prose reply mostly produces
+            # another prose reply. Naming the failure is what changes the odds.
+            user = (
+                f"{user}\n\n"
+                "Your previous reply could not be parsed: "
+                f"{reason[:200]}\n"
+                "Reply with a single JSON object and nothing else — no prose, "
+                "no explanation, no markdown fences."
+            )
+        raw = _complete_json(self.llm_client, system, user)
         return self._parse(raw)
 
     def _parse(self, raw: str) -> BaseModel:
