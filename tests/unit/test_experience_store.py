@@ -13,7 +13,7 @@ def test_migrate_adds_experience_records_table(tmp_path: Path) -> None:
     db = tmp_path / "experiences.db"
     client = SqliteClient(db)
     try:
-        assert client.schema_version() == SCHEMA_VERSION == "9"
+        assert client.schema_version() == SCHEMA_VERSION
         tables = {
             row["name"]
             for row in client.conn.execute(

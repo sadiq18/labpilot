@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
+from labpilot.accessor.common.provenance import record_invocation
+
 if TYPE_CHECKING:
     from labpilot.llm.client import LLMClient
 
@@ -195,11 +197,13 @@ class BaseMicroAgent:
         # record that this run was deterministic is the one set here.
         self.last_generated_by = "rule_engine"
         self.last_failure_reason = None if self.llm_client is not None else "no llm client"
+        used_attempts = 0
         if self.llm_client is not None:
             max_attempts = max(1, int(getattr(self, "llm_max_attempts", 3)))
             retry_delay = float(getattr(self, "llm_retry_delay_seconds", 20.0))
             last_exc: Exception | None = None
             for attempt in range(1, max_attempts + 1):
+                used_attempts = attempt
                 try:
                     result = self._run_llm(context)
                     self.last_used_llm = True
@@ -208,6 +212,7 @@ class BaseMicroAgent:
                     # Which model produced this, when the client can say. M14
                     # records *what kind of thing* ran; this records *which*.
                     self.last_served = getattr(self.llm_client, "last_served", None)
+                    self._record_provenance(used_attempts)
                     return result
                 except Exception as exc:  # noqa: BLE001 - soft-fail to deterministic path
                     last_exc = exc
@@ -230,7 +235,21 @@ class BaseMicroAgent:
                     )
                     self.last_failure_reason = str(last_exc)
                     break
+        # Recorded on the fallback path too — and on the silent no-client path,
+        # which never enters the try/except above. A provenance record that only
+        # exists when something interesting happened cannot produce a *rate*.
+        self._record_provenance(used_attempts or 1)
         return self._run_rule_engine(context)
+
+    def _record_provenance(self, attempts: int) -> None:
+        record_invocation(
+            agent=self.name or type(self).__name__,
+            generated_by=self.last_generated_by,
+            llm_role=str(getattr(self, "llm_role", "") or ""),
+            failure_reason=self.last_failure_reason,
+            attempts=attempts,
+            served=self.last_served,
+        )
 
     # --- LLM path ---------------------------------------------------------
 

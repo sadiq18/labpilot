@@ -31,6 +31,7 @@ from labpilot.research_engine.conductor.policy import decide_next
 from labpilot.research_engine.conductor.scheduler import Scheduler
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.planner.schemas.task_types import is_runnable_plan_status
+from labpilot.research_engine.telemetry.agent_provenance import recording_provenance
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
 
@@ -161,6 +162,46 @@ def run_until_stop(
     using the deterministic offline order — unless ``prefer_offline`` or
     ``auto_approve`` (``--yes``) is set.
     """
+    # Every micro-agent invocation in this campaign is recorded: which agent,
+    # whether the LLM or its rule engine produced the answer, and on failure
+    # what kind. M14 2b and 3 are both blocked on having that as *data* rather
+    # than log lines, and it can only be collected while the run happens.
+    with recording_provenance(
+        workspace.knowledge_dir, workspace.competition, session_id=session_id
+    ):
+        return _run_until_stop_inner(
+            store,
+            workspace,
+            session_id,
+            registry,
+            llm_client=llm_client,
+            max_steps=max_steps,
+            auto_approve=auto_approve,
+            approval_prompt=approval_prompt,
+            on_progress=on_progress,
+            autonomy=autonomy,
+            campaign_mode=campaign_mode,
+            prefer_offline=prefer_offline,
+            offline_fallback_prompt=offline_fallback_prompt,
+        )
+
+
+def _run_until_stop_inner(
+    store: ConductorStore,
+    workspace: Workspace,
+    session_id: str,
+    registry: ToolRegistry,
+    *,
+    llm_client: Any | None = None,
+    max_steps: int = 8,
+    auto_approve: bool = False,
+    approval_prompt: ApprovalPrompt | None = None,
+    on_progress: ProgressCallback | None = None,
+    autonomy: int = 0,
+    campaign_mode: bool = True,
+    prefer_offline: bool = False,
+    offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+) -> list[DecisionRecord]:
     scheduler = Scheduler(store, registry, workspace, llm_client=llm_client)
     decisions: list[DecisionRecord] = []
     session = store.get_session(session_id)
