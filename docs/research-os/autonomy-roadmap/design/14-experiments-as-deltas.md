@@ -1,6 +1,7 @@
 # Design — M19: an experiment is a change to its parent
 
-**Plan:** [../14-experiments-as-deltas.md](../14-experiments-as-deltas.md) · **Status:** design · **Owner:** unassigned · **Supersedes:** the Jinja template pack ·
+**Plan:** [../14-experiments-as-deltas.md](../14-experiments-as-deltas.md) ·
+**Status:** design · **Owner:** unassigned · **Supersedes:** the Jinja template pack ·
 **Subsumes:** technique registry, `applied`/`candidate` split, template→labpilot coupling
 
 ---
@@ -15,27 +16,26 @@ competition, per problem type, per dataset quirk. Measured on rogii: the registr
 declares 12 executable techniques and **7 resolve `not_applicable` purely because
 nobody wrote a gate**. The registry exists only to feed template gates — its own
 docstring says so — so the whole `applied` vs `candidate` distinction is an
-artifact of the template mechanism rather than anything about research.
+artifact of the mechanism rather than anything about research.
 
-They are also the third instance of a pattern already rejected twice: a curated
-set answering an open-world question. `KNOWN_TECHNIQUES` went for this reason;
-so did the proposed package allowlist.
+They are the third instance of a pattern rejected twice already: a curated set
+answering an open-world question, after `KNOWN_TECHNIQUES` and the proposed
+package allowlist.
 
-**Whole-file regeneration is wasteful and lossy.** The parent's code is sent into
-the prompt — up to 120k chars, measured at **~3,376 tokens or 46% of the prompt**
-— and the contract then says *"always emit full overridden train.py"*. So the
-system pays to send the parent, pays again to receive a near-copy, and every
-regeneration is an opportunity to silently drop something that worked. The skill
-tells the model to "keep what worked", which is an instruction fighting its own
-mechanism.
+**Whole-file regeneration is wasteful and lossy.** The parent's code goes into
+the prompt — up to 120k chars, measured at **~3,376 tokens or 46% of it** — and
+the contract then says *"always emit full overridden train.py"*. The system pays
+to send the parent, pays again to receive a near-copy, and every regeneration is
+an opportunity to silently drop something that worked. The skill's own
+instruction to "keep what worked" fights its mechanism.
 
 ### Why this matters beyond cost
 
 The partitioned template encodes `partition_suffix_holdout`, `_driver_columns()`
 and three leakage gates — validation discipline fixed once, after a real leakage
-bug. Under whole-file regeneration that discipline is re-derived on every run and
-can be lost without any metric showing it: a leaky score looks *better*, not
-worse. That risk is the only reason templates still looked load-bearing.
+bug. Under whole-file regeneration that discipline is re-derived every run and
+can be lost with no metric showing it: **a leaky score looks better, not worse.**
+That risk is the only reason templates still looked load-bearing.
 
 ---
 
@@ -50,186 +50,177 @@ after-the-fact contract to verify.
 This also aligns the code artifact with the model the rest of the system already
 uses. Evidence cards compare `parent_cv` to `treatment_cv`; the experiment graph
 is parent → child; `technique_attribution` credits the difference. Only the code
-was a fresh object each time. After this it is `parent + change`, matching what
-every downstream consumer already assumes.
+was a fresh object each time. After this it is `parent + change`.
 
 ```
 competition start   ──▶  baseline      whole file, from the dataset profile
                               │
-hypothesis 1        ──▶       ├──▶ edit set ──▶ child A
-hypothesis 2        ──▶       ├──▶ edit set ──▶ child B
-hypothesis 3        ──▶  (on A) ──▶ edit set ──▶ child C
+hypothesis 1        ──▶       ├──▶ delta ──▶ child A
+hypothesis 2        ──▶       ├──▶ delta ──▶ child B
+hypothesis 3        ──▶  (on A) ──▶ delta ──▶ child C
 ```
 
 ---
 
-## 3. Requirements
+## 3. Buy the edit machinery, build the research parts
 
-**Functional**
+An earlier draft of this design specified an anchored-edit format, uniqueness
+rules, an apply algorithm and a failure ladder — roughly 60% of the document.
+**A spike deleted all of it.**
 
-1. Codegen emits **anchored edits** against the parent, not a whole file, for any
-   plan with a parent execution.
-2. A baseline (no parent) still emits whole files.
-3. An edit that cannot be applied is **detected and named**, never applied
-   partially.
-4. A failed edit set is re-asked with the reason, then falls back to whole-file
-   emission. The result records which path produced it.
-5. Changes to validation logic are possible but visible — a delta touching the
-   validation region is flagged on the evidence card, because a hypothesis about
-   the metric is different from a hypothesis about the model.
+`aider` already does this, tuned over years against published edit-format
+benchmarks. Measured 2026-08-07 on rogii's real `train.py` (331 lines), asking
+for the `SWA`-style change that produced this system's only genuine improvement:
 
-**Non-functional**
+| | nemotron-super-120b | **nemotron-ultra-550b** |
+|---|---|---|
+| Delta | +55 / −8 | **+24 / −8** |
+| Self-doubt comments left in code | 6 | **0** |
+| Validation half correct | yes | yes |
+| Test half correct | no — *"Let me correct"* | **yes** |
+| `_driver_columns` / `_add_partition_features` / `_known_rows` / `partition_suffix_holdout` touched | **0 lines** | **0 lines** |
+| Syntax valid | yes | yes |
+| Cost | $0.007 | $0.02 |
 
-- Prompt cost for a child experiment drops by roughly the size of the parent
-  file: the parent is still sent as context, but the reply is a few hundred
-  tokens instead of a few thousand.
-- Edit application is deterministic and offline — no LLM in the apply path.
+The strong model's delta is what a competent human writes: a seed loop over
+validation, a seed loop over the final fit, and the submission mapping updated to
+the averaged predictions. Nothing else moved.
 
----
+**Both runs left the leakage discipline untouched** — §2's core requirement, met
+without labpilot writing a line of edit-format code.
 
-## 4. Why anchored edits, not unified diff
+**The variable is model quality, not mechanism.** That is exactly what
+[M10](04-llm-tiering.md) already manages: `aider --model` takes whatever the
+`codegen` role resolves to, so routing, budget, failover and provenance stay in
+one place.
 
-| Format | Model reliability | Failure detectable? | Chosen |
-|---|---|---|---|
-| Unified diff | poor — line numbers and hunk headers drift | partially (patch rejects) | no |
-| Whole file | high | n/a — silently loses things instead | baseline only |
-| **Anchored edit** — exact `find` text + `replace` | high; no counting required | **yes, exactly** — the anchor is present or it is not | **yes** |
-| Structured op list (`add_feature`, `set_param`) | high | yes | rejected: it is a closed vocabulary, the same trap again |
-
-The anchored form is what makes failure *loud*, which is the property this
-codebase keeps needing. An anchor that does not match is a fact, not a judgement
-— and it retries with the reason named, the same mechanism that fixed prose
-replies to JSON prompts (`_is_shape_error` → corrective re-ask).
-
-The structured-op alternative is rejected on the same grounds as templates: it
-can only express changes someone anticipated.
+So this design specifies an **adapter**, not an edit format.
 
 ---
 
-## 5. Schema
+## 4. Architecture
 
-`CodeFileSpec.action` is already `Literal["write"]` — a single-member literal,
-which is the natural extension point.
+```
+      plan + hypothesis + parent code
+                  │
+                  ▼
+        copy workspace to scratch          ← never edit the workspace
+                  │
+                  ▼
+      aider --model <codegen role>         ← borrowed edit machinery
+                  │
+                  ▼
+        diff scratch against parent
+                  │
+                  ▼
+             CodeProposal                  ← existing typed contract
+                  │
+                  ▼
+    existing validation (ast.parse, path allowlist)
+                  │
+                  ▼
+              apply_proposal               ← existing apply path
+```
+
+Running aider in a **copy** is what preserves three properties the direct-edit
+alternative would lose:
+
+* **propose-then-apply.** A bad proposal is rejected before it touches the
+  workspace. Direct file edits would mean discovering damage afterwards.
+* **never edit the workspace.** The standing rule the repair machinery depends
+  on.
+* **provenance.** The adapter records `generated_by`, model, provider and
+  attempt count into `agent_invocations` like every other agent, so M14's
+  instrument keeps working on the most important call in the system.
+
+### The seam
 
 ```python
-class CodeEdit(BaseModel):
-    """One anchored replacement within an existing file."""
-    find: str       # exact text from the parent, unique within the file
-    replace: str
-    why: str = ""   # shown in the failure message when the anchor misses
-
-
-class CodeFileSpec(BaseModel):
-    path: str
-    action: Literal["write", "edit"] = "write"
-    content: str = ""            # action="write"
-    edits: list[CodeEdit] = []   # action="edit"
+class CodeAgent(Protocol):
+    def propose(self, ctx: CodegenContext, parent: Path | None) -> CodeProposal: ...
 ```
 
-**Application rules**
-
-- Every `find` must occur **exactly once** in the current file. Zero occurrences
-  is a miss; more than one is ambiguous and is also a miss — a delta that could
-  land in two places is not a delta.
-- Edits apply against the **original** text, not against each other's output, so
-  the set is order-independent and one edit cannot invalidate another's anchor.
-- All-or-nothing. A partially edited `train.py` is worse than an unedited one:
-  it runs, produces a number, and the number means nothing.
+Two implementations: `AiderAgent` and the existing whole-file `CodeEngineerAgent`
+(baselines, and any workspace without aider). One protocol, chosen by config —
+the same shape as `fitroute`, where the router was put behind a boundary so it
+could be swapped without a rewrite.
 
 ---
 
-## 6. Failure ladder
+## 5. What labpilot still has to build
 
-```
-emit edits ──▶ all anchors unique? ──yes──▶ apply ──▶ syntax check ──▶ run
-                     │                                     │
-                     no                                    fail
-                     ▼                                     ▼
-        re-ask, naming the missed anchor            re-ask with traceback
-                     │ (bounded)                          (bounded)
-                     ▼
-        fall back to whole-file emission
-                     │
-                     ▼
-          record generated_by="whole_file_fallback"
-```
+The parts no coding agent knows about, because they are about *research*, not
+code:
 
-The fallback is deliberate and recorded rather than silent. Measured precedent:
-when the JSON re-ask landed, the campaign that had been dropping to the offline
-policy three times in eight steps ran 30 of 30. The same shape applies here — a
-miss is recoverable if the model is told what it missed.
-
-`agent_invocations` already records `failure_kind`; add `anchor_miss` so the rate
-is measurable the way `json_shape` is, and the decision to keep or drop the
-whole-file fallback becomes evidence-based rather than a judgement call.
+| Piece | Why only labpilot can do it |
+|---|---|
+| **Validation-region flagging** | Detect when a delta touches `partition_suffix_holdout`, `_driver_columns`, or the holdout construction, and record it on the evidence card |
+| **Delta → evidence linkage** | The card already compares parent and treatment; it should carry *what changed*, so `technique_attribution` can be read against the actual diff |
+| **Baseline vs delta routing** | No parent ⇒ whole file; parent ⇒ delta. The experiment graph already knows which |
+| **Provenance capture** | Translate aider's result into an `agent_invocations` row |
+| **Failure classification** | `aider_no_edit`, `aider_syntax_fail` alongside `json_shape` and `anchor_miss`, so the rate is measurable |
 
 ---
 
-## 7. What this removes
+## 6. Risks
 
-| Removed | Why it existed | Why it goes |
-|---|---|---|
-| 7 Jinja templates | deterministic code production | codegen produces better and less constrained code; `SWA`, the only measured improvement, came from the codegen path |
-| `technique/registry.py` | feed template gates | no gates left to feed |
-| `applied` / `not_applicable` statuses | whether a gate could execute a recipe | every technique is expressible as a delta; the honest statuses are the ones the vocabulary store derives from evidence |
-| `from labpilot… import compute_metric` in 6 templates | shared metric helper | templates gone; a generated artifact must run standalone, not import the tool that produced it |
+**The one that would hurt.** A delta can still damage validation logic — running
+in a copy makes it *reviewable*, not impossible. Mitigation is detection, not
+prohibition: flag a delta whose change falls in the validation region and record
+it on the card. A hypothesis *about* validation is legitimate; one that changes
+validation while claiming to test a feature is a false result.
 
-`prompt_technique_fields` and the hypothesis triad stay: the model still needs to
-know *what* to try. Only the mechanism that turned that into code changes.
+**Cost per experiment rises.** ~$0.02 against near-zero for a template render —
+about $1.20 across a 60-step campaign. Acceptable, but it is real, and it is the
+first time the research loop's cost scales with experiment count rather than
+prompt count.
 
----
-
-## 8. Risks
-
-**The one that would hurt.** A delta can still damage validation logic — anchored
-edits make it *possible* to change anything, they do not prevent it. Mitigation is
-detection, not prohibition: flag when a delta's anchor falls inside the validation
-region and record it on the evidence card. A hypothesis about validation is
-legitimate; one that changes validation while claiming to test a feature is a
-false result. Prohibiting it outright would block the legitimate case.
+**A new runtime dependency.** `uvx --from aider-chat aider` needs no install, so
+it is containable, but it is an external surface with its own CLI stability. The
+`CodeAgent` protocol is what keeps this reversible: if aider becomes a problem,
+the whole-file implementation is still there.
 
 **Drift over a long chain.** Twenty deltas deep, the code is far from the
-baseline and no single review saw the whole thing. The experiment graph already
-records the chain, so the mitigation is a periodic whole-file re-emission as a
-readable checkpoint — not a correctness measure, a legibility one.
-
-**Anchor brittleness on formatting.** If a formatter runs between generations,
-every anchor misses. Do not format generated code between runs; the syntax check
-is the only automatic pass over it.
+baseline and no single review saw the whole thing. The experiment graph records
+the chain; a periodic whole-file re-emission is a legibility checkpoint, not a
+correctness measure.
 
 ---
 
-## 9. Testing
+## 7. Testing
 
 The failure modes are all "it looked applied and was not", so:
 
-1. **A missed anchor never half-applies.** Two edits, one anchor bogus: the file
-   is byte-identical afterwards.
-2. **An ambiguous anchor is a miss**, not a first-match win.
-3. **Edits are order-independent** — applying `[a, b]` equals `[b, a]`.
-4. **The validation region is preserved** across a feature-adding delta: render a
-   baseline, apply a realistic edit set, assert `partition_suffix_holdout` and
-   `_driver_columns` survive byte-identical.
-5. **The fallback is recorded**, not silent — `generated_by` distinguishes it.
-6. **A delta touching validation is flagged** on the card.
-
-Test 4 is the one that matters; it is the property that lets templates go.
+1. **The workspace is never touched on a rejected proposal.** Force a syntax
+   error in the scratch copy; assert the workspace file is byte-identical.
+2. **Validation logic survives a feature-adding delta**, byte-identical. This is
+   the property that lets templates go, and the spike already demonstrates it
+   twice.
+3. **A delta touching validation is flagged** on the card.
+4. **Provenance is recorded** — model and `generated_by` reach
+   `agent_invocations`, not just the log.
+5. **No aider ⇒ whole-file path**, so a workspace without it still works.
+6. **A no-op aider run is a failure**, not a silent success — the same lesson as
+   the stale `metrics.json` guard, which asked "is there a file?" instead of
+   "did this run write one?".
 
 ---
 
-## 10. Rollout
+## 8. Rollout
 
-Behind `codegen.strategy: whole_file | delta` in config, defaulting to
-`whole_file`. Both paths coexist while the anchor-miss rate is measured on real
-campaigns — the standard M14 phase 2b set for exactly this kind of decision, and
-the reason 2b shipped default-off with a number attached rather than a guess.
+Behind `codegen.strategy: whole_file | delta`, defaulting to `whole_file`. Both
+paths coexist while the failure rate is measured on real campaigns — the standard
+M14 phase 2b set for exactly this kind of decision, and why 2b shipped
+default-off with a number attached rather than a guess.
 
-1. Schema + apply + tests. Nothing calls it.
-2. Skill teaches the edit format. Opt-in via config.
-3. Measure `anchor_miss` over campaigns.
-4. Flip the default when the rate justifies it; delete templates in the same
-   change that makes delta the default, never before.
+1. `CodeAgent` protocol + `AiderAgent` + copy/diff/propose. Nothing calls it.
+2. Opt-in via config; measure `aider_no_edit` and `aider_syntax_fail`.
+3. Flip the default when the rate justifies it.
+4. Delete templates **in the same change** that makes delta the default — never
+   before. The discipline M14 phase 3 established, where a removal and the
+   precondition that makes it safe must ship together.
 
-Templates are deleted **last**, and only once delta is the measured default —
-the same discipline applied to the rule engines, where the precondition and the
-deletion had to ship together for the deletion to be safe.
+**Open question for step 1.** The spike used a free OpenRouter model at $0.02.
+Whether the `codegen` role should point somewhere stronger for delta work is a
+routing decision, not a design one — and `agent_invocations` will answer it with
+a rate rather than an opinion.
