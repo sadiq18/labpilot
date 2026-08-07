@@ -46,6 +46,24 @@ generated from scratch from the dataset profile and `data/raw` inventory.
   (ASCII ``__main__`` only — never alter that string)
 - No network calls, no Kaggle upload, no inventing leaderboard scores
 - Prefer one cohesive `pipeline/train.py` (+ small helpers) over sprawling packages
+- **Declare every third-party import in a PEP 723 block at the top of
+  `pipeline/train.py`**, immediately after the module docstring:
+
+  ```python
+  # /// script
+  # requires-python = ">=3.11"
+  # dependencies = [
+  #   "lightgbm>=4.0",
+  #   "catboost>=1.2",
+  # ]
+  # ///
+  ```
+
+  The runner installs exactly what you declare into a throwaway environment, so
+  you are not limited to what happens to be installed — reach for the right
+  library and name it here. An import you do not declare will fail at runtime:
+  measured 2026-08-07, an undeclared `import catboost` killed eight consecutive
+  runs and produced no evidence at all. Only stdlib may go undeclared.
 
 ## Soft-fail
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from pathlib import Path
 from typing import Any
 
 from labpilot.research_engine.agents.catalog import build_default_specialist_registry
@@ -69,6 +71,23 @@ class ExperimentProducedNoMetricsError(RuntimeError):
     """
 
 
+def _metrics_written_since(metrics_ref: Any, started_at: float) -> bool:
+    """Whether the metrics artifact was written by the run that just finished.
+
+    A missing file and a stale file are the same answer to the only question
+    that matters — did this execution produce a result — but they need different
+    messages, so the caller distinguishes them.
+    """
+    if metrics_ref is None:
+        return False
+    path = Path(str(getattr(metrics_ref, "path", "") or ""))
+    if not path.is_file():
+        return False
+    # A second of slack: some filesystems round mtime, and the artifact is
+    # written moments before the ref is built.
+    return path.stat().st_mtime >= started_at - 1.0
+
+
 def run_experiment(
     workspace: Workspace,
     *,
@@ -95,6 +114,7 @@ def run_experiment(
         description=description or f"run experiment for {plan_id}",
         metadata=meta,
     )
+    started_at = time.time()
     refs = execute_agent_sync(
         candidates[0].agent,
         task,
@@ -106,10 +126,24 @@ def run_experiment(
     # A real experiment that produced no metrics did not happen. Reporting
     # success here is how a dry run masqueraded as training for an entire
     # campaign: the policy saw "completed", chose it again, and looped.
-    if not dry_run and metrics_ref is None:
+    #
+    # Presence is not enough: `metrics.json` from an earlier successful run sits
+    # at the workspace root and survives a failure, so this guard found a file
+    # and passed while the execution had died at `import catboost`. Measured on
+    # rogii 2026-08-07 — eight consecutive failed executions, every one recorded
+    # `run_experiment completed`, and the campaign looked healthy for 20 steps.
+    # Ask whether *this run* wrote it.
+    if not dry_run and not _metrics_written_since(metrics_ref, started_at):
+        stale = metrics_ref is not None
         raise ExperimentProducedNoMetricsError(
-            f"run_experiment for {plan_id} completed without writing metrics. "
-            "The plan may have been a no-op (already done, or nothing to train)."
+            f"run_experiment for {plan_id} completed without writing metrics"
+            + (
+                " — the metrics file on disk predates this run, so it belongs to "
+                "an earlier execution"
+                if stale
+                else ". The plan may have been a no-op (already done, or nothing "
+                "to train)."
+            )
         )
     return ToolResult(
         refs=refs,
