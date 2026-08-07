@@ -29,6 +29,35 @@ Local mirrors (gitignored): `.cursor/rules/karpathy-guidelines.mdc`,
 3. **Discoverable tests** — Put automated checks under [`tests/`](tests/) so CI
    and scanners find them. Prefer `tests/unit/` for fast unit coverage.
 
+## Working on this codebase
+
+Four rules earned from real defects here. Each cost a bug to learn.
+
+1. **Never edit a competition workspace.** Validate against a sandbox copy:
+   `cp -R "$WS/knowledge/research" "$SANDBOX/kb/$COMP/research"`, then pass
+   `$SANDBOX/kb` as the knowledge dir (`ResearchPaths` expects
+   `<knowledge_dir>/<competition>/research/knowledge.db`). If a workspace needs
+   migrating or cleaning, make labpilot do it on the next run — do not hand-edit
+   artifacts or the DB.
+
+2. **Recompute, never step.** Derived state must be a function of current
+   inputs, so it stays correct after those inputs are repaired.
+   `apply_card_to_beliefs` stepped once per card; repairing a card afterwards
+   changed nothing, and the one technique that improved the metric stayed
+   recorded as harmful. See `evidence/belief_repair.py` for the shape.
+
+3. **Check the field the bad record actually uses.** Nine defects have been
+   "the guard exists and its input is wrong" — a check on
+   `normalize_label(name)` that strips the colon it tests for; a filter on
+   `effect` when the bad claims have `effect=''`; a metrics guard asking
+   "is there a file?" when the question was "did *this run* write one?".
+   Before trusting a guard, feed it a real bad record.
+
+4. **Prove your test fails without your fix.** Several tests here passed
+   vacuously — one compared two renders in *different directories* while the
+   renderer bakes the directory into its output. If a test could pass on an
+   empty list, assert the list is non-empty first.
+
 ## Verification commands
 
 Matches [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
