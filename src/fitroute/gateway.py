@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 
@@ -105,6 +106,62 @@ class LLMGateway:
         return os.environ.get(env_name, "").strip()
 
 
+class _ProviderCallFailed(Exception):
+    """Internal: carries which provider failed, so it can be cooled down.
+
+    Never escapes `complete` — the original exception is re-raised so callers
+    and `_is_transient_llm_error` see exactly what they saw before.
+    """
+
+    def __init__(self, provider: str, original: Exception) -> None:
+        super().__init__(str(original))
+        self.provider = provider
+        self.original = original
+
+
+#: Upstream conditions worth trying a different provider for. A malformed
+#: request or a bad key will fail identically everywhere, so failing over on
+#: those just burns the whole chain to reach the same error more slowly.
+_RETRYABLE_MARKERS = (
+    "429",
+    "RATE LIMIT",
+    "RESOURCE_EXHAUSTED",
+    "QUOTA",
+    "HIGH DEMAND",
+    "500",
+    "502",
+    "503",
+    "504",
+    "UNAVAILABLE",
+    "OVERLOADED",
+    "TIMEOUT",
+    "TIMED OUT",
+    "CONNECTION",
+    "TEMPORARILY",
+)
+
+#: Not retryable even when the text also matches above.
+_FATAL_MARKERS = ("401", "403", "UNAUTHORIZED", "INVALID API KEY", "400", "404")
+
+
+def _is_retryable_upstream(exc: BaseException) -> bool:
+    text = str(exc).upper()
+    if any(marker in text for marker in _FATAL_MARKERS):
+        return False
+    return any(marker in text for marker in _RETRYABLE_MARKERS)
+
+
+def _cooldown_seconds(exc: BaseException) -> float:
+    """How long to shelve a provider. Honours Retry-After when present."""
+    match = re.search(r"RETRY[- ]?AFTER[\"\':\s]+(\d+)", str(exc), re.IGNORECASE)
+    if match:
+        try:
+            return min(300.0, float(match.group(1)))
+        except ValueError:
+            pass
+    return 60.0
+
+
 class RoleBoundClient:
     """``complete(system, user)`` for one role. Satisfies labpilot's LLMClient.
 
@@ -125,6 +182,65 @@ class RoleBoundClient:
         return decision.model
 
     def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
+        """Complete for this role, failing over to the next provider if needed.
+
+        Selection is *predictive*: it knows what our own ledger says we have
+        spent, not what the upstream thinks. Those disagree — an OpenRouter
+        model returned 429 on 2026-08-07 while our accounting showed budget
+        left, because the limit was the upstream's, not ours. With nine
+        providers configured and no failover, that single response ended a
+        campaign.
+
+        A failed provider is cooled down rather than skipped ad hoc, so the
+        ordinary `select_route` walk does the work and the next call can use it
+        again the moment the cooldown expires. `BudgetLedger.cool_down` was
+        written for this and had never been called.
+        """
+        attempts = max(1, int(getattr(self._gateway.routing, "max_failover_attempts", 4)))
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                # Waiting is legitimate on the first attempt — "everything is
+                # rate-limited, the window reopens in 20s" is worth pacing for.
+                # On a failover attempt it is not: we are here because a
+                # provider just failed and we cooled it down ourselves, so
+                # sleeping that cooldown out inside one call trades a fast, and
+                # actionable, error for a stalled campaign.
+                return self._complete_once(
+                    system, user, json_mode=json_mode, allow_wait=attempt == 1
+                )
+            except RoleUnavailable:
+                # Everything we could reach has now been cooled down by this
+                # very loop. "no provider available" is true but useless — the
+                # informative answer is why they failed, and the failure
+                # taxonomy downstream keys on that message. Reporting
+                # RoleUnavailable here would bucket a chain of 429s as `other`.
+                if last_exc is None:
+                    raise
+                raise last_exc from None
+            except _ProviderCallFailed as failure:
+                last_exc = failure.original
+                if attempt >= attempts or not _is_retryable_upstream(failure.original):
+                    raise failure.original from None
+                self._gateway.ledger.cool_down(
+                    failure.provider,
+                    _cooldown_seconds(failure.original),
+                    reason=type(failure.original).__name__,
+                )
+                logger.warning(
+                    "role=%s provider %s failed (%s); failing over (attempt %d/%d)",
+                    self.role,
+                    failure.provider,
+                    failure.original,
+                    attempt,
+                    attempts,
+                )
+        assert last_exc is not None
+        raise last_exc
+
+    def _complete_once(
+        self, system: str, user: str, *, json_mode: bool = False, allow_wait: bool = True
+    ) -> str:
         gateway = self._gateway
         spec = gateway.routing.role_spec(self.role)
 
@@ -135,7 +251,11 @@ class RoleBoundClient:
             credential_resolver=gateway.credential_resolver,
         )
         if decision.provider is None:
-            if decision.wait_seconds <= 0 or decision.wait_seconds > spec.max_wait_seconds:
+            if (
+                not allow_wait
+                or decision.wait_seconds <= 0
+                or decision.wait_seconds > spec.max_wait_seconds
+            ):
                 raise RoleUnavailable(
                     f"role {self.role!r}: {decision.reason}"
                     + (
@@ -196,11 +316,11 @@ class RoleBoundClient:
                 temperature=gateway.temperature,
                 json_mode=json_mode,
             )
-        except Exception:
+        except Exception as exc:
             # A failed call still consumed quota on most providers, so it is
             # recorded before the exception propagates.
             gateway.ledger.record(provider.name)
-            raise
+            raise _ProviderCallFailed(provider.name, exc) from exc
         latency_ms = int((time.monotonic() - started) * 1000)
 
         gateway.ledger.record(provider.name, tokens=result.total_tokens)

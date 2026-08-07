@@ -147,6 +147,11 @@ class RoutingConfig(BaseModel):
     # provider without losing its position in the preference order.
     providers: list[ProviderSpec] = Field(default_factory=list)
     roles: dict[str, RoleSpec] = Field(default_factory=dict)
+    # How many providers to try before giving up on one call. Selection is
+    # predictive — it knows our ledger, not the upstream's — so a provider can
+    # 429 while we believe it has budget. Bounded because failing over through a
+    # nine-deep chain on a fatal error just reaches the same error slowly.
+    max_failover_attempts: int = 4
 
     @model_validator(mode="after")
     def _expand_use(self) -> RoutingConfig:

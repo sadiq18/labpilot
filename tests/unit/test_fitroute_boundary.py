@@ -52,12 +52,27 @@ def test_init_does_not_import_labpilot():
 
 
 def test_fitroute_uses_only_the_standard_library_and_pydantic():
-    """Keeping the dependency surface tiny is what makes it adoptable."""
+    """Keeping the dependency surface tiny is what makes it adoptable.
+
+    The stdlib set comes from `sys.stdlib_module_names` rather than a list
+    maintained here. A hand-written list fails on the first stdlib module
+    fitroute happens to use next — it flagged `re` — which trains the reader to
+    extend the allowlist reflexively, and that is how a real third-party import
+    would eventually be waved through.
+    """
+    import sys
+
     allowed = {"fitroute", "pydantic", "__future__"}
-    stdlib = {
-        "ast", "collections", "dataclasses", "functools", "hashlib", "json",
-        "logging", "os", "pathlib", "sqlite3", "time", "typing", "urllib",
-    }
     for module in _MODULES:
-        extra = _imported_roots(_ROOT / f"{module}.py") - allowed - stdlib
+        extra = _imported_roots(_ROOT / f"{module}.py") - allowed - sys.stdlib_module_names
         assert not extra, f"fitroute/{module}.py adds dependency {sorted(extra)}"
+
+
+def test_the_boundary_test_still_catches_a_real_dependency(tmp_path):
+    """Guards the guard: `sys.stdlib_module_names` must not admit everything."""
+    import sys
+
+    probe = tmp_path / "probe.py"
+    probe.write_text("import requests\nimport numpy as np\n", encoding="utf-8")
+    extra = _imported_roots(probe) - {"fitroute", "pydantic", "__future__"} - sys.stdlib_module_names
+    assert extra == {"requests", "numpy"}
