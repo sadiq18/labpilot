@@ -4,6 +4,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from labpilot.research_engine.execution.training.environment import (
+    child_environment,
+    declared_dependencies,
+    training_command,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,14 +28,25 @@ class TrainingRunner:
         if not self.train_script.exists():
             raise FileNotFoundError(f"Training script not found: {self.train_script}")
 
-        logger.info("Running training script %s (cwd=%s)", self.train_script, self.run_dir)
+        cmd = training_command(self.train_script, python=sys.executable)
+        deps = declared_dependencies(self.train_script)
+        logger.info(
+            "Running training script %s (cwd=%s, via=%s%s)",
+            self.train_script,
+            self.run_dir,
+            cmd[0],
+            f", deps={deps}" if deps else "",
+        )
         result = subprocess.run(
-            [sys.executable, str(self.train_script)],
+            cmd,
             cwd=self.run_dir,
             capture_output=True,
             text=True,
             timeout=timeout,
             check=False,
+            # Generated code runs without the operator's provider or Kaggle
+            # credentials. It needs data on disk, not API access.
+            env=child_environment(),
         )
         logger.info("Training script finished with return code %d", result.returncode)
         return result
