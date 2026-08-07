@@ -191,11 +191,6 @@ class HypothesisAssistant:
 
         tried = load_existing_technique_tags(knowledge_dir, competition)
         ledger = build_experiment_ledger(knowledge_dir, competition)
-        with KnowledgeStore(knowledge_dir, competition) as store:
-            technique_statuses = {
-                normalize_label(str(row.get("name") or "")): str(row.get("status") or "candidate")
-                for row in store.list_techniques()
-            }
         notes.append(
             "hypothesis: ledger "
             f"artifacts={len(ledger.artifacts)} "
@@ -211,7 +206,6 @@ class HypothesisAssistant:
             tried_techniques=tried,
             ledger=ledger,
             problem_type=_resolve_problem_type(knowledge_dir, competition),
-            technique_statuses=technique_statuses,
         )
         combo_candidates, combo_note = self._combo_candidates(
             ledger, research_context=research_context

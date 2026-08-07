@@ -62,13 +62,20 @@ def _apply_incremental_migrations(conn: sqlite3.Connection) -> None:
             reason           TEXT NOT NULL,
             evidence_card_id TEXT,
             observations     INTEGER NOT NULL DEFAULT 0,
-            net_effect       REAL,
+            signed_net       REAL,
             created_at       TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_technique_status_history_technique
             ON technique_status_history(technique_id);
         """
     )
+    if "technique_status_history" in tables and _table_has_column(
+        conn, "technique_status_history", "net_effect"
+    ) and not _table_has_column(conn, "technique_status_history", "signed_net"):
+        # Step-1 preview DBs may still have the misnamed column.
+        conn.execute(
+            "ALTER TABLE technique_status_history RENAME COLUMN net_effect TO signed_net"
+        )
 
 
 def run_migration(conn: sqlite3.Connection) -> None:

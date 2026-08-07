@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS technique_status_history (
     reason           TEXT NOT NULL,
     evidence_card_id TEXT,
     observations     INTEGER NOT NULL DEFAULT 0,
-    net_effect       REAL,
+    signed_net       REAL,
     created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_technique_status_history_technique

@@ -21,12 +21,6 @@ logger = logging.getLogger(__name__)
 #: Same bar as ``ClaimPromoter`` — a second epsilon would let the two drift.
 _NO_EFFECT_EPSILON = 1e-9
 
-from labpilot.research_engine.execution.technique.status_constants import (
-    CLAIM_PROMOTION_STATUSES,
-    PLANNER_VISIBLE_STATUSES,
-    VALID_STATUSES,
-)
-
 
 @dataclass(frozen=True)
 class TechniqueStatusDerivation:
@@ -42,8 +36,17 @@ class TechniqueStatusDerivation:
     evidence_card_id: str | None = None
 
 
+def _list_cards(promoter: ClaimPromoter) -> list[Any]:
+    try:
+        return list(promoter._evidence.list())  # noqa: SLF001 — shared card walk
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _signed_measured_effect(
-    promoter: ClaimPromoter, technique: str
+    promoter: ClaimPromoter,
+    technique: str,
+    cards: list[Any],
 ) -> tuple[int, float, float, str | None]:
     """``(observations, raw_net, signed_net, last_card_id)`` for ``technique``.
 
@@ -59,11 +62,6 @@ def _signed_measured_effect(
     raw_net = 0.0
     signed_net = 0.0
     last_card: str | None = None
-    try:
-        cards = promoter._evidence.list()  # noqa: SLF001 — shared card walk
-    except Exception:  # noqa: BLE001
-        return 0, 0.0, 0.0, None
-
     for card in cards:
         if not promoter._card_compared_something_real(card):  # noqa: SLF001
             continue
@@ -85,45 +83,27 @@ def _signed_measured_effect(
     return observations, raw_net, signed_net, last_card
 
 
-def selected_technique_names(knowledge_dir: Path, competition: str) -> set[str]:
-    """Technique labels that appear on any hypothesis for this competition."""
-    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
-
-    names: set[str] = set()
-    for hyp in HypothesisStore(Path(knowledge_dir), competition).list():
-        if hyp.technique:
-            names.add(str(hyp.technique).strip().lower())
-        for item in hyp.technique_stack or []:
-            if str(item).strip():
-                names.add(str(item).strip().lower())
-        for item in hyp.combo_techniques or []:
-            if str(item).strip():
-                names.add(str(item).strip().lower())
-    return names
-
-
 def derive_technique_status(
     name: str,
     promoter: ClaimPromoter,
     *,
-    selected: set[str] | None = None,
-) -> tuple[str, str, int, float, str | None]:
-    """Return ``(status, reason, observations, net_effect, evidence_card_id)``."""
-    observations, raw_net, signed_net, last_card = _signed_measured_effect(promoter, name)
+    cards: list[Any] | None = None,
+) -> tuple[str, str, int, float, float, str | None]:
+    """Return ``(status, reason, observations, raw_net, signed_net, evidence_card_id)``.
+
+    Step 1 does not derive ``dormant`` — that needs campaign aging (design §4),
+    which lands with step 2. Unmeasured techniques stay ``candidate``.
+    """
+    card_list = cards if cards is not None else _list_cards(promoter)
+    observations, raw_net, signed_net, last_card = _signed_measured_effect(
+        promoter, name, card_list
+    )
     if observations == 0:
-        label = name.strip().lower()
-        if selected is not None and label and label not in selected:
-            return (
-                "dormant",
-                "proposed in knowledge but never selected for a hypothesis",
-                0,
-                0.0,
-                None,
-            )
         return (
             "candidate",
             "proposed; no conclusive evidence card attributes a result yet",
             0,
+            0.0,
             0.0,
             None,
         )
@@ -133,6 +113,7 @@ def derive_technique_status(
             f"{observations} observation(s) but net signed effect is ~0",
             observations,
             raw_net,
+            signed_net,
             last_card,
         )
     if signed_net <= -_NO_EFFECT_EPSILON:
@@ -141,6 +122,7 @@ def derive_technique_status(
             f"measured adverse effect (signed net={signed_net:+.6g} over {observations} run(s))",
             observations,
             raw_net,
+            signed_net,
             last_card,
         )
     return (
@@ -148,6 +130,7 @@ def derive_technique_status(
         f"measured non-zero effect (signed net={signed_net:+.6g} over {observations} run(s))",
         observations,
         raw_net,
+        signed_net,
         last_card,
     )
 
@@ -156,17 +139,17 @@ def derive_all_technique_statuses(
     store: KnowledgeStore,
     promoter: ClaimPromoter,
     *,
-    selected: set[str] | None = None,
+    cards: list[Any] | None = None,
 ) -> list[TechniqueStatusDerivation]:
     """Derive status for every row in ``techniques``."""
+    card_list = cards if cards is not None else _list_cards(promoter)
     out: list[TechniqueStatusDerivation] = []
     for row in store.list_techniques():
         name = str(row.get("name") or "")
         tid = str(row.get("id") or "")
-        status, reason, obs, net, card_id = derive_technique_status(
-            name, promoter, selected=selected
+        status, reason, obs, raw_net, signed_net, card_id = derive_technique_status(
+            name, promoter, cards=card_list
         )
-        _, _, signed_net, _ = _signed_measured_effect(promoter, name)
         out.append(
             TechniqueStatusDerivation(
                 technique_id=tid,
@@ -174,7 +157,7 @@ def derive_all_technique_statuses(
                 status=status,
                 reason=reason,
                 observations=obs,
-                net_effect=net,
+                net_effect=raw_net,
                 signed_net=signed_net,
                 evidence_card_id=card_id,
             )
@@ -186,42 +169,47 @@ def recompute_technique_status(knowledge_dir: Path, competition: str) -> list[st
     """Recompute every technique status from current cards. Returns changed ids."""
     changed: list[str] = []
     promoter = ClaimPromoter(Path(knowledge_dir), competition)
-    selected = selected_technique_names(Path(knowledge_dir), competition)
     try:
+        cards = _list_cards(promoter)
         with KnowledgeStore(Path(knowledge_dir), competition) as store:
             for row in store.list_techniques():
                 tid = str(row.get("id") or "")
                 name = str(row.get("name") or "")
                 if not tid or not name:
                     continue
-                status, reason, obs, net, card_id = derive_technique_status(
-                    name, promoter, selected=selected
-                )
-                prior = str(row.get("status") or "candidate")
-                if prior == status:
-                    continue
-                store.set_technique_status(
-                    tid,
-                    status,
-                    competition=competition,
-                    from_status=prior,
-                    reason=reason,
-                    evidence_card_id=card_id,
-                    observations=obs,
-                    net_effect=net,
-                )
-                changed.append(tid)
-                logger.info(
-                    "Technique %s (%s): %s → %s (%s)",
-                    name,
-                    tid,
-                    prior,
-                    status,
-                    reason,
-                )
-    except Exception as exc:  # noqa: BLE001 — repair must never block a campaign
-        logger.warning("technique status recompute failed: %s", exc)
-        return changed
+                try:
+                    status, reason, obs, _raw, signed_net, card_id = derive_technique_status(
+                        name, promoter, cards=cards
+                    )
+                    prior = str(row.get("status") or "candidate")
+                    if prior == status:
+                        continue
+                    store.set_technique_status(
+                        tid,
+                        status,
+                        competition=competition,
+                        from_status=prior,
+                        reason=reason,
+                        evidence_card_id=card_id,
+                        observations=obs,
+                        signed_net=signed_net,
+                    )
+                    changed.append(tid)
+                    logger.info(
+                        "Technique %s (%s): %s → %s (%s)",
+                        name,
+                        tid,
+                        prior,
+                        status,
+                        reason,
+                    )
+                except Exception as exc:  # noqa: BLE001 — one bad row must not abort
+                    logger.warning(
+                        "technique status recompute failed for %s (%s): %s",
+                        name,
+                        tid,
+                        exc,
+                    )
     finally:
         promoter.close()
     return changed
@@ -233,11 +221,14 @@ def technique_status_report(
 ) -> dict[str, Any]:
     """Summarise derived statuses without writing — for step-1 review."""
     promoter = ClaimPromoter(Path(knowledge_dir), competition)
-    selected = selected_technique_names(Path(knowledge_dir), competition)
     try:
+        cards = _list_cards(promoter)
         with KnowledgeStore(Path(knowledge_dir), competition) as store:
-            derived = derive_all_technique_statuses(store, promoter, selected=selected)
-            stored = {str(r["id"]): str(r.get("status") or "candidate") for r in store.list_techniques()}
+            derived = derive_all_technique_statuses(store, promoter, cards=cards)
+            stored = {
+                str(r["id"]): str(r.get("status") or "candidate")
+                for r in store.list_techniques()
+            }
     finally:
         promoter.close()
 

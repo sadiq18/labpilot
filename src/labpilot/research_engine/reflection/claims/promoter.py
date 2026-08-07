@@ -197,14 +197,6 @@ class ClaimPromoter:
         technique = str(belief.get("technique") or "")
         effect = str(belief.get("effect") or "")
 
-        # Vocabulary filter (M-25): rejected/dormant never become claims.
-        # ``candidate`` may still promote when a measurement exists — status
-        # can lag until ``recompute_technique_status`` runs, and the measurement
-        # gate below *is* the confirmed bar (design §2).
-        vocab_status = self._knowledge.technique_status(technique)
-        if vocab_status in ("rejected", "dormant"):
-            return None
-
         # Promotion requires a measured effect. Full stop.
         #
         # This used to be gated on `effect` being set and not "unknown", which

@@ -20,32 +20,9 @@ from labpilot.research_engine.intelligence.repositories.models import (
 )
 from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_label
 from labpilot.research_engine.intelligence.retrieval.models import ResearchContext
-from labpilot.research_engine.execution.technique.status_constants import PLANNER_VISIBLE_STATUSES
 
 if TYPE_CHECKING:
     from labpilot.research_engine.intelligence.hypothesis.ledger import ExperimentLedger
-
-
-def filter_by_technique_status(
-    candidates: list[HypothesisCandidate],
-    statuses: dict[str, str],
-    *,
-    visible: frozenset[str] = PLANNER_VISIBLE_STATUSES,
-) -> tuple[list[HypothesisCandidate], list[str]]:
-    """Drop candidates whose primary technique is not visible by vocabulary status."""
-    kept: list[HypothesisCandidate] = []
-    dropped: list[str] = []
-    for candidate in candidates:
-        tech = str(candidate.technique or "").strip()
-        if not tech:
-            kept.append(candidate)
-            continue
-        status = str(statuses.get(normalize_label(tech), "candidate"))
-        if status in visible:
-            kept.append(candidate)
-        else:
-            dropped.append(tech)
-    return kept, dropped
 
 
 # Technique tokens that only make sense for a given modality. Evidence cards
@@ -115,7 +92,6 @@ def generate_candidates(
     tried_techniques: set[str] | None = None,
     ledger: ExperimentLedger | None = None,
     problem_type: str = "",
-    technique_statuses: dict[str, str] | None = None,
 ) -> list[HypothesisCandidate]:
     """Build candidates from beliefs/techniques, pipeline-diff, transfers, failures.
 
@@ -133,20 +109,10 @@ def generate_candidates(
     if ledger is not None:
         pipeline |= {normalize_label(x) for x in ledger.winning_stack}
     candidates: list[HypothesisCandidate] = []
-    statuses = dict(technique_statuses or {})
+
     for card in context.techniques:
         name = str(card.get("name") or "").strip()
-        if name and normalize_label(name) not in statuses:
-            statuses[normalize_label(name)] = str(card.get("status") or "candidate")
-
-    def _plannable(name: str) -> bool:
         if not name:
-            return True
-        return statuses.get(normalize_label(name), "candidate") in PLANNER_VISIBLE_STATUSES
-
-    for card in context.techniques:
-        name = str(card.get("name") or "").strip()
-        if not name or not _plannable(name):
             continue
         key_label = normalize_label(name)
         evidence = _evidence_from_card(card)
@@ -221,8 +187,6 @@ def generate_candidates(
             or (transfer.deltas[0] if transfer.deltas else "")
             or transfer.summary
         )
-        if not _plannable(str(technique or "")):
-            continue
         key_label = normalize_label(technique or transfer.repo_id)
         if not key_label or key_label in tried:
             continue
@@ -261,8 +225,6 @@ def generate_candidates(
         label = str(failure.get("label") or fail_id)
         summary = str(failure.get("summary") or failure.get("why") or "")
         technique = _technique_from_failure(label, summary, context)
-        if technique and not _plannable(technique):
-            continue
         key_label = normalize_label(f"fix:{technique or label}")
         technique_label = normalize_label(technique) if technique else ""
         # Skip when this failure's technique was already tried locally (Q5).
@@ -301,14 +263,15 @@ def generate_candidates(
             )
 
     if ledger is not None:
-        candidates.extend(_candidates_from_ledger(ledger, tried=tried, statuses=statuses))
+        candidates.extend(_candidates_from_ledger(ledger, tried=tried))
 
     deduped = _dedupe_candidates(candidates)
-    kept, dropped = filter_by_technique_status(deduped, statuses)
+    kept, dropped = filter_incompatible_techniques(deduped, problem_type)
     if dropped:
         logger.info(
-            "Dropped %d technique(s) by vocabulary status: %s",
+            "Dropped %d technique(s) incompatible with problem_type=%s: %s",
             len(dropped),
+            problem_type,
             ", ".join(sorted(set(dropped))[:8]),
         )
     return kept
@@ -318,7 +281,6 @@ def _candidates_from_ledger(
     ledger: ExperimentLedger,
     *,
     tried: set[str],
-    statuses: dict[str, str],
 ) -> list[HypothesisCandidate]:
     """Stack unused techniques/beliefs/claims onto the winning line when present."""
     from labpilot.research_engine.intelligence.hypothesis.ledger import ExperimentLedger as _L
@@ -334,8 +296,6 @@ def _candidates_from_ledger(
     def _blocked(tech: str) -> bool:
         label = normalize_label(tech)
         if not label or label in tried or ledger.is_failed(tech):
-            return True
-        if statuses.get(label, "candidate") not in PLANNER_VISIBLE_STATUSES:
             return True
         for parent_tech in stack:
             if (normalize_label(parent_tech), label) in avoid:

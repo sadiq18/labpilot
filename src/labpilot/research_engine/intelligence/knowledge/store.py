@@ -382,9 +382,13 @@ class KnowledgeStore:
         reason: str = "",
         evidence_card_id: str | None = None,
         observations: int = 0,
-        net_effect: float | None = None,
+        signed_net: float | None = None,
     ) -> None:
         """Write derived status and append an audit row — never delete history."""
+        from labpilot.research_engine.execution.technique.status_constants import VALID_STATUSES
+
+        if status not in VALID_STATUSES:
+            raise ValueError(f"invalid technique status: {status!r}")
         now = _now()
         self._conn.execute(
             "UPDATE techniques SET status = ?, updated_at = ? WHERE id = ?",
@@ -394,7 +398,7 @@ class KnowledgeStore:
             """
             INSERT INTO technique_status_history (
                 technique_id, competition_slug, from_status, to_status, reason,
-                evidence_card_id, observations, net_effect, created_at
+                evidence_card_id, observations, signed_net, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -405,7 +409,7 @@ class KnowledgeStore:
                 reason,
                 evidence_card_id,
                 observations,
-                net_effect,
+                signed_net,
                 now,
             ),
         )
