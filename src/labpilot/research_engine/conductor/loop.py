@@ -556,10 +556,24 @@ def _run_until_stop_inner(
             store.update_session_status(session_id, "completed")
             _progress(f"Conductor stop: {action.rationale}")
             break
+        # Resolve `@latest` here too. Only the multi-step campaign path did,
+        # so this path could not use the shared `_default_args` and hand-rolled
+        # its own — which is how `offline_next_action` came to pin
+        # `plan_id="P-001"` and `dry_run=True`, and how a degraded policy
+        # started minting `dry_run_stub` metrics that became evidence cards.
+        action_args = resolve_step_args(
+            action.tool,
+            action.args,
+            latest_plan_id=_latest_plan_id(workspace),
+            latest_execution_id=_latest_execution_id(workspace),
+            next_hypothesis_id=_next_hypothesis_id(workspace),
+            baseline_plan_exists=_baseline_plan_exists(workspace),
+        )
+        record.args = action_args
         task = store.enqueue(
             session_id,
             action.tool,
-            args=action.args,
+            args=action_args,
             decision_id=decision_id,
         )
         record.task_id = task.id

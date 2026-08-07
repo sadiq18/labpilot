@@ -8,6 +8,7 @@ import os
 from typing import Any
 
 from labpilot.accessor.common.provenance import record_invocation
+from labpilot.research_engine.conductor.actions import _default_args
 from labpilot.research_engine.conductor.approvals import (
     OfflineFallbackPrompt,
     resolve_offline_fallback,
@@ -24,6 +25,10 @@ from labpilot.research_engine.workspace_facade import Workspace
 logger = logging.getLogger(__name__)
 
 # Offline / null-LLM fallback order (deterministic).
+#: Tools worth doing again once the first pass is complete — each produces new
+#: information on a repeat. `analyze_competition` and `search_papers` do not.
+_REPEATABLE = ("generate_plan", "run_plan", "reflect")
+
 _DEFAULT_ORDER = (
     "analyze_competition",
     "search_papers",
@@ -174,21 +179,60 @@ def offline_next_action(
             continue
         if name in rejected:
             continue
-        args: dict[str, Any] = {}
-        if name == "generate_plan":
-            args = {"baseline": True}
-        if name == "search_papers":
-            args = {"offline": True}
-        if name == "run_plan":
-            # Caller/loop may inject plan_id; offline stub uses placeholder.
-            args = {"plan_id": "P-001", "dry_run": True}
         return NextAction(
             tool=name,
-            args=args,
+            args=_default_args(name),
             rationale=f"offline policy: next unfinished tool is {name}",
             stop=False,
         )
-    return NextAction(tool=None, rationale="offline policy: catalog exhausted", stop=True)
+
+    # Everything has run once. A research loop is not a one-pass checklist:
+    # after analyze -> plan -> run -> reflect, the useful move is to plan
+    # against a new hypothesis, not to stop. Returning `stop=True` here ended
+    # two healthy campaigns — S-019 at step 8 and S-020 at step 27 — with the
+    # LLM working fine by then.
+    #
+    # Only the tools that produce new information on a repeat are eligible;
+    # re-analysing the competition does not. The allowlist still gates them, so
+    # this cannot spin: `generate_plan` is removed while a plan is unrun, and
+    # `run_plan` while none is runnable.
+    available = [t for t in _REPEATABLE if t in allowlist and t not in rejected]
+    if not available:
+        return NextAction(
+            tool=None,
+            rationale="offline policy: no repeatable tool is currently available",
+            stop=True,
+        )
+
+    # Least-recently-used, not fixed order. Taking `_REPEATABLE` in order meant
+    # `generate_plan` won whenever it was available, giving plan -> run -> plan
+    # -> run and never reflecting again after the first pass.
+    # `completed_tools` is an ordered list with repeats, so "how long since this
+    # last ran" is answerable.
+    ordered = list(observe.get("completed_tools") or [])
+    positions = {tool: i for i, tool in enumerate(ordered)}  # last index wins
+    available.sort(key=lambda t: positions.get(t, -1))
+    choice = available[0]
+
+    # Repeating the thing we just did, with nothing else on offer, is a spin.
+    # A DRAFT plan makes `has_unrun_plan` true and `has_runnable_plan` false, so
+    # the allowlist can narrow to `{reflect}` alone — bounded by max_steps, but
+    # it burns a whole degraded campaign re-reflecting on the same state.
+    if len(available) == 1 and ordered and ordered[-1] == choice:
+        return NextAction(
+            tool=None,
+            rationale=(
+                f"offline policy: {choice} is the only available tool and it "
+                "just ran; nothing further to try"
+            ),
+            stop=True,
+        )
+    return NextAction(
+        tool=choice,
+        args=_default_args(choice),
+        rationale=f"offline policy: cycling back to {choice}",
+        stop=False,
+    )
 
 
 def validate_next_action(action: NextAction, allowlist: set[str]) -> NextAction:
