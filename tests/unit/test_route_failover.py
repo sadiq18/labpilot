@@ -186,3 +186,35 @@ def test_an_empty_choices_response_fails_over():
         "https://openrouter.ai/api/v1 returned no choices for 'openai/gpt-oss-20b:free'"
     )
     assert _is_retryable_upstream(exc)
+
+
+# --- review #96: status codes are tokens, not substrings --------------------
+
+
+@pytest.mark.parametrize(
+    ("message", "retryable"),
+    [
+        # `"400" in text` matched inside these, making retryable errors fatal.
+        ("timed out after 4000s", True),
+        ("connection lost after 40400ms", True),
+        ("read timeout after 4040ms", True),
+        # Real status codes still classify.
+        ("HTTP 400 Bad Request", False),
+        ("HTTP 404 not found", False),
+        ("HTTP 429 slow down", True),
+        ("HTTP 504 gateway timeout", True),
+    ],
+)
+def test_status_codes_match_on_token_boundaries(message, retryable):
+    assert _is_retryable_upstream(Exception(message)) is retryable
+
+
+def test_empty_message_content_fails_over_like_empty_choices():
+    """`adapters.py` raises both strings; only the first was listed.
+
+    A non-empty `choices` whose message has no content is the same failure —
+    the provider returned nothing usable — and dropped the campaign to the
+    offline policy without trying anyone else.
+    """
+    exc = RuntimeError("https://openrouter.ai/api/v1 returned no message.content for 'x'")
+    assert _is_retryable_upstream(exc)

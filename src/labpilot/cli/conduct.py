@@ -223,6 +223,18 @@ def _budget_metadata(
         # with target_metric unset. Same defect as `build_evidence_card`.
         **({} if maximize is None else {"maximize": maximize}),
     )
+    if maximize is None and target_metric and target_value is not None:
+        # A target is the only thing that reads `maximize`, so an unknown
+        # direction is harmless until one is set — and unacceptable after.
+        # "stop when the metric reaches X" would fire on the wrong side.
+        # `build_evidence_card` already refuses on this; the campaign should
+        # not be more permissive about the same unknown.
+        raise typer.BadParameter(
+            f"cannot determine whether {target_metric!r} should be maximised or "
+            "minimised, so --target-value would stop the campaign on the wrong "
+            "side. Set metric.direction in the workspace competition.json, or "
+            "run `research analyze` to produce the competition profile."
+        )
     from labpilot.research_engine.conductor.budgets import BudgetState
 
     state = BudgetState.model_validate(meta.get("budget_state") or {})

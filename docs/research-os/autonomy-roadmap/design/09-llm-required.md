@@ -467,6 +467,14 @@ with strict mode on and zero aborts. One honest caveat: that run recorded 30 of
 *clean* run — it did not exercise an abort. The abort path is covered by unit
 tests, not by a campaign.
 
+**Fatal means the session, not the step.** Review of the first build found
+`LLMDegradedError` being caught by the Conductor's generic dispatch handler,
+which logged "Task failed" and carried on to the next step. That is the silent
+degradation M14 exists to remove, reappearing one level up: strict mode would
+have been on, a degraded call would have cost a step, and the campaign would
+have finished looking healthy. The error is now caught *before* the generic
+handler, the session is marked `failed`, and the exception propagates.
+
 **Why the default stays off.** Measured, not cautious:
 
 | Session | Invocations | Fallbacks | Rate | Kinds |

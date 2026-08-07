@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from labpilot.accessor.common.micro_agents import LLMDegradedError
 from labpilot.research_engine.conductor.actions import (
     ResearchAction,
     map_research_action,
@@ -42,6 +43,22 @@ ProgressCallback = Callable[[str], None]
 # How many times an advisory "stop" is overridden while the objective is unmet.
 # Bounded so a policy that genuinely has nothing left can still end the run.
 _MAX_STOP_OVERRIDES = 2
+
+
+def _fail_session_on_degraded_llm(store, session_id, record, decisions, exc) -> None:
+    """Record a strict-mode abort before it propagates.
+
+    The session is marked so a later `conduct continue` sees why it ended
+    rather than finding a run that simply stopped short.
+    """
+    record.rationale = f"{record.rationale} | strict LLM abort: {exc}"
+    store.append_decision(record)
+    decisions.append(record)
+    try:
+        store.increment_metric(session_id, "tasks_failed")
+        store.update_session_status(session_id, "failed")
+    except Exception:  # noqa: BLE001 — the abort matters more than the bookkeeping
+        logger.warning("could not mark session %s failed", session_id)
 
 
 def _objective_unmet(config: Any, state: Any) -> bool:
@@ -489,6 +506,14 @@ def _run_until_stop_inner(
                         )
                         budget_state.submissions += 1
                         persist_budgets(store, session_id, budget_cfg, budget_state)
+                except LLMDegradedError as exc:
+                    # Strict mode (M14 2b) means fatal, and the generic handler
+                    # below would reduce it to one lost step with the campaign
+                    # carrying on — which is the silent degradation M14 exists
+                    # to remove, just one level up. Stop the session and say why.
+                    _fail_session_on_degraded_llm(store, session_id, record, decisions, exc)
+                    _progress(f"Campaign stopped: {exc}")
+                    raise
                 except Exception as exc:
                     store.increment_metric(session_id, "tasks_failed")
                     record.rationale = f"{record.rationale} | dispatch error: {exc}"
@@ -558,6 +583,10 @@ def _run_until_stop_inner(
         try:
             result = scheduler.dispatch(task)
             record.artifact_refs = [r.model_dump() for r in result.refs]
+        except LLMDegradedError as exc:
+            _fail_session_on_degraded_llm(store, session_id, record, decisions, exc)
+            _progress(f"Campaign stopped: {exc}")
+            raise
         except Exception as exc:
             record.rationale = f"{record.rationale} | dispatch error: {exc}"
             store.append_decision(record)

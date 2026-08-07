@@ -262,3 +262,39 @@ def test_the_conductor_policy_records_its_own_failures(tmp_path):
 
     report = rule_engine_fire_report(tmp_path, COMPETITION)
     assert any(s.agent == "ConductorPolicy" for s in report)
+
+
+# --- review #96: the campaign sink must not clobber the CLI sink ------------
+
+
+def test_the_campaign_sink_restores_the_cli_sink(tmp_path):
+    """`cli/main.py` installs a process-wide sink; clearing to None on campaign
+    exit would silently stop recording anything that runs afterwards."""
+    outer = _Recorder()
+    token = set_sink(outer)
+    try:
+        with recording_provenance(tmp_path, COMPETITION, session_id="S-1"):
+            _Agent(_Client()).run(StructuredContext(data={}))
+        # Back to the outer sink, not to None.
+        _Agent(_Client()).run(StructuredContext(data={}))
+        assert len(outer.records) == 1
+    finally:
+        set_sink(None)
+        _ = token
+
+
+def test_run_context_is_restored_too(tmp_path):
+    from labpilot.accessor.common.provenance import set_run_context
+
+    outer = _Recorder()
+    set_sink(outer)
+    set_run_context(competition="outer-comp", session_id="OUTER")
+    try:
+        with recording_provenance(tmp_path, COMPETITION, session_id="S-1"):
+            pass
+        _Agent(_Client()).run(StructuredContext(data={}))
+        assert outer.records[-1].competition_slug == "outer-comp"
+        assert outer.records[-1].session_id == "OUTER"
+    finally:
+        set_sink(None)
+        set_run_context()

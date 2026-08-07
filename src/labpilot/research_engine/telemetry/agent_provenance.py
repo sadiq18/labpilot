@@ -24,6 +24,8 @@ from typing import Any
 from labpilot.accessor.common.provenance import (
     AgentInvocation,
     record_invocation,  # noqa: F401 — re-exported for callers
+    reset_run_context,
+    reset_sink,
     set_run_context,
     set_sink,
 )
@@ -84,14 +86,20 @@ def recording_provenance(
         sink = SqliteInvocationSink(knowledge_dir, competition)
     except Exception as exc:  # noqa: BLE001
         logger.warning("agent provenance disabled: %s", exc)
+    sink_token = ctx_tokens = None
     if sink is not None:
-        set_sink(sink)
-        set_run_context(competition=competition, session_id=session_id)
+        sink_token = set_sink(sink)
+        ctx_tokens = set_run_context(competition=competition, session_id=session_id)
     try:
         yield sink
     finally:
-        set_sink(None)
-        set_run_context()
+        # Restore rather than clear: `cli/main.py` installs a process-wide sink,
+        # and setting None here would silently stop recording any agent work
+        # that continues after the campaign in the same process.
+        if sink_token is not None:
+            reset_sink(sink_token)
+        if ctx_tokens is not None:
+            reset_run_context(ctx_tokens)
         if sink is not None:
             sink.close()
 

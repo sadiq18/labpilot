@@ -122,16 +122,15 @@ class _ProviderCallFailed(Exception):
 #: Upstream conditions worth trying a different provider for. A malformed
 #: request or a bad key will fail identically everywhere, so failing over on
 #: those just burns the whole chain to reach the same error more slowly.
-_RETRYABLE_MARKERS = (
-    "429",
+#:
+#: Status codes are matched on token boundaries, not as substrings. `"400" in
+#: text` also matches "timed out after 4000s" and "connection lost after
+#: 40400ms", both of which are retryable and were being classified fatal.
+_RETRYABLE_TEXT = (
     "RATE LIMIT",
     "RESOURCE_EXHAUSTED",
     "QUOTA",
     "HIGH DEMAND",
-    "500",
-    "502",
-    "503",
-    "504",
     "UNAVAILABLE",
     "OVERLOADED",
     "TIMEOUT",
@@ -145,17 +144,33 @@ _RETRYABLE_MARKERS = (
     # the offline policy three times in eight steps.
     "RETURNED NO CHOICES",
     "NO CHOICES",
+    # Same shape, different string: a non-empty `choices` whose message has no
+    # content. `adapters.py` raises both, and only the first was listed.
+    "NO MESSAGE.CONTENT",
 )
 
+_RETRYABLE_STATUS = (429, 500, 502, 503, 504)
+
 #: Not retryable even when the text also matches above.
-_FATAL_MARKERS = ("401", "403", "UNAUTHORIZED", "INVALID API KEY", "400", "404")
+_FATAL_TEXT = ("UNAUTHORIZED", "FORBIDDEN", "INVALID API KEY", "NOT FOUND")
+_FATAL_STATUS = (400, 401, 403, 404)
+
+_STATUS_RE = re.compile(r"(?<!\d)(\d{3})(?!\d)")
+
+
+def _status_codes(text: str) -> set[int]:
+    """HTTP-looking status codes in ``text``, as whole tokens."""
+    return {int(m) for m in _STATUS_RE.findall(text)}
 
 
 def _is_retryable_upstream(exc: BaseException) -> bool:
     text = str(exc).upper()
-    if any(marker in text for marker in _FATAL_MARKERS):
+    codes = _status_codes(text)
+    if any(marker in text for marker in _FATAL_TEXT) or (codes & set(_FATAL_STATUS)):
         return False
-    return any(marker in text for marker in _RETRYABLE_MARKERS)
+    if codes & set(_RETRYABLE_STATUS):
+        return True
+    return any(marker in text for marker in _RETRYABLE_TEXT)
 
 
 def _cooldown_seconds(exc: BaseException) -> float:

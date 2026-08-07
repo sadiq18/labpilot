@@ -901,3 +901,57 @@ def test_intent_text_alone_would_still_be_hijacked():
         catalog,
     )
     assert [s.tool for s in hijacked.steps] != ["reflect"]
+
+
+# --- review #96: strict mode must stop the session, not just the step -------
+
+
+def test_strict_llm_abort_stops_the_campaign(tmp_path, monkeypatch):
+    """`LLMDegradedError` was caught by the generic dispatch handler, which
+    logged "Task failed" and carried on. A degraded LLM that merely costs a
+    step is the silent degradation M14 exists to remove, one level up.
+    """
+    import pytest as _pytest
+
+    from labpilot.accessor.common.micro_agents import LLMDegradedError
+    from labpilot.research_engine.conductor import loop as loop_mod
+
+    calls: list[str] = []
+
+    class _Store:
+        def append_decision(self, record):
+            calls.append("decision")
+
+        def increment_metric(self, session_id, name):
+            calls.append(f"metric:{name}")
+
+        def update_session_status(self, session_id, status):
+            calls.append(f"status:{status}")
+
+    class _Record:
+        rationale = "chose implement"
+
+    decisions: list = []
+    loop_mod._fail_session_on_degraded_llm(
+        _Store(), "S-1", _Record(), decisions, LLMDegradedError("agent: prose reply")
+    )
+
+    assert "status:failed" in calls, "the session must be marked, not left short"
+    assert "metric:tasks_failed" in calls
+    assert len(decisions) == 1
+    assert "strict LLM abort" in decisions[0].rationale
+    _ = _pytest
+
+
+def test_the_degraded_handler_precedes_the_generic_one():
+    """Ordering is the whole fix: a later `except Exception` would swallow it."""
+    import inspect
+
+    from labpilot.research_engine.conductor import loop as loop_mod
+
+    source = inspect.getsource(loop_mod.run_until_stop.__wrapped__) if hasattr(
+        loop_mod.run_until_stop, "__wrapped__"
+    ) else inspect.getsource(loop_mod._run_until_stop_inner)
+    degraded = source.index("except LLMDegradedError")
+    generic = source.index("except Exception as exc:", degraded)
+    assert degraded < generic, "LLMDegradedError must be caught before Exception"

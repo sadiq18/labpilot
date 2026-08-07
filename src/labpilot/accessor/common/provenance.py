@@ -30,7 +30,7 @@ this cannot break a run that would otherwise have worked.
 from __future__ import annotations
 
 import logging
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
@@ -65,14 +65,29 @@ _competition: ContextVar[str] = ContextVar("_provenance_competition", default=""
 _session: ContextVar[str | None] = ContextVar("_provenance_session", default=None)
 
 
-def set_sink(sink: InvocationSink | None) -> None:
-    _sink.set(sink)
+def set_sink(sink: InvocationSink | None) -> Token:
+    """Install ``sink`` and return a token that restores the previous one."""
+    return _sink.set(sink)
 
 
-def set_run_context(*, competition: str = "", session_id: str | None = None) -> None:
+def reset_sink(token: Token) -> None:
+    """Put back whatever sink was installed before the matching `set_sink`.
+
+    Clearing to ``None`` instead would drop the process-wide sink that
+    `cli/main.py` installs, so any agent work continuing after a campaign
+    would stop being recorded.
+    """
+    _sink.reset(token)
+
+
+def set_run_context(*, competition: str = "", session_id: str | None = None) -> tuple:
     """Tag subsequent records with the campaign they belong to."""
-    _competition.set(competition or "")
-    _session.set(session_id)
+    return _competition.set(competition or ""), _session.set(session_id)
+
+
+def reset_run_context(tokens: tuple) -> None:
+    _competition.reset(tokens[0])
+    _session.reset(tokens[1])
 
 
 #: Failure taxonomy. The point is to separate "the provider was busy" from "the

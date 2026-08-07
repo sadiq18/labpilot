@@ -341,3 +341,43 @@ def test_a_minimised_target_is_met_by_going_below_it():
 
     assert _objective_unmet(cfg, _Below()) is False
     assert _objective_unmet(cfg, _Above()) is True
+
+
+def test_a_target_with_an_unknown_direction_is_refused(tmp_path):
+    """A target is the only thing that reads `maximize`, so an unknown
+    direction is harmless until one is set — and unacceptable after.
+
+    Leaving BudgetConfig's `True` default in place would stop the campaign on
+    the wrong side. `build_evidence_card` already refuses on this; the campaign
+    should not be more permissive about the same unknown.
+    """
+    import typer
+
+    from labpilot.cli.conduct import _budget_metadata
+
+    with pytest.raises(typer.BadParameter, match="maximised or minimised"):
+        _budget_metadata(
+            max_submissions=None,
+            max_wall_s=None,
+            max_cost_usd=None,
+            target_metric="mse",
+            target_value=5.0,
+            plateau_window=3,
+            maximize=None,
+        )
+
+
+def test_no_target_tolerates_an_unknown_direction(tmp_path):
+    """Nothing reads `maximize` without a target, so this must not block a run."""
+    from labpilot.cli.conduct import _budget_metadata
+
+    meta = _budget_metadata(
+        max_submissions=None,
+        max_wall_s=None,
+        max_cost_usd=None,
+        target_metric=None,
+        target_value=None,
+        plateau_window=3,
+        maximize=None,
+    )
+    assert meta["budgets"]["target_value"] is None
