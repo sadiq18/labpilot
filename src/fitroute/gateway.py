@@ -138,6 +138,13 @@ _RETRYABLE_MARKERS = (
     "TIMED OUT",
     "CONNECTION",
     "TEMPORARILY",
+    # Measured on rogii 2026-08-07: OpenRouter returns HTTP 200 with an empty
+    # `choices` array for some free models. Not an error status, not a rate
+    # limit, and the provider produced nothing usable — which is precisely the
+    # case another provider can answer. Without this the campaign dropped to
+    # the offline policy three times in eight steps.
+    "RETURNED NO CHOICES",
+    "NO CHOICES",
 )
 
 #: Not retryable even when the text also matches above.

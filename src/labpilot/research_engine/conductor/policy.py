@@ -7,6 +7,7 @@ import logging
 import os
 from typing import Any
 
+from labpilot.accessor.common.provenance import record_invocation
 from labpilot.research_engine.conductor.approvals import (
     OfflineFallbackPrompt,
     resolve_offline_fallback,
@@ -274,14 +275,36 @@ def _invoke_llm_next_action(
         already["instruction"] = "Choose a different tool from allowlist, or stop."
         payload["already_rejected"] = already
     user = json.dumps(payload, indent=2, default=str)
-    if hasattr(llm_client, "complete"):
-        text = llm_client.complete(system, user)
-    elif hasattr(llm_client, "generate"):
-        text = str(llm_client.generate(task="planning", prompt=user))
-    else:
-        raise TypeError("llm_client has no complete/generate method")
-    data = _parse_json(text)
-    action = NextAction.model_validate(data)
+    # Recorded here rather than in `decide_next`'s handler so success and
+    # failure are stamped at the same place the call happens. The Conductor
+    # policy is the highest-frequency LLM caller in the system and is *not* a
+    # micro agent, so none of this reached the provenance store — measured
+    # 2026-08-07, an 8-step campaign recorded one invocation while the policy
+    # fell back to the offline order three times. That missing number is
+    # exactly what M14 2b needs to decide whether fatal failure is safe.
+    try:
+        if hasattr(llm_client, "complete"):
+            text = llm_client.complete(system, user)
+        elif hasattr(llm_client, "generate"):
+            text = str(llm_client.generate(task="planning", prompt=user))
+        else:
+            raise TypeError("llm_client has no complete/generate method")
+        data = _parse_json(text)
+        action = NextAction.model_validate(data)
+    except Exception as exc:
+        record_invocation(
+            agent="ConductorPolicy",
+            generated_by="rule_engine",
+            llm_role="default",
+            failure_reason=str(exc),
+        )
+        raise
+    record_invocation(
+        agent="ConductorPolicy",
+        generated_by="llm",
+        llm_role="default",
+        served=getattr(llm_client, "last_served", None),
+    )
     validated = validate_next_action(action, allowlist)
     # Choosing a tool that is currently gated is a *recoverable* policy mistake,
     # not a reason to end the campaign. Measured 2026-08-07: `generate_plan` is

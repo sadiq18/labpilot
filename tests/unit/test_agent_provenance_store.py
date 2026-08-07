@@ -239,3 +239,26 @@ def test_a_fatal_error_is_still_not_retried():
 
     assert not _is_transient_llm_error(RuntimeError("401 Unauthorized"))
     assert not _is_transient_llm_error(RuntimeError("model exploded"))
+
+
+def test_the_conductor_policy_records_its_own_failures(tmp_path):
+    """The policy is the highest-frequency LLM caller and is not a micro agent.
+
+    Measured on rogii 2026-08-07: an 8-step campaign recorded one invocation
+    while the policy fell back to the offline order three times — so the very
+    number M14 2b needs was the number missing.
+    """
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    class _Failing:
+        def complete(self, system, user):
+            raise RuntimeError("returned no choices")
+
+    with recording_provenance(tmp_path, COMPETITION, session_id="S-9"):
+        with pytest.raises(Exception):
+            policy_mod._invoke_llm_next_action(  # noqa: SLF001
+                {"allowlist": ["stop"]}, {"stop"}, _Failing()
+            )
+
+    report = rule_engine_fire_report(tmp_path, COMPETITION)
+    assert any(s.agent == "ConductorPolicy" for s in report)

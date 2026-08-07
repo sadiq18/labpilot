@@ -175,3 +175,14 @@ def test_a_working_provider_is_not_retried(gateway, monkeypatch):
 
     assert gateway.for_role("default").complete("s", "u") == "ok from first"
     assert adapters.calls == ["first"]
+
+
+def test_an_empty_choices_response_fails_over():
+    """OpenRouter returns HTTP 200 with an empty `choices` array for some free
+    models — not an error status, not a rate limit, and nothing usable came
+    back. Measured on rogii: this dropped the campaign to the offline policy
+    three times in eight steps while eight other providers sat unused."""
+    exc = RuntimeError(
+        "https://openrouter.ai/api/v1 returned no choices for 'openai/gpt-oss-20b:free'"
+    )
+    assert _is_retryable_upstream(exc)
