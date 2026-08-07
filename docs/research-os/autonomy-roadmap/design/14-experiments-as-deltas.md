@@ -175,7 +175,70 @@ OpenAI-compatible HTTP shell over it. It also lets `structured_output` become a
 **per-role** precondition — still required for the policy, not for codegen — and
 it stays inside `fitroute`, which keeps the package extractable.
 
+#### Roles must survive the HTTP boundary
+
+The proxy sees requests, not roles — so every aider call would look identical and
+per-role limits, `requires`, `on_exhaustion` and `requires_strong` would collapse
+into one bucket. That is M10's founding property lost at the first hop.
+
+Encode the role in the model name:
+
+```
+aider --model labpilot/codegen --openai-api-base http://localhost:PORT
+```
+
+The proxy reads `labpilot/codegen`, resolves it through
+`select_route("codegen", …)`, and substitutes the real provider and model. Call
+sites still name a role, never a vendor.
+
+#### Rate limiting through a proxy
+
+Enforcement changes shape, and improves. Today `RoleBoundClient.complete` handles
+a limit by **sleeping** until the window reopens. A proxy cannot: aider holds an
+HTTP connection with its own timeout, and stalling it invites a client-side retry
+that makes the pressure worse.
+
+Server-side, in order:
+
+1. **Route around it** — pick another eligible provider. This is the `cool_down`
+   + re-select failover already in `gateway.py`, and it beats waiting: the
+   request succeeds rather than stalling.
+2. **Degrade**, for roles whose `on_exhaustion` permits it.
+3. **`429` with `Retry-After`** only when nothing is available — the correct
+   OpenAI-compatible answer, which litellm (aider's client) already honours.
+
+Accounting also gets *more* accurate, not less: every call aider makes, including
+internal retries and repo-map lookups, arrives as a request the ledger records.
+
 **Useful beyond aider:** any external tool reached for later gets M10 for free.
+
+#### One chokepoint, two transports
+
+A tempting generalisation is to route *all* labpilot LLM traffic through the
+proxy, so relocating it to a shared backend later is a URL change. The goal is
+right; forcing every internal call onto a socket to get it is not.
+
+What actually delivers "change the URL and nothing breaks" is **one place where
+routing decisions are made** — and `LLMGateway` already is that place. The proxy
+is one adapter onto it, for clients that can only speak HTTP:
+
+```
+micro agents ──── Python ────┐
+                             ├──▶ LLMGateway ──▶ select_route · ledger · failover
+aider ─── HTTP ─── proxy ────┘                          │
+                                                         ▼
+                                              providers, or a remote fitroute
+```
+
+Relocation is then a `ProviderSpec` change — a `remote` kind pointing at a hosted
+fitroute — not a rewrite, and every call site is already insulated because none
+of them names a vendor.
+
+Making every internal call HTTP would buy uniformity at the cost of: a process
+lifecycle to manage (who starts the proxy, what happens on port conflict), a new
+hard dependency for a path that currently cannot fail that way, and stack traces
+that stop at a socket. Worth revisiting if a shared backend becomes real —
+recorded here so the option is not lost.
 
 ### The seam
 
