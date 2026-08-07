@@ -197,11 +197,12 @@ class ClaimPromoter:
         technique = str(belief.get("technique") or "")
         effect = str(belief.get("effect") or "")
 
-        from labpilot.research_engine.execution.technique.status_constants import (
-            CLAIM_PROMOTION_STATUSES,
-        )
-
-        if self._knowledge.technique_status(technique) not in CLAIM_PROMOTION_STATUSES:
+        # Vocabulary filter (M-25): rejected/dormant never become claims.
+        # ``candidate`` may still promote when a measurement exists — status
+        # can lag until ``recompute_technique_status`` runs, and the measurement
+        # gate below *is* the confirmed bar (design §2).
+        vocab_status = self._knowledge.technique_status(technique)
+        if vocab_status in ("rejected", "dormant"):
             return None
 
         # Promotion requires a measured effect. Full stop.

@@ -240,14 +240,14 @@ def test_history_survives_demotion(tmp_path) -> None:
     assert rows[-1]["to_status"] == "candidate"
 
 
-def test_claim_promotion_requires_confirmed_status(tmp_path) -> None:
-    from labpilot.research_engine.reflection.claims.promoter import ClaimPromoter
-
+def test_claim_promotion_blocks_rejected_and_needs_measurement(tmp_path) -> None:
+    """Rejected never promotes; confirmed status alone is not enough without measurement."""
+    cards = EvidenceCardStore(tmp_path, COMPETITION)
     with KnowledgeStore(tmp_path, COMPETITION) as store:
-        store.merge_technique("vit", confidence=0.95)
+        tid = store.merge_technique("vit", confidence=0.95)
         store.set_technique_status(
-            store.merge_technique("vit"),
-            "candidate",
+            tid,
+            "rejected",
             competition=COMPETITION,
             reason="test",
         )
@@ -258,19 +258,21 @@ def test_claim_promotion_requires_confirmed_status(tmp_path) -> None:
             effect="positive",
             confidence=0.95,
         )
+    _card(cards, "EV-vit-bad", {"vit": 5.0}, maximize=False)
     promoter = ClaimPromoter(tmp_path, COMPETITION)
     try:
         belief = promoter._knowledge.list_beliefs()[0]
         assert promoter.promote_from_belief(belief) is None
         with KnowledgeStore(tmp_path, COMPETITION) as store:
             store.set_technique_status(
-                store.merge_technique("vit"),
+                tid,
                 "confirmed",
                 competition=COMPETITION,
-                from_status="candidate",
+                from_status="rejected",
                 reason="test",
             )
-        # Still no measured effect — status alone is not enough.
+        # Confirmed + measurement would promote; strip the card first.
+        (cards.dir / "EV-vit-bad.json").unlink()
         assert promoter.promote_from_belief(belief) is None
     finally:
         promoter.close()
