@@ -438,8 +438,85 @@ needs phase 1's telemetry.
 |---|---|---|---|
 | 1 | **done** | — | — |
 | 2a | **done** | — | — |
-| **2b** | trigger met 2026-08-06 | ~~after [M10](../04-llm-tiering.md) is live~~ — it is, with a capable model | **one campaign**: the rate of `did not contain a JSON object` under the new routing is unmeasured |
-| **3** | trigger met 2026-08-06 | ~~after M10 + several stamped campaigns~~ | **the same campaign** — no stamped campaign exists yet; every record predates phase 1 |
+| **2b** | **shipped 2026-08-07**, default off | — | — |
+| **3** | **data collected 2026-08-07**; triage deferred on coverage | 13 of 21 agents still unexercised | breadth, not judgement |
+
+### 2b as shipped (2026-08-07)
+
+`LABPILOT_STRICT_LLM=1` makes a *failed* LLM call raise `LLMDegradedError`
+instead of returning rule-engine output. Deliberately a separate type from
+`LLMUnavailableError`: "this model cannot hold the contract" and "configure a
+provider" are different operator actions.
+
+Two things had to land first, and the second was found by running the thing:
+
+1. **`Response did not contain a JSON object` now retries.** It was excluded
+   from `_is_transient_llm_error`, which the design already flagged as 2b's real
+   risk. It retries *immediately* — nothing is busy, so backing off buys only
+   lost campaign time — and with a corrective re-ask rather than the identical
+   prompt, since repeating input that produced prose mostly produces more prose.
+2. **The Conductor policy records its own provenance.** It is the
+   highest-frequency LLM caller in the system and is not a micro agent, so it
+   was invisible to the store. An 8-step campaign recorded *one* invocation
+   while the policy fell back three times — the number 2b needed was the number
+   missing.
+
+**Acceptance, per the guard above.** A real 30-step campaign completed on rogii
+with strict mode on and zero aborts. One honest caveat: that run recorded 30 of
+30 invocations on the LLM path, so it demonstrates strict mode does not break a
+*clean* run — it did not exercise an abort. The abort path is covered by unit
+tests, not by a campaign.
+
+**Why the default stays off.** Measured, not cautious:
+
+| Session | Invocations | Fallbacks | Rate | Kinds |
+|---|---|---|---|---|
+| S-020 (strict off) | 27 | 3 | 11% | all `json_shape` |
+| S-021 (strict **on**) | 30 | 0 | 0% | — |
+| cumulative, all commands | 94 | 3 | 3.2% | all `json_shape` |
+
+At 11% a campaign dies roughly every nine steps. At 3.2% it survives a 30-step
+run about a third of the time. Neither licenses a total-abort blast radius yet.
+`agent_invocations` now holds the number, so flipping the default is a decision
+with evidence behind it rather than a judgement call — which is the whole point.
+
+### Phase 3 input, collected
+
+Provenance is recorded for every command, not just campaigns. That correction
+mattered: three campaigns produced invocations for **two** agents, because most
+of the 21 rule engines run under `analyze` / `hypothesize` / `ingest`, not under
+the campaign loop. A campaign is where the loop runs; it is not where most
+agents run.
+
+Across a campaign, a hypothesis run, and an analyze run on rogii:
+
+| Agent | Invocations | LLM | Rule engine |
+|---|---|---|---|
+| ConductorPolicy | 57 | 54 | 3 |
+| PaperAnalyzerAgent | 15 | 15 | 0 |
+| HypothesisGeneratorAgent | 10 | 10 | 0 |
+| RepositoryAnalyzerAgent | 7 | 7 | 0 |
+| ComboPortfolioAgent | 2 | 2 | 0 |
+| CodeEngineerAgent | 1 | 1 | 0 |
+| CompetitionPageAnalyzerAgent | 1 | 1 | 0 |
+| RepoQueryPlannerAgent | 1 | 1 | 0 |
+
+**The finding: every one of the three fallbacks is `ConductorPolicy`, which is
+not a micro agent and falls to the offline decision order rather than to a rule
+engine. Across 37 micro-agent invocations, `_run_rule_engine` fired zero times.**
+
+That is evidence for phase 3's delete direction and is *not* sufficient to act
+on. Two reasons, both about what the number cannot say:
+
+* 13 of 21 agents were never invoked. Zero fires for an agent that never ran is
+  not a measurement of that agent.
+* Zero fires under M10 routing measures the *model*, not the rule engine. It
+  says the LLM path held up, which is what §11.4's run C is for — a rule engine
+  that stops firing when the model improves was masking a failure; one that
+  keeps firing is doing real work. We have the first half of that comparison.
+
+Triage is therefore deferred on **coverage, not judgement**. The instrument
+exists and reports; it needs a workload that reaches the other thirteen.
 
 **Decision (2026-08-03).** 2b waits for M10 entirely rather than shipping
 opt-in behind a flag. An opt-in build was offered and declined, on the grounds
