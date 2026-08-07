@@ -290,8 +290,8 @@ class KnowledgeStore:
                 """
                 INSERT INTO techniques (
                     id, name, category, domain, summary, known_issues,
-                    confidence, metadata, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    confidence, status, metadata, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     tid,
@@ -301,6 +301,7 @@ class KnowledgeStore:
                     summary,
                     known_issues,
                     confidence,
+                    "candidate",
                     json.dumps(metadata or {}),
                     now,
                     now,
@@ -337,27 +338,82 @@ class KnowledgeStore:
         row = self._conn.execute("SELECT * FROM techniques WHERE id = ?", (tid,)).fetchone()
         return dict(row) if row else None
 
+    def technique_status(self, name: str) -> str:
+        """Vocabulary status for a technique name, or ``candidate`` if unknown."""
+        row = self._conn.execute(
+            "SELECT status FROM techniques WHERE lower(name) = lower(?)",
+            (name.strip(),),
+        ).fetchone()
+        return str(row["status"]) if row else "candidate"
+
     def list_techniques(
-        self, *, domain: str | None = None, limit: int | None = None
+        self,
+        *,
+        domain: str | None = None,
+        status: str | None = None,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Merged technique rows, optionally domain-filtered, highest confidence first."""
+        """Merged technique rows, optionally filtered, highest confidence first."""
+        query = "SELECT * FROM techniques"
+        params: list[Any] = []
+        clauses: list[str] = []
         if domain:
-            rows = self._conn.execute(
-                """
-                SELECT * FROM techniques
-                WHERE lower(domain) = lower(?) OR domain = ''
-                ORDER BY confidence DESC, name
-                """,
-                (domain,),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM techniques ORDER BY confidence DESC, name"
-            ).fetchall()
+            clauses.append("(lower(domain) = lower(?) OR domain = '')")
+            params.append(domain)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY confidence DESC, name"
+        rows = self._conn.execute(query, params).fetchall()
         techniques = [dict(row) for row in rows]
         if limit is not None:
             return techniques[: max(0, limit)]
         return techniques
+
+    def set_technique_status(
+        self,
+        technique_id: str,
+        status: str,
+        *,
+        competition: str = "",
+        from_status: str | None = None,
+        reason: str = "",
+        evidence_card_id: str | None = None,
+        observations: int = 0,
+        signed_net: float | None = None,
+    ) -> None:
+        """Write derived status and append an audit row — never delete history."""
+        from labpilot.research_engine.execution.technique.status_constants import VALID_STATUSES
+
+        if status not in VALID_STATUSES:
+            raise ValueError(f"invalid technique status: {status!r}")
+        now = _now()
+        self._conn.execute(
+            "UPDATE techniques SET status = ?, updated_at = ? WHERE id = ?",
+            (status, now, technique_id),
+        )
+        self._conn.execute(
+            """
+            INSERT INTO technique_status_history (
+                technique_id, competition_slug, from_status, to_status, reason,
+                evidence_card_id, observations, signed_net, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                technique_id,
+                competition,
+                from_status,
+                status,
+                reason,
+                evidence_card_id,
+                observations,
+                signed_net,
+                now,
+            ),
+        )
+        self._conn.commit()
 
     # -- generic merged entities (technique / dataset / architecture / task) ---
 
