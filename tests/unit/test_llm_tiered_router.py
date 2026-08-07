@@ -26,6 +26,11 @@ def _provider(name, **kw):
         kind="openai_compat",
         api_key_env=f"{name.upper()}_KEY",
         models={"default": f"{name}-model"},
+        # Every role requires `structured_output` and no config can drop it
+        # (`RoleSpec._enforce_mandatory_caps`), so a provider without it is
+        # eligible for nothing. These tests are about tiering and budget, not
+        # capability, so the fixture grants it and individual tests override.
+        caps={"structured_output"},
     )
     defaults.update(kw)
     return ProviderSpec(name=name, **defaults)

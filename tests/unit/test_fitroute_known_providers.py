@@ -208,3 +208,40 @@ def test_remote_base_urls_are_https():
         assert spec.base_url.startswith("https://"), (
             f"{name} sends credentials over {spec.base_url}"
         )
+
+
+# --- M14 phase 3: the precondition that makes deleting rule engines safe ----
+
+
+def test_structured_output_cannot_be_dropped():
+    """With the rule engines gone there is no net under a prose reply.
+
+    Measured on rogii 2026-08-07: the prose-reply failure is unreachable while
+    `structured_output` is required, and that is the whole basis for removing
+    the deterministic fallbacks. A workspace that relaxed `requires` would
+    reintroduce the failure to a system that no longer catches it.
+    """
+    from fitroute.catalog import MANDATORY_CAPS, RoleSpec
+
+    assert RoleSpec().requires >= MANDATORY_CAPS
+    assert RoleSpec(requires=set()).requires >= MANDATORY_CAPS
+    assert RoleSpec(requires={"vision"}).requires >= MANDATORY_CAPS
+
+
+def test_other_capabilities_are_preserved():
+    """Enforcing the mandatory set must not discard what a config asked for."""
+    from fitroute.catalog import RoleSpec
+
+    spec = RoleSpec(requires={"vision", "long_context"})
+    assert {"vision", "long_context", "structured_output"} == spec.requires
+
+
+def test_a_workspace_config_cannot_relax_it():
+    """The lock has to survive the real config path, not just direct
+    construction — that is where a deployment would try to drop it."""
+    from fitroute.catalog import RoutingConfig
+
+    routing = RoutingConfig.model_validate(
+        {"roles": {"summarize": {"requires": [], "on_exhaustion": "degrade"}}}
+    )
+    assert "structured_output" in routing.role_spec("summarize").requires

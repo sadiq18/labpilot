@@ -95,6 +95,11 @@ class ProviderSpec(BaseModel):
         return bool(os.environ.get(self.api_key_env, "").strip())
 
 
+#: Capabilities every role requires, whatever a deployment writes in `requires`.
+#: See `RoleSpec.requires` for why this one cannot be relaxed.
+MANDATORY_CAPS: frozenset[str] = frozenset({"structured_output"})
+
+
 class RoleSpec(BaseModel):
     """What a class of work needs, and what to do when it cannot be had."""
 
@@ -103,6 +108,9 @@ class RoleSpec(BaseModel):
     # precondition, checked before any ranking: routing a JSON-parsing role to
     # a model that cannot produce JSON is not a degraded result, it is a
     # guaranteed one.
+    # `MANDATORY_CAPS` is unioned in by the validator below and cannot be
+    # dropped: with the rule engines deleted (M14 phase 3) nothing else catches
+    # a model that answers a JSON-only prompt in prose.
     requires: set[str] = Field(default_factory=set)
     # wait   — queue until a capable provider frees up (default for reasoning
     #          and codegen: a weak model silently produces a *false negative*,
@@ -113,6 +121,23 @@ class RoleSpec(BaseModel):
     # Bounded, because an unbounded wait in an unattended campaign is
     # indistinguishable from a hang.
     max_wait_seconds: float = 900.0
+
+    @model_validator(mode="after")
+    def _enforce_mandatory_caps(self) -> "RoleSpec":
+        """Union in any mandatory capability the config left out or removed.
+
+        Restoring silently beats raising: omitting `requires` entirely is the
+        common, correct case, and the guarantee should hold regardless of what
+        a deployment wrote. Measured on rogii 2026-08-07, the prose-reply
+        failure is unreachable while `structured_output` is required — which is
+        what makes deleting the deterministic fallbacks safe. A workspace that
+        relaxed it would quietly reintroduce the failure to a system that no
+        longer has a net.
+        """
+        missing = MANDATORY_CAPS - self.requires
+        if missing:
+            self.requires = set(self.requires) | missing
+        return self
 
 
 @lru_cache(maxsize=1)
@@ -128,7 +153,6 @@ def known_providers() -> dict[str, ProviderSpec]:
         name: ProviderSpec(name=name, **fields)
         for name, fields in raw.get("providers", {}).items()
     }
-
 
 class RoutingConfig(BaseModel):
     """Catalog + entitlement + per-role requirements."""
