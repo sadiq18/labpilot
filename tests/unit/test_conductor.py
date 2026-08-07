@@ -955,3 +955,83 @@ def test_the_degraded_handler_precedes_the_generic_one():
     degraded = source.index("except LLMDegradedError")
     generic = source.index("except Exception as exc:", degraded)
     assert degraded < generic, "LLMDegradedError must be caught before Exception"
+
+
+# --- the offline policy must not fabricate evidence (#40) -------------------
+
+
+def test_offline_policy_never_requests_a_dry_run():
+    """The guard that existed and did not cover this path.
+
+    `test_campaign_runs_are_not_dry_runs` checks `_default_args` and the
+    templates. `offline_next_action` hand-rolled its own args with
+    `dry_run=True`, so it was never covered. A dry run writes
+    `{'cv_accuracy': 0.5, 'status': 'dry_run_stub'}`, which is the source of 6
+    of the 7 placeholder evidence cards that fabricated `hyp:H-010`'s -971.50
+    net effect on rogii. It fired this way twice in real campaigns.
+    """
+    from labpilot.research_engine.conductor.policy import _DEFAULT_ORDER, offline_next_action
+
+    for tool in _DEFAULT_ORDER:
+        action = offline_next_action({"completed_tools": []}, {tool})
+        assert action.tool == tool
+        assert action.args.get("dry_run") is not True, f"{tool} would run a stub"
+
+
+def test_offline_policy_does_not_pin_a_plan_id():
+    """`plan_id="P-001"` was a placeholder that may be done or may not exist.
+
+    It existed because the legacy dispatch path did not resolve `@latest`;
+    it does now, so the shared sentinel works here as it does everywhere else.
+    """
+    from labpilot.research_engine.conductor.actions import LATEST
+    from labpilot.research_engine.conductor.policy import offline_next_action
+
+    action = offline_next_action({"completed_tools": []}, {"run_plan"})
+    assert action.args.get("plan_id") == LATEST
+
+
+def test_offline_policy_matches_the_shared_defaults():
+    """Two sources of args is what let them drift apart in the first place."""
+    from labpilot.research_engine.conductor.actions import _default_args
+    from labpilot.research_engine.conductor.policy import _DEFAULT_ORDER, offline_next_action
+
+    for tool in _DEFAULT_ORDER:
+        action = offline_next_action({"completed_tools": []}, {tool})
+        assert action.args == _default_args(tool), tool
+
+
+def test_an_exhausted_catalog_cycles_instead_of_stopping():
+    """`stop=True` here ended two healthy campaigns — S-019 at step 8 and
+    S-020 at step 27 — with the LLM working fine by then. A research loop is
+    not a one-pass checklist."""
+    from labpilot.research_engine.conductor.policy import offline_next_action
+
+    done = ["analyze_competition", "search_papers", "query_memory",
+            "generate_plan", "run_plan", "reflect", "submit"]
+    action = offline_next_action({"completed_tools": done},
+                                 {"generate_plan", "run_plan", "reflect"})
+    assert action.stop is False
+    assert action.tool in {"generate_plan", "run_plan", "reflect"}
+
+
+def test_cycling_still_stops_at_a_genuine_dead_end():
+    """The allowlist does the anti-spin work: `generate_plan` is gated while a
+    plan is unrun and `run_plan` while none is runnable, so an empty allowlist
+    is a real dead end rather than a reason to loop."""
+    from labpilot.research_engine.conductor.policy import offline_next_action
+
+    action = offline_next_action({"completed_tools": ["generate_plan"]}, set())
+    assert action.stop is True
+    assert action.tool is None
+
+
+def test_cycling_honours_operator_rejection():
+    from labpilot.research_engine.conductor.policy import offline_next_action
+
+    observe = {
+        "completed_tools": ["generate_plan", "run_plan", "reflect"],
+        "operator_feedback": [{"decision": "reject", "gated_tool": "run_plan"}],
+    }
+    action = offline_next_action(observe, {"run_plan", "reflect"})
+    assert action.tool == "reflect"
