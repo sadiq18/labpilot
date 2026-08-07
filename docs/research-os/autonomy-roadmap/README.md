@@ -93,6 +93,7 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
 | **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **1, 2a, 2b shipped 2026-08-07.** 2b ships default-off against a measured 3.2% fallback rate; a 30-step campaign completed with strict mode on. Phase 3's instrument is built and reporting — triage is deferred on agent coverage (8 of 21 exercised), not on judgement |
 | **M-25** | [Technique vocabulary earns its entries](design/10-technique-vocabulary.md) | Attention goes somewhere defensible | **design** — 116 techniques on rogii, none with a status; a campaign asked the code engineer to implement `the` |
+| **M-11** | [An experiment is a change to its parent](design/11-experiments-as-deltas.md) | Validation discipline survives by construction | **design** — templates cover 5 of 12 techniques on rogii; whole-file regeneration costs 46% of the prompt and can silently drop what worked |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
 | **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
