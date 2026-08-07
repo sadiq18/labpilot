@@ -31,9 +31,11 @@ fighting its mechanism.
 
 ## The insight
 
-**Express an experiment as a delta and the validation discipline survives by
-construction.** `partition_suffix_holdout`, `_driver_columns()` and the leakage
-gates live in the parent; a delta that does not touch them cannot lose them.
+**Express an experiment as a delta and the validation discipline survives
+whenever the delta does not touch it.** `partition_suffix_holdout`,
+`_driver_columns()` and the leakage gates live in the parent and are never
+regenerated. That is not a guarantee — a delta *can* reach into them — which is
+why detection is part of the work rather than an optional extra.
 
 That is the only reason templates still looked load-bearing — a leaky score looks
 *better*, not worse, so losing that discipline fails silently. Deltas remove the
@@ -84,7 +86,7 @@ provenance.
 ## Risk worth naming
 
 A delta makes it *possible* to change validation logic; running in a copy makes
-it reviewable, not impossible. The mitigation is detection, not prohibition — flag a delta whose
-anchor falls in the validation region and record it on the evidence card. A
+it reviewable, not impossible. The mitigation is detection, not prohibition — flag a delta that lands in the
+validation region and record it on the evidence card. A
 hypothesis *about* validation is legitimate; one that changes validation while
 claiming to test a feature is a false result.

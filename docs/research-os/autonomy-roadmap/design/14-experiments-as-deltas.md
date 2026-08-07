@@ -43,9 +43,16 @@ That risk is the only reason templates still looked load-bearing.
 
 **An experiment is a diff against its parent, not a fresh file.**
 
-The validation protocol then survives **by construction** — it lives in the
-parent and the delta does not touch it. No template needed to carry it, and no
-after-the-fact contract to verify.
+The validation protocol then survives **whenever the delta does not touch it** —
+it lives in the parent, and nothing regenerates it. That is a much better
+starting position than whole-file regeneration, where the discipline is
+re-derived every run.
+
+It is *not* a guarantee, and this design should not claim one. A delta **can**
+reach into `_driver_columns` or the holdout construction; the spike simply did
+not, twice, on one kind of request. n=2 is a strong argument against building an
+edit format. It is not a proof of safety — which is precisely why the flagging
+work in §5 and exit criterion 3 are load-bearing rather than optional.
 
 This also aligns the code artifact with the model the rest of the system already
 uses. Evidence cards compare `parent_cv` to `treatment_cv`; the experiment graph
@@ -90,7 +97,7 @@ the averaged predictions. Nothing else moved.
 without labpilot writing a line of edit-format code.
 
 **The variable is model quality, not mechanism** — which is what
-[M10](04-llm-tiering.md) exists to manage. But see §5: passing `--model` only
+[M10](04-llm-tiering.md) exists to manage. But see §4: passing `--model` only
 transfers the *selection*. Everything else M10 does is bypassed unless aider is
 pointed at fitroute rather than at the provider.
 
@@ -122,6 +129,22 @@ So this design specifies an **adapter**, not an edit format.
               apply_proposal               ← existing apply path
 ```
 
+#### The proposal carries whole files, not a patch
+
+`CodeFileSpec` is `path` + `content` + `action="write"`, and `apply_proposal`
+writes `spec.content` after `ast.parse`. A unified diff or SEARCH/REPLACE block
+does not fit it, and **must not be made to**.
+
+So the adapter reads the *resulting files* out of the scratch copy into
+`CodeProposal.files[].content`. The diff is computed too, but only as **evidence**
+— it feeds validation-region flagging and the delta→card linkage in §5. It is
+never the thing that gets applied.
+
+Stated explicitly because the obvious next move is to extend `CodeProposal` with
+patch operations, which would reinvent the apply path this design exists to
+delete. The delta is how the *model* thinks; whole files are how the *system*
+applies. Those are allowed to differ.
+
 Running aider in a **copy** is what preserves three properties the direct-edit
 alternative would lose:
 
@@ -132,6 +155,12 @@ alternative would lose:
 * **provenance.** The adapter records `generated_by`, model, provider and
   attempt count into `agent_invocations` like every other agent, so M14's
   instrument keeps working on the most important call in the system.
+
+**Scope of the copy:** editable roots only — `pipeline/`, plus `config.yaml` and
+the profile summary aider needs for context. **Not** `data/`, which is the bulk
+of a competition tree and which generated code reads by path at run time, not at
+edit time. Copying it would make every experiment pay a multi-GB copy for no
+benefit.
 
 ### The proxy — and why it is a prerequisite, not a nicety
 
@@ -171,9 +200,27 @@ scraped from stdout; today's failover applies to codegen; provenance records wha
 happened rather than what was intended.
 
 `LLMGateway` already does all of this as a Python API, so the proxy is a thin
-OpenAI-compatible HTTP shell over it. It also lets `structured_output` become a
-**per-role** precondition — still required for the policy, not for codegen — and
-it stays inside `fitroute`, which keeps the package extractable.
+OpenAI-compatible HTTP shell over it, and it stays inside `fitroute`, which keeps
+the package extractable.
+
+##### The `structured_output` carve-out is a deliberate catalog change
+
+Today `MANDATORY_CAPS` unions `structured_output` into **every** role and cannot
+be relaxed (PR #98) — that precondition is what made deleting the rule engines
+safe in M14 phase 3. aider needs a good *editor*, not JSON mode, so the current
+mandate would exclude models that are ideal for it.
+
+Step 0 must therefore change the catalog, not rely on a proxy side-effect:
+
+* **`codegen` opts out** of `structured_output` — its output is a file edit,
+  validated by `ast.parse` and by the run itself, not by JSON parsing.
+* **Every other role keeps the mandate.** `default` (the Conductor policy),
+  `reasoning` and `summarize` all parse JSON, and relaxing them would reopen the
+  prose-reply failure M14 phase 3 removed the net for.
+
+Spelled out because the two wrong implementations are both plausible: keep the
+global mandate and silently exclude good editors, or weaken `MANDATORY_CAPS`
+globally and quietly undo phase 3.
 
 #### Roles must survive the HTTP boundary
 
@@ -299,7 +346,7 @@ code:
 | **Delta → evidence linkage** | The card already compares parent and treatment; it should carry *what changed*, so `technique_attribution` can be read against the actual diff |
 | **Baseline vs delta routing** | No parent ⇒ whole file; parent ⇒ delta. The experiment graph already knows which |
 | **Provenance capture** | Translate aider's result into an `agent_invocations` row |
-| **Failure classification** | `aider_no_edit`, `aider_syntax_fail` alongside `json_shape` and `anchor_miss`, so the rate is measurable |
+| **Failure classification** | `aider_no_edit`, `aider_syntax_fail` alongside `json_shape`, so the rate is measurable |
 
 ---
 
@@ -356,7 +403,17 @@ default-off with a number attached rather than a guess.
 
 0. **fitroute OpenAI-compatible proxy.** Prerequisite, not optional — without
    it steps 1-3 opt codegen out of M10 (see §4). Independently useful and
-   independently testable.
+   independently testable. Includes the `codegen` carve-out from
+   `MANDATORY_CAPS`.
+
+   **Lifecycle: an ephemeral child of the campaign,** started when
+   `run_until_stop` begins and stopped in its `finally`, on an OS-assigned port
+   passed to aider. Not a daemon: a long-running server needs its own
+   supervision, port conflicts between concurrent campaigns become a real
+   failure mode, and an orphan outlives the run that owns its budget ledger.
+   Scoping it to the campaign means it cannot outlive what it is accounting for.
+   A shared daemon is the right shape only once fitroute is genuinely hosted,
+   which is the same trigger as the full-HTTP option below.
 1. `CodeAgent` protocol + `AiderAgent` + copy/diff/propose, pointed at the proxy.
    Nothing calls it.
 2. Opt-in via config; measure `aider_no_edit` and `aider_syntax_fail`.
