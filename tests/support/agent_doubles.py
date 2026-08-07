@@ -48,15 +48,16 @@ def _builder_for_name(class_name: str, module_path: str) -> Builder:
     cached = _BUILDER_CACHE.get(class_name)
     if cached is not None:
         return cached
-    mod_path, body = _BODIES[class_name]
+    _mod_path, body = _BODIES[class_name]
+    # Compile once at builder creation — not on every agent.run() in tests.
+    mod = importlib.import_module(module_path)
+    ns = dict(mod.__dict__)
+    code = "def _build(context):\n" + textwrap.indent(body, "    ")
+    exec(compile(code, f"<double:{class_name}>", "exec"), ns)
+    build_fn = ns["_build"]
 
     def builder(context: StructuredContext) -> BaseModel:
-        # Prefer the live module of the already-imported agent class path.
-        mod = importlib.import_module(module_path)
-        ns = dict(mod.__dict__)
-        code = "def _build(context):\n" + textwrap.indent(body, "    ")
-        exec(compile(code, f"<double:{class_name}>", "exec"), ns)
-        return ns["_build"](context)
+        return build_fn(context)
 
     _BUILDER_CACHE[class_name] = builder
     return builder
