@@ -212,6 +212,40 @@ internal retries and repo-map lookups, arrives as a request the ledger records.
 
 **Useful beyond aider:** any external tool reached for later gets M10 for free.
 
+#### aider is a local process, and always will be
+
+Worth stating because it bounds what a backend can ever buy. `aider` is a CLI
+that reads and writes files on local disk — verified in the spike, which ran it
+via `uvx` against a local `train.py`. It has no server component. Its only
+network traffic is *outbound* calls to the model, which is exactly why pointing
+it at the proxy works.
+
+```
+labpilot          (local)  spawns ↓
+  aider           (local)  edits files in the workspace copy
+    │ HTTP
+    ▼
+  fitroute proxy  (local now, relocatable)
+    │ HTTP
+    ▼
+  OpenRouter / Groq / ollama          (remote)
+```
+
+So relocating fitroute moves **LLM routing only**:
+
+| Component | Can move to a backend? | Why |
+|---|---|---|
+| fitroute routing / budget / failover | **yes** — the proxy is the seam | it only needs the request |
+| aider | no | must be where the files are |
+| labpilot's own agents | no | orchestration is local by nature |
+| training runs | no | need the dataset on disk |
+
+That split is worth naming: a hosted fitroute gives shared budget, central policy
+and a shared cache across machines. It does **not** make the system remote —
+every machine still runs its own labpilot, its own aider and its own training.
+Wanting all of that remote is a hosted *workspace*, a different and much larger
+architecture that the proxy does not set up.
+
 #### One chokepoint, two transports
 
 A tempting generalisation is to route *all* labpilot LLM traffic through the
