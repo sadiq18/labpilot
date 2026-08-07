@@ -56,10 +56,26 @@ CREATE TABLE IF NOT EXISTS techniques (
     summary      TEXT NOT NULL DEFAULT '',
     known_issues TEXT NOT NULL DEFAULT '',
     confidence   REAL NOT NULL DEFAULT 0.5,
+    status       TEXT NOT NULL DEFAULT 'candidate',
     metadata     TEXT NOT NULL DEFAULT '{}',
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS technique_status_history (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    technique_id     TEXT NOT NULL,
+    competition_slug TEXT NOT NULL DEFAULT '',
+    from_status      TEXT,
+    to_status        TEXT NOT NULL,
+    reason           TEXT NOT NULL,
+    evidence_card_id TEXT,
+    observations     INTEGER NOT NULL DEFAULT 0,
+    net_effect       REAL,
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_technique_status_history_technique
+    ON technique_status_history(technique_id);
 
 CREATE TABLE IF NOT EXISTS datasets (
     id         TEXT PRIMARY KEY,

@@ -197,6 +197,13 @@ class ClaimPromoter:
         technique = str(belief.get("technique") or "")
         effect = str(belief.get("effect") or "")
 
+        from labpilot.research_engine.execution.technique.status_constants import (
+            CLAIM_PROMOTION_STATUSES,
+        )
+
+        if self._knowledge.technique_status(technique) not in CLAIM_PROMOTION_STATUSES:
+            return None
+
         # Promotion requires a measured effect. Full stop.
         #
         # This used to be gated on `effect` being set and not "unknown", which

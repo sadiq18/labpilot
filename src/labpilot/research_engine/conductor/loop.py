@@ -283,6 +283,18 @@ def _run_until_stop_inner(
         if rebuilt:
             _progress(f"Re-derived {len(rebuilt)} belief(s) from repaired evidence")
 
+        from labpilot.research_engine.execution.technique.vocabulary import (
+            recompute_technique_status,
+        )
+
+        status_changes = recompute_technique_status(
+            workspace.knowledge_dir, workspace.competition
+        )
+        if status_changes:
+            _progress(
+                f"Recomputed status for {len(status_changes)} technique(s) from evidence"
+            )
+
         contested = revalidate_outcome_claims(
             knowledge_dir=workspace.knowledge_dir, competition=workspace.competition
         )
