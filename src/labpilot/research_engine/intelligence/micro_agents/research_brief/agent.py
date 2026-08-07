@@ -27,33 +27,3 @@ class ResearchBriefAgent(BaseMicroAgent):
             f"Question: {context.question}\n"
             f"Evidence:\n{context.text}"
         )
-
-    def _run_rule_engine(self, context: StructuredContext) -> ResearchBriefNarrative:
-        d = context.data
-        title = str(d.get("title") or context.competition or "Competition")
-        problem_type = str(d.get("problem_type") or "unknown problem")
-        dataset = str(d.get("dataset_overview") or "").strip()
-        rules = str(d.get("rules_and_metric") or "").strip()
-        bits = [f"{title} is a {problem_type} competition"]
-        if rules:
-            bits.append(rules.split("|")[0].strip())
-        if dataset:
-            bits.append(dataset)
-        problem_summary = ". ".join(bits) + "."
-
-        risks = coerce_str_list(d.get("known_risks"))
-        hypotheses = coerce_str_list(d.get("top_hypotheses"))
-        suggested = coerce_str_list(d.get("suggested_experiments"))
-        focus = ""
-        if suggested:
-            focus = suggested[0]
-        elif hypotheses:
-            focus = hypotheses[0]
-        elif coerce_str_list(d.get("winning_techniques")):
-            focus = f"Validate {coerce_str_list(d.get('winning_techniques'))[0]}"
-
-        return ResearchBriefNarrative(
-            problem_summary=problem_summary,
-            key_risks=risks[:8],
-            recommended_focus=focus,
-        )

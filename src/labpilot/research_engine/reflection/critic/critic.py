@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.reflection.confidence import (
     ConfidenceEstimate,
     ConfidenceEstimatorAgent,
@@ -85,23 +85,22 @@ class ExperimentCritic:
             text="\n".join(notes),
             data=signal_data,
         )
-        draft = self._root_cause.run(context)
-        assert isinstance(draft, ReflectionDraft)
-
-        conf = self._confidence.run(
-            StructuredContext(
-                competition=context.competition,
-                data={"strength": strength, "cv_delta": cv_delta},
-            )
-        )
-        assert isinstance(conf, ConfidenceEstimate)
-
         belief_effect, hyp_outcome = _map_outcomes(
             strength=strength,
             cv_delta=_as_float(cv_delta),
             verdict=str(comparison.get("verdict") or ""),
         )
-        contradiction = self._contradiction.run(
+
+        draft = run_or_none(self._root_cause, context)
+        conf = run_or_none(
+            self._confidence,
+            StructuredContext(
+                competition=context.competition,
+                data={"strength": strength, "cv_delta": cv_delta},
+            ),
+        )
+        contradiction = run_or_none(
+            self._contradiction,
             StructuredContext(
                 competition=context.competition,
                 data={
@@ -111,9 +110,34 @@ class ExperimentCritic:
                     "prior_claim_ids": prior_claim_ids or [],
                     "evidence_id": evidence.get("id"),
                 },
-            )
+            ),
         )
-        assert isinstance(contradiction, ContradictionReport)
+
+        if draft is None:
+            draft = ReflectionDraft(
+                summary=f"strength={strength}",
+                likely_cause="LLM critic unavailable; outcomes mapped from evidence strength.",
+                next_steps=["Re-run reflection with a reachable LLM."],
+            )
+        elif not isinstance(draft, ReflectionDraft):
+            draft = ReflectionDraft.model_validate(draft.model_dump())
+
+        if conf is None:
+            conf = ConfidenceEstimate(
+                label="medium",
+                score=0.5,
+                rationale="LLM confidence estimator unavailable.",
+            )
+        elif not isinstance(conf, ConfidenceEstimate):
+            conf = ConfidenceEstimate.model_validate(conf.model_dump())
+
+        if contradiction is None:
+            contradiction = ContradictionReport(
+                has_contradiction=False,
+                summary="LLM contradiction check unavailable.",
+            )
+        elif not isinstance(contradiction, ContradictionReport):
+            contradiction = ContradictionReport.model_validate(contradiction.model_dump())
 
         used_llm = (
             self._root_cause.last_used_llm
@@ -130,7 +154,7 @@ class ExperimentCritic:
             belief_effect=belief_effect,
             hypothesis_outcome=hyp_outcome,
             next_steps=list(draft.next_steps),
-            generated_by="llm" if used_llm else "rule_engine",
+            generated_by="llm" if used_llm else "template_fallback",
             draft=draft,
             contradiction=contradiction,
         )

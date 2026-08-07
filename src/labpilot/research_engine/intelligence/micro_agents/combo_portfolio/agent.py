@@ -42,19 +42,3 @@ class ComboPortfolioAgent(BaseMicroAgent):
             f"{json.dumps(data.get('shortlist') or [], ensure_ascii=False)[:8000]}\n"
             f"Pick up to {int(data.get('limit') or 3)} best merges."
         )
-
-    def _run_rule_engine(self, context: StructuredContext) -> ComboPortfolioDraft:
-        shortlist = list(context.data.get("shortlist") or [])
-        limit = int(context.data.get("limit") or 3)
-        picks_raw = rule_engine_pick_combos(shortlist, limit=limit)
-        return ComboPortfolioDraft(
-            picks=[
-                ComboPick(
-                    techniques=list(p.get("techniques") or []),
-                    rationale=str(p.get("rationale") or ""),
-                    confidence=float(p.get("confidence") or 0.6),
-                    expected_impact=float(p.get("expected_impact") or 0.015),
-                )
-                for p in picks_raw
-            ]
-        )

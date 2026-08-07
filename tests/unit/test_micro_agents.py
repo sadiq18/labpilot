@@ -1,8 +1,7 @@
 """Plan 3 — Micro Agents scaffold.
 
-All tests run with **no API key and no network**: the default ``rule_engine``
-path must return valid typed artifacts, and the optional LLM path is exercised
-only with in-process fakes.
+All tests run with **no API key and no network**: per-agent doubles (issue #39)
+supply meaningful JSON so assertions stay contentful, not empty defaults.
 """
 
 from __future__ import annotations
@@ -52,13 +51,13 @@ class _StaticClient:
         self.payload = payload
         self.calls = 0
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
         self.calls += 1
         return self.payload
 
 
 class _BoomClient:
-    def complete(self, system: str, user: str) -> str:
+    def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
         raise RuntimeError("simulated LLM outage")
 
 
@@ -84,19 +83,20 @@ def test_available_agents_registered() -> None:
 
 
 @pytest.mark.parametrize("name", INTEL_NAMES)
-def test_intel_agent_rule_engine_returns_valid_model(name: str) -> None:
-    agent = intel_agents.get_agent(name)  # llm_client=None -> deterministic
+def test_intel_agent_double_returns_valid_model(name: str) -> None:
+    agent = intel_agents.get_agent(name)  # autouse double when client omitted
     assert isinstance(agent, MicroAgent)
-    assert not agent.uses_llm
+    assert agent.uses_llm
     result = agent.run(StructuredContext(question="q", text="body"))
     assert isinstance(result, BaseModel)
     assert isinstance(result, agent.output_model)
+    assert agent.last_generated_by == "llm"
 
 
-def test_build_agents_shares_disabled_llm() -> None:
+def test_build_agents_gets_per_agent_doubles() -> None:
     agents = intel_agents.build_agents()
     assert set(agents) == set(INTEL_NAMES)
-    assert all(not a.uses_llm for a in agents.values())
+    assert all(a.uses_llm for a in agents.values())
 
 
 def test_unknown_agent_raises() -> None:
@@ -104,7 +104,7 @@ def test_unknown_agent_raises() -> None:
         intel_agents.get_agent("NopeAgent")
 
 
-def test_paper_agent_rule_engine_echoes_signals() -> None:
+def test_paper_agent_double_echoes_signals() -> None:
     agent = intel_agents.get_agent("PaperAnalyzerAgent")
     ctx = StructuredContext(
         text="…",
@@ -116,7 +116,7 @@ def test_paper_agent_rule_engine_echoes_signals() -> None:
     assert out.datasets_used == []
 
 
-def test_concept_normalizer_rule_engine_dedupes() -> None:
+def test_concept_normalizer_double_dedupes() -> None:
     agent = intel_agents.get_agent("ConceptNormalizerAgent")
     ctx = StructuredContext(
         items=["SpecAugment", "Time Masking", "SpecAugment", "Frequency Masking"],
@@ -152,7 +152,7 @@ def test_repo_agent_extracts_repo_knowledge() -> None:
     assert "EMA" in out.techniques
 
 
-def test_repo_query_planner_rule_engine_returns_seed() -> None:
+def test_repo_query_planner_double_returns_seed() -> None:
     agent = intel_agents.get_agent("RepoQueryPlannerAgent")
     out = agent.run(
         StructuredContext(
@@ -167,7 +167,7 @@ def test_repo_query_planner_rule_engine_returns_seed() -> None:
     assert out.queries[0].category.value == "baseline"
 
 
-def test_forum_and_hypothesis_rule_engine() -> None:
+def test_forum_and_hypothesis_double() -> None:
     forum = intel_agents.get_agent("ForumAnalyzerAgent").run(
         StructuredContext(data={"discoveries": ["public LB misleading"]})
     )
@@ -198,23 +198,29 @@ def test_llm_path_parses_json_into_model() -> None:
     assert client.calls == 1
 
 
-def test_llm_failure_soft_falls_back_to_rule_engine() -> None:
+def test_llm_failure_raises_degraded() -> None:
+    from labpilot.accessor.common.micro_agents import LLMDegradedError
+
     agent = intel_agents.get_agent("PaperAnalyzerAgent", llm_client=_BoomClient())
-    out = agent.run(StructuredContext(data={"techniques": ["EMA"]}))
-    assert isinstance(out, PaperKnowledge)
-    assert out.techniques == ["EMA"]  # deterministic fallback, no raise
+    agent.llm_max_attempts = 1
+    agent.llm_retry_delay_seconds = 0.0
+    with pytest.raises(LLMDegradedError):
+        agent.run(StructuredContext(data={"techniques": ["EMA"]}))
 
 
-def test_llm_garbage_falls_back_to_rule_engine() -> None:
+def test_llm_garbage_raises_degraded() -> None:
+    from labpilot.accessor.common.micro_agents import LLMDegradedError
+
     agent = intel_agents.get_agent(
         "PaperAnalyzerAgent", llm_client=_StaticClient("not json at all")
     )
-    out = agent.run(StructuredContext(data={"techniques": ["Mixup"]}))
-    assert isinstance(out, PaperKnowledge)
-    assert out.techniques == ["Mixup"]
+    agent.llm_max_attempts = 1
+    agent.llm_retry_delay_seconds = 0.0
+    with pytest.raises(LLMDegradedError):
+        agent.run(StructuredContext(data={"techniques": ["Mixup"]}))
 
 
-def test_reflection_generator_rule_engine_and_llm() -> None:
+def test_reflection_generator_double_and_llm() -> None:
     agent = exec_agents.get_agent("ReflectionGeneratorAgent")
     assert isinstance(agent, ReflectionGeneratorAgent)
     ctx = StructuredContext(data={"cv_delta": 0.01, "lb_delta": -0.01, "changes": ["EMA"]})

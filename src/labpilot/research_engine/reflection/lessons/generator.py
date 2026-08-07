@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.reflection.critic.critic import CriticAssessment
 from labpilot.research_engine.reflection.lessons.micro_agent import (
     LessonDraft,
@@ -33,7 +33,8 @@ class LessonGenerator:
         cross_competition: bool = False,
         needs_review: bool = False,
     ) -> dict[str, Any]:
-        draft = self._agent.run(
+        draft = run_or_none(
+            self._agent,
             StructuredContext(
                 competition=self.competition,
                 data={
@@ -42,14 +43,21 @@ class LessonGenerator:
                     "summary": assessment.summary,
                     "belief_effect": assessment.belief_effect,
                 },
-            )
+            ),
         )
-        assert isinstance(draft, LessonDraft)
+        if draft is None:
+            draft = LessonDraft(
+                summary=assessment.likely_cause or assessment.summary or "Lesson unavailable.",
+                category="process",
+                confidence=0.4,
+            )
+        elif not isinstance(draft, LessonDraft):
+            draft = LessonDraft.model_validate(draft.model_dump())
         slug = None if cross_competition else self.competition
         meta: dict[str, Any] = {
             "strength": evidence.get("strength"),
             "belief_effect": assessment.belief_effect,
-            "generated_by": "llm" if self._agent.last_used_llm else "rule_engine",
+            "generated_by": "llm" if self._agent.last_used_llm else "template_fallback",
         }
         if needs_review:
             meta["needs_review"] = True

@@ -23,11 +23,6 @@ from typing import Any, Literal
 
 from labpilot.accessor.common.ids import task_id as make_task_id
 from labpilot.accessor.common.micro_agents import StructuredContext
-from labpilot.research_engine.shared.experiments.hypothesis import (
-    BASELINE_HYPOTHESIS_ID,
-    HypothesisStore,
-)
-from labpilot.research_engine.shared.experiments.models import Hypothesis
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.planner import optimizer, scheduler, serializer
 from labpilot.research_engine.planner.context_builder import PlanningContext, build_context
@@ -48,6 +43,11 @@ from labpilot.research_engine.planner.templates import (
     select_template,
 )
 from labpilot.research_engine.planner.validator import PlanValidationError, validate_plan
+from labpilot.research_engine.shared.experiments.hypothesis import (
+    BASELINE_HYPOTHESIS_ID,
+    HypothesisStore,
+)
+from labpilot.research_engine.shared.experiments.models import Hypothesis
 
 logger = logging.getLogger(__name__)
 
@@ -432,14 +432,17 @@ def _try_llm_revision(
     priority: int = 0,
 ) -> ResearchPlan:
     """One Planning Engine call; keep baseline unless a revised draft validates."""
+    from labpilot.accessor.common.micro_agents import LLMDegradedError
+
     agent = ResearchPlannerAgent(llm_client=llm_client)
     structured = _planning_structured_context(context, hypothesis, baseline_draft)
-    draft = agent.run(structured)
-
-    if not agent.last_used_llm:
+    try:
+        draft = agent.run(structured)
+    except LLMDegradedError as exc:
         logger.info(
-            "Planning Engine soft-fell back to rule_engine for %s; keeping baseline.",
+            "Planning Engine LLM degraded for %s (%s); keeping template baseline.",
             plan_id,
+            exc,
         )
         return baseline
 
@@ -466,7 +469,7 @@ def _try_llm_revision(
             exc,
         )
         baseline.notes = list(baseline.notes) + [
-            f"LLM revision rejected; kept rule_engine baseline ({exc})."
+            f"LLM revision rejected; kept template baseline ({exc})."
         ]
         return baseline
 

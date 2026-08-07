@@ -256,10 +256,11 @@ def test_q5_suggest_untried_with_literature(tmp_path: Path) -> None:
     # Mixup already tried in exp:12 — must not be suggested as a new technique.
     assert "mixup" not in tags
     assert "try mixup" not in titles
-    # Every card must carry grounded evidence refs.
+    # Micro Agents use per-agent doubles in tests (issue #39); combo shortcuts
+    # may still stamp RULE_ENGINE when they skip the draft agent.
     for card in result.recommendations:
         assert card.supporting_evidence or card.evidence
-        assert card.generator.value == "rule_engine" or str(card.generator) == "rule_engine"
+        assert str(card.generator) in {"llm", "rule_engine"}
 
 
 def test_format_text_and_json_still_write_analyze_json(tmp_path: Path) -> None:

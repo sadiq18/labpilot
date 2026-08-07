@@ -178,7 +178,7 @@ def test_unique_limit_stops_and_skips_existing(tmp_path: Path) -> None:
         assert artifact.type.value == "repository"
         assert artifact.source == "kaggle"
         assert artifact.metadata.get("kind") == "kaggle_kernel"
-        assert artifact.metadata.get("extraction_source") == "rule_engine"
+        assert artifact.metadata.get("extraction_source") == "llm"
         # Rule engine should pick up Mixup / Focal / EMA from fake train.py.
         labels = {t.lower() for t in artifact.techniques}
         assert labels & {"mixup", "focal loss", "ema"}
@@ -216,7 +216,8 @@ def test_discussions_enrich_rule_engine(tmp_path: Path) -> None:
         knowledge_dir=knowledge,
     )
     assert result.written == 2
-    assert result.rule_engine_enriched == 2
+    assert result.llm_enriched == 2
+    assert result.rule_engine_enriched == 0
     with KnowledgeStore(knowledge, "birdclef-2026") as store:
         art = store.get_artifact("kaggle-discussion:birdclef-2026:101")
         assert art is not None

@@ -27,13 +27,3 @@ class LessonGeneratorAgent(BaseMicroAgent):
 
     def user_prompt(self, context: StructuredContext) -> str:
         return f"Outcome:\n{context.data}\nNotes:\n{context.text}"
-
-    def _run_rule_engine(self, context: StructuredContext) -> LessonDraft:
-        d = context.data
-        strength = str(d.get("strength") or "moderate")
-        cause = str(d.get("likely_cause") or d.get("summary") or "Experiment completed.")
-        category = "technique" if strength in {"strong", "rejected"} else "process"
-        if strength == "rejected":
-            category = "pitfall"
-        conf = 0.7 if strength == "strong" else 0.5 if strength == "moderate" else 0.4
-        return LessonDraft(summary=cause, category=category, confidence=conf)

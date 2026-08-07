@@ -28,28 +28,3 @@ class HypothesisRevisionAgent(BaseMicroAgent):
 
     def user_prompt(self, context: StructuredContext) -> str:
         return f"Hypothesis + evidence:\n{context.data}\nNotes:\n{context.text}"
-
-    def _run_rule_engine(self, context: StructuredContext) -> HypothesisRevisionDraft:
-        d = context.data
-        outcome = str(d.get("hypothesis_outcome") or "inconclusive")
-        cause = str(d.get("likely_cause") or "Insufficient signal to revise firmly.")
-        prediction = str(d.get("prediction") or "")
-        why = cause
-        if outcome == "partial":
-            why = f"Partial support: {cause}"
-        revised = prediction
-        if outcome == "rejected" and prediction:
-            revised = f"Revisit: {prediction}"
-        checks = []
-        if outcome in {"inconclusive", "partial"}:
-            checks.append("Run a higher-powered follow-up with clearer controls.")
-        elif outcome == "confirmed":
-            checks.append("Promote to a research claim if evidence stays strong.")
-        else:
-            checks.append("Do not retry the same change without a new mechanism.")
-        return HypothesisRevisionDraft(
-            outcome=outcome,
-            why=why,
-            revised_prediction=revised,
-            next_checks=checks,
-        )

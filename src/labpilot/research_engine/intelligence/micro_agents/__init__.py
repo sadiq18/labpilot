@@ -1,12 +1,10 @@
 """Research Intelligence Micro Agents (design §2.4).
 
 Optional reasoning slice of the platform: each agent maps a typed
-``StructuredContext`` to a typed Pydantic artifact. All agents work with **no
-API key** via a deterministic ``rule_engine`` fallback, so the pipeline never
-hard-depends on an LLM.
+``StructuredContext`` to a typed Pydantic artifact. Agents require an LLM
+client (issue #39); tests inject per-agent doubles when none is passed.
 
-Use :func:`get_agent` / :func:`build_agents` to construct agents; pass
-``llm_client=None`` (the default) to force the deterministic path.
+Use :func:`get_agent` / :func:`build_agents` to construct agents.
 """
 
 from __future__ import annotations
@@ -72,8 +70,8 @@ def available_agents() -> list[str]:
 def get_agent(name: str, *, llm_client: LLMClient | None = None) -> MicroAgent:
     """Construct one Micro Agent by name.
 
-    ``llm_client=None`` (default) selects the deterministic ``rule_engine``
-    path — no network, no API key.
+    ``llm_client=None`` (default) leaves the agent without a client; callers
+    (and tests) must supply one or accept ``LLMUnavailableError``.
     """
     try:
         cls = _AGENTS_BY_NAME[name]

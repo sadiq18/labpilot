@@ -35,17 +35,12 @@ console = Console()
 
 
 def _apply_deterministic_env(offline: bool) -> None:
-    """`--offline` already means "no LLM policy"; extend that to micro agents.
+    """Historical hook: offline used to opt micro agents into rule engines.
 
-    Without this an offline campaign would refuse at the first agent, since
-    agents now decline to substitute their rule engine unless asked.
+    Rule engines are gone (issue #39). Offline campaigns must avoid agents that
+    need an LLM (policy), not silently substitute deterministic output.
     """
-    import os
-
-    from labpilot.accessor.common.micro_agents import DETERMINISTIC_ENV
-
-    if offline:
-        os.environ[DETERMINISTIC_ENV] = "1"
+    _ = offline
 
 
 def _test_registry_subset() -> object:

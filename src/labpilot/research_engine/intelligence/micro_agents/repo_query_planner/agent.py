@@ -35,13 +35,3 @@ class RepoQueryPlannerAgent(BaseMicroAgent):
             f"Deterministic seed: {json.dumps(context.data.get('seed_queries', []))}\n"
             "Prefer broad recall over ultra-precise phrase matches."
         )
-
-    def _run_rule_engine(self, context: StructuredContext) -> RepoSearchPlan:
-        raw = context.data.get("seed_queries") or []
-        queries: list[RepoSearchQuery] = []
-        for item in raw:
-            try:
-                queries.append(RepoSearchQuery.model_validate(item))
-            except (TypeError, ValueError):
-                continue
-        return RepoSearchPlan(queries=queries[:8])

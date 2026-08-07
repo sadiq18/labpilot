@@ -1,12 +1,11 @@
 """Durable micro-agent provenance — the data M14 2b and 3 are blocked on.
 
-Companion to `test_agent_provenance.py`, which covers phase 1's in-memory
-stamps. This file covers making them survive the run.
+Companion to `test_agent_provenance.py`, which covers in-memory stamps. This
+file covers making them survive the run.
 
-Phase 1 made each agent report what produced its output; the report lived on the
-instance and died with it. The only durable trace was
-``research_plans.generated_by``, covering 1 of the 21 agents implementing
-``_run_rule_engine``.
+Issue #39 removed rule-engine substitutes: a failed LLM call raises
+``LLMDegradedError`` after recording the attempt; a missing client raises
+``LLMUnavailableError`` without producing an artifact.
 """
 
 from __future__ import annotations
@@ -15,8 +14,9 @@ import pytest
 from pydantic import BaseModel
 
 from labpilot.accessor.common.micro_agents import (
-    DETERMINISTIC_ENV,
     BaseMicroAgent,
+    LLMDegradedError,
+    LLMUnavailableError,
     StructuredContext,
 )
 from labpilot.accessor.common.provenance import (
@@ -41,12 +41,14 @@ class _Out(BaseModel):
 
 class _Agent(BaseMicroAgent):
     name = "demo_agent"
+    output_model = _Out
     llm_role = "reasoning"
 
     def __init__(self, client=None, *, fail: Exception | None = None) -> None:
         super().__init__(llm_client=client)
         self._fail = fail
         self.llm_max_attempts = 1
+        self.llm_retry_delay_seconds = 0.0
 
     def system_prompt(self) -> str:
         return "s"
@@ -59,15 +61,12 @@ class _Agent(BaseMicroAgent):
             raise self._fail
         return _Out(value="llm")
 
-    def _run_rule_engine(self, context):
-        return _Out(value="rules")
-
 
 class _Client:
     last_served = None
 
     def complete(self, *a, **k):
-        return "{}"
+        return '{"value": "llm"}'
 
 
 class _Recorder:
@@ -131,26 +130,21 @@ def test_a_successful_llm_run_is_recorded(recorder):
     assert rec.session_id == "S-1"
 
 
-def test_a_fallback_is_recorded_with_its_reason(recorder):
-    _Agent(_Client(), fail=ValueError("Response did not contain a JSON object")).run(
-        StructuredContext(data={})
-    )
+def test_a_degraded_call_is_recorded_with_its_reason(recorder):
+    with pytest.raises(LLMDegradedError):
+        _Agent(_Client(), fail=ValueError("Response did not contain a JSON object")).run(
+            StructuredContext(data={})
+        )
     (rec,) = recorder.records
-    assert rec.generated_by == "rule_engine"
+    assert rec.generated_by == "llm"
     assert rec.failure_kind == "json_shape"
 
 
-def test_the_silent_no_client_path_is_recorded(recorder, monkeypatch):
-    """This path never enters the try/except, so it recorded nothing at all.
-
-    A provenance record that only appears when something interesting happened
-    cannot produce a *rate* — the denominator has to be written too.
-    """
-    monkeypatch.setenv(DETERMINISTIC_ENV, "1")
-    _Agent(None).run(StructuredContext(data={}))
-    (rec,) = recorder.records
-    assert rec.generated_by == "rule_engine"
-    assert rec.failure_kind == "no_client"
+def test_no_client_raises_without_an_artifact(recorder):
+    """Missing client is a hard refuse — no invented output, no success stamp."""
+    with pytest.raises(LLMUnavailableError):
+        _Agent(None).run(StructuredContext(data={}))
+    assert recorder.records == []
 
 
 def test_no_sink_installed_is_a_no_op():
@@ -178,22 +172,23 @@ def test_reports_over_a_recorded_campaign(tmp_path):
     with recording_provenance(tmp_path, COMPETITION, session_id="S-1"):
         _Agent(_Client()).run(StructuredContext(data={}))
         _Agent(_Client()).run(StructuredContext(data={}))
-        _Agent(_Client(), fail=ValueError("did not contain a JSON object")).run(
-            StructuredContext(data={})
-        )
-        _Agent(_Client(), fail=RuntimeError("429 rate limit")).run(StructuredContext(data={}))
+        with pytest.raises(LLMDegradedError):
+            _Agent(_Client(), fail=ValueError("did not contain a JSON object")).run(
+                StructuredContext(data={})
+            )
+        with pytest.raises(LLMDegradedError):
+            _Agent(_Client(), fail=RuntimeError("429 rate limit")).run(
+                StructuredContext(data={})
+            )
 
     totals = invocation_totals(tmp_path, COMPETITION)
-    assert totals == {"total": 4, "llm": 2, "rule_engine": 2}
+    # Failures still stamp generated_by=llm (attempted); rule_engine fires are gone.
+    assert totals == {"total": 4, "llm": 4, "rule_engine": 0}
 
     failures = llm_failure_report(tmp_path, COMPETITION)
     assert failures == {"json_shape": 1, "rate_limit": 1}
 
-    (stat,) = rule_engine_fire_report(tmp_path, COMPETITION)
-    assert stat.agent == "demo_agent"
-    assert stat.total == 4
-    assert stat.rule_engine == 2
-    assert stat.fallback_rate == pytest.approx(0.5)
+    assert all(s.rule_engine == 0 for s in rule_engine_fire_report(tmp_path, COMPETITION))
 
 
 def test_reports_are_empty_without_a_campaign(tmp_path):

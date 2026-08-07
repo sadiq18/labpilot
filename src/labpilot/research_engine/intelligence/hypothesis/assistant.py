@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.intelligence.hypothesis.candidates import generate_candidates
 from labpilot.research_engine.intelligence.hypothesis.combo import (
     build_combo_shortlist,
@@ -367,7 +367,8 @@ class HypothesisAssistant:
         if not shortlist:
             return [], "hypothesis: combo shortlist empty (need ≥2 untried techniques)."
         agent = ComboPortfolioAgent(llm_client=self.llm_client)
-        draft = agent.run(
+        draft = run_or_none(
+            agent,
             StructuredContext(
                 competition=str(
                     (research_context.competition or {}).get("slug")
@@ -385,7 +386,7 @@ class HypothesisAssistant:
                     "failed": list(getattr(ledger, "techniques_failed", []) or []),
                     "skill_agent_key": "combo_portfolio",
                 },
-            )
+            ),
         )
         picks_raw: list[dict[str, Any]] = []
         if isinstance(draft, ComboPortfolioDraft):
@@ -425,7 +426,8 @@ class HypothesisAssistant:
             )
         agent = HypothesisGeneratorAgent(llm_client=self.llm_client)
         evidence_text = context.brief or candidate.reason
-        result = agent.run(
+        result = run_or_none(
+            agent,
             StructuredContext(
                 question=candidate.title,
                 text=evidence_text[:4000],
@@ -436,7 +438,7 @@ class HypothesisAssistant:
                     "expected_impact": _impact_float(candidate),
                     "confidence": candidate.confidence,
                 },
-            )
+            ),
         )
         used_llm = bool(getattr(agent, "last_used_llm", False))
         if isinstance(result, HypothesisDraft):

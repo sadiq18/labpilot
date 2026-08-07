@@ -168,7 +168,7 @@ def test_rule_engine_combo_fallback_without_llm(tmp_path: Path) -> None:
         )
     )
     assert draft.picks
-    assert not agent.last_used_llm
+    assert agent.last_used_llm  # per-agent double (issue #39)
 
 
 def test_combination_ranks_above_stacked_and_single() -> None:

@@ -62,3 +62,10 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+# Former ``_run_rule_engine`` helpers stay imported so
+# ``tests/support/agent_doubles`` can compile those bodies against the module
+# namespace (issue #39). Production no longer calls them.
+[tool.ruff.lint.per-file-ignores]
+"src/labpilot/research_engine/**/micro_agents/**/agent.py" = ["F401"]
+"src/labpilot/research_engine/reflection/**/micro_agent.py" = ["F401"]

@@ -57,21 +57,42 @@ def _no_real_dotenv_in_tests(monkeypatch):
 
     monkeypatch.setattr(OllamaProvider, "is_reachable", lambda *a, **k: False)
 
-    # CI has no LLM, and the suite is deliberately hermetic, so it opts into
-    # deterministic operation explicitly — which is what the escape hatch is
-    # for. This is *declared*, unlike the automatic fallback it replaces:
-    # production sets nothing and therefore refuses to run without an LLM.
-    # Tests covering the refusal itself delete this var (see
-    # tests/unit/test_agent_provenance.py).
-    monkeypatch.setenv("LABPILOT_DETERMINISTIC", "1")
+
+@pytest.fixture(autouse=True)
+def _inject_per_agent_llm_doubles(monkeypatch):
+    """Issue #39: production has no rule engines; tests get per-agent doubles.
+
+    Only agents with a registered meaningful builder are auto-wired. Ad-hoc
+    test subclasses without a builder keep ``llm_client=None`` so refusal-path
+    tests still raise ``LLMUnavailableError``. Explicit clients are untouched.
+    """
+    from labpilot.accessor.common.micro_agents import BaseMicroAgent
+    from helpers.agent_doubles import AgentDoubleClient, double_for, resolve_builder
+
+    orig_init = BaseMicroAgent.__init__
+    orig_run_llm = BaseMicroAgent._run_llm
+
+    def __init__(self, llm_client=None):
+        if llm_client is None and resolve_builder(type(self)) is not None:
+            llm_client = double_for(type(self))
+        orig_init(self, llm_client)
+
+    def _run_llm(self, context):
+        client = self.llm_client
+        if isinstance(client, AgentDoubleClient):
+            client.bind(context)
+        return orig_run_llm(self, context)
+
+    monkeypatch.setattr(BaseMicroAgent, "__init__", __init__)
+    monkeypatch.setattr(BaseMicroAgent, "_run_llm", _run_llm)
 
 
 @pytest.fixture
 def stub_llm_client():
     """A client returning canned JSON, for exercising the *shipped* LLM path.
 
-    Preferred over relying on the rule engine: a test asserting rule-engine
-    output is not testing what production does. Set ``payload`` per test.
+    Set ``payload`` per test. Prefer this over empty ``{}`` when asserting
+    content — empty defaults hollow the suite (issue #39).
     """
 
     class _Stub:

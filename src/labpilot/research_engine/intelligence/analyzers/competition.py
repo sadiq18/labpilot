@@ -17,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.research_engine.intelligence.competition.page_fetch import CompetitionPages, fetch_competition_pages
 from labpilot.research_engine.intelligence.competition.parser import CompetitionMetadataFetcher, CompetitionParser
@@ -352,14 +352,15 @@ class CompetitionAnalyzer(BaseAnalyzer):
             profile.rules_excerpt = pages.rules_text[:_RULES_EXCERPT_CAP]
 
         agent = CompetitionPageAnalyzerAgent(llm_client=self.llm_client)
-        extract = agent.run(StructuredContext(text=pages.combined_text))
+        extract = run_or_none(agent, StructuredContext(text=pages.combined_text))
+        if extract is None:
+            profile.page_enrichment_source = "unavailable"
+            notes.append("page enrichment: unavailable — LLM path failed.")
+            return
         if not isinstance(extract, CompetitionPageExtract):
             extract = CompetitionPageExtract.model_validate(extract.model_dump())
 
-        # What actually produced this, not what was configured. `uses_llm` is
-        # True whenever a client exists, so it recorded "llm" for runs that fell
-        # back to the rule engine — provenance that reads as reasoning when the
-        # output was deterministic.
+        # What actually produced this, not what was configured.
         source = agent.last_generated_by
         profile.page_enrichment_source = source
         apply_page_extract(profile, extract)

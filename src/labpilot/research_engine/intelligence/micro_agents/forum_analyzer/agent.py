@@ -63,33 +63,6 @@ class ForumAnalyzerAgent(BaseMicroAgent):
     def user_prompt(self, context: StructuredContext) -> str:
         return f"Discussion text:\n{context.text}"
 
-    def _run_rule_engine(self, context: StructuredContext) -> ForumExtract:
-        d = context.data
-        recipes = coerce_feature_recipes(d.get("feature_recipes"))
-        techniques = coerce_str_list(d.get("techniques"))
-        pre = ForumExtract(
-            mistakes=coerce_str_list(d.get("mistakes")),
-            discoveries=coerce_str_list(d.get("discoveries")),
-            dataset_bugs=coerce_str_list(d.get("dataset_bugs")),
-            lb_shakeups=coerce_str_list(d.get("lb_shakeups")),
-            ood_notes=coerce_str_list(d.get("ood_notes")),
-            techniques=techniques,
-            feature_recipes=recipes_to_metadata(recipes),
-        )
-        if any(
-            (
-                pre.mistakes,
-                pre.discoveries,
-                pre.dataset_bugs,
-                pre.lb_shakeups,
-                pre.ood_notes,
-                pre.techniques,
-                pre.feature_recipes,
-            )
-        ):
-            return _attach_fe(pre, context.text or "")
-        return _attach_fe(_heuristic_extract(context.text or ""), context.text or "")
-
 
 def _heuristic_extract(text: str) -> ForumExtract:
     lines = [line.strip() for line in text.splitlines() if line.strip()]

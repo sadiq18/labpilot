@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import Hypothesis, HypothesisStatus
 from labpilot.research_engine.reflection.critic.critic import CriticAssessment
@@ -52,7 +52,8 @@ class HypothesisEvaluator:
         if hypothesis is None:
             return None
 
-        draft = self._revision.run(
+        draft = run_or_none(
+            self._revision,
             StructuredContext(
                 competition=hypothesis.competition,
                 data={
@@ -61,9 +62,17 @@ class HypothesisEvaluator:
                     "prediction": hypothesis.prediction,
                     "strength_hint": assessment.confidence_label,
                 },
-            )
+            ),
         )
-        assert isinstance(draft, HypothesisRevisionDraft)
+        if draft is None:
+            draft = HypothesisRevisionDraft(
+                outcome=assessment.hypothesis_outcome or "inconclusive",
+                why=assessment.likely_cause or "LLM revision unavailable.",
+                revised_prediction=hypothesis.prediction,
+                next_checks=["Re-run reflection with a reachable LLM."],
+            )
+        elif not isinstance(draft, HypothesisRevisionDraft):
+            draft = HypothesisRevisionDraft.model_validate(draft.model_dump())
         status = _OUTCOME_MAP.get(draft.outcome, HypothesisStatus.INCONCLUSIVE)
         updated = self.store.update_status(
             hypothesis_id,
@@ -77,5 +86,5 @@ class HypothesisEvaluator:
             "why": draft.why,
             "revised_prediction": draft.revised_prediction,
             "next_checks": draft.next_checks,
-            "generated_by": "llm" if self._revision.last_used_llm else "rule_engine",
+            "generated_by": "llm" if self._revision.last_used_llm else "template_fallback",
         }

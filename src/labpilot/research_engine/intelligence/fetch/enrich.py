@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from labpilot.accessor.common.micro_agents import StructuredContext, coerce_str_list
+from labpilot.accessor.common.micro_agents import StructuredContext, coerce_str_list, run_or_none
 from labpilot.research_engine.intelligence.micro_agents.forum_analyzer import (
     ForumAnalyzerAgent,
 )
@@ -29,22 +29,23 @@ def enrich_kernel_artifact(
     """Run ``RepositoryAnalyzerAgent``; return (artifact, extraction_source)."""
     agent = RepositoryAnalyzerAgent(llm_client=llm_client)
     meta = dict(artifact.metadata)
-    try:
-        card: RepoKnowledge = agent.run(
-            StructuredContext(
-                competition=competition,
-                text=(source_text or "")[:120_000],
-                data={
-                    "repo_id": artifact.id,
-                    "full_name": meta.get("ref") or artifact.title,
-                    "interesting_files": meta.get("files") or [],
-                    "has_readme": bool(source_text),
-                },
-            )
-        )
-    except Exception:
-        meta["extraction_source"] = "rule_engine"
-        return artifact.model_copy(update={"metadata": meta}), "rule_engine"
+    card = run_or_none(
+        agent,
+        StructuredContext(
+            competition=competition,
+            text=(source_text or "")[:120_000],
+            data={
+                "repo_id": artifact.id,
+                "full_name": meta.get("ref") or artifact.title,
+                "interesting_files": meta.get("files") or [],
+                "has_readme": bool(source_text),
+            },
+        ),
+    )
+    if card is None:
+        meta["extraction_source"] = "unavailable"
+        return artifact.model_copy(update={"metadata": meta}), "unavailable"
+    assert isinstance(card, RepoKnowledge)
 
     source = agent.last_generated_by
     techniques = list(dict.fromkeys([*artifact.techniques, *card.techniques]))
@@ -92,17 +93,17 @@ def enrich_discussion_artifact(
     """Run ``ForumAnalyzerAgent``; attach ``forum_extract`` metadata."""
     agent = ForumAnalyzerAgent(llm_client=llm_client)
     meta = dict(artifact.metadata)
-    try:
-        extract = agent.run(
-            StructuredContext(
-                competition=competition,
-                text=(thread_text or "")[:80_000],
-                data={},
-            )
-        )
-    except Exception:
-        meta["extraction_source"] = "rule_engine"
-        return artifact.model_copy(update={"metadata": meta}), "rule_engine"
+    extract = run_or_none(
+        agent,
+        StructuredContext(
+            competition=competition,
+            text=(thread_text or "")[:80_000],
+            data={},
+        ),
+    )
+    if extract is None:
+        meta["extraction_source"] = "unavailable"
+        return artifact.model_copy(update={"metadata": meta}), "unavailable"
 
     source = agent.last_generated_by
     payload = extract.model_dump(mode="json")
