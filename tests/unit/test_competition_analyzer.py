@@ -227,7 +227,7 @@ def test_competition_analyzer_builds_profile_from_cache(tmp_path: Path, monkeypa
     assert dumped["inference_limits"]["status"] == "ok"
     assert dumped["inference_limits"]["internet_allowed"] is False
     assert dumped["evaluation"]["formula"]
-    assert dumped["page_enrichment_source"] == "rule_engine"
+    assert dumped["page_enrichment_source"] == "llm"
     assert dumped["winning_solutions"]["status"] == "unavailable"
     assert any(a.metadata.get("relation") == "previous_edition" for a in result.items)
     assert any("winning solutions: unavailable" in n for n in result.notes)

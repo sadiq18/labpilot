@@ -65,65 +65,6 @@ class RepositoryAnalyzerAgent(BaseMicroAgent):
             f"Cached repository text:\n{context.text}"
         )
 
-    def _run_rule_engine(self, context: StructuredContext) -> RepoKnowledge:
-        d = context.data
-        text = context.text.lower()
-        architecture = coerce_str_list(d.get("architecture")) or _find_terms(
-            text, _ARCHITECTURE
-        )
-        losses = coerce_str_list(d.get("loss")) or _find_terms(text, _LOSSES)
-        augmentation = coerce_str_list(d.get("augmentation")) or _find_terms(
-            text, _AUGMENTATION
-        )
-        tricks = coerce_str_list(d.get("training_tricks")) or _find_terms(
-            text, _TRICKS
-        )
-        dependencies = coerce_str_list(d.get("dependencies"))
-        recipes = merge_feature_recipes(
-            coerce_feature_recipes(d.get("feature_recipes")),
-            heuristic_feature_recipes(context.text or ""),
-        )
-        techniques = list(
-            dict.fromkeys(
-                [
-                    *coerce_str_list(d.get("techniques")),
-                    *architecture,
-                    *losses,
-                    *augmentation,
-                    *tricks,
-                    *recipe_technique_names(recipes),
-                ]
-            )
-        )
-        files = coerce_str_list(
-            d.get("interesting_files") or d.get("files_worth_reading")
-        )
-        sources = sum(
-            bool(value)
-            for value in (
-                d.get("has_readme"),
-                files,
-                dependencies,
-            )
-        )
-        grounded = "mixed" if sources > 1 else (
-            "code_excerpt" if files else "deps" if dependencies else "readme"
-        )
-        return RepoKnowledge(
-            repo_id=str(d.get("repo_id") or ""),
-            full_name=str(d.get("full_name") or ""),
-            architecture=architecture,
-            loss=losses,
-            augmentation=augmentation,
-            training_tricks=tricks,
-            interesting_files=files,
-            dependencies=dependencies,
-            techniques=techniques,
-            feature_recipes=recipes,
-            confidence=0.65 if techniques else 0.35,
-            grounded_in=grounded,
-        )
-
 
 def _find_terms(text: str, terms: tuple[str, ...]) -> list[str]:
     return [term for term in terms if term in text]

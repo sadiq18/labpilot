@@ -33,7 +33,7 @@ def test_critic_rule_engine_offline() -> None:
     )
     assert assessment.belief_effect == "supports"
     assert assessment.hypothesis_outcome == "confirmed"
-    assert assessment.generated_by == "rule_engine"
+    assert assessment.generated_by == "llm"
     assert assessment.summary
 
 

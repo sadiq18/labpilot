@@ -54,17 +54,3 @@ class ResearchPlannerAgent(BaseMicroAgent):
             brief_excerpt=str(data.get("brief_excerpt") or context.text or ""),
             baseline_json=baseline_json,
         )
-
-    def _run_rule_engine(self, context: StructuredContext) -> ResearchPlanDraft:
-        """Identity: return the compiler's baseline draft unchanged."""
-        baseline = context.data.get("baseline_draft")
-        if isinstance(baseline, ResearchPlanDraft):
-            return baseline
-        if isinstance(baseline, dict):
-            return ResearchPlanDraft.model_validate(baseline)
-        return ResearchPlanDraft(
-            goal=str(context.data.get("goal") or context.question or ""),
-            current_state=str(context.data.get("current_state") or ""),
-            expected_outcome=str(context.data.get("expected_outcome") or ""),
-            tasks=[],
-        )

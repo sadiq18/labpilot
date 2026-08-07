@@ -86,69 +86,6 @@ class PaperAnalyzerAgent(BaseMicroAgent):
             f"Paper text (abstract/metadata):\n{context.text}"
         )
 
-    def _run_rule_engine(self, context: StructuredContext) -> PaperKnowledge:
-        d = context.data
-        paper_id = str(d.get("paper_id", "") or "")
-        title = str(d.get("title", "") or "")
-        contributions = coerce_str_list(d.get("contributions"))
-        methods = coerce_str_list(d.get("methods"))
-        limitations = coerce_str_list(d.get("limitations"))
-        ideas = coerce_str_list(d.get("ideas_worth_testing") or d.get("hypotheses"))
-        techniques = coerce_str_list(d.get("techniques"))
-        recipes = merge_feature_recipes(
-            coerce_feature_recipes(d.get("feature_recipes")),
-        )
-        datasets = coerce_str_list(d.get("datasets_used") or d.get("datasets"))
-        benchmarks = coerce_str_list(d.get("benchmarks"))
-        code_urls = coerce_str_list(d.get("code_urls") or d.get("github_urls"))
-        claims = coerce_str_list(d.get("claims"))
-
-        # Legacy PaperExtract-shaped signals.
-        if not contributions and claims:
-            contributions = claims
-        if not techniques and coerce_str_list(d.get("models")):
-            techniques = coerce_str_list(d.get("models"))
-
-        text = (context.text or "").strip()
-        if text and not (contributions or methods or limitations):
-            contributions, methods, limitations, ideas, techniques = _heuristic_extract(
-                text, techniques=techniques, ideas=ideas
-            )
-        if text:
-            recipes = merge_feature_recipes(recipes, heuristic_feature_recipes(text))
-        techniques = list(
-            dict.fromkeys([*techniques, *recipe_technique_names(recipes)])
-        )
-
-        grounded = str(d.get("grounded_in", "abstract") or "abstract")
-        if grounded not in {"abstract", "pdf_excerpt", "metadata"}:
-            grounded = "abstract"
-
-        confidence = d.get("confidence")
-        try:
-            conf = float(confidence) if confidence is not None else (
-                0.55 if (contributions or methods) else 0.35
-            )
-        except (TypeError, ValueError):
-            conf = 0.35
-        conf = max(0.0, min(1.0, conf))
-
-        return PaperKnowledge(
-            paper_id=paper_id,
-            title=title,
-            contributions=contributions,
-            methods=methods,
-            limitations=limitations,
-            ideas_worth_testing=ideas,
-            techniques=techniques,
-            feature_recipes=recipes,
-            datasets_used=datasets,
-            benchmarks=benchmarks,
-            code_urls=code_urls,
-            confidence=conf,
-            grounded_in=grounded,  # type: ignore[arg-type]
-        )
-
 
 def _heuristic_extract(
     text: str,

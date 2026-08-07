@@ -114,7 +114,7 @@ def test_research_brief_has_all_sections(tmp_path: Path) -> None:
         brief = build_research_brief(report, store, llm_client=None)
 
     assert isinstance(brief, ResearchBrief)
-    assert brief.generated_by == "rule_engine"
+    assert brief.generated_by == "llm"
     assert brief.problem_summary
     assert "audio" in brief.dataset_overview.lower() or "1000" in brief.dataset_overview
     assert "Macro F1" in brief.rules_and_metric

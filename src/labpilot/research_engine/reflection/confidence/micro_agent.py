@@ -33,25 +33,3 @@ class ConfidenceEstimatorAgent(BaseMicroAgent):
 
     def user_prompt(self, context: StructuredContext) -> str:
         return f"Signals:\n{context.data}\nNotes:\n{context.text}"
-
-    def _run_rule_engine(self, context: StructuredContext) -> ConfidenceEstimate:
-        d = context.data
-        strength = str(d.get("strength") or "moderate")
-        delta = _as_float(d.get("cv_delta"))
-        if strength == "strong" or (delta is not None and abs(delta) >= 0.01):
-            return ConfidenceEstimate(
-                label="high",
-                score=0.8,
-                rationale="Clear metric movement beyond noise / strong evidence.",
-            )
-        if strength == "rejected" or strength == "weak":
-            return ConfidenceEstimate(
-                label="low",
-                score=0.4,
-                rationale="Weak or rejected evidence reduces confidence.",
-            )
-        return ConfidenceEstimate(
-            label="medium",
-            score=0.55,
-            rationale="Moderate evidence; treat verdict as provisional.",
-        )

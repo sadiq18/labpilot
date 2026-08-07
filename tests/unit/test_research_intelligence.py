@@ -257,9 +257,6 @@ def test_micro_agent_retries_transient_llm_errors(monkeypatch) -> None:
         def user_prompt(self, context: StructuredContext) -> str:
             return "user"
 
-        def _run_rule_engine(self, context: StructuredContext) -> PaperKnowledge:
-            return PaperKnowledge(paper_id="fallback")
-
     client = Flaky()
     agent = Agent(llm_client=client)
     out = agent.run(StructuredContext(text="paper"))

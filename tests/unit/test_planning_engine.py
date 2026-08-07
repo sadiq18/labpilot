@@ -225,7 +225,7 @@ def test_agent_rule_engine_returns_baseline():
     )
     assert isinstance(result, ResearchPlanDraft)
     assert result.goal == "g"
-    assert agent.last_used_llm is False
+    assert agent.last_used_llm is True  # per-agent double (issue #39)
     assert len(result.tasks) == 1
 
 

@@ -285,7 +285,7 @@ def test_paper_analyzer_with_fake_literature(tmp_path: Path) -> None:
     art = result.items[0]
     assert art.type is ResearchArtifactType.PAPER
     assert "SpecAugment" in art.title or art.techniques
-    assert any("paper extraction: rule_engine" in n for n in result.notes)
+    assert any("paper extraction: llm" in n for n in result.notes)
 
 
 def test_paper_analyzer_empty_search(tmp_path: Path) -> None:

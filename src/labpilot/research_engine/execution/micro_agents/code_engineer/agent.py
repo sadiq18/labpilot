@@ -71,11 +71,3 @@ class CodeEngineerAgent(BaseMicroAgent):
                 data.get("parent_metrics") or {}, ensure_ascii=False
             )[:2000],
         )
-
-    def _run_rule_engine(self, context: StructuredContext) -> CodeProposal:
-        """No offline template pack — LLM must generate from inventory."""
-        return CodeProposal(
-            summary="Awaiting LLM codegen",
-            rationale="Jinja scaffolds disabled; generate from profile inventory",
-            files=[],
-        )

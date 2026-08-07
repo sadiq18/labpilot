@@ -30,24 +30,3 @@ class ExperimentReviewerAgent(BaseMicroAgent):
 
     def user_prompt(self, context: StructuredContext) -> str:
         return f"Experiment signals:\n{context.data}\nNotes:\n{context.text}"
-
-    def _run_rule_engine(self, context: StructuredContext) -> ExperimentReview:
-        d = context.data
-        cv = _as_float(d.get("cv_delta"))
-        lb = _as_float(d.get("lb_delta"))
-        changes = coerce_str_list(d.get("changes"))
-
-        if cv is not None and lb is not None and cv > 0 and lb < 0:
-            diagnosis = (
-                "CV improved but LB regressed: likely validation/test "
-                "distribution mismatch or overfitting to the CV split."
-            )
-        elif cv is not None and cv < 0:
-            diagnosis = "CV regressed; the change did not help on local validation."
-        elif cv is not None and cv > 0:
-            diagnosis = "CV improved; change looks promising pending LB confirmation."
-        else:
-            diagnosis = "Insufficient metric signal to diagnose the outcome."
-
-        suggestions = [f"Re-examine effect of: {c}" for c in changes]
-        return ExperimentReview(diagnosis=diagnosis, suggestions=suggestions, confidence=0.5)

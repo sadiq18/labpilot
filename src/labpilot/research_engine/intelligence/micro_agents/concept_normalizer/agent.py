@@ -31,19 +31,3 @@ class ConceptNormalizerAgent(BaseMicroAgent):
     def user_prompt(self, context: StructuredContext) -> str:
         candidates = "\n".join(context.items)
         return f"Candidate concepts:\n{candidates}"
-
-    def _run_rule_engine(self, context: StructuredContext) -> ConceptNormalization:
-        seen: list[str] = []
-        for raw in context.items:
-            name = raw.strip()
-            if name and name not in seen:
-                seen.append(name)
-        canonical = seen[0] if seen else ""
-        category = str(context.data.get("category", "")).strip()
-        if not category and looks_like_feature_engineering(" ".join(seen)):
-            category = FEATURE_ENGINEERING_CATEGORY
-        return ConceptNormalization(
-            canonical=canonical,
-            aliases=seen[1:],
-            category=category,
-        )

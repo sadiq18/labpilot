@@ -26,21 +26,3 @@ class EvidenceSynthesisAgent(BaseMicroAgent):
 
     def user_prompt(self, context: StructuredContext) -> str:
         return f"State:\n{context.data}\nNotes:\n{context.text}"
-
-    def _run_rule_engine(self, context: StructuredContext) -> EvidenceSynthesisDraft:
-        d = context.data
-        by_strength = d.get("evidence_by_strength") or {}
-        beliefs = coerce_str_list(d.get("belief_lines"))
-        open_hyps = coerce_str_list(d.get("open_hypothesis_lines"))
-        summary = (
-            "Current understanding: "
-            f"strong={by_strength.get('strong', 0)}, "
-            f"rejected={by_strength.get('rejected', 0)}, "
-            f"beliefs={len(beliefs)}, open_hypotheses={len(open_hyps)}."
-        )
-        takeaways = beliefs[:3] or ["No validated beliefs yet."]
-        return EvidenceSynthesisDraft(
-            summary=summary,
-            open_questions=open_hyps[:5] or ["No open hypotheses."],
-            key_takeaways=takeaways,
-        )

@@ -33,14 +33,3 @@ class HypothesisGeneratorAgent(BaseMicroAgent):
 
     def user_prompt(self, context: StructuredContext) -> str:
         return f"Question: {context.question}\nEvidence:\n{context.text}"
-
-    def _run_rule_engine(self, context: StructuredContext) -> HypothesisDraft:
-        d = context.data
-        observation = str(d.get("observation") or context.question or "")
-        return HypothesisDraft(
-            observation=observation,
-            prediction=str(d.get("prediction", "")),
-            rationale=str(d.get("rationale", "")),
-            expected_impact=_as_float(d.get("expected_impact"), 0.0),
-            confidence=_as_float(d.get("confidence"), 0.5),
-        )
