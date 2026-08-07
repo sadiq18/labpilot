@@ -191,6 +191,9 @@ def run_until_stop(
     # Measured 2026-08-07: a full campaign ran with 45 false `vit` claims intact
     # because revalidation only fired from `record_successful_execution`.
     try:
+        from labpilot.research_engine.evidence.belief_repair import (
+            rederive_beliefs_from_cards,
+        )
         from labpilot.research_engine.evidence.repair import repair_card_directions
         from labpilot.research_engine.execution.outcome import revalidate_outcome_claims
 
@@ -212,6 +215,15 @@ def run_until_stop(
                 f"Re-oriented {len(reoriented)} evidence card(s) built with the "
                 "wrong metric direction"
             )
+
+        # Beliefs are recomputed from the repaired cards, not stepped again.
+        # Repairing a card does not retract the belief step it already caused,
+        # so without this the loop plans against the pre-repair compass.
+        rebuilt = rederive_beliefs_from_cards(
+            workspace.knowledge_dir, workspace.competition
+        )
+        if rebuilt:
+            _progress(f"Re-derived {len(rebuilt)} belief(s) from repaired evidence")
 
         contested = revalidate_outcome_claims(
             knowledge_dir=workspace.knowledge_dir, competition=workspace.competition

@@ -138,11 +138,29 @@ def test_the_same_belief_promotes_once_a_measurement_exists(promoter, evidence):
     assert claim["technique"] == "SWA"
 
 
-def test_an_unknown_effect_is_still_promotable(promoter):
-    """"appears to be unknown" asserts nothing about impact, so it needs no
-    measurement to back it."""
+def test_an_unknown_effect_is_not_a_free_pass(promoter):
+    """Rewritten: this test previously asserted the opposite, and was wrong.
+
+    The old reasoning was that "appears to be unknown" asserts nothing about
+    impact, so it needs no measurement. But the claim still names a technique
+    and still enters research memory, where the Conductor reads it. And the
+    beliefs that reach here with `effect="unknown"` are precisely the
+    literature-derived ones: `KnowledgeHub._persist_belief` sets confidence from
+    citation count (0.95 at five mentions) and never sets an effect. So the
+    exemption applied exactly to the beliefs that had never been measured —
+    which is how `vit` was promoted on a tabular competition.
+    """
     claim = promoter.promote_from_belief(
         {"id": "B-3", "technique": "vit", "effect": "unknown", "confidence": 0.95}
+    )
+    assert claim is None
+
+
+def test_a_measured_technique_promotes_regardless_of_effect_wording(promoter, evidence):
+    """The guard must gate on measurement, not on the effect string."""
+    _card(evidence, "EV-U", {"SWA": -3.83})
+    claim = promoter.promote_from_belief(
+        {"id": "B-3b", "technique": "SWA", "effect": "unknown", "confidence": 0.95}
     )
     assert claim is not None
 
