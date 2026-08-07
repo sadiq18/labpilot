@@ -1029,9 +1029,92 @@ def test_cycling_still_stops_at_a_genuine_dead_end():
 def test_cycling_honours_operator_rejection():
     from labpilot.research_engine.conductor.policy import offline_next_action
 
+    # `reflect` is deliberately not the last completed tool: with it last, the
+    # spin guard fires and this would assert the wrong rule — the same "whatever
+    # fires first" trap as the credential test in PR #98.
     observe = {
-        "completed_tools": ["generate_plan", "run_plan", "reflect"],
+        "completed_tools": ["reflect", "generate_plan", "run_plan"],
         "operator_feedback": [{"decision": "reject", "gated_tool": "run_plan"}],
     }
     action = offline_next_action(observe, {"run_plan", "reflect"})
+    assert action.stop is False
+    assert action.tool == "reflect", "rejected run_plan must not be chosen"
+
+
+def test_cycling_is_least_recently_used_not_fixed_order():
+    """Fixed `_REPEATABLE` order let `generate_plan` win whenever available,
+    giving plan -> run -> plan -> run and never reflecting again."""
+    from labpilot.research_engine.conductor.policy import offline_next_action
+
+    full = {"generate_plan", "run_plan", "reflect"}
+    done = ["analyze_competition", "search_papers", "query_memory",
+            "generate_plan", "run_plan", "reflect", "submit"]
+
+    seen = []
+    for _ in range(3):
+        tool = offline_next_action({"completed_tools": done}, full).tool
+        seen.append(tool)
+        done.append(tool)
+    assert seen == ["generate_plan", "run_plan", "reflect"], seen
+
+
+def test_cycling_stops_rather_than_repeating_itself():
+    """A DRAFT plan makes `has_unrun_plan` true and `has_runnable_plan` false,
+    so the allowlist can narrow to `{reflect}` — bounded by max_steps, but it
+    burns a whole degraded campaign re-reflecting on the same state."""
+    from labpilot.research_engine.conductor.policy import offline_next_action
+
+    done = ["generate_plan", "run_plan", "reflect"]
+    action = offline_next_action({"completed_tools": done}, {"reflect"})
+    assert action.stop is True
+    assert "just ran" in action.rationale
+
+
+def test_a_sole_tool_that_has_not_just_run_is_still_offered():
+    """The spin guard must not refuse work that is genuinely next."""
+    from labpilot.research_engine.conductor.policy import offline_next_action
+
+    done = ["generate_plan", "run_plan", "reflect", "generate_plan"]
+    action = offline_next_action({"completed_tools": done}, {"reflect"})
+    assert action.stop is False
     assert action.tool == "reflect"
+
+
+def test_the_legacy_dispatch_path_resolves_latest(monkeypatch, tmp_path):
+    """`@latest` must not reach the Engineer as a literal.
+
+    Only the multi-step campaign path resolved it, which is why
+    `offline_next_action` pinned `plan_id="P-001"` instead of using the shared
+    defaults. This pins the parity that removed the hardcode.
+    """
+    from labpilot.research_engine.conductor import loop as loop_mod
+    from labpilot.research_engine.conductor.actions import LATEST, resolve_step_args
+
+    monkeypatch.setattr(loop_mod, "_latest_plan_id", lambda ws: "P-042")
+    monkeypatch.setattr(loop_mod, "_latest_execution_id", lambda ws: "E-007")
+    monkeypatch.setattr(loop_mod, "_next_hypothesis_id", lambda ws: None)
+    monkeypatch.setattr(loop_mod, "_baseline_plan_exists", lambda ws: True)
+
+    resolved = resolve_step_args(
+        "run_plan",
+        {"plan_id": LATEST, "dry_run": False},
+        latest_plan_id=loop_mod._latest_plan_id(None),
+        latest_execution_id=loop_mod._latest_execution_id(None),
+        next_hypothesis_id=None,
+        baseline_plan_exists=True,
+    )
+    assert resolved["plan_id"] == "P-042", "the sentinel reached dispatch unresolved"
+    assert resolved["dry_run"] is False
+
+
+def test_the_loop_resolves_before_enqueue_on_both_paths():
+    """Guards the parity itself: if someone removes the legacy resolve, the
+    hardcoded-plan-id bug becomes reachable again."""
+    import inspect
+
+    from labpilot.research_engine.conductor import loop as loop_mod
+
+    source = inspect.getsource(loop_mod._run_until_stop_inner)
+    assert source.count("resolve_step_args(") >= 2, (
+        "both the multi-step and legacy dispatch paths must resolve @latest"
+    )

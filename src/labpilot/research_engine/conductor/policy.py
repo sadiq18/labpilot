@@ -196,18 +196,42 @@ def offline_next_action(
     # re-analysing the competition does not. The allowlist still gates them, so
     # this cannot spin: `generate_plan` is removed while a plan is unrun, and
     # `run_plan` while none is runnable.
-    for name in _REPEATABLE:
-        if name in allowlist and name not in rejected:
-            return NextAction(
-                tool=name,
-                args=_default_args(name),
-                rationale=f"offline policy: cycling back to {name}",
-                stop=False,
-            )
+    available = [t for t in _REPEATABLE if t in allowlist and t not in rejected]
+    if not available:
+        return NextAction(
+            tool=None,
+            rationale="offline policy: no repeatable tool is currently available",
+            stop=True,
+        )
+
+    # Least-recently-used, not fixed order. Taking `_REPEATABLE` in order meant
+    # `generate_plan` won whenever it was available, giving plan -> run -> plan
+    # -> run and never reflecting again after the first pass.
+    # `completed_tools` is an ordered list with repeats, so "how long since this
+    # last ran" is answerable.
+    ordered = list(observe.get("completed_tools") or [])
+    positions = {tool: i for i, tool in enumerate(ordered)}  # last index wins
+    available.sort(key=lambda t: positions.get(t, -1))
+    choice = available[0]
+
+    # Repeating the thing we just did, with nothing else on offer, is a spin.
+    # A DRAFT plan makes `has_unrun_plan` true and `has_runnable_plan` false, so
+    # the allowlist can narrow to `{reflect}` alone — bounded by max_steps, but
+    # it burns a whole degraded campaign re-reflecting on the same state.
+    if len(available) == 1 and ordered and ordered[-1] == choice:
+        return NextAction(
+            tool=None,
+            rationale=(
+                f"offline policy: {choice} is the only available tool and it "
+                "just ran; nothing further to try"
+            ),
+            stop=True,
+        )
     return NextAction(
-        tool=None,
-        rationale="offline policy: no repeatable tool is currently available",
-        stop=True,
+        tool=choice,
+        args=_default_args(choice),
+        rationale=f"offline policy: cycling back to {choice}",
+        stop=False,
     )
 
 

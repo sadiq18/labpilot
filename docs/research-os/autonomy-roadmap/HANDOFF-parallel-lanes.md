@@ -1,8 +1,8 @@
 # Parallel work plan — #11, #25, #39
 
-Three independent lanes for another agent. A fourth (#40) is being worked
-concurrently by someone else — **do not touch
-`src/labpilot/research_engine/conductor/policy.py`**.
+Three independent lanes for another agent. A fourth (#40) was worked
+concurrently and is in review as PR #99 — **do not touch
+`src/labpilot/research_engine/conductor/policy.py`** until it merges.
 
 Each brief below is self-contained. You do not need the conversation that
 produced it.
@@ -15,7 +15,7 @@ Merge conflicts are the main risk of running these in parallel. File ownership:
 
 | Lane | Owns | Must not touch |
 |---|---|---|
-| **#40** (taken) | `conductor/policy.py`, `tests/unit/test_conductor.py` | — |
+| **#40** (done — PR #99) | `conductor/policy.py`, `tests/unit/test_conductor.py` | — |
 | **#11** | `execution/capabilities/code_engineering/**`, `**/templates/**/*.j2`, `execution/technique/resolver.py` | `conductor/policy.py`; avoid `micro_agents/code_engineer/agent.py` if you can (see #39) |
 | **#25** | `execution/technique/` (new `vocabulary.py`), `intelligence/hypothesis/candidates.py`, `accessor/sqlite/schema.sql`, `accessor/sqlite/migrate.py`, `conductor/loop.py` (one call) | `conductor/policy.py` |
 | **#39** | all 20 `**/agent.py` + `**/micro_agent.py`, `accessor/common/micro_agents.py`, `tests/conftest.py`, ~28 test files | everything else |
@@ -35,9 +35,14 @@ These are hard-won on this repo. Ignoring them is how the bugs below were made.
 
 1. **Never edit the competition workspace.** Validate against a *sandbox copy*:
    ```bash
-   cp -R /Users/sadik/workspace/rogii-wellbore-geology-prediction/knowledge/research \
-         /tmp/sb/kb/rogii-wellbore-geology-prediction/research
+   # $WS = the competition workspace (the directory holding labpilot.yaml).
+   # $COMP = its slug, e.g. rogii-wellbore-geology-prediction.
+   mkdir -p "$SANDBOX/kb/$COMP"
+   cp -R "$WS/knowledge/research" "$SANDBOX/kb/$COMP/research"
    ```
+   Then pass `$SANDBOX/kb` as the knowledge dir. `ResearchPaths` expects
+   `<knowledge_dir>/<competition>/research/knowledge.db`, which is why the copy
+   is nested that way.
    If a workspace needs migrating or cleaning, make labpilot do it on the next
    run — do not hand-edit artifacts or the DB.
 
@@ -60,7 +65,7 @@ These are hard-won on this repo. Ignoring them is how the bugs below were made.
    ```bash
    uv run pytest -m "not llm and not image and not deep"
    ```
-   Currently 1090 passed, 1 skipped. Also run it with provider keys *set*
+   Also run it with provider keys *set*
    (`GROQ_API_KEY=x OPENROUTER_API_KEY=x …`) — one test was env-dependent.
 
 6. **Commit messages: short subject, why not what.** Detail belongs in
@@ -109,7 +114,7 @@ Suggested approach:
 4. A technique that legitimately cannot alter this template must say so. That is
    information, not a failure.
 
-**Verify:** the differ-table above, plus a campaign on rogii producing at least
+**Verify:** the differ-table above, plus a campaign producing at least
 two *distinct* scores from two different techniques. Baseline to beat: MSE
 190.97.
 
@@ -146,7 +151,7 @@ Step 2 (consumers filter by status) is a separate PR, after a human reads step
 4. One call in `conductor/loop.py`'s repair chain, after
    `rederive_beliefs_from_cards`. Order matters and is established there.
 
-**Verify on a sandbox copy of rogii** (116 techniques, 124 beliefs, 15 evidence
+**Verify on a sandbox copy of the workspace** (rogii today: 116 techniques, 124 beliefs, 15 evidence
 cards). Expected: `SWA` → `confirmed`; `the`, `Breath Focus practice`,
 `3D garment modeling` → not `confirmed`; recompute twice changes nothing the
 second time.
@@ -217,8 +222,7 @@ and `strict_llm()` / `STRICT_LLM_ENV` / `deterministic_allowed()` /
 `DETERMINISTIC_ENV`, all of which become moot with nothing to fall back to.
 
 **Verify:** full suite green *without* a generic double; spot-check three of the
-converted test files to confirm they still assert something real; one campaign on
-rogii completing.
+converted test files to confirm they still assert something real; one campaign completing.
 
 ---
 
