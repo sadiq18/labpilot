@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from labpilot.research_engine.shared.experiments.models import Hypothesis
 from labpilot.research_engine.planner import compile_research_plan, validate_plan
 from labpilot.research_engine.planner.micro_agents.planning_engine import ResearchPlannerAgent
 from labpilot.research_engine.planner.schemas.draft import DraftTask, ResearchPlanDraft
 from labpilot.research_engine.planner.schemas.task_types import TaskType
+from labpilot.research_engine.shared.experiments.models import Hypothesis
 
 
 def _hypothesis(tags: list[str] | None = None) -> Hypothesis:
