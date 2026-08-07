@@ -12,6 +12,7 @@ later sessions pass without selection — aging is what keeps the vocabulary ope
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,15 @@ logger = logging.getLogger(__name__)
 
 #: Same bar as ``ClaimPromoter`` — a second epsilon would let the two drift.
 _NO_EFFECT_EPSILON = 1e-9
+
+
+def _vocab_key(value: str) -> str:
+    """Canonical technique key for selection ↔ vocabulary membership checks.
+
+    Same contract as ``normalize_label``: strip, lower, drop non-alphanumerics
+    so ``Grad Boost`` and ``grad_boost`` match.
+    """
+    return re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
 
 
 @dataclass(frozen=True)
@@ -122,13 +132,17 @@ def selected_technique_names(knowledge_dir: Path, competition: str) -> set[str]:
     names: set[str] = set()
     for hyp in HypothesisStore(Path(knowledge_dir), competition).list():
         if hyp.technique:
-            names.add(str(hyp.technique).strip().lower())
+            key = _vocab_key(str(hyp.technique))
+            if key:
+                names.add(key)
         for item in hyp.technique_stack or []:
-            if str(item).strip():
-                names.add(str(item).strip().lower())
+            key = _vocab_key(str(item))
+            if key:
+                names.add(key)
         for item in hyp.combo_techniques or []:
-            if str(item).strip():
-                names.add(str(item).strip().lower())
+            key = _vocab_key(str(item))
+            if key:
+                names.add(key)
     return names
 
 
@@ -203,7 +217,7 @@ def derive_technique_status(
         promoter, name, card_list
     )
     if observations == 0:
-        label = name.strip().lower()
+        label = _vocab_key(name)
         age = campaigns_since(created_at, session_times or ())
         if (
             selected is not None

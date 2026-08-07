@@ -351,3 +351,25 @@ def test_campaigns_since_parses_mixed_iso_forms() -> None:
         )
         == 1
     )
+
+def test_selection_matches_across_spacing_and_underscores(tmp_path) -> None:
+    """Hypothesis 'Grad Boost' must keep vocabulary 'grad_boost' from dormant."""
+    from labpilot.research_engine.execution.technique.vocabulary import _vocab_key
+
+    with KnowledgeStore(tmp_path, COMPETITION) as store:
+        store.merge_technique("grad_boost")
+        created = store.list_techniques()[0]["created_at"]
+    later = ["2099-01-01T00:00:00+00:00", "2099-01-02T00:00:00+00:00"]
+    promoter = ClaimPromoter(tmp_path, COMPETITION)
+    try:
+        status, *_ = derive_technique_status(
+            "grad_boost",
+            promoter,
+            selected={_vocab_key("Grad Boost")},
+            created_at=created,
+            session_times=later,
+            dormant_after=2,
+        )
+        assert status == "candidate"
+    finally:
+        promoter.close()

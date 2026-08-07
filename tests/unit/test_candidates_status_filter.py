@@ -90,6 +90,7 @@ def test_confirmed_is_not_hard_blocked_by_modality() -> None:
     )
     assert any(c.technique == "vit" for c in candidates)
     assert any("Applicability note" in (c.reason or "") for c in candidates)
+    assert all(not (c.reason or "").startswith("None ") for c in candidates)
 
 
 def test_filter_incompatible_techniques_still_drops_vision_on_tabular() -> None:

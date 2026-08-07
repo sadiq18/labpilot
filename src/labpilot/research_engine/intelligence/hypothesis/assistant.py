@@ -188,13 +188,15 @@ class HypothesisAssistant:
                     competition={"slug": competition},
                     progressive=progressive,
                 )
-                notes.extend(research_context.notes)
-            technique_statuses = {
-                normalize_label(str(row.get("name") or "")): str(
+            notes.extend(research_context.notes)
+            technique_statuses = {}
+            for row in store.list_techniques():
+                name = str(row.get("name") or "").strip()
+                if not name:
+                    continue
+                technique_statuses[normalize_label(name)] = str(
                     row.get("status") or "candidate"
                 )
-                for row in store.list_techniques()
-            }
 
         tried = load_existing_technique_tags(knowledge_dir, competition)
         ledger = build_experiment_ledger(knowledge_dir, competition)

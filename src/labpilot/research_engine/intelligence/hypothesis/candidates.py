@@ -338,7 +338,9 @@ def generate_candidates(
             )
             annotated_confirmed.append(
                 candidate.model_copy(
-                    update={"reason": f"{candidate.reason} {note}".strip()}
+                    update={
+                        "reason": f"{candidate.reason or ''} {note}".strip()
+                    }
                 )
             )
         else:
