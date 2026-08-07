@@ -1,9 +1,12 @@
-"""Derive technique vocabulary status from evidence cards (M-25 step 1).
+"""Derive technique vocabulary status from evidence cards (M-25).
 
 Status is recomputed from the current card set — never stepped — so repairing a
 card afterwards changes the vocabulary the same way ``belief_repair`` does for
-beliefs. Step 1 writes status + history and exposes a report; consumers do not
-filter yet (step 2).
+beliefs.
+
+Step 2 adds campaign-aged ``dormant`` and consumer filters elsewhere. Fresh
+unmeasured techniques stay ``candidate`` until ``DORMANT_AFTER_CAMPAIGNS``
+later sessions pass without selection — aging is what keeps the vocabulary open.
 """
 
 from __future__ import annotations
@@ -13,6 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from labpilot.research_engine.execution.technique.status_constants import (
+    DORMANT_AFTER_CAMPAIGNS,
+)
 from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
 from labpilot.research_engine.reflection.claims.promoter import ClaimPromoter
 
@@ -83,22 +89,92 @@ def _signed_measured_effect(
     return observations, raw_net, signed_net, last_card
 
 
+def selected_technique_names(knowledge_dir: Path, competition: str) -> set[str]:
+    """Technique labels that appear on any hypothesis for this competition."""
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+
+    names: set[str] = set()
+    for hyp in HypothesisStore(Path(knowledge_dir), competition).list():
+        if hyp.technique:
+            names.add(str(hyp.technique).strip().lower())
+        for item in hyp.technique_stack or []:
+            if str(item).strip():
+                names.add(str(item).strip().lower())
+        for item in hyp.combo_techniques or []:
+            if str(item).strip():
+                names.add(str(item).strip().lower())
+    return names
+
+
+def campaign_created_ats(knowledge_dir: Path, competition: str) -> list[str]:
+    """Session ``created_at`` stamps for ``competition``, oldest first.
+
+    Reads ``os_sessions`` through SqliteClient — not ConductorStore — so
+    ``execution/`` stays free of conductor imports (architecture boundary).
+    """
+    from labpilot.accessor.sqlite import SqliteClient
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+
+    client = SqliteClient(ResearchPaths(Path(knowledge_dir), competition).db_path)
+    try:
+        rows = client.conn.execute(
+            "SELECT created_at FROM os_sessions WHERE competition = ? "
+            "ORDER BY created_at",
+            (competition,),
+        ).fetchall()
+        return [str(r["created_at"]) for r in rows if r["created_at"]]
+    finally:
+        client.close()
+
+
+def campaigns_since(created_at: str | None, session_times: list[str]) -> int:
+    """How many campaigns started after ``created_at`` (string-ordered ISO times)."""
+    if not created_at:
+        return 0
+    stamp = str(created_at)
+    return sum(1 for t in session_times if t > stamp)
+
+
 def derive_technique_status(
     name: str,
     promoter: ClaimPromoter,
     *,
     cards: list[Any] | None = None,
+    selected: set[str] | None = None,
+    created_at: str | None = None,
+    session_times: list[str] | None = None,
+    dormant_after: int = DORMANT_AFTER_CAMPAIGNS,
 ) -> tuple[str, str, int, float, float, str | None]:
     """Return ``(status, reason, observations, raw_net, signed_net, evidence_card_id)``.
 
-    Step 1 does not derive ``dormant`` — that needs campaign aging (design §4),
-    which lands with step 2. Unmeasured techniques stay ``candidate``.
+    ``dormant`` requires all three: never measured, never selected, and at least
+    ``dormant_after`` campaigns started after the technique was proposed. Without
+    the aging clause, first recompute would permanently exclude every new row.
     """
     card_list = cards if cards is not None else _list_cards(promoter)
     observations, raw_net, signed_net, last_card = _signed_measured_effect(
         promoter, name, card_list
     )
     if observations == 0:
+        label = name.strip().lower()
+        age = campaigns_since(created_at, session_times or [])
+        if (
+            selected is not None
+            and label
+            and label not in selected
+            and age >= dormant_after
+        ):
+            return (
+                "dormant",
+                (
+                    f"proposed {age} campaign(s) ago, never selected for a "
+                    "hypothesis, never measured"
+                ),
+                0,
+                0.0,
+                0.0,
+                None,
+            )
         return (
             "candidate",
             "proposed; no conclusive evidence card attributes a result yet",
@@ -140,6 +216,9 @@ def derive_all_technique_statuses(
     promoter: ClaimPromoter,
     *,
     cards: list[Any] | None = None,
+    selected: set[str] | None = None,
+    session_times: list[str] | None = None,
+    dormant_after: int = DORMANT_AFTER_CAMPAIGNS,
 ) -> list[TechniqueStatusDerivation]:
     """Derive status for every row in ``techniques``."""
     card_list = cards if cards is not None else _list_cards(promoter)
@@ -148,7 +227,13 @@ def derive_all_technique_statuses(
         name = str(row.get("name") or "")
         tid = str(row.get("id") or "")
         status, reason, obs, raw_net, signed_net, card_id = derive_technique_status(
-            name, promoter, cards=card_list
+            name,
+            promoter,
+            cards=card_list,
+            selected=selected,
+            created_at=str(row.get("created_at") or "") or None,
+            session_times=session_times,
+            dormant_after=dormant_after,
         )
         out.append(
             TechniqueStatusDerivation(
@@ -171,6 +256,8 @@ def recompute_technique_status(knowledge_dir: Path, competition: str) -> list[st
     promoter = ClaimPromoter(Path(knowledge_dir), competition)
     try:
         cards = _list_cards(promoter)
+        selected = selected_technique_names(Path(knowledge_dir), competition)
+        sessions = campaign_created_ats(Path(knowledge_dir), competition)
         with KnowledgeStore(Path(knowledge_dir), competition) as store:
             for row in store.list_techniques():
                 tid = str(row.get("id") or "")
@@ -179,7 +266,12 @@ def recompute_technique_status(knowledge_dir: Path, competition: str) -> list[st
                     continue
                 try:
                     status, reason, obs, _raw, signed_net, card_id = derive_technique_status(
-                        name, promoter, cards=cards
+                        name,
+                        promoter,
+                        cards=cards,
+                        selected=selected,
+                        created_at=str(row.get("created_at") or "") or None,
+                        session_times=sessions,
                     )
                     prior = str(row.get("status") or "candidate")
                     if prior == status:
@@ -219,12 +311,20 @@ def technique_status_report(
     knowledge_dir: Path,
     competition: str,
 ) -> dict[str, Any]:
-    """Summarise derived statuses without writing — for step-1 review."""
+    """Summarise derived statuses without writing — for review before filtering."""
     promoter = ClaimPromoter(Path(knowledge_dir), competition)
     try:
         cards = _list_cards(promoter)
+        selected = selected_technique_names(Path(knowledge_dir), competition)
+        sessions = campaign_created_ats(Path(knowledge_dir), competition)
         with KnowledgeStore(Path(knowledge_dir), competition) as store:
-            derived = derive_all_technique_statuses(store, promoter, cards=cards)
+            derived = derive_all_technique_statuses(
+                store,
+                promoter,
+                cards=cards,
+                selected=selected,
+                session_times=sessions,
+            )
             stored = {
                 str(r["id"]): str(r.get("status") or "candidate")
                 for r in store.list_techniques()
@@ -282,7 +382,7 @@ def format_technique_status_report(report: dict[str, Any]) -> str:
         )
     if len(would) > 40:
         lines.append(f"  … +{len(would) - 40} more")
-    for status in ("confirmed", "rejected"):
+    for status in ("confirmed", "rejected", "dormant"):
         rows = (report.get("by_status") or {}).get(status) or []
         if not rows:
             continue

@@ -20,9 +20,35 @@ from labpilot.research_engine.intelligence.repositories.models import (
 )
 from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_label
 from labpilot.research_engine.intelligence.retrieval.models import ResearchContext
+from labpilot.research_engine.execution.technique.status_constants import (
+    PLANNER_VISIBLE_STATUSES,
+)
 
 if TYPE_CHECKING:
     from labpilot.research_engine.intelligence.hypothesis.ledger import ExperimentLedger
+
+
+def filter_by_technique_status(
+    candidates: list[HypothesisCandidate],
+    statuses: dict[str, str],
+    *,
+    visible: frozenset[str] = PLANNER_VISIBLE_STATUSES,
+) -> tuple[list[HypothesisCandidate], list[str]]:
+    """Drop candidates whose primary technique is not planner-visible by status."""
+    kept: list[HypothesisCandidate] = []
+    dropped: list[str] = []
+    for candidate in candidates:
+        tech = str(candidate.technique or "").strip()
+        if not tech:
+            kept.append(candidate)
+            continue
+        # Unknown names default to candidate so the vocabulary can still grow.
+        status = str(statuses.get(normalize_label(tech), "candidate"))
+        if status in visible:
+            kept.append(candidate)
+        else:
+            dropped.append(tech)
+    return kept, dropped
 
 
 # Technique tokens that only make sense for a given modality. Evidence cards
@@ -92,11 +118,18 @@ def generate_candidates(
     tried_techniques: set[str] | None = None,
     ledger: ExperimentLedger | None = None,
     problem_type: str = "",
+    technique_statuses: dict[str, str] | None = None,
 ) -> list[HypothesisCandidate]:
     """Build candidates from beliefs/techniques, pipeline-diff, transfers, failures.
 
     When ``ledger`` is provided, also mint stacked / unused-belief / unused-claim
     candidates from the full competition inventory.
+
+    Vocabulary status is the visibility gate (``candidate``/``confirmed``). The
+    modality token filter stays wired as a second pass: confirmed techniques are
+    never hard-blocked by it (measured evidence overrides the token list); other
+    statuses still go through ``filter_incompatible_techniques`` so #28 cannot
+    return via an empty call site.
     """
     tried = {normalize_label(item) for item in (tried_techniques or set())}
     if ledger is not None:
@@ -109,10 +142,17 @@ def generate_candidates(
     if ledger is not None:
         pipeline |= {normalize_label(x) for x in ledger.winning_stack}
     candidates: list[HypothesisCandidate] = []
+    statuses = dict(technique_statuses or {})
+    for card in context.techniques:
+        name = str(card.get("name") or "").strip()
+        if name and normalize_label(name) not in statuses:
+            statuses[normalize_label(name)] = str(card.get("status") or "candidate")
 
     for card in context.techniques:
         name = str(card.get("name") or "").strip()
         if not name:
+            continue
+        if statuses.get(normalize_label(name), "candidate") not in PLANNER_VISIBLE_STATUSES:
             continue
         key_label = normalize_label(name)
         evidence = _evidence_from_card(card)
@@ -263,10 +303,50 @@ def generate_candidates(
             )
 
     if ledger is not None:
-        candidates.extend(_candidates_from_ledger(ledger, tried=tried))
+        candidates.extend(
+            _candidates_from_ledger(ledger, tried=tried, statuses=statuses)
+        )
 
     deduped = _dedupe_candidates(candidates)
-    kept, dropped = filter_incompatible_techniques(deduped, problem_type)
+    status_kept, status_dropped = filter_by_technique_status(deduped, statuses)
+    if status_dropped:
+        logger.info(
+            "Dropped %d technique(s) by vocabulary status: %s",
+            len(status_dropped),
+            ", ".join(sorted(set(status_dropped))[:8]),
+        )
+
+    # Fold modality: confirmed (measured) is never hard-blocked by the token
+    # list — applicability is a justification note. Candidates still go through
+    # the existing filter so the #28 call site stays load-bearing.
+    confirmed: list[HypothesisCandidate] = []
+    rest: list[HypothesisCandidate] = []
+    for candidate in status_kept:
+        label = normalize_label(str(candidate.technique or ""))
+        if statuses.get(label, "candidate") == "confirmed":
+            confirmed.append(candidate)
+        else:
+            rest.append(candidate)
+
+    _, modality_hits = filter_incompatible_techniques(confirmed, problem_type)
+    hit_set = {normalize_label(x) for x in modality_hits}
+    annotated_confirmed: list[HypothesisCandidate] = []
+    for candidate in confirmed:
+        if normalize_label(str(candidate.technique or "")) in hit_set:
+            note = (
+                f"Applicability note: modality tokens look atypical for "
+                f"problem_type={problem_type or 'unknown'}; kept because "
+                "status=confirmed."
+            )
+            annotated_confirmed.append(
+                candidate.model_copy(
+                    update={"reason": f"{candidate.reason} {note}".strip()}
+                )
+            )
+        else:
+            annotated_confirmed.append(candidate)
+
+    kept, dropped = filter_incompatible_techniques(rest, problem_type)
     if dropped:
         logger.info(
             "Dropped %d technique(s) incompatible with problem_type=%s: %s",
@@ -274,13 +354,14 @@ def generate_candidates(
             problem_type,
             ", ".join(sorted(set(dropped))[:8]),
         )
-    return kept
+    return [*annotated_confirmed, *kept]
 
 
 def _candidates_from_ledger(
     ledger: ExperimentLedger,
     *,
     tried: set[str],
+    statuses: dict[str, str],
 ) -> list[HypothesisCandidate]:
     """Stack unused techniques/beliefs/claims onto the winning line when present."""
     from labpilot.research_engine.intelligence.hypothesis.ledger import ExperimentLedger as _L
@@ -296,6 +377,8 @@ def _candidates_from_ledger(
     def _blocked(tech: str) -> bool:
         label = normalize_label(tech)
         if not label or label in tried or ledger.is_failed(tech):
+            return True
+        if statuses.get(label, "candidate") not in PLANNER_VISIBLE_STATUSES:
             return True
         for parent_tech in stack:
             if (normalize_label(parent_tech), label) in avoid:

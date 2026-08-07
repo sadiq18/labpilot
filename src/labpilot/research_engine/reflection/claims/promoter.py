@@ -217,6 +217,17 @@ class ClaimPromoter:
                 logger.info("Not promoting %r: %s", technique, why)
                 return None
 
+        # Vocabulary filter after measurement: rejected/dormant never become
+        # claims. Missing store rows default to candidate — measurement still
+        # licenses promotion (novel techniques must not need membership first).
+        from labpilot.research_engine.execution.technique.status_constants import (
+            CLAIM_BLOCKED_STATUSES,
+        )
+
+        vocab_status = self._knowledge.technique_status(technique)
+        if vocab_status in CLAIM_BLOCKED_STATUSES:
+            return None
+
         statement = f"{technique} appears to be {effect} on {self.competition}"
         status = "candidate"
         contradictions: list[str] = []
