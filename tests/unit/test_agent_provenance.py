@@ -218,3 +218,84 @@ def test_deterministic_flag_parsing(monkeypatch, value, allowed):
 
     monkeypatch.setenv("LABPILOT_DETERMINISTIC", value)
     assert deterministic_allowed() is allowed
+
+
+# --- phase 2b: a failed call raises when strict mode is on -------------------
+
+
+def test_strict_mode_raises_on_a_failed_call(monkeypatch):
+    """2a covers a *missing* client; 2b covers one that answered badly.
+
+    Without this, prose output becomes rule-engine output and nothing upstream
+    can tell the difference — the whole premise of M14.
+    """
+    from labpilot.accessor.common.micro_agents import STRICT_LLM_ENV, LLMDegradedError
+
+    monkeypatch.setenv(STRICT_LLM_ENV, "1")
+    agent = _Agent(llm_client=_BadClient())
+    with pytest.raises(LLMDegradedError) as exc:
+        _run(agent)
+
+    message = str(exc.value)
+    assert "prov_probe" in message, "names the agent"
+    assert STRICT_LLM_ENV in message, "names the switch that caused it"
+    assert "JSON" in message, "carries the underlying failure"
+
+
+def test_strict_mode_still_records_provenance(monkeypatch):
+    """Raising must not cost the measurement — a strict run that aborts is
+    exactly when knowing why matters most."""
+    from labpilot.accessor.common.micro_agents import STRICT_LLM_ENV, LLMDegradedError
+    from labpilot.accessor.common.provenance import AgentInvocation, set_sink
+
+    records: list[AgentInvocation] = []
+
+    class _Sink:
+        def record(self, invocation):
+            records.append(invocation)
+
+    monkeypatch.setenv(STRICT_LLM_ENV, "1")
+    set_sink(_Sink())
+    try:
+        with pytest.raises(LLMDegradedError):
+            _run(_Agent(llm_client=_BadClient()))
+    finally:
+        set_sink(None)
+
+    assert records and records[-1].failure_kind == "json_shape"
+
+
+def test_strict_mode_off_by_default_still_falls_back(monkeypatch):
+    """The measured default. On rogii the fallback rate was 11%, all
+    `json_shape` — at that rate strict mode ends a campaign every ~9 steps."""
+    from labpilot.accessor.common.micro_agents import STRICT_LLM_ENV
+
+    monkeypatch.delenv(STRICT_LLM_ENV, raising=False)
+    agent = _Agent(llm_client=_BadClient())
+    assert _run(agent).value == "rule"
+    assert agent.last_generated_by == "rule_engine"
+
+
+def test_strict_mode_does_not_affect_a_working_llm(monkeypatch):
+    from labpilot.accessor.common.micro_agents import STRICT_LLM_ENV
+
+    monkeypatch.setenv(STRICT_LLM_ENV, "1")
+    agent = _Agent(llm_client=_GoodClient())
+    assert _run(agent).value == "llm"
+    assert agent.last_generated_by == "llm"
+
+
+def test_a_missing_client_still_raises_the_2a_error(monkeypatch):
+    """The two failures stay distinct: "configure a provider" is not the same
+    operator action as "this model cannot hold the contract"."""
+    from labpilot.accessor.common.micro_agents import (
+        STRICT_LLM_ENV,
+        LLMDegradedError,
+        LLMUnavailableError,
+    )
+
+    monkeypatch.setenv(STRICT_LLM_ENV, "1")
+    monkeypatch.delenv("LABPILOT_DETERMINISTIC", raising=False)
+    with pytest.raises(LLMUnavailableError) as exc:
+        _run(_Agent(llm_client=None))
+    assert not isinstance(exc.value, LLMDegradedError)

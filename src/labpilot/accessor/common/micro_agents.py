@@ -48,6 +48,30 @@ GeneratedBy = Literal["llm", "rule_engine", "template_fallback", "stub"]
 #: beliefs and claims.
 DETERMINISTIC_ENV = "LABPILOT_DETERMINISTIC"
 
+#: M14 phase 2b. When set, a *failed* LLM call raises instead of quietly
+#: producing rule-engine output. Phase 2a already does this for a *missing*
+#: client; 2b extends it to a client that answered badly.
+#:
+#: Default off, and the reason is measured rather than cautious. On rogii
+#: 2026-08-07, a 27-step campaign recorded 28 invocations with a **11% fallback
+#: rate, all three failures `json_shape`** — a model replying in prose, which is
+#: exactly the failure 2b converts into a hard abort. At that rate a campaign
+#: would die roughly every nine steps. Retrying with a corrective re-ask (see
+#: `_is_transient_llm_error`) is the first move; flipping this default is the
+#: second, once the recorded rate justifies it. `agent_invocations` holds the
+#: number, so this is now a decision with evidence behind it rather than a
+#: judgement call.
+STRICT_LLM_ENV = "LABPILOT_STRICT_LLM"
+
+
+class LLMDegradedError(RuntimeError):
+    """The LLM was reachable and its answer was unusable (M14 2b).
+
+    Distinct from :class:`LLMUnavailableError`, which means no client at all.
+    Separate types because the operator responses differ: one is "configure a
+    provider", the other is "this model cannot hold the contract".
+    """
+
 
 class LLMUnavailableError(RuntimeError):
     """No LLM configured, and deterministic mode was not requested.
@@ -61,6 +85,15 @@ class LLMUnavailableError(RuntimeError):
 def deterministic_allowed() -> bool:
     """True when the operator explicitly asked for deterministic operation."""
     return os.environ.get(DETERMINISTIC_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+def strict_llm() -> bool:
+    """True when a failed LLM call must raise rather than fall back (M14 2b)."""
+    if os.environ.get(STRICT_LLM_ENV, "").strip().lower() in {"1", "true", "yes"}:
+        # An explicit "be strict" outranks an explicit "deterministic is fine":
+        # the operator asking for strictness is asking about *this* run.
+        return True
+    return False
 
 
 def coerce_str_list(value: object) -> list[str]:
@@ -268,6 +301,13 @@ class BaseMicroAgent:
                         last_exc,
                     )
                     self.last_failure_reason = str(last_exc)
+                    if strict_llm():
+                        self._record_provenance(attempt)
+                        raise LLMDegradedError(
+                            f"{self.name or type(self).__name__}: the LLM path failed "
+                            f"after {attempt} attempt(s) and strict mode is on "
+                            f"({STRICT_LLM_ENV}=1). Last failure: {last_exc}"
+                        ) from last_exc
                     break
         # Recorded on the fallback path too — and on the silent no-client path,
         # which never enters the try/except above. A provenance record that only
