@@ -48,7 +48,15 @@ class BudgetLedger:
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(path))
+        # `check_same_thread=False` because the proxy (`server.py`) serves
+        # requests on worker threads while the ledger is opened by whoever
+        # started the campaign. Safe here only because every gateway call is
+        # serialised by `server._GATEWAY_LOCK` — sqlite tolerates cross-thread
+        # use, not concurrent use, and the ledger's read-modify-write would
+        # otherwise interleave. Without this every proxied request failed with
+        # "SQLite objects created in a thread can only be used in that same
+        # thread".
+        self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
