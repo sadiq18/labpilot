@@ -11,6 +11,7 @@ from rich.console import Console
 from labpilot.cli.config_helpers import load_cli_config, resolve_competition
 from labpilot.research_engine.execution.technique.vocabulary import (
     format_technique_status_report,
+    load_aging_context,
     recompute_technique_status,
     technique_status_report,
 )
@@ -40,13 +41,16 @@ def techniques_report(
         knowledge_dir=knowledge_dir,
     )
     slug = resolve_competition(competition, workspace)
+    aging = load_aging_context(config.knowledge_dir, slug)
     if apply:
-        changed = recompute_technique_status(config.knowledge_dir, slug)
+        changed = recompute_technique_status(
+            config.knowledge_dir, slug, aging=aging
+        )
         console.print(
             f"[green]Updated status for {len(changed)} technique(s)[/green] "
             f"in [cyan]{slug}[/cyan]"
         )
-    report = technique_status_report(config.knowledge_dir, slug)
+    report = technique_status_report(config.knowledge_dir, slug, aging=aging)
     if output_json:
         print(json.dumps(report, indent=2))
         return

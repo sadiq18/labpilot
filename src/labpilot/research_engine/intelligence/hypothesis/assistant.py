@@ -176,8 +176,9 @@ class HypothesisAssistant:
     ) -> HypothesisAssistantResult:
         notes: list[str] = []
         research_context = context
-        if research_context is None:
-            with KnowledgeStore(knowledge_dir, competition) as store:
+        technique_statuses: dict[str, str] = {}
+        with KnowledgeStore(knowledge_dir, competition) as store:
+            if research_context is None:
                 research_context = ContextBuilder(
                     store, llm_client=self.llm_client
                 ).build(
@@ -188,6 +189,14 @@ class HypothesisAssistant:
                     progressive=progressive,
                 )
             notes.extend(research_context.notes)
+            technique_statuses = {}
+            for row in store.list_techniques():
+                name = str(row.get("name") or "").strip()
+                if not name:
+                    continue
+                technique_statuses[normalize_label(name)] = str(
+                    row.get("status") or "candidate"
+                )
 
         tried = load_existing_technique_tags(knowledge_dir, competition)
         ledger = build_experiment_ledger(knowledge_dir, competition)
@@ -206,6 +215,7 @@ class HypothesisAssistant:
             tried_techniques=tried,
             ledger=ledger,
             problem_type=_resolve_problem_type(knowledge_dir, competition),
+            technique_statuses=technique_statuses,
         )
         combo_candidates, combo_note = self._combo_candidates(
             ledger, research_context=research_context

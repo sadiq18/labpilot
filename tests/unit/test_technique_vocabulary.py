@@ -244,3 +244,132 @@ def test_report_lists_would_change_without_apply(tmp_path) -> None:
     assert len(report["would_change"]) == 1
     assert report["would_change"][0]["name"] == "SWA"
     assert report["would_change"][0]["signed_net"] == pytest.approx(3.83)
+
+
+def test_unselected_stays_candidate_until_aged(tmp_path) -> None:
+    """Aging is what makes dormant safe — first recompute must not close the vocab."""
+    with KnowledgeStore(tmp_path, COMPETITION) as store:
+        _seed_techniques(store, ["gradient_boosting_dart"])
+        created = store.list_techniques()[0]["created_at"]
+    promoter = ClaimPromoter(tmp_path, COMPETITION)
+    try:
+        status, reason, *_ = derive_technique_status(
+            "gradient_boosting_dart",
+            promoter,
+            selected=set(),
+            created_at=created,
+            session_times=[],
+        )
+        assert status == "candidate"
+        assert "never selected" not in reason
+    finally:
+        promoter.close()
+
+
+def test_unselected_becomes_dormant_after_n_campaigns(tmp_path) -> None:
+    with KnowledgeStore(tmp_path, COMPETITION) as store:
+        _seed_techniques(store, ["3D garment modeling"])
+        created = store.list_techniques()[0]["created_at"]
+    later = [
+        "2099-01-01T00:00:00+00:00",
+        "2099-01-02T00:00:00+00:00",
+    ]
+    promoter = ClaimPromoter(tmp_path, COMPETITION)
+    try:
+        status, reason, obs, *_ = derive_technique_status(
+            "3D garment modeling",
+            promoter,
+            selected=set(),
+            created_at=created,
+            session_times=later,
+            dormant_after=2,
+        )
+        assert status == "dormant"
+        assert obs == 0
+        assert "2 campaign" in reason
+    finally:
+        promoter.close()
+
+
+def test_fresh_technique_after_campaigns_stays_candidate(tmp_path) -> None:
+    """A technique proposed *after* existing campaigns must remain visible."""
+    sessions = ["2020-01-01T00:00:00+00:00", "2020-01-02T00:00:00+00:00"]
+    with KnowledgeStore(tmp_path, COMPETITION) as store:
+        _seed_techniques(store, ["brand_new_trick"])
+        created = store.list_techniques()[0]["created_at"]
+    assert created > sessions[-1]
+    promoter = ClaimPromoter(tmp_path, COMPETITION)
+    try:
+        status, *_ = derive_technique_status(
+            "brand_new_trick",
+            promoter,
+            selected=set(),
+            created_at=created,
+            session_times=sessions,
+            dormant_after=2,
+        )
+        assert status == "candidate"
+    finally:
+        promoter.close()
+
+
+def test_selected_unmeasured_never_goes_dormant(tmp_path) -> None:
+    with KnowledgeStore(tmp_path, COMPETITION) as store:
+        _seed_techniques(store, ["waiting"])
+        created = store.list_techniques()[0]["created_at"]
+    later = ["2099-01-01T00:00:00+00:00", "2099-01-02T00:00:00+00:00"]
+    promoter = ClaimPromoter(tmp_path, COMPETITION)
+    try:
+        status, *_ = derive_technique_status(
+            "waiting",
+            promoter,
+            selected={"waiting"},
+            created_at=created,
+            session_times=later,
+            dormant_after=2,
+        )
+        assert status == "candidate"
+    finally:
+        promoter.close()
+
+
+def test_campaigns_since_parses_mixed_iso_forms() -> None:
+    """Z vs +00:00 must not invert ordering via lexicographic string compare."""
+    from labpilot.research_engine.execution.technique.vocabulary import campaigns_since
+
+    assert (
+        campaigns_since(
+            "2026-08-07T15:38:16.500000+00:00",
+            ["2026-08-07T15:38:16Z", "2026-08-07T15:38:17Z"],
+        )
+        == 1
+    )
+    assert (
+        campaigns_since(
+            "2026-08-07T15:38:16Z",
+            ["2026-08-07T15:38:16.999999+00:00"],
+        )
+        == 1
+    )
+
+def test_selection_matches_across_spacing_and_underscores(tmp_path) -> None:
+    """Hypothesis 'Grad Boost' must keep vocabulary 'grad_boost' from dormant."""
+    from labpilot.research_engine.execution.technique.vocabulary import _vocab_key
+
+    with KnowledgeStore(tmp_path, COMPETITION) as store:
+        store.merge_technique("grad_boost")
+        created = store.list_techniques()[0]["created_at"]
+    later = ["2099-01-01T00:00:00+00:00", "2099-01-02T00:00:00+00:00"]
+    promoter = ClaimPromoter(tmp_path, COMPETITION)
+    try:
+        status, *_ = derive_technique_status(
+            "grad_boost",
+            promoter,
+            selected={_vocab_key("Grad Boost")},
+            created_at=created,
+            session_times=later,
+            dormant_after=2,
+        )
+        assert status == "candidate"
+    finally:
+        promoter.close()
