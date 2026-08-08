@@ -38,12 +38,28 @@ FIRST_PLAN_ID = "P-001"
 FIRST_EXECUTION_ID = "E-001"
 
 
+# What a campaign asks `analyze_competition` for. A campaign is a long loop, so
+# what it can afford per step is not what a one-off `research analyze` can:
+#
+# * `kaggle_fetch_plan="best_score"` — the kernels that actually scored, and
+#   nothing else. The vote-sorted sweep and the discussion sweep are two more
+#   round-trips-plus-ingest for evidence that largely overlaps the first.
+# * `exclude={"papers"}` — the paper analyzer searches 40 and extracts 15
+#   through the LLM. Measured on rogii 2026-08-09 it held step 2 for over
+#   sixteen minutes and had not finished. On a Kaggle competition the kernels
+#   are the better-grounded source anyway: they ran against this dataset.
+#
+# `research analyze` keeps both. This is the campaign's budget, not a claim
+# that papers are worthless.
+ANALYZE_ARGS: dict[str, Any] = {
+    "fetch_kaggle": True,
+    "kaggle_fetch_plan": "best_score",
+    "exclude": ["papers"],
+}
+
+
 # Offline / template intents → tool chains
 _TEMPLATES: list[tuple[tuple[str, ...], list[ToolStep]]] = [
-    (
-        ("paper", "literature", "search", "read"),
-        [ToolStep(tool="search_papers", args={"offline": True})],
-    ),
     (
         ("memory", "recall", "retrieve", "what do we know"),
         [ToolStep(tool="query_memory", args={})],
@@ -53,7 +69,7 @@ _TEMPLATES: list[tuple[tuple[str, ...], list[ToolStep]]] = [
         [
             ToolStep(
                 tool="analyze_competition",
-                args={"fetch_kaggle": True},
+                args=dict(ANALYZE_ARGS),
             )
         ],
     ),
@@ -77,7 +93,6 @@ _TEMPLATES: list[tuple[tuple[str, ...], list[ToolStep]]] = [
     (
         ("augment", "minority", "investigate"),
         [
-            ToolStep(tool="search_papers", args={"offline": True}),
             ToolStep(tool="generate_plan", args={"baseline": True}),
             ToolStep(tool="run_experiment", args={"plan_id": LATEST, "dry_run": False}),
             ToolStep(tool="reflect", args={"persist": False}),
@@ -107,9 +122,7 @@ def map_research_action(
                     steps=[],
                     unmapped=True,
                     missing_tools=[name],
-                    suggestion=(
-                        f"Need capability/tool {name!r} for intent: {action.intent}"
-                    ),
+                    suggestion=(f"Need capability/tool {name!r} for intent: {action.intent}"),
                 )
             steps.append(ToolStep(tool=name, args=_default_args(name)))
         return ActionPlan(steps=steps)
@@ -140,14 +153,13 @@ def map_research_action(
 
 def _default_args(tool: str) -> dict[str, Any]:
     if tool == "analyze_competition":
-        # Evidence breadth is the input to everything downstream: artifacts ->
-        # concepts -> techniques -> beliefs/claims -> hypotheses. Running the
-        # default analyzer set (competition, dataset, experiments, papers,
-        # repositories) AND pulling Kaggle kernels/discussions is what gives a
-        # campaign something to iterate on. Previously this ran with no
-        # arguments at all, so `fetch_kaggle` defaulted to False and no kernel
-        # or discussion evidence was ever gathered.
-        return {"fetch_kaggle": True}
+        # Evidence is the input to everything downstream: artifacts -> concepts
+        # -> techniques -> beliefs/claims -> hypotheses. Pulling Kaggle kernels
+        # is what gives a campaign something to iterate on; this once ran with
+        # no arguments at all, so `fetch_kaggle` defaulted to False and no
+        # kernel evidence was ever gathered. See `ANALYZE_ARGS` for why the
+        # campaign takes a narrower slice than `research analyze` does.
+        return dict(ANALYZE_ARGS)
     if tool == "generate_plan":
         return {"baseline": True}
     if tool == "search_papers":

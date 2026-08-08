@@ -527,14 +527,44 @@ def test_generate_plan_keeps_baseline_when_no_hypothesis_available():
 
 
 def test_conductor_analyze_gathers_kaggle_domain_knowledge():
-    """No kernels/discussions => no concepts => no hypotheses => no iteration."""
+    """No kernels => no concepts => no hypotheses => no iteration."""
     from labpilot.research_engine.conductor.actions import _default_args
 
     args = _default_args("analyze_competition")
     assert args["fetch_kaggle"] is True
-    # No analyzer is excluded: papers and repositories feed techniques and
-    # beliefs just as kernels do.
-    assert "exclude" not in args
+
+
+def test_a_campaign_buys_the_cheap_slice_of_the_evidence():
+    """A campaign runs this every few steps, so it takes the highest-yield
+    source and skips the rest.
+
+    The paper analyzer searches 40 and LLM-extracts 15; on rogii 2026-08-09 it
+    held a single step for over sixteen minutes without finishing. Kernels
+    sorted by score are the evidence that actually ran against this dataset.
+    """
+    from labpilot.research_engine.conductor.actions import _default_args
+
+    args = _default_args("analyze_competition")
+    assert args["kaggle_fetch_plan"] == "best_score"
+    assert args["exclude"] == ["papers"]
+
+
+def test_the_campaign_and_the_template_ask_for_the_same_thing():
+    """Two call sites, one budget — they drifted apart once already."""
+    from labpilot.research_engine.conductor.actions import (
+        _TEMPLATES,
+        _default_args,
+    )
+
+    template_args = [
+        step.args
+        for _keywords, steps in _TEMPLATES
+        for step in steps
+        if step.tool == "analyze_competition"
+    ]
+    assert template_args
+    for args in template_args:
+        assert args == _default_args("analyze_competition")
 
 
 # --- precondition-aware tool selection ---------------------------------------
@@ -683,7 +713,14 @@ def test_a_full_pool_with_fresh_evidence_blocks_re_gathering(monkeypatch):
 def test_an_empty_pool_reopens_evidence_gathering(monkeypatch):
     tools = _available_with_backlog(monkeypatch, backlog=0)
     assert "analyze_competition" in tools
-    assert "search_papers" in tools
+
+
+def test_search_papers_is_never_offered_to_a_campaign(monkeypatch):
+    """It is forced `offline=True` on every conductor path and the policy only
+    picks tool names, so it can write `count: 0` and nothing else. An empty
+    pool is exactly when a wasted step hurts most."""
+    assert "search_papers" not in _available_with_backlog(monkeypatch, backlog=0)
+    assert "search_papers" not in _available_with_backlog(monkeypatch, backlog=10)
 
 
 def test_backlog_below_target_still_gathers(monkeypatch):

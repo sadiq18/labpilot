@@ -7,7 +7,10 @@ from typing import Any
 
 from labpilot.research_engine.artifacts.analysis import write_analysis
 from labpilot.research_engine.intelligence.context import build_context
-from labpilot.research_engine.intelligence.orchestrator import AnalyzeOrchestrator
+from labpilot.research_engine.intelligence.orchestrator import (
+    DEFAULT_KAGGLE_FETCH_PLAN,
+    AnalyzeOrchestrator,
+)
 from labpilot.research_engine.intelligence.registry import build_default_registry
 from labpilot.research_engine.shared.verify_artifact import (
     VerifyPrompt,
@@ -66,6 +69,7 @@ def analyze_competition(
     hypothesize: bool = True,
     brief: bool = True,
     fetch_kaggle: bool = False,
+    kaggle_fetch_plan: str = DEFAULT_KAGGLE_FETCH_PLAN,
     refresh: bool = False,
     url: str | None = None,
     verify_auto: bool = True,
@@ -95,6 +99,7 @@ def analyze_competition(
         hypothesize=hypothesize,
         brief=brief,
         fetch_kaggle=fetch_kaggle,
+        kaggle_fetch_plan=kaggle_fetch_plan,
         on_progress=on_progress,
     )
     report = orchestrator.analyze_without_side_effects(

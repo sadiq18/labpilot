@@ -520,7 +520,15 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
         # Re-analysing with work already queued is the single most expensive
         # way for a campaign to make no progress.
         "analyze_competition": gather_ok,
-        "search_papers": gather_ok,
+        # Never offered. Every conductor path forces `offline=True` — the
+        # template, `_default_args`, and the CLI's own registry wrapper all do —
+        # and the policy only ever chooses tool *names*, so a campaign's
+        # `search_papers` writes `count: 0` and returns. It cannot gather
+        # evidence, only spend a step. Literature is reached through
+        # `analyze_competition`, where it is a config choice rather than a
+        # separate step; on rogii 2026-08-09 this took step 1 of 8 and produced
+        # an empty hit list.
+        "search_papers": False,
         # Same brake one level down: queuing another plan while one is still
         # unrun adds no information and starves the thing that does.
         "generate_plan": not has_unrun_plan(workspace),
