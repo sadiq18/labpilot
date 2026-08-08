@@ -138,3 +138,62 @@ def test_the_filter_reports_rather_than_swallows_an_unexpected_shape(caplog):
 
     with caplog.at_level(logging.WARNING):
         assert _is_stale(_Broken(), ()) is False
+
+
+# --- a retired idea must retire the work queued against it -------------------
+
+
+def test_a_plan_testing_a_retired_hypothesis_is_not_selectable():
+    """The campaign selects *plans*, not hypotheses, and the two retire
+    independently. Measured on rogii 2026-08-09: redundancy correctly rejected
+    `H-051`, and the very next step selected `P-021` — the plan carrying it,
+    still `in_progress` and therefore still runnable. Retiring the idea has to
+    retire the work, or the loop continues one level up.
+    """
+    from labpilot.research_engine.intelligence.hypothesis.viability import plan_is_selectable
+
+    class _Plan:
+        hypothesis_id = "H-051"
+
+    assert plan_is_selectable(_Plan(), {"H-051"}) is False
+
+
+def test_a_plan_for_a_live_hypothesis_is_selectable():
+    from labpilot.research_engine.intelligence.hypothesis.viability import plan_is_selectable
+
+    class _Plan:
+        hypothesis_id = "H-052"
+
+    assert plan_is_selectable(_Plan(), {"H-051"}) is True
+
+
+def test_a_baseline_plan_is_always_selectable():
+    """No hypothesis means no retired idea behind it."""
+    from labpilot.research_engine.intelligence.hypothesis.viability import plan_is_selectable
+
+    class _Baseline:
+        hypothesis_id = None
+
+    assert plan_is_selectable(_Baseline(), {"H-051"}) is True
+
+
+def test_retired_ids_come_from_rejected_status(tmp_path):
+    from labpilot.research_engine.intelligence.hypothesis.viability import (
+        retired_hypothesis_ids,
+    )
+
+    store = _store(tmp_path)
+    ids = _propose(store, 3)
+    store.update_status(ids[0], HypothesisStatus.REJECTED)
+
+    assert retired_hypothesis_ids(tmp_path / "knowledge", _COMP) == {ids[0]}
+
+
+def test_an_unreadable_store_retires_nothing(tmp_path):
+    """Failing open: a store we cannot read must not silently disable every
+    plan in the workspace."""
+    from labpilot.research_engine.intelligence.hypothesis.viability import (
+        retired_hypothesis_ids,
+    )
+
+    assert retired_hypothesis_ids(tmp_path / "nowhere", _COMP) == set()

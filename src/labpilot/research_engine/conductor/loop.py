@@ -149,7 +149,19 @@ def _latest_plan_id(workspace: Workspace) -> str | None:
         artifacts.close()
     if not plans:
         return None
-    runnable = sorted(p.id for p in plans if is_runnable_plan_status(p.status))
+    # A plan testing a retired hypothesis is not work worth dispatching. The
+    # campaign selects *plans*, and retiring the idea behind one leaves the plan
+    # runnable — measured 2026-08-09, `H-051` was correctly rejected and the
+    # very next step selected `P-021`, which carries it.
+    from labpilot.research_engine.intelligence.hypothesis.viability import (
+        plan_is_selectable,
+        retired_hypothesis_ids,
+    )
+
+    retired = retired_hypothesis_ids(workspace.knowledge_dir, workspace.competition)
+    runnable = sorted(
+        p.id for p in plans if is_runnable_plan_status(p.status) and plan_is_selectable(p, retired)
+    )
     return runnable[-1] if runnable else None
 
 
@@ -331,9 +343,7 @@ def _run_until_stop_inner(
         # Beliefs are recomputed from the repaired cards, not stepped again.
         # Repairing a card does not retract the belief step it already caused,
         # so without this the loop plans against the pre-repair compass.
-        rebuilt = rederive_beliefs_from_cards(
-            workspace.knowledge_dir, workspace.competition
-        )
+        rebuilt = rederive_beliefs_from_cards(workspace.knowledge_dir, workspace.competition)
         if rebuilt:
             _progress(f"Re-derived {len(rebuilt)} belief(s) from repaired evidence")
 
@@ -352,28 +362,20 @@ def _run_until_stop_inner(
             workspace.root, workspace.knowledge_dir, workspace.competition
         )
         if relearned:
-            _progress(
-                f"Rebuilt {len(relearned)} skill overlay(s) from repaired evidence"
-            )
+            _progress(f"Rebuilt {len(relearned)} skill overlay(s) from repaired evidence")
         leaking = record_references_in_overlays(workspace.root)
         if leaking:
             # Not repaired here: the write-path guard in `outcome.py` owns this,
             # and a hit means a write site it does not cover.
-            logger.warning(
-                "record reference still present in overlay(s): %s", ", ".join(leaking)
-            )
+            logger.warning("record reference still present in overlay(s): %s", ", ".join(leaking))
 
         from labpilot.research_engine.execution.technique.vocabulary import (
             recompute_technique_status,
         )
 
-        status_changes = recompute_technique_status(
-            workspace.knowledge_dir, workspace.competition
-        )
+        status_changes = recompute_technique_status(workspace.knowledge_dir, workspace.competition)
         if status_changes:
-            _progress(
-                f"Recomputed status for {len(status_changes)} technique(s) from evidence"
-            )
+            _progress(f"Recomputed status for {len(status_changes)} technique(s) from evidence")
 
         contested = revalidate_outcome_claims(
             knowledge_dir=workspace.knowledge_dir, competition=workspace.competition
@@ -405,9 +407,7 @@ def _run_until_stop_inner(
             # campaign that could not run a single experiment in the same state
             # as the campaign that met its target, which is the distinction the
             # breaker exists to draw.
-            store.update_session_status(
-                session_id, "failed" if stop == "failing" else "completed"
-            )
+            store.update_session_status(session_id, "failed" if stop == "failing" else "completed")
             if stop != "metric_target":
                 store.increment_metric(session_id, "unmet_goal")
             rationale = f"stop:{stop}"
@@ -448,9 +448,7 @@ def _run_until_stop_inner(
 
         if campaign_mode:
             completed = [
-                t.tool_name
-                for t in store.list_tasks(session_id)
-                if t.status == "completed"
+                t.tool_name for t in store.list_tasks(session_id) if t.status == "completed"
             ]
             if prefer_offline:
                 research = offline_next_research_action(completed, allowlist)
@@ -510,8 +508,7 @@ def _run_until_stop_inner(
                     record_suggestion(
                         store,
                         session_id,
-                        "Policy stopped early with the objective unmet: "
-                        f"{research.rationale}",
+                        f"Policy stopped early with the objective unmet: {research.rationale}",
                         context={"step": step},
                     )
                     # Name the tool explicitly. Routing this by intent text let
@@ -618,9 +615,7 @@ def _run_until_stop_inner(
                 if approval is not None:
                     record.approval = approval
                     if approval.decision == "reject":
-                        store.update_task_status(
-                            task.id, "cancelled", error="operator rejected"
-                        )
+                        store.update_task_status(task.id, "cancelled", error="operator rejected")
                         store.increment_metric(session_id, "tasks_blocked")
                         store.append_decision(record)
                         decisions.append(record)

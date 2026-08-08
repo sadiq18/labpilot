@@ -625,8 +625,30 @@ def has_unrun_plan(workspace: Workspace) -> bool:
 
 
 def has_runnable_plan(workspace: Workspace) -> bool:
-    """True when a plan can actually be dispatched to the Engineer right now."""
-    return any(is_runnable_plan_status(s) for s in _plan_statuses(workspace))
+    """True when a plan can actually be dispatched to the Engineer right now.
+
+    Excludes plans whose hypothesis has been retired. Otherwise `run_plan` and
+    `run_experiment` stay in the allowlist to target work already settled, and
+    the campaign keeps choosing them — which is what happened on rogii after
+    `H-051` was correctly rejected.
+    """
+    from labpilot.research_engine.artifacts.plan import PlanArtifacts
+    from labpilot.research_engine.intelligence.hypothesis.viability import (
+        plan_is_selectable,
+        retired_hypothesis_ids,
+    )
+
+    retired = retired_hypothesis_ids(workspace.knowledge_dir, workspace.competition)
+    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    try:
+        return any(
+            is_runnable_plan_status(p.status) and plan_is_selectable(p, retired)
+            for p in artifacts.list()
+        )
+    except Exception:  # noqa: BLE001 — absent store means nothing runnable
+        return False
+    finally:
+        artifacts.close()
 
 
 def untested_hypothesis_count(workspace: Workspace) -> int:

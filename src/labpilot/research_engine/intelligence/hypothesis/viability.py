@@ -74,6 +74,37 @@ def viable_hypothesis_count(knowledge_dir: Path, competition: str) -> int:
     return sum(1 for hypothesis in proposed if not _is_stale(hypothesis, selections))
 
 
+def retired_hypothesis_ids(knowledge_dir: Path, competition: str) -> set[str]:
+    """Hypotheses settled as `rejected` — nothing further to learn from them.
+
+    Needed because the campaign selects **plans**, not hypotheses, and the two
+    retire independently. Measured on rogii 2026-08-09: redundancy detection
+    correctly rejected `H-051`, and the very next step selected `P-021` again —
+    the plan carrying it, still `in_progress` and therefore still runnable.
+
+    Retiring the idea has to retire the work queued against it, or the loop the
+    retirement exists to break simply continues one level up.
+    """
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+    from labpilot.research_engine.shared.experiments.models import HypothesisStatus
+
+    try:
+        store = HypothesisStore(Path(knowledge_dir), competition)
+        return {h.id for h in store.list(status=HypothesisStatus.REJECTED)}
+    except Exception:  # noqa: BLE001 — unreadable store retires nothing
+        return set()
+
+
+def plan_is_selectable(plan: object, retired: set[str]) -> bool:
+    """False when this plan tests an idea already retired.
+
+    A plan with no hypothesis — a baseline — is always selectable: there is no
+    retired idea behind it.
+    """
+    hypothesis_id = str(getattr(plan, "hypothesis_id", "") or "")
+    return not hypothesis_id or hypothesis_id not in retired
+
+
 def _selection_times(knowledge_dir: Path, competition: str) -> tuple:
     """When the selector chose *some* hypothesis, oldest first.
 
