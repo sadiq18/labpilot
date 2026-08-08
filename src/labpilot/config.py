@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -149,9 +149,25 @@ class ExperimentsConfig(BaseModel):
     ranking: RankingConfig = Field(default_factory=RankingConfig)
 
 
+class CodegenConfig(BaseModel):
+    """How training code is produced.
+
+    ``whole_file`` regenerates the script; ``delta`` edits the parent through
+    aider. Default is ``whole_file`` because M19 §10 requires both paths to
+    coexist while the failure rate is measured — flipping the default is step 3,
+    and it needs a number rather than a preference.
+
+    ``delta`` degrades to ``whole_file`` rather than failing when there is no
+    parent to edit or no gateway to route through.
+    """
+
+    strategy: Literal["whole_file", "delta"] = "whole_file"
+
+
 class AppConfig(BaseModel):
     runs_dir: Path = Path("runs")
     knowledge_dir: Path = Path("knowledge")
+    codegen: CodegenConfig = Field(default_factory=CodegenConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     profiler: ProfilerConfig = Field(default_factory=ProfilerConfig)
