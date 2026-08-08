@@ -78,7 +78,7 @@ provenance.
 |---|---|---|
 | 0 | fitroute OpenAI-compatible proxy | **shipped** (PR #110) |
 | 1a | `CodeAgent` seam + hypothesis-consistency checks | **shipped** (PR #111) |
-| 1b | wire the checks into the whole-file path, observe-only | **partly shipped** — confinement only; see below |
+| 1b | wire the checks into the whole-file path, observe-only | **shipped** — all four checks, observe-only |
 | 1c | `AiderAgent` + copy/diff/propose + per-execution provenance | not started |
 | 2 | opt-in via config; measure the failure rate | not started |
 | 3 | flip the default when the rate justifies it | not started |
@@ -97,12 +97,15 @@ hypothesis ids, category names, two techniques glued together, and once the
 bare word `the`. The most recent campaign is 5 unusable in 9. Nothing maps a
 technique name to a code identifier, and `TechniqueSpec` has no field for one.
 
-So 1b shipped the half that needs no vocabulary — `touched_functions` and the
-wide-delta flag, now recorded on every evidence card — which is the check that
-catches *two changes, one attribution*. Preservation, addition and combination
-stay dark until a claim can be sourced honestly; the promising route is having
-codegen declare the symbols it kept, added and combined, and verifying the code
-against that.
+The fix was to stop trying to derive the claim and ask the author for it.
+`CodeProposal` now carries `kept` / `added` / `combined` as **code
+identifiers**, named by the agent that wrote the file, so all four checks run
+with nothing to maintain. Every evidence card records the verdict, the
+violations, the wide-delta flag and the claim itself.
+
+Self-reported, so a consistently lying model is not caught — but carelessness
+is the failure that happens, and the gap between what the author says it did
+and what the file does is exactly what makes attribution false.
 
 ## Exit criteria
 

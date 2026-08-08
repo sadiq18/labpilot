@@ -634,13 +634,22 @@ default-off with a number attached rather than a guess.
    not relative** — a 30-function file would flag at 20% changed. Revisit when a
    second competition provides a second data point.
 
-   **Still open: where do `keep`/`add`/`combine` come from?** The promising
-   answer is that codegen *declares its own claim* — the agent names the symbols
-   it kept, added and combined, and the checks verify the code against that
-   declaration. It cannot catch a model that lies consistently, but it catches
-   the actual failure (code that contradicts its author's stated intent) and it
-   needs no vocabulary at all. Deferred to its own step rather than guessed at
-   here.
+   **Resolved: codegen declares its own claim.** `CodeProposal` gained `kept` /
+   `added` / `combined` — code identifiers named by the agent that wrote the
+   file, so no technique→symbol map is needed and nothing has to be maintained.
+   All four checks now run on the whole-file path, observe-only, and the
+   declaration is recorded as `delta_claim` so a reader can audit it against the
+   hypothesis rather than trusting a bare verdict.
+
+   The limit, stated plainly: this is **self-reported**, so a model that lies
+   consistently is not caught. The failure that actually occurs is carelessness
+   — the declaration is *intent*, the file is *execution*, and the gap between
+   them is what makes a card read "ensembling improved MSE" for a run that
+   substituted.
+
+   `null` and bare strings coerce to lists. A `ValidationError` on this field
+   would be read by the retry path as a malformed response and re-asked, costing
+   a step from a 30-step campaign over optional metadata.
 
 3. **1c — `AiderAgent` + copy/diff/propose, pointed at the proxy**, with
    per-execution code provenance (§6).
