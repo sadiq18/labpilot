@@ -124,6 +124,48 @@ def imported_modules(tree: ast.Module) -> set[str]:
     return found
 
 
+#: Named aggregations. Necessary but nowhere near sufficient — see below.
+_AGGREGATORS = frozenset(
+    {"mean", "average", "nanmean", "median", "sum", "vstack", "stack", "concatenate"}
+)
+
+
+def _has_arithmetic_blend(tree: ast.Module) -> bool:
+    """Is anything combined by arithmetic rather than by a named aggregator?
+
+    Checking only for `mean`/`stack` rejected four of five correct ensembles.
+    The miss that matters is the **weighted** blend — ``0.6 * a.predict(X) +
+    0.4 * b.predict(X)`` — which is the standard technique and never calls an
+    aggregator. Each false violation costs a re-ask, and steps are the scarce
+    resource in a campaign, so a check that fires on correct code is expensive
+    in exactly the case it should be silent.
+
+    A blend is an arithmetic expression drawing on **two or more distinct
+    non-parameter names**. Parameters are excluded because ``m.predict(X) * 2``
+    references two names (``m`` and ``X``) while combining nothing — counting
+    ``X`` would let a scaled single model pass as an ensemble, which is the
+    false negative this whole check exists to prevent.
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        args = node.args
+        params = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)} | {
+            a.arg for a in (args.vararg, args.kwarg) if a
+        }
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.BinOp):
+                continue
+            names = {
+                sub.id
+                for sub in ast.walk(inner)
+                if isinstance(sub, ast.Name) and sub.id not in params
+            }
+            if len(names) >= 2:
+                return True
+    return False
+
+
 def _function_bodies(tree: ast.Module) -> dict[str, str]:
     return {
         node.name: ast.dump(node)
@@ -184,11 +226,11 @@ def check_combination(child: ast.Module, combine: list[str]) -> list[str]:
     if len(combine) < 2:
         return []
     problems = check_addition(child, combine)
-    aggregators = {"mean", "average", "nanmean", "sum", "vstack", "stack", "concatenate"}
-    if not (called_names(child) & aggregators):
+    if not (called_names(child) & _AGGREGATORS or _has_arithmetic_blend(child)):
         problems.append(
             f"claimed to combine {combine}, but the result contains no aggregation "
-            "(mean/average/sum/stack) — the components are computed and discarded"
+            "(no mean/stack call and no arithmetic blend) — the components are "
+            "computed and discarded"
         )
     return problems
 

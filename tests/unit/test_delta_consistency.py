@@ -147,6 +147,53 @@ def test_import_aliases_are_collected(source, expected):
     assert expected <= imported_modules(ast.parse(source))
 
 
+# --- how an ensemble is spelled ---------------------------------------------
+
+_TWO_MODELS = """
+import lightgbm as lgb
+import catboost as cb
+import numpy as np
+
+
+def train(X, y):
+    a = lgb.LGBMRegressor()
+    a.fit(X, y)
+    b = cb.CatBoostRegressor()
+    b.fit(X, y)
+"""
+
+
+@pytest.mark.parametrize(
+    ("label", "ending", "combined"),
+    [
+        ("named aggregator", "    return np.mean([a.predict(X), b.predict(X)], axis=0)\n", True),
+        ("plain average", "    return (a.predict(X) + b.predict(X)) / 2\n", True),
+        ("weighted blend", "    return 0.6 * a.predict(X) + 0.4 * b.predict(X)\n", True),
+        ("scalar times sum", "    return 0.5 * (a.predict(X) + b.predict(X))\n", True),
+        (
+            "via locals",
+            "    pa = a.predict(X)\n    pb = b.predict(X)\n    return (pa + pb) / 2\n",
+            True,
+        ),
+        ("second model discarded", "    return a.predict(X)\n", False),
+        ("one model, scaled", "    return a.predict(X) * 2\n", False),
+    ],
+)
+def test_every_spelling_of_an_ensemble_is_recognised(label, ending, combined):
+    """Checking only for `mean`/`stack` rejected four of five correct forms.
+
+    The weighted blend is the one that matters: it is the standard technique
+    and never calls an aggregator. Each false violation costs a re-ask, and
+    steps are the scarce resource in a campaign.
+
+    The last case is the guard against over-correcting — `a.predict(X) * 2`
+    is arithmetic over two names (`a` and `X`) but combines nothing, so
+    counting parameters would let a scaled single model pass as an ensemble.
+    """
+    report = check_delta_consistency(PARENT, _TWO_MODELS + ending, **CLAIM)
+    assert report.ok is combined, report.violations
+
+
 # --- confinement flags, it does not block -----------------------------------
 
 
