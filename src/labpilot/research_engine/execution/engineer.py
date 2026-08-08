@@ -100,9 +100,7 @@ class ResearchEngineer:
             # metrics (false-success training marked done).
             self._reset_tasks_for_retry(plan)
             if plan.status != PlanStatus.IN_PROGRESS:
-                self._plan_store.update_plan_status(
-                    execution.plan_id, PlanStatus.IN_PROGRESS
-                )
+                self._plan_store.update_plan_status(execution.plan_id, PlanStatus.IN_PROGRESS)
         return self._run_execution(execution_id)
 
     def _run_execution(self, execution_id: str) -> ResearchExecution:
@@ -162,9 +160,7 @@ class ResearchEngineer:
                 llm_client=self.constraints.get("llm_client"),
             )
         except Exception:
-            logger.exception(
-                "Failed to record execution learning for %s", execution_id
-            )
+            logger.exception("Failed to record execution learning for %s", execution_id)
         return result
 
     def _run_task(
@@ -231,9 +227,7 @@ class ResearchEngineer:
             decision = decide_recovery(task, evidence, attempt=attempt)
             if decision.action == RecoveryAction.RETRY:
                 attempt += 1
-                logger.info(
-                    "Retrying task %s (%s)", task.id, decision.reason
-                )
+                logger.info("Retrying task %s (%s)", task.id, decision.reason)
                 continue
             if decision.action == RecoveryAction.SKIP:
                 self._plan_store.update_task_status(
@@ -250,9 +244,7 @@ class ResearchEngineer:
                 error=decision.reason,
                 metadata_patch={"attempt": attempt},
             )
-            raise EngineerError(
-                f"task {task.id} failed: {decision.reason}"
-            )
+            raise EngineerError(f"task {task.id} failed: {decision.reason}")
 
     def _load_runnable_plan(self, plan_id: str) -> ResearchPlan:
         plan = self._plan_store.get_plan(plan_id)
@@ -268,14 +260,94 @@ class ResearchEngineer:
             assert plan is not None
             logger.info("Reopened abandoned plan %s for retry", plan_id)
         if plan.status not in {PlanStatus.READY, PlanStatus.IN_PROGRESS}:
-            raise EngineerError(
-                f"plan {plan_id} status={plan.status}; need ready or in_progress"
-            )
+            raise EngineerError(f"plan {plan_id} status={plan.status}; need ready or in_progress")
         validate_plan(plan)
         return plan
 
+    #: Tasks whose whole purpose is to prove the generated code runs. When one
+    #: of these fails, the code is the thing that is wrong.
+    _CODE_VALIDATION_TASKS = frozenset({TaskType.RUN_SMOKE_TEST, TaskType.RUN_UNIT_TEST})
+
+    def _train_script_is_unrunnable(self) -> bool:
+        """True when the script we are about to re-run cannot possibly work.
+
+        Asking "which task failed?" is not enough, because the task that
+        notices is not always the one scoped as a code check. Measured on rogii
+        2026-08-08: codegen returned a 624-byte `train.py` — a docstring and
+        half a `# requires-python` line — and **`run_smoke_test` passed it**.
+        A docstring followed by comments executes fine and exits 0, so the gate
+        whose whole purpose is "does this run" saw success. Only `run_training`
+        failed, which is deliberately excluded from the code-suspect set
+        because training also fails for reasons code cannot fix.
+
+        So this asks about the artifact instead of the task: if the file on
+        disk fails the same checks `apply_proposal` enforces, no retry of it
+        can succeed and `write_code` has to run again. Reuses those validators
+        rather than restating them — two copies of this rule would be the
+        third instance of a guard whose input drifted from its twin.
+        """
+        from labpilot.research_engine.execution.capabilities.code_engineering.apply import (
+            TRAIN_RELPATH,
+            ApplyError,
+            _check_dependency_block,
+            _check_not_truncated,
+            strip_stdlib_dependencies,
+        )
+
+        root = competition_workspace_path(self.knowledge_dir, self.competition)
+        script = Path(root) / TRAIN_RELPATH
+        try:
+            content = script.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            # A script we cannot read is a script that cannot run, and this
+            # method's whole question is "can the thing we are about to re-run
+            # work?". Returning False here answered "yes" for a *missing*
+            # `train.py`: `write_code` stayed `done`, the retry skipped it, and
+            # the plan re-ran a file that was not there — the same
+            # rebuild-never-happens loop this method was added to break, just
+            # reached by a different door.
+            logger.info("Re-queuing write_code: cannot read %s (%s)", TRAIN_RELPATH, exc)
+            return True
+        try:
+            _check_dependency_block(TRAIN_RELPATH, content)
+            _check_not_truncated(TRAIN_RELPATH, content)
+        except ApplyError as exc:
+            logger.info("Re-queuing write_code: %s", exc)
+            return True
+        # A stdlib name makes uv reject the *whole* dependency set, so a file
+        # carrying one cannot run. Regenerating is the way out rather than
+        # editing the file here: `apply_proposal` is the only writer, and it
+        # strips these on the way in.
+        _, stdlib_deps = strip_stdlib_dependencies(content)
+        if stdlib_deps:
+            logger.info(
+                "Re-queuing write_code: %s declares stdlib module(s) as "
+                "dependencies (%s), which makes uv reject every dependency",
+                TRAIN_RELPATH,
+                ", ".join(stdlib_deps),
+            )
+            return True
+        return False
+
     def _reset_tasks_for_retry(self, plan: ResearchPlan) -> None:
-        """Reset failed tasks and the train/eval spine so retries re-produce artifacts."""
+        """Reset failed tasks and the train/eval spine so retries re-produce artifacts.
+
+        `WRITE_CODE` is reset too when a code-validation task failed, and that
+        case is why this method exists in its current form. The spine below
+        deliberately covers only *run* artifacts, so a retry resumed after
+        `write_code` and re-executed the identical file — which cannot pass a
+        gate it has already failed. Measured on rogii 2026-08-08: `train.py`
+        imported `catboost` with no dependency declaration, the smoke test
+        failed, and 16 consecutive `run_experiment` dispatches re-ran that same
+        file. Zero `write_code`. The fix for the underlying defect had shipped
+        eight days earlier and could not be reached, because the only step that
+        would have applied it was marked `done`.
+
+        Scoped to smoke/unit failures on purpose. `run_training` can fail for
+        reasons the code cannot fix — a missing dataset, an OOM — and
+        regenerating a correct file in response would discard working code and
+        spend a codegen call to do it.
+        """
         spine = {
             TaskType.RUN_SMOKE_TEST,
             TaskType.RUN_TRAINING,
@@ -289,6 +361,16 @@ class ResearchEngineer:
         failed_ids = {t.id for t in plan.tasks if t.status == TaskStatus.FAILED}
         if not failed_ids:
             return
+
+        code_is_suspect = (
+            any(
+                t.status == TaskStatus.FAILED and t.type in self._CODE_VALIDATION_TASKS
+                for t in plan.tasks
+            )
+            or self._train_script_is_unrunnable()
+        )
+        if code_is_suspect:
+            spine = spine | {TaskType.WRITE_CODE}
 
         # Transitive dependencies of every failed task (ancestors in the DAG).
         by_id = {t.id: t for t in plan.tasks}
@@ -304,6 +386,13 @@ class ResearchEngineer:
                     ancestors.add(dep)
                     stack.append(dep)
 
+        # Why the code is being rebuilt, so codegen is not asked to try again
+        # from the inputs that produced the broken file. Regenerating blind
+        # reproduces the same mistake and burns a step doing it; naming the
+        # failure is the mechanism that took prose-reply failures from
+        # three-in-eight to 30 of 30.
+        retry_reason = self._first_failure_reason(plan) if code_is_suspect else ""
+
         for task in plan.tasks:
             reset = task.id in failed_ids or (
                 task.id in ancestors
@@ -312,12 +401,36 @@ class ResearchEngineer:
             )
             if not reset:
                 continue
+            patch: dict[str, object] = {"retried_after_abandon": True}
+            if retry_reason and task.type == TaskType.WRITE_CODE:
+                patch["retry_reason"] = retry_reason
             self._plan_store.update_task_status(
                 task.id,
                 TaskStatus.PENDING,
-                metadata_patch={"retried_after_abandon": True},
+                metadata_patch=patch,
                 error="",
             )
+
+    @staticmethod
+    def _first_failure_reason(plan: ResearchPlan) -> str:
+        """The error text from the failed task closest to the code.
+
+        Prefers a code-validation failure over anything downstream: a smoke
+        test names what would not run, while `evaluate` failing three steps
+        later describes a consequence.
+        """
+        failed = [
+            t
+            for t in plan.tasks
+            if t.status == TaskStatus.FAILED and str(t.metadata.get("error") or "").strip()
+        ]
+        if not failed:
+            return ""
+        code_first = sorted(
+            failed,
+            key=lambda t: (t.type not in ResearchEngineer._CODE_VALIDATION_TASKS, t.order),
+        )
+        return str(code_first[0].metadata.get("error") or "").strip()
 
 
 def default_stub_registry() -> CapabilityRegistry:

@@ -48,6 +48,14 @@ which is what made it valuable. A Titanic-shaped competition would have passed.
 | 17 | Per-workspace dataset cache | New workspace re-downloaded 1.2 GB it already had | `LABPILOT_KAGGLE_CACHE_DIR` |
 | 18 | LLM health undiagnosable | `llm_unavailable` in a profile with no way to tell why | `doctor` checks reachability + model pulled |
 
+### Correction to #7, 2026-08-08
+
+**The fix closed half the case.** `resolve_step_args` swaps `baseline` for a
+hypothesis only when one is proposed; with none proposed it leaves
+`baseline=True` untouched and the idempotent re-run resumes. Found in PR #112
+review, six days after this log was written. Full analysis and options in
+[deferred/baseline-plan-step-burner.md](deferred/baseline-plan-step-burner.md).
+
 ## Open issues found but not fixed
 
 Recorded here because they were observed directly and would otherwise be lost.

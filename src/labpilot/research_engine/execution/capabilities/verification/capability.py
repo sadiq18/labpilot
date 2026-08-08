@@ -13,6 +13,40 @@ from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
+#: How much of a failure to keep. Same budget as before; the change is *which*
+#: end of the output it comes from.
+_EXCERPT_CHARS = 1500
+
+
+def failure_excerpt(stderr: str, stdout: str, *, limit: int = _EXCERPT_CHARS) -> str:
+    """The part of a failed run worth reading: the end, minus progress bars.
+
+    Taking `[:limit]` kept the *head*, and a training script's head is where
+    tqdm lives while its traceback is at the very bottom. Measured on rogii
+    2026-08-08: E-174's stored error was 1523 characters of
+    ``Loading train: 96%|█████████▋|`` and contained no diagnosis at all — the
+    run failed for a reason nothing recorded.
+
+    tqdm redraws one line by emitting ``\\r``, so each carriage return is a
+    frame of the same bar. Keeping only the text after the last ``\\r`` collapses
+    a bar to its final state instead of preserving every frame, which is what
+    filled the budget.
+    """
+    raw = stderr.strip() or stdout.strip()
+    if not raw:
+        return ""
+    # Split on newlines only. `str.splitlines()` also breaks on `\r`, which
+    # would hand every tqdm frame back as its own line and defeat the collapse
+    # entirely — the first version of this function did exactly that.
+    collapsed = "\n".join(line.rsplit("\r", 1)[-1].rstrip() for line in raw.split("\n"))
+    # Drop frames that survived collapsing but still say nothing.
+    kept = [line for line in collapsed.splitlines() if line.strip()]
+    text = "\n".join(kept)
+    if len(text) <= limit:
+        return text
+    # The tail, because a traceback names its cause on the last line.
+    return "…\n" + text[-limit:]
+
 
 class VerificationCapability(BaseCapability):
     name = "verification"
@@ -76,7 +110,7 @@ class VerificationCapability(BaseCapability):
             summary="unit tests passed" if ok else "unit tests failed",
             checks=["pytest"],
             paths=[str(log_path)],
-            error=None if ok else (proc.stderr or proc.stdout)[:1500],
+            error=None if ok else failure_excerpt(proc.stderr or "", proc.stdout or ""),
             metadata={"returncode": proc.returncode, "duration_s": duration},
         )
 
@@ -98,7 +132,9 @@ class VerificationCapability(BaseCapability):
             )
 
         # Always syntax-check.
-        from labpilot.research_engine.execution.capabilities.code_engineering.offline_codegen.renderer import validate_python_syntax
+        from labpilot.research_engine.execution.capabilities.code_engineering.offline_codegen.renderer import (
+            validate_python_syntax,
+        )
 
         syntax_errors = validate_python_syntax(train)
         if syntax_errors:
@@ -128,9 +164,24 @@ class VerificationCapability(BaseCapability):
                 metadata={"mode": "syntax_only"},
             )
 
+        # Run it the way training will. This gate calls itself
+        # "production-shaped", and invoking `python train.py` directly was not:
+        # `training_command` uses `uv run --script` whenever the file declares
+        # dependencies, so the two paths differ exactly where dependencies are
+        # concerned — which is the failure this gate exists to catch first.
+        #
+        # Measured on rogii 2026-08-08: a `train.py` whose PEP 723 block was
+        # unterminated **passed smoke** (bare `python` ignores the block, and a
+        # docstring plus comments exits 0) and then failed training, where uv
+        # refused the whole script. The gate reported success for a file that
+        # could not run.
+        from labpilot.research_engine.execution.training.environment import (
+            training_command,
+        )
+
         started = time.monotonic()
         proc = subprocess.run(  # noqa: S603
-            [sys.executable, str(train)],
+            training_command(train, python=sys.executable),
             capture_output=True,
             text=True,
             check=False,
@@ -145,8 +196,7 @@ class VerificationCapability(BaseCapability):
         )
         duration = time.monotonic() - started
         log_path.write_text(
-            f"returncode={proc.returncode}\nduration_s={duration}\n"
-            f"{proc.stdout}\n{proc.stderr}\n",
+            f"returncode={proc.returncode}\nduration_s={duration}\n{proc.stdout}\n{proc.stderr}\n",
             encoding="utf-8",
         )
         ok = proc.returncode == 0
@@ -164,6 +214,6 @@ class VerificationCapability(BaseCapability):
             summary="smoke gate passed" if ok else "smoke gate failed",
             checks=["smoke_gate"],
             paths=[str(log_path)],
-            error=None if ok else (proc.stderr or proc.stdout)[:1500],
+            error=None if ok else failure_excerpt(proc.stderr or "", proc.stdout or ""),
             metadata={"returncode": proc.returncode, "duration_s": duration},
         )

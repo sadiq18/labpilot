@@ -93,7 +93,7 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
 | **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **Complete 2026-08-07.** 2b ships default-off against a measured 3.2% fallback rate; a 30-step campaign completed with strict mode on. Phase 3 retired all 20 rule engines (PR #104) behind the `structured_output` precondition (PR #98) that makes removal safe |
 | **M18** | [Technique vocabulary earns its entries](13-technique-vocabulary.md) | Attention goes somewhere defensible | **shipped 2026-08-07** (PR #100 step 1, PR #101 step 2). Status derived from evidence; the junk (`the`, `Breath Focus practice`) no longer reaches the planner and `SWA` still does |
-| **M19** | [An experiment is a change to its parent](14-experiments-as-deltas.md) | Validation discipline is preserved, and violations are visible | **in progress — steps 0 and 1a shipped.** The `CodeAgent` seam and the hypothesis-consistency checks are merged but have no production caller; next is wiring them into the whole-file path observe-only, before the aider adapter |
+| **M19** | [An experiment is a change to its parent](14-experiments-as-deltas.md) | Validation discipline is preserved, and violations are visible | **in progress — steps 0, 1a and 1b shipped** (PRs #110, #111, #112). Every card now carries a consistency verdict, its violations, the wide-delta flag and the claim itself — self-reported by codegen as code identifiers, because rogii's 19 real plans proved `technique` cannot supply them. Two gaps before 1c: **§5's fifth check, validation-region flagging, was never built** (4 of 5 exist), and **no campaign has run with 1b**, so the false-positive rate the observe-only step exists to produce does not exist yet |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
 | **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
@@ -172,6 +172,21 @@ cost. When a plan's rationale seems excessive, they are why.
   (194.80 → 190.97). Also records five wiring defects of one shape, three
   guards that looked protective and were not, and three corrections to
   diagnoses stated too confidently.
+
+### Deferred — understood, not yet fixed
+
+[`deferred/`](deferred/) holds work found while driving this roadmap that was
+deliberately not fixed in the PR that found it, with the reason why. Each names
+its site, what it costs, and how to measure the fix — so picking one up does not
+start from scratch.
+
+| Item | Why deferred |
+|---|---|
+| [baseline-plan-step-burner.md](deferred/baseline-plan-step-burner.md) | **Live defect.** [#7](evidence-log.md) fixed only the case where a hypothesis exists; with none proposed the idempotent baseline re-runs and burns steps. The fix is campaign policy, not arg resolution |
+| [technique-vocabulary-cleanup.md](deferred/technique-vocabulary-cleanup.md) | M18's writers were guarded in PR #112; the rows earlier runs wrote remain. Cleaning them edits the user's workspace |
+
+This is not the [post-M6 backlog](../backlog/README.md), which catalogues
+deferred *features*. These are defects and repairs with a known cause.
 
 ---
 

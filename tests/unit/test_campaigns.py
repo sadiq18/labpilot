@@ -137,8 +137,11 @@ def test_loop_stops_on_submission_budget(tmp_path: Path) -> None:
         session = store.create_session(
             "win",
             metadata={
-                "budgets": {"max_submissions": 0},
-                "budget_state": {"submissions": 0},
+                # A *spent* budget, not a zero one. `max_submissions=0` means
+                # "never submit" and no longer stops a campaign that has not
+                # submitted — see test_no_submit_budget_still_runs.
+                "budgets": {"max_submissions": 1},
+                "budget_state": {"submissions": 1},
             },
         )
         decisions = run_until_stop(
@@ -419,12 +422,13 @@ def test_capstone_offline_campaign(tmp_path: Path) -> None:
         tools = {t.tool_name for t in store.list_tasks(session.id) if t.status == "completed"}
         assert "analyze_competition" in tools
 
-        # Budget stop path
+        # Budget stop path — a budget that has been spent. Zero now means
+        # "never submit" and lets the campaign keep running.
         persist_budgets(
             store,
             session.id,
-            BudgetConfig(max_submissions=0),
-            BudgetState(submissions=0),
+            BudgetConfig(max_submissions=1),
+            BudgetState(submissions=1),
         )
         store.update_session_status(session.id, "running")
         stops = run_until_stop(

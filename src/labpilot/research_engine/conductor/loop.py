@@ -15,11 +15,12 @@ from labpilot.research_engine.conductor.actions import (
     resolve_step_args,
 )
 from labpilot.research_engine.conductor.approvals import (
+    SUBMIT_TOOLS,
     ApprovalPrompt,
     OfflineFallbackPrompt,
     maybe_approve,
 )
-from labpilot.research_engine.conductor.budgets import evaluate_stops
+from labpilot.research_engine.conductor.budgets import evaluate_stops, submit_tools_allowed
 from labpilot.research_engine.conductor.checkpoint import (
     load_budget_pair,
     persist_budgets,
@@ -283,6 +284,32 @@ def _run_until_stop_inner(
         if rebuilt:
             _progress(f"Re-derived {len(rebuilt)} belief(s) from repaired evidence")
 
+        # Overlays reach the *model*, so a stale one costs more than a stale
+        # row. `upsert_skill_overlay` returns early on a known lesson id, so a
+        # lesson written from an inverted verdict is permanent until this runs.
+        # Measured 2026-08-08: every rogii overlay said `Avoid: SWA` — the only
+        # technique that ever improved the metric — long after its card was
+        # re-oriented to `accepted`.
+        from labpilot.research_engine.evidence.overlay_repair import (
+            record_references_in_overlays,
+            repair_skill_overlays,
+        )
+
+        relearned = repair_skill_overlays(
+            workspace.root, workspace.knowledge_dir, workspace.competition
+        )
+        if relearned:
+            _progress(
+                f"Rebuilt {len(relearned)} skill overlay(s) from repaired evidence"
+            )
+        leaking = record_references_in_overlays(workspace.root)
+        if leaking:
+            # Not repaired here: the write-path guard in `outcome.py` owns this,
+            # and a hit means a write site it does not cover.
+            logger.warning(
+                "record reference still present in overlay(s): %s", ", ".join(leaking)
+            )
+
         from labpilot.research_engine.execution.technique.vocabulary import (
             recompute_technique_status,
         )
@@ -313,6 +340,12 @@ def _run_until_stop_inner(
             break
 
         budget_cfg, budget_state = load_budget_pair(session)
+        if not submit_tools_allowed(budget_cfg):
+            # A campaign told never to submit must not be *offered* the tool.
+            # Relying on the approval gate would not hold: `--yes` maps every
+            # gated tool to `auto_approve`, so a non-interactive run has no
+            # brake between "selected submit_learn" and "uploaded to Kaggle".
+            allowlist -= SUBMIT_TOOLS
         stop = evaluate_stops(budget_cfg, budget_state)
         if stop != "none":
             store.update_session_status(session_id, "completed")
@@ -371,7 +404,12 @@ def _run_until_stop_inner(
                         suggested_tools=[next_tool.tool],
                     )
             # Re-read after policy/offline so same-step registration is visible.
+            # The submit carve-out has to be re-applied: this is the allowlist
+            # that reaches `map_research_action`, so a plain re-read would hand
+            # the tools back at exactly the point they get selected.
             allowlist = set(registry.names())
+            if not submit_tools_allowed(budget_cfg):
+                allowlist -= SUBMIT_TOOLS
             plan = map_research_action(research, allowlist)
             if research.stop and _objective_unmet(budget_cfg, budget_state):
                 # Goal persistence. The policy tends to call it done once it has

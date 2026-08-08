@@ -96,7 +96,15 @@ def update_competition_skill_overlays(
     reflection: dict[str, Any] | None = None,
     techniques: list[str] | None = None,
 ) -> None:
-    """Upsert per-run competition skill overlays (bounded / summarized on disk)."""
+    """Upsert per-run competition skill overlays (bounded / summarized on disk).
+
+    Techniques are filtered here for the reason `shared/labels.py` records: a
+    record reference is not a method name. This site writes into a **system
+    prompt**, not the knowledge store, so neither the write-guards on
+    `techniques.name` nor the four reader-side filters protect it — measured on
+    rogii, `.labpilot/skills/code_engineer.md` carried `Keep: hyp:H-010`, and
+    every agent read it on every run.
+    """
     try:
         from labpilot.research_engine.shared.skills import upsert_skill_overlay
     except Exception as exc:
@@ -105,15 +113,16 @@ def update_competition_skill_overlays(
 
     assessment = (reflection or {}).get("assessment") or {}
     lessons = (reflection or {}).get("lessons") or {}
+    named = [t for t in (techniques or []) if str(t).strip() and not is_record_reference(t)]
     keep: list[str] = []
     avoid: list[str] = []
     try_next: list[str] = []
     if summary.learning_gain and summary.learning_gain > 0:
-        keep.extend(techniques or [])
+        keep.extend(named)
         if summary.hypothesis_id:
             keep.append(f"parent stack from {summary.hypothesis_id}")
     if summary.learning_loss and summary.learning_loss > 0:
-        avoid.extend(techniques or [])
+        avoid.extend(named)
         avoid.append(f"regression on {summary.execution_id}")
     rec = str(assessment.get("recommendation") or "").strip()
     if rec:

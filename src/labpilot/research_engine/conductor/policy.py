@@ -167,11 +167,17 @@ def offline_next_action(
     done = set(observe.get("completed_tools") or [])
     # Honours reject-submit feedback: skip submit if last feedback rejected it.
     feedback = observe.get("operator_feedback") or []
+    # `.get` on both keys. The line above already used it for `decision`, so a
+    # row lacking `gated_tool` survived the filter and then raised `KeyError`
+    # from the subscript — a malformed feedback row taking the offline policy
+    # down with it. `build_observe_bundle` always writes both, but this reads
+    # whatever is in the store, including rows written before it did.
     rejected = {
-        f["gated_tool"]
+        f.get("gated_tool")
         for f in feedback
         if f.get("decision") == "reject"
     }
+    rejected.discard(None)
     for name in _DEFAULT_ORDER:
         if name not in allowlist:
             continue

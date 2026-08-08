@@ -1,6 +1,6 @@
 # M19 — An experiment is a change to its parent
 
-**Status:** step 0 and step 1a shipped · **Design:**
+**Status:** steps 0, 1a and 1b shipped · **Design:**
 [design/14-experiments-as-deltas.md](design/14-experiments-as-deltas.md) ·
 **Supersedes:** the Jinja template pack ·
 **Subsumes:** the technique registry, the `applied`/`candidate` split
@@ -78,7 +78,8 @@ provenance.
 |---|---|---|
 | 0 | fitroute OpenAI-compatible proxy | **shipped** (PR #110) |
 | 1a | `CodeAgent` seam + hypothesis-consistency checks | **shipped** (PR #111) |
-| 1b | wire the checks into the whole-file path, observe-only | **shipped** — all four checks, observe-only |
+| 1b | wire the checks into the whole-file path, observe-only | **shipped** (PR #112) — four of §5's five checks |
+| — | **validation-region flagging**, §5's fifth check | **not built** — see below |
 | 1c | `AiderAgent` + copy/diff/propose + per-execution provenance | not started |
 | 2 | opt-in via config; measure the failure rate | not started |
 | 3 | flip the default when the rate justifies it | not started |
@@ -106,6 +107,30 @@ violations, the wide-delta flag and the claim itself.
 Self-reported, so a consistently lying model is not caught — but carelessness
 is the failure that happens, and the gap between what the author says it did
 and what the file does is exactly what makes attribution false.
+
+**The fifth check was never built, and it is the one this milestone rests on.**
+§5 lists preservation, addition, combination, confinement and **validation
+region**; `consistency.py` implements the first four. Nothing detects a delta
+landing in `partition_suffix_holdout`, `_driver_columns` or the holdout
+construction — which is the mitigation §8 names for the only risk it calls *the
+one that would hurt*, and the property that justifies deltas at all.
+
+It does not depend on aider. Like confinement it needs no claim from the author,
+so the argument that put 1b before 1c applies to it unchanged: whole-file
+regeneration can silently drop the leakage discipline today, and a leaky score
+looks *better*, not worse.
+
+What stopped it is a design question, not effort. Defining the region as a list
+of function names is the curated-set-answering-an-open-world-question pattern
+this plan has already rejected four times — most recently as the technique→symbol
+map that killed 1b's original derivation. The region has to be derived from the
+parent or declared by the workspace, and that decision is unmade.
+
+**Also outstanding before step 2 means anything:** no campaign has run with 1b
+in place. Its whole purpose is a false-positive rate before a check can cost a
+step, and the checks have still only seen samples the author wrote — the same
+setup that produced both 1a bugs. The wide-delta threshold of 5 is calibrated on
+one 8-function file and stays a guess until a second competition.
 
 ## Exit criteria
 

@@ -53,6 +53,14 @@ return a FULL updated pipeline/train.py that overrides this file):
 ```
 {% endif %}
 
+{% if retry_reason %}
+The previous attempt at this file FAILED. Fix the cause before anything else —
+regenerating the same approach will fail the same way:
+```
+{{ retry_reason }}
+```
+{% endif %}
+
 Return a CodeProposal JSON with full file contents.
 {% if improve_on_prior and prior_train_py %}
 {% if combo_techniques %}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -458,8 +459,31 @@ def write_comparison_files(workspace_root: Path, card: EvidenceCard) -> None:
     arts.mkdir(parents=True, exist_ok=True)
     (arts / "comparison.json").write_text(text, encoding="utf-8")
     if card.id:
+        # A snapshot, not the card. `EvidenceCardStore` under
+        # `research/evidence/` is the source of record, and `repair_card_directions`
+        # re-orients cards *there* — this copy keeps whatever direction was
+        # believed when it was written. Nothing reads it back, so the staleness
+        # is harmless to the system and misleading to a human: on rogii it
+        # still showed EV-012 (the one real improvement) as `rejected` long
+        # after the store had been repaired to `accepted`. Stamped so the next
+        # reader is told rather than fooled.
+        snapshot = {
+            "_snapshot": {
+                "authoritative": False,
+                "source_of_record": (
+                    f"EvidenceCardStore — research/evidence/{card.id}.json"
+                ),
+                "generated_at": datetime.now(UTC).isoformat(),
+                "warning": (
+                    "Written once when this card was built and never updated. "
+                    "`decision` and `maximize` here predate any direction "
+                    "repair. Read the store copy instead."
+                ),
+            }
+        }
+        snapshot.update(json.loads(card.model_dump_json()))
         (arts / f"evidence_card_{card.id}.json").write_text(
-            card.model_dump_json(indent=2) + "\n", encoding="utf-8"
+            json.dumps(snapshot, indent=2) + "\n", encoding="utf-8"
         )
 
 
@@ -471,8 +495,6 @@ def metrics_as_experiment(
     runtime_seconds: float | None = None,
 ) -> Experiment:
     """Minimal Experiment view for comparator.compare."""
-    from datetime import UTC, datetime
-
     numeric = {
         k: float(v)
         for k, v in metrics.items()
