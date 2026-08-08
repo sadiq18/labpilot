@@ -1,6 +1,7 @@
 # M19 — An experiment is a change to its parent
 
-**Status:** steps 0, 1a and 1b shipped · **Design:**
+**Status:** steps 0, 1a, 1b and §6 provenance shipped — **1c unblocked** ·
+**Design:**
 [design/14-experiments-as-deltas.md](design/14-experiments-as-deltas.md) ·
 **Supersedes:** the Jinja template pack ·
 **Subsumes:** the technique registry, the `applied`/`candidate` split
@@ -80,7 +81,8 @@ provenance.
 | 1a | `CodeAgent` seam + hypothesis-consistency checks | **shipped** (PR #111) |
 | 1b | wire the checks into the whole-file path, observe-only | **shipped** (PR #112) — four of §5's five checks |
 | — | **validation-region flagging**, §5's fifth check | **not built** — see below |
-| 1c | `AiderAgent` + copy/diff/propose + per-execution provenance | not started |
+| — | per-execution code provenance (§6) | **shipped** (PR #113) — `runs/<execution_id>/` |
+| 1c | `AiderAgent` + copy/diff/propose + **campaign circuit breaker** | not started |
 | 2 | opt-in via config; measure the failure rate | not started |
 | 3 | flip the default when the rate justifies it | not started |
 | 4 | delete templates in that same change | not started |
@@ -126,11 +128,40 @@ this plan has already rejected four times — most recently as the technique→s
 map that killed 1b's original derivation. The region has to be derived from the
 parent or declared by the workspace, and that decision is unmade.
 
-**Also outstanding before step 2 means anything:** no campaign has run with 1b
-in place. Its whole purpose is a false-positive rate before a check can cost a
-step, and the checks have still only seen samples the author wrote — the same
-setup that produced both 1a bugs. The wide-delta threshold of 5 is calibrated on
-one 8-function file and stays a guess until a second competition.
+**Also outstanding before step 2 means anything:** the checks have still only
+seen samples the author wrote — the same setup that produced both 1a bugs. Nine
+campaigns ran on 2026-08-08 and none exercised them, because every `write_code`
+in that run regenerated a whole file rather than proposing a delta. The
+wide-delta threshold of 5 is calibrated on one 8-function file and stays a guess
+until a second competition.
+
+## 1c also owns the circuit breaker
+
+**The absence that cost the most on 2026-08-08 was not a wrong check but a
+missing one.** `evaluate_stops` can end a campaign for submissions, wall time,
+cost, metric target, plateau, operator pause and step count. None of them is
+*nothing is working*.
+
+So 108 consecutive failures at ~33 ms each looked exactly like a campaign in
+progress: four sessions, 80 steps, 104 LLM calls, no stop, and `tasks_failed`
+recording **0** throughout. `os_capability_gaps` and `os_suggestions` hold 0 rows
+across all 33 sessions — the machinery to record "I could not do this" exists and
+nothing writes to it.
+
+It lands here rather than in [M20](15-gates-must-fail.md) because it is a
+campaign-policy control, not a verification one, and because **1c needs it
+directly**: step 2 decides on a measured failure rate, and a campaign that cannot
+notice its own failures cannot produce one. `aider_no_edit` and
+`aider_syntax_fail` are counters with nothing watching the count.
+
+Shape: stop when N consecutive executions fail, or when M steps pass with no
+successful experiment, and say which. Roughly twenty lines beside
+`evaluate_stops` — the difficulty is choosing N and M, and the 2026-08-08 record
+gives the first data point either way.
+
+**The full account of all fifteen defects is in
+[evidence-log-2026-08-08.md](evidence-log-2026-08-08.md).** Thirteen were fixed
+in PR #113; the eight that share one shape are why M20 exists.
 
 ## Exit criteria
 
