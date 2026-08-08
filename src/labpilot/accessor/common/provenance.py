@@ -128,10 +128,19 @@ def record_invocation(
     generated_by: str,
     llm_role: str = "",
     failure_reason: str | None = None,
+    failure_kind: str | None = None,
     attempts: int = 1,
     served: object | None = None,
 ) -> None:
-    """Write one record, if a sink is installed. Never raises."""
+    """Write one record, if a sink is installed. Never raises.
+
+    ``failure_kind`` overrides `classify_failure` for callers that *know* their
+    kind rather than inferring it from a message. `AiderAgent` is the case:
+    `aider_no_edit` and `aider_syntax_fail` are distinct outcomes M19 step 2
+    decides on, and recovering them by string-matching messages this codebase
+    writes itself would be a guard reading its own output — the shape that has
+    cost this project repeatedly.
+    """
     sink = _sink.get()
     if sink is None:
         return
@@ -142,7 +151,7 @@ def record_invocation(
                 generated_by=generated_by,
                 llm_role=llm_role,
                 failure_reason=failure_reason,
-                failure_kind=classify_failure(failure_reason),
+                failure_kind=failure_kind or classify_failure(failure_reason),
                 attempts=attempts,
                 provider=getattr(served, "provider", None),
                 model=getattr(served, "model", None),

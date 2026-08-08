@@ -38,6 +38,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from labpilot.accessor.common.micro_agents import StructuredContext
+from labpilot.accessor.common.provenance import record_invocation
 from labpilot.research_engine.execution.schemas.code_proposal import (
     CodeFileSpec,
     CodeProposal,
@@ -153,7 +154,31 @@ class AiderAgent:
     def propose(self, ctx: StructuredContext, parent: Path | None) -> CodeProposal:
         """Edit a copy of `parent` and return the resulting files.
 
-        A baseline has no parent, so there is nothing to diff against and
+        Every outcome is recorded to `agent_invocations`, success and failure
+        alike, because step 2 decides whether delta becomes the default from a
+        *rate* — and a rate needs the denominator. M14's instrument covered the
+        micro agents via `BaseMicroAgent.run`; this agent is a subprocess and
+        would otherwise be the one important call the instrument cannot see.
+        """
+        try:
+            proposal = self._propose(ctx, parent)
+        except AiderError as exc:
+            record_invocation(
+                agent=self.name,
+                generated_by="aider",
+                llm_role=self._role,
+                failure_reason=str(exc),
+                # The agent knows its kind; recovering it by string-matching a
+                # message we wrote ourselves would be a guard reading its own
+                # output.
+                failure_kind=exc.kind,
+            )
+            raise
+        record_invocation(agent=self.name, generated_by="aider", llm_role=self._role)
+        return proposal
+
+    def _propose(self, ctx: StructuredContext, parent: Path | None) -> CodeProposal:
+        """A baseline has no parent, so there is nothing to diff against and
         nothing to preserve. That is `WholeFileAgent`'s job, and raising here
         rather than silently regenerating keeps the routing decision visible.
         """

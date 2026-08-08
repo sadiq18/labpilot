@@ -229,6 +229,53 @@ class CodeEngineeringCapability(BaseCapability):
             return self._write(context)
         return self._modify_config(context)
 
+    def _propose_delta(
+        self,
+        context: TaskContext,
+        structured,
+        prior_train: str,
+    ) -> tuple[CodeProposal | None, str]:
+        """Try the aider path. ``(None, "")`` means "use the whole-file path".
+
+        Four ways this declines, and each is a routing decision rather than a
+        failure:
+
+        * not configured — `codegen.strategy` defaults to `whole_file` (§10:
+          both paths coexist while the rate is measured);
+        * no parent — a baseline has nothing to diff against, which is
+          `WholeFileAgent`'s job by design;
+        * no gateway — aider without the proxy bypasses the budget ledger, rate
+          limiting and failover, which §4 calls a regression dressed as a
+          feature. Declining beats routing around M10;
+        * aider failed — recorded with its kind, then handed on.
+        """
+        if str(context.constraints.get("codegen_strategy") or "whole_file") != "delta":
+            return None, ""
+        if not prior_train.strip():
+            return None, ""
+        gateway = self._llm if callable(getattr(self._llm, "for_role", None)) else None
+        if gateway is None:
+            logger.info("codegen.strategy=delta ignored: no gateway, so aider would bypass M10")
+            return None, ""
+
+        from labpilot.research_engine.execution.delta.aider_agent import (
+            AiderAgent,
+            AiderError,
+        )
+
+        try:
+            agent = AiderAgent(gateway)
+            proposal = agent.propose(structured, Path(context.workspace_root))
+        except AiderError as exc:
+            # Already recorded to `agent_invocations` with its kind by the
+            # agent itself; this only decides what happens next.
+            logger.warning("aider proposal failed (%s); falling back: %s", exc.kind, exc)
+            return None, ""
+        except Exception:  # noqa: BLE001 — a codegen path must not kill the step
+            logger.exception("aider proposal raised; falling back to whole-file")
+            return None, ""
+        return (proposal, "aider") if proposal.files else (None, "")
+
     def _read(self, context: TaskContext) -> TaskEvidence:
         root = context.workspace_root
         notes: list[str] = []
@@ -361,9 +408,15 @@ class CodeEngineeringCapability(BaseCapability):
                 ),
             },
         )
-        raw = run_or_none(self._agent, structured)
-        proposal = raw if isinstance(raw, CodeProposal) else CodeProposal()
-        origin = "llm" if self._agent.last_used_llm else "last_resort"
+        # Delta first when configured and a parent exists, falling back to the
+        # whole-file path rather than failing the step. §10 requires both paths
+        # to coexist while the failure rate is measured, and a campaign that
+        # cannot produce code because aider had a bad day measures nothing.
+        proposal, origin = self._propose_delta(context, structured, prior_train)
+        if proposal is None:
+            raw = run_or_none(self._agent, structured)
+            proposal = raw if isinstance(raw, CodeProposal) else CodeProposal()
+            origin = "llm" if self._agent.last_used_llm else "last_resort"
 
         if not proposal.files:
             # Prefer the deterministic baseline template over the emergency
