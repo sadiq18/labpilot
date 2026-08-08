@@ -389,10 +389,20 @@ recorded here so the option is not lost.
 
 ```python
 class CodeAgent(Protocol):
-    def propose(self, ctx: CodegenContext, parent: Path | None) -> CodeProposal: ...
+    name: str
+    def propose(self, ctx: StructuredContext, parent: Path | None) -> CodeProposal: ...
 ```
 
-Two implementations: `AiderAgent` and the existing whole-file `CodeEngineerAgent`
+An earlier draft wrote this as `CodegenContext`. No such type exists — every
+micro-agent takes `StructuredContext`, and adding a second envelope for one
+caller would split the input type the whole agent layer shares.
+
+`parent` stays out of `ctx.data` because it is a *path to a tree*, not a
+compressed signal: a delta agent copies and edits it, a whole-file agent
+ignores it. `name` is on the protocol because a result is not comparable
+across experiments unless the producing agent is recorded with it.
+
+Two implementations: `AiderAgent` and `WholeFileAgent`, wrapping the existing
 (baselines, and any workspace without aider). One protocol, chosen by config —
 the same shape as `fitroute`, where the router was put behind a boundary so it
 could be swapped without a rewrite.
