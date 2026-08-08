@@ -31,7 +31,11 @@ from labpilot.research_engine.execution.capabilities.code_engineering.apply impo
     apply_proposal,
 )
 from labpilot.research_engine.execution.context import TaskContext
-from labpilot.research_engine.execution.delta import check_delta_consistency
+from labpilot.research_engine.execution.delta import (
+    check_delta_consistency,
+    record_execution_source,
+    snapshot_dir,
+)
 from labpilot.research_engine.execution.micro_agents.code_engineer import CodeEngineerAgent
 from labpilot.research_engine.execution.schemas import TaskEvidence
 from labpilot.research_engine.execution.schemas.code_proposal import (
@@ -420,6 +424,10 @@ class CodeEngineeringCapability(BaseCapability):
         digests = {str(p): file_digest(p) for p in written}
         paths = [str(p) for p in written]
         delta = _observe_delta(prior_train, proposal)
+        # M19 §6: record what *this* execution ran, keyed by this execution, so
+        # a child can address its parent's code instead of inferring it from
+        # write order. Snapshotted after apply, so it records what landed.
+        snapshot = record_execution_source(root, str(context.execution.id), written)
         if backup_path is not None:
             paths.append(str(backup_path))
         return evidence(
@@ -440,6 +448,9 @@ class CodeEngineeringCapability(BaseCapability):
                 "used_jinja": False,
                 "overrode_existing": bool(prior_train),
                 "backup": str(backup_path) if backup_path else None,
+                "code_snapshot": str(snapshot_dir(root, str(context.execution.id)))
+                if snapshot
+                else None,
                 # F5. Reflection must be able to tell three outcomes apart that
                 # today all read as "technique X did not help": never applied,
                 # applied with no effect, and applied-and-worse. Only the last
