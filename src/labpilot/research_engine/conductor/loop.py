@@ -283,6 +283,32 @@ def _run_until_stop_inner(
         if rebuilt:
             _progress(f"Re-derived {len(rebuilt)} belief(s) from repaired evidence")
 
+        # Overlays reach the *model*, so a stale one costs more than a stale
+        # row. `upsert_skill_overlay` returns early on a known lesson id, so a
+        # lesson written from an inverted verdict is permanent until this runs.
+        # Measured 2026-08-08: every rogii overlay said `Avoid: SWA` — the only
+        # technique that ever improved the metric — long after its card was
+        # re-oriented to `accepted`.
+        from labpilot.research_engine.evidence.overlay_repair import (
+            record_references_in_overlays,
+            repair_skill_overlays,
+        )
+
+        relearned = repair_skill_overlays(
+            workspace.root, workspace.knowledge_dir, workspace.competition
+        )
+        if relearned:
+            _progress(
+                f"Rebuilt {len(relearned)} skill overlay(s) from repaired evidence"
+            )
+        leaking = record_references_in_overlays(workspace.root)
+        if leaking:
+            # Not repaired here: the write-path guard in `outcome.py` owns this,
+            # and a hit means a write site it does not cover.
+            logger.warning(
+                "record reference still present in overlay(s): %s", ", ".join(leaking)
+            )
+
         from labpilot.research_engine.execution.technique.vocabulary import (
             recompute_technique_status,
         )
