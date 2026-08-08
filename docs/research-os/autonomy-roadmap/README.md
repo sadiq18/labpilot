@@ -44,7 +44,14 @@ asserted.
 | **5** | **M16** (needs M11 + M14 full) · **M12** (needs M7 + M8) | Last |
 
 Standing throughout: **M9** (verification-first), **M15** (capability audit),
-**M14** phases 2–3 once the test migration is budgeted.
+**M20** (gates must be able to fail), **M14** phases 2–3 once the test
+migration is budgeted.
+
+**M20 is blocked by nothing and can start at any point.** It is listed as
+standing rather than phased because its items are independent of the research
+loop — but note the cost of deferring it: on 2026-08-08, eight gates reporting
+`pass` on things that could not run cost nine campaign runs to find, and four of
+them had been read and approved.
 
 ### The one cycle: M10 ⇄ M7
 
@@ -93,7 +100,8 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
 | **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **Complete 2026-08-07.** 2b ships default-off against a measured 3.2% fallback rate; a 30-step campaign completed with strict mode on. Phase 3 retired all 20 rule engines (PR #104) behind the `structured_output` precondition (PR #98) that makes removal safe |
 | **M18** | [Technique vocabulary earns its entries](13-technique-vocabulary.md) | Attention goes somewhere defensible | **shipped 2026-08-07** (PR #100 step 1, PR #101 step 2). Status derived from evidence; the junk (`the`, `Breath Focus practice`) no longer reaches the planner and `SWA` still does |
-| **M19** | [An experiment is a change to its parent](14-experiments-as-deltas.md) | Validation discipline is preserved, and violations are visible | **in progress — steps 0, 1a and 1b shipped** (PRs #110, #111, #112). Every card now carries a consistency verdict, its violations, the wide-delta flag and the claim itself — self-reported by codegen as code identifiers, because rogii's 19 real plans proved `technique` cannot supply them. Two gaps before 1c: **§5's fifth check, validation-region flagging, was never built** (4 of 5 exist), and **no campaign has run with 1b**, so the false-positive rate the observe-only step exists to produce does not exist yet |
+| **M19** | [An experiment is a change to its parent](14-experiments-as-deltas.md) | Validation discipline is preserved, and violations are visible | **in progress — steps 0, 1a, 1b and §6 provenance shipped** (PRs #110–#113). Cards carry a consistency verdict, violations, the wide-delta flag and the claim; each execution's source is addressable at `runs/<execution_id>/`. **1c is unblocked** — the LLM codegen path, the thread-safe gateway and provenance all landed 2026-08-08. Still open: **§5's fifth check (validation-region flagging) was never built**, the checks have seen no real delta, and 1c now also owns the **campaign circuit breaker** |
+| **M20** | [A gate that cannot fail is not a gate](15-gates-must-fail.md) | Verification you can believe — the checks stop reporting pass on things that cannot run | Not started. Fifteen defects found 2026-08-08; **eight were one shape**: a gate testing something easier than it promises ([evidence](evidence-log-2026-08-08.md)) |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
 | **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
@@ -172,6 +180,12 @@ cost. When a plan's rationale seems excessive, they are why.
   (194.80 → 190.97). Also records five wiring defects of one shape, three
   guards that looked protective and were not, and three corrections to
   diagnoses stated too confidently.
+- [evidence-log-2026-08-08.md](evidence-log-2026-08-08.md) — restarting a
+  workspace dead for a day: **108 consecutive failures, four sessions, no stop
+  condition**. Nine campaign runs, fifteen defects, thirteen fixed. Eight share
+  one shape — *a gate that does not test what it claims to* — which is why
+  [M20](15-gates-must-fail.md) exists. Ends with the first honest **research**
+  failure this workspace has produced, rather than an infrastructure one.
 
 ### Deferred — understood, not yet fixed
 
