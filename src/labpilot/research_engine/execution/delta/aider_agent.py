@@ -39,6 +39,7 @@ from pathlib import Path
 
 from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.accessor.common.provenance import record_invocation
+from labpilot.research_engine.execution.delta.redundancy import check_redundancy
 from labpilot.research_engine.execution.schemas.code_proposal import (
     CodeFileSpec,
     CodeProposal,
@@ -201,6 +202,23 @@ class AiderAgent:
             raise AiderError(f"parent tree not found: {parent}", kind="no_parent")
 
         brief = self._brief(ctx)
+
+        # Asked here because this is the one place holding both halves: the
+        # claim (`brief.added`, as code identifiers) and the parent it would be
+        # applied to. Deciding it later from the failure text cannot work —
+        # "aider made no edit" reads identically whether the adapter failed or
+        # the change was already present, and those are opposite findings.
+        #
+        # Measured on rogii 2026-08-09: four campaigns spent every step
+        # re-selecting a hypothesis asking for an ensemble `train.py` already
+        # had. Raising *before* the subprocess also saves the call that was
+        # only ever going to be declined.
+        verdict = check_redundancy(
+            str((getattr(ctx, "data", None) or {}).get("prior_train_py") or ""), brief.added
+        )
+        if verdict.redundant:
+            raise AiderError(verdict.reason, kind="hypothesis_redundant")
+
         instruction = brief.instruction.strip() or _instruction(ctx)
         with tempfile.TemporaryDirectory(prefix="labpilot-aider-") as scratch_str:
             scratch = Path(scratch_str)

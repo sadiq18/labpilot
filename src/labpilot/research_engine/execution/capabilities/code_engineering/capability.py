@@ -229,6 +229,31 @@ class CodeEngineeringCapability(BaseCapability):
             return self._write(context)
         return self._modify_config(context)
 
+    def _retire_redundant_hypothesis(self, context: TaskContext, reason: str) -> None:
+        """Retire a hypothesis whose change the parent already implements.
+
+        Detected here rather than after the experiment because the evidence is
+        already in hand — the claim and the parent — and because a failed
+        execution cannot distinguish this from an adapter that broke. Retiring
+        it is the whole point: `_next_hypothesis_id` lists only `proposed`, so
+        rejection is what removes it from selection.
+        """
+        hypothesis_id = getattr(context.plan, "hypothesis_id", None)
+        if not hypothesis_id:
+            return
+        try:
+            from labpilot.research_engine.reflection.hypotheses import HypothesisEvaluator
+
+            HypothesisEvaluator(context.paths.base_dir, context.competition).record_failed_attempt(
+                hypothesis_id,
+                failure_reason=reason,
+                failure_kind="hypothesis_redundant",
+                redundant=True,
+            )
+            logger.info("Retired %s: %s", hypothesis_id, reason)
+        except Exception as exc:  # noqa: BLE001 — bookkeeping must not kill the step
+            logger.warning("could not retire redundant hypothesis %s: %s", hypothesis_id, exc)
+
     def _propose_delta(
         self,
         context: TaskContext,
@@ -269,6 +294,11 @@ class CodeEngineeringCapability(BaseCapability):
         except AiderError as exc:
             # Already recorded to `agent_invocations` with its kind by the
             # agent itself; this only decides what happens next.
+            if exc.kind == "hypothesis_redundant":
+                # Not a codegen failure. The campaign chose work already done,
+                # and retiring it here is what stops it being chosen again —
+                # four campaigns re-selected P-021 because nothing did this.
+                self._retire_redundant_hypothesis(context, str(exc))
             logger.warning("aider proposal failed (%s); falling back: %s", exc.kind, exc)
             return None, ""
         except Exception:  # noqa: BLE001 — a codegen path must not kill the step
