@@ -8,6 +8,8 @@ because nothing maps a technique name to a code identifier — see
 
 from __future__ import annotations
 
+import pytest
+
 from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
     _observe_delta,
 )
@@ -36,8 +38,109 @@ def train(X, y):
 """
 
 
-def _proposal(content: str) -> CodeProposal:
-    return CodeProposal(files=[CodeFileSpec(path="pipeline/train.py", content=content)])
+def _proposal(content: str, **claim) -> CodeProposal:
+    return CodeProposal(files=[CodeFileSpec(path="pipeline/train.py", content=content)], **claim)
+
+
+# --- the agent declares its own claim, in code identifiers ------------------
+
+_PARENT_LGB = """
+import lightgbm as lgb
+
+
+def train(X, y):
+    a = lgb.LGBMRegressor()
+    a.fit(X, y)
+    return a.predict(X)
+"""
+
+_SUBSTITUTED = """
+import catboost as cb
+
+
+def train(X, y):
+    b = cb.CatBoostRegressor()
+    b.fit(X, y)
+    return b.predict(X)
+"""
+
+_ADDED_UNUSED = """
+import lightgbm as lgb
+import catboost as cb
+
+
+def train(X, y):
+    a = lgb.LGBMRegressor()
+    a.fit(X, y)
+    b = cb.CatBoostRegressor()
+    b.fit(X, y)
+    return a.predict(X)
+"""
+
+_ENSEMBLED = """
+import lightgbm as lgb
+import catboost as cb
+
+
+def train(X, y):
+    a = lgb.LGBMRegressor()
+    a.fit(X, y)
+    b = cb.CatBoostRegressor()
+    b.fit(X, y)
+    return 0.5 * a.predict(X) + 0.5 * b.predict(X)
+"""
+
+_CLAIM = {"kept": ["lgb"], "added": ["cb"], "combined": ["lgb", "cb"]}
+
+
+def test_a_substitution_contradicts_the_claim():
+    """The card would read "ensembling improved MSE" for a run that measured
+    substitution."""
+    meta = _observe_delta(_PARENT_LGB, _proposal(_SUBSTITUTED, **_CLAIM))
+    assert meta["delta_consistent"] is False
+    assert any("should have been kept" in v for v in meta["delta_violations"])
+
+
+def test_a_discarded_second_model_contradicts_the_claim():
+    """The quietest failure: the constructor is present, so addition passes,
+    but the score reflects the parent alone."""
+    meta = _observe_delta(_PARENT_LGB, _proposal(_ADDED_UNUSED, **_CLAIM))
+    assert meta["delta_consistent"] is False
+    assert any("no aggregation" in v for v in meta["delta_violations"])
+
+
+def test_an_honest_ensemble_passes():
+    """A check that rejects everything is a blocker, not a check. Uses a
+    weighted blend — the standard technique, which calls no aggregator."""
+    meta = _observe_delta(_PARENT_LGB, _proposal(_ENSEMBLED, **_CLAIM))
+    assert meta["delta_consistent"] is True, meta["delta_violations"]
+
+
+def test_the_claim_is_recorded_even_when_it_holds():
+    """A reader has to be able to see what was claimed, not just whether it
+    passed — the verdict alone cannot be audited against the hypothesis."""
+    meta = _observe_delta(_PARENT_LGB, _proposal(_ENSEMBLED, **_CLAIM))
+    assert meta["delta_claim"] == {
+        "kept": ["lgb"],
+        "added": ["cb"],
+        "combined": ["lgb", "cb"],
+    }
+
+
+def test_a_baseline_claiming_nothing_gets_no_verdict():
+    """Empty is honest for a from-scratch baseline. Reporting `consistent:
+    true` would be a pass nobody earned."""
+    meta = _observe_delta("", _proposal(_ENSEMBLED))
+    assert "delta_consistent" not in meta
+    assert meta["delta_claim"] == {"kept": [], "added": [], "combined": []}
+
+
+def test_observing_never_blocks_regardless_of_the_verdict():
+    """Observe-only: these checks have only ever been calibrated against
+    hand-written samples, which is exactly how the step 1a bugs got in."""
+    meta = _observe_delta(_PARENT_LGB, _proposal(_SUBSTITUTED, **_CLAIM))
+    assert meta["delta_consistent"] is False
+    assert isinstance(meta, dict)  # returned, not raised
 
 
 def test_it_records_which_functions_changed():
@@ -92,3 +195,29 @@ def test_reformatting_is_not_recorded_as_a_change():
     parent does not look like a delta touching everything."""
     reflowed = PARENT.replace("def train(X, y):", "def train(X,   y):  # regenerated")
     assert _observe_delta(PARENT, _proposal(reflowed))["delta_touched_functions"] == []
+
+
+# --- the claim must survive how models actually answer ----------------------
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({}, []),
+        ({"kept": None}, []),
+        ({"kept": []}, []),
+        ({"kept": "lgb"}, ["lgb"]),
+        ({"kept": ""}, []),
+        ({"kept": ["lgb", "cb"]}, ["lgb", "cb"]),
+    ],
+)
+def test_a_claim_parses_however_the_model_spells_it(payload, expected):
+    """`null` means "nothing", not "invalid".
+
+    Models emit `"kept": null` about as readily as `[]`. Rejecting it raises a
+    ValidationError, which the retry path reads as a malformed response and
+    re-asks — burning a step from a 30-step campaign over optional metadata.
+    """
+    import json
+
+    assert CodeProposal.model_validate_json(json.dumps(payload)).kept == expected

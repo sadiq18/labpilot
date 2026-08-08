@@ -126,28 +126,30 @@ def _summarise_profile(profile: dict) -> dict:
 
 
 def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object]:
-    """Record what the change touched. Observe-only — this gates nothing.
+    """Check the change against the claim its own author made. Gates nothing.
 
-    Only the checks that need **no vocabulary** run here: `touched_functions`
-    and confinement. `keep`/`add`/`combine` are deliberately not passed, and
-    `check_delta_consistency` returns an empty verdict rather than a fabricated
-    one when no claim is supplied.
+    The claim comes from `proposal.kept` / `added` / `combined` — code
+    identifiers named by the agent that wrote the file. Not from the plan's
+    `technique` field, which cannot serve: `SWA` is not an importable symbol,
+    and rogii's plans recorded `feature_engineering` (a category), `add+model`
+    (two names concatenated) and once the bare word `the`. Passing those in
+    would make a working guard fire on wrong input — the defect this module
+    exists to catch, reproduced inside it.
 
-    That omission is the finding, not an oversight. Those three checks need
-    *code identifiers*; what the system records is *technique names*, and on
-    rogii's most recent campaign 5 of 9 were unusable as identifiers —
-    `feature_engineering` (a category), `add+model` (two names concatenated),
-    and `the` (a regex fallback that captured an article). Feeding those in
-    would make every such experiment report a guaranteed-false violation: the
-    guard would work perfectly on input that was wrong. Nothing maps a
-    technique name to a symbol, and hand-maintaining that map is the
-    curated-set-answering-an-open-world-question pattern already rejected for
-    `KNOWN_TECHNIQUES`, the package allowlist, and the template pack.
+    Self-reported, and that limit is real: a model that lies consistently is not
+    caught. The failure that actually happens is carelessness — code that
+    contradicts its author's own stated intent — and the gap between the
+    declaration and the file is exactly what makes an evidence card wrong.
 
-    What survives is the check the design calls **the dangerous one**: a delta
-    that added a technique *and* quietly retuned something else, where
-    `technique_attribution` credits the whole `cv_gain` to one name. That is a
-    fact about how wide the change is, so it needs no vocabulary at all.
+    Confinement runs regardless, because it needs no claim at all, and it covers
+    the case §5 calls **the dangerous one**: a delta that added a technique *and*
+    quietly retuned something else, where `technique_attribution` credits the
+    whole `cv_gain` to one name.
+
+    **Observe-only on purpose.** These three checks have only ever been
+    calibrated against hand-written samples, and that is precisely how the two
+    bugs in step 1a got in. The first real campaign supplies a false-positive
+    rate; blocking is a one-line change after that, with evidence behind it.
     """
     train = next(
         (f for f in proposal.files if f.path.endswith("pipeline/train.py")),
@@ -155,12 +157,28 @@ def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object
     )
     if train is None:
         return {}
-    report = check_delta_consistency(prior_train, train.content)
+    report = check_delta_consistency(
+        prior_train,
+        train.content,
+        keep=list(proposal.kept),
+        add=list(proposal.added),
+        combine=list(proposal.combined),
+    )
     meta = report.as_metadata()
-    # No claim was supplied, so `consistent` would report a pass nobody earned.
-    meta.pop("consistent", None)
-    meta.pop("violations", None)
-    return {f"delta_{k}": v for k, v in meta.items()}
+    claimed = bool(proposal.kept or proposal.added or proposal.combined)
+    if not claimed:
+        # Nothing was claimed, so `consistent: true` would be a pass nobody
+        # earned — the fabricated-verdict failure, in the module written to
+        # prevent it. A baseline legitimately claims nothing.
+        meta.pop("consistent", None)
+        meta.pop("violations", None)
+    out: dict[str, object] = {f"delta_{k}": v for k, v in meta.items()}
+    out["delta_claim"] = {
+        "kept": list(proposal.kept),
+        "added": list(proposal.added),
+        "combined": list(proposal.combined),
+    }
+    return out
 
 
 class CodeEngineeringCapability(BaseCapability):
