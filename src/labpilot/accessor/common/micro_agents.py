@@ -185,7 +185,11 @@ class BaseMicroAgent:
         # Accept a gateway wherever a client is accepted, so every existing
         # `Agent(llm_client=...)` call site keeps working and plain test stubs
         # stay valid.
-        if hasattr(llm_client, "for_role"):
+        # `callable`, not `hasattr`: a stub carrying `for_role` as a plain
+        # attribute would otherwise raise TypeError here, during construction,
+        # before the agent has done anything — a confusing place to fail for
+        # something that just means "this is not a gateway".
+        if callable(getattr(llm_client, "for_role", None)):
             llm_client = llm_client.for_role(self.llm_role)  # type: ignore[union-attr]
         self.llm_client = llm_client
         self.last_used_llm = False
@@ -233,8 +237,7 @@ class BaseMicroAgent:
                     if _is_shape_error(exc):
                         self._reask_reason = str(exc)
                     logger.warning(
-                        "Micro agent %s LLM path failed (%s); retrying in %.0fs "
-                        "(attempt %d/%d).",
+                        "Micro agent %s LLM path failed (%s); retrying in %.0fs (attempt %d/%d).",
                         self.name or type(self).__name__,
                         exc,
                         delay,
@@ -283,9 +286,7 @@ class BaseMicroAgent:
 
             agent_file = inspect.getfile(type(self))
             workspace = (
-                context.data.get("workspace_root")
-                or context.data.get("skill_overlay_dir")
-                or ""
+                context.data.get("workspace_root") or context.data.get("skill_overlay_dir") or ""
             )
             agent_key = str(context.data.get("skill_agent_key") or "").strip()
             if not agent_key:
