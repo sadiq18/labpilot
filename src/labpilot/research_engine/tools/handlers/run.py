@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from labpilot.research_engine.artifacts.base import ArtifactRef
@@ -14,6 +15,24 @@ from labpilot.research_engine.execution import (
 )
 from labpilot.research_engine.tools.descriptors import ToolResult
 from labpilot.research_engine.workspace_facade import Workspace
+
+logger = logging.getLogger(__name__)
+
+
+def _codegen_strategy(workspace: Workspace) -> str:
+    """`codegen.strategy` from the workspace config, or the safe default.
+
+    Never raises: an unreadable or absent config means `whole_file`, which is
+    the path that has always worked. A campaign should not fail to produce code
+    because a config file has a typo in an unrelated section.
+    """
+    try:
+        from labpilot.config import load_config
+
+        return str(load_config(workspace.root / "configs" / "default.yaml").codegen.strategy)
+    except Exception as exc:  # noqa: BLE001 — config trouble must not stop a run
+        logger.debug("codegen strategy unreadable, using whole_file: %s", exc)
+        return "whole_file"
 
 
 def run_plan(
@@ -40,7 +59,12 @@ def run_plan(
         )
 
     exec_arts = ExecutionArtifacts(workspace.knowledge_dir, workspace.competition)
+    # `codegen.strategy` is the config surface M19 §10 specifies. Read here
+    # because this is the last place that has both the workspace and the
+    # constraint dict; the capability sees only constraints. An explicit
+    # caller-supplied `codegen_strategy` still wins, since it is spread after.
     merged: dict[str, Any] = {
+        "codegen_strategy": _codegen_strategy(workspace),
         "dry_run": dry_run,
         "allow_upload": submit,
         "smoke_syntax_only": dry_run,
