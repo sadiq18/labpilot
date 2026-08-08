@@ -52,6 +52,34 @@ _MAX_STOP_OVERRIDES = 2
 _EXPERIMENT_TOOLS = frozenset({"run_experiment", "run_plan"})
 
 
+#: Execution statuses that mean the experiment actually produced a result.
+#: `pending` and `running` are not successes — an execution left mid-flight has
+#: produced nothing, and treating it as a win would reset the breaker on a
+#: campaign that is stalling rather than progressing.
+_SUCCESS_STATUSES = frozenset({"succeeded"})
+
+
+def _experiment_outcome(result: object) -> tuple[bool, str]:
+    """`(succeeded, error)` for an experiment tool that returned without raising.
+
+    A tool call returning is not an experiment succeeding: `run_plan` reports a
+    failed execution in `data["status"]` and raises nothing at all. Reading the
+    status is what makes this the question the breaker is supposed to ask.
+
+    An absent status is treated as success, deliberately — this runs on the
+    path where the call *worked*, and inventing failures from a missing field
+    would stop campaigns for a reporting gap rather than a real one.
+    """
+    data = getattr(result, "data", None)
+    if not isinstance(data, dict) or "status" not in data:
+        return True, ""
+    status = str(data.get("status") or "").strip().lower()
+    if status in _SUCCESS_STATUSES:
+        return True, ""
+    error = str(data.get("error") or "").strip()
+    return False, error or f"execution status={status or 'unknown'}"
+
+
 def _record_experiment_outcome(
     store,
     session_id: str,
@@ -607,7 +635,22 @@ def _run_until_stop_inner(
                         budget_state.submissions += 1
                         persist_budgets(store, session_id, budget_cfg, budget_state)
                     if tool_step.tool in _EXPERIMENT_TOOLS:
-                        _record_experiment_outcome(store, session_id, succeeded=True)
+                        # Ask what the *execution* did, not whether the call
+                        # returned. `run_plan` reports a failed execution in its
+                        # result and raises nothing, so counting a clean return
+                        # as a success reset the breaker on every one.
+                        #
+                        # Measured 2026-08-09: a campaign with **8 executions,
+                        # all failed** ran its full 8 steps, because 10 of its
+                        # 16 dispatches were `run_plan` returning normally. The
+                        # breaker built to stop exactly that never reached 3.
+                        outcome = _experiment_outcome(result)
+                        _record_experiment_outcome(
+                            store,
+                            session_id,
+                            succeeded=outcome[0],
+                            error=outcome[1],
+                        )
                 except LLMDegradedError as exc:
                     # Strict mode (M14 2b) means fatal, and the generic handler
                     # below would reduce it to one lost step with the campaign
