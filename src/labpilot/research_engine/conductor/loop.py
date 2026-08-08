@@ -32,7 +32,6 @@ from labpilot.research_engine.conductor.models import DecisionRecord
 from labpilot.research_engine.conductor.policy import decide_next
 from labpilot.research_engine.conductor.scheduler import Scheduler
 from labpilot.research_engine.conductor.store import ConductorStore
-from labpilot.research_engine.planner.schemas.task_types import is_runnable_plan_status
 from labpilot.research_engine.telemetry.agent_provenance import recording_provenance
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
@@ -138,31 +137,16 @@ def _latest_plan_id(workspace: Workspace) -> str | None:
     returning None lets the caller offer `generate_plan` instead of burning a
     step on a run that cannot succeed.
     """
-    from labpilot.research_engine.artifacts.plan import PlanArtifacts
+    from labpilot.research_engine.planner.store import PlanStore
 
-    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    store = PlanStore(workspace.knowledge_dir, workspace.competition)
     try:
-        plans = artifacts.list()
+        selectable = store.selectable_plan_ids()
     except Exception:  # noqa: BLE001 — absent store simply means "no plans yet"
         return None
     finally:
-        artifacts.close()
-    if not plans:
-        return None
-    # A plan testing a retired hypothesis is not work worth dispatching. The
-    # campaign selects *plans*, and retiring the idea behind one leaves the plan
-    # runnable — measured 2026-08-09, `H-051` was correctly rejected and the
-    # very next step selected `P-021`, which carries it.
-    from labpilot.research_engine.intelligence.hypothesis.viability import (
-        plan_is_selectable,
-        retired_hypothesis_ids,
-    )
-
-    retired = retired_hypothesis_ids(workspace.knowledge_dir, workspace.competition)
-    runnable = sorted(
-        p.id for p in plans if is_runnable_plan_status(p.status) and plan_is_selectable(p, retired)
-    )
-    return runnable[-1] if runnable else None
+        store.close()
+    return selectable[-1] if selectable else None
 
 
 def _next_hypothesis_id(workspace: Workspace) -> str | None:

@@ -10,47 +10,45 @@ step each time.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
+from labpilot.research_engine.planner.schemas.models import ResearchPlan
 from labpilot.research_engine.planner.schemas.task_types import (
     PlanStatus,
     is_runnable_plan_status,
     is_unrun_plan_status,
 )
+from labpilot.research_engine.planner.store import PlanStore
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+from labpilot.research_engine.shared.experiments.models import HypothesisStatus
 
-
-class _Plan:
-    def __init__(self, pid: str, status: str) -> None:
-        self.id = pid
-        self.status = status
-        self.metadata: dict = {}
+_COMP = "demo"
 
 
 class _WS:
-    knowledge_dir = "/nonexistent"
-    competition = "demo"
+    """Workspace facade with a real knowledge dir, so the query really runs."""
+
+    def __init__(self, tmp_path):
+        self.knowledge_dir = tmp_path / "knowledge"
+        self.competition = _COMP
+        self.root = tmp_path
 
 
-@pytest.fixture
-def plans(monkeypatch):
-    """Install a fake PlanArtifacts returning whatever the test sets."""
-    holder: list[_Plan] = []
-
-    class _Artifacts:
-        def __init__(self, *a, **k):
-            pass
-
-        def list(self):
-            return list(holder)
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr("labpilot.research_engine.artifacts.plan.PlanArtifacts", _Artifacts)
-    return holder
-
-
-# --- the predicates ---------------------------------------------------------
+def _plan(store, pid, status, hypothesis_id=""):
+    now = datetime.now(UTC)
+    store.upsert_plan(
+        ResearchPlan(
+            id=pid,
+            competition=_COMP,
+            hypothesis_id=hypothesis_id,
+            goal="g",
+            status=status,
+            created_at=now,
+            updated_at=now,
+        )
+    )
 
 
 @pytest.mark.parametrize(
@@ -99,49 +97,94 @@ def test_an_unknown_status_is_neither():
 # --- the policy gate --------------------------------------------------------
 
 
-def test_all_plans_done_offers_generate_not_run(plans):
-    """The exact step-burner: every plan finished, `run_plan` still offered."""
+def test_all_plans_done_offers_generate_not_run(tmp_path):
     from labpilot.research_engine.conductor.policy import has_runnable_plan, has_unrun_plan
 
-    plans.extend([_Plan("P-001", "done"), _Plan("P-002", "done")])
-    assert has_runnable_plan(_WS()) is False
-    assert has_unrun_plan(_WS()) is False
+    store = PlanStore(tmp_path / "knowledge", _COMP)
+    try:
+        _plan(store, "P-001", PlanStatus.DONE)
+    finally:
+        store.close()
+
+    assert has_runnable_plan(_WS(tmp_path)) is False
+    assert has_unrun_plan(_WS(tmp_path)) is False
 
 
-def test_a_ready_plan_is_runnable(plans):
+def test_a_ready_plan_is_runnable(tmp_path):
     from labpilot.research_engine.conductor.policy import has_runnable_plan
 
-    plans.extend([_Plan("P-001", "done"), _Plan("P-002", "ready")])
-    assert has_runnable_plan(_WS()) is True
+    store = PlanStore(tmp_path / "knowledge", _COMP)
+    try:
+        _plan(store, "P-001", PlanStatus.READY)
+    finally:
+        store.close()
+
+    assert has_runnable_plan(_WS(tmp_path)) is True
 
 
-def test_a_draft_blocks_generating_but_does_not_enable_running(plans):
+def test_a_draft_blocks_generating_but_does_not_enable_running(tmp_path):
     from labpilot.research_engine.conductor.policy import has_runnable_plan, has_unrun_plan
 
-    plans.append(_Plan("P-001", "draft"))
-    assert has_unrun_plan(_WS()) is True
-    assert has_runnable_plan(_WS()) is False
+    store = PlanStore(tmp_path / "knowledge", _COMP)
+    try:
+        _plan(store, "P-001", PlanStatus.DRAFT)
+    finally:
+        store.close()
+
+    assert has_unrun_plan(_WS(tmp_path)) is True
+    assert has_runnable_plan(_WS(tmp_path)) is False
 
 
-def test_no_plans_at_all(plans):
-    from labpilot.research_engine.conductor.policy import has_runnable_plan, has_unrun_plan
+def test_a_plan_for_a_retired_hypothesis_is_not_runnable(tmp_path):
+    """Retiring an idea must retire the work queued against it.
 
-    assert has_runnable_plan(_WS()) is False
-    assert has_unrun_plan(_WS()) is False
+    Measured on rogii 2026-08-09: `H-051` was correctly rejected and the very
+    next step selected `P-021`, the plan carrying it — still `in_progress` and
+    therefore still runnable. Answered by a join against the mirrored
+    `hypotheses` table, which `HypothesisStore._save` keeps current on every
+    mutation.
+    """
+    from labpilot.research_engine.conductor.loop import _latest_plan_id
+    from labpilot.research_engine.conductor.policy import has_runnable_plan
+
+    hstore = HypothesisStore(tmp_path / "knowledge", _COMP)
+    hyp = hstore.create(observation="o", reason="r", prediction="p", confidence=0.5)
+    hstore.update_status(hyp.id, HypothesisStatus.REJECTED)
+
+    store = PlanStore(tmp_path / "knowledge", _COMP)
+    try:
+        _plan(store, "P-001", PlanStatus.IN_PROGRESS, hypothesis_id=hyp.id)
+    finally:
+        store.close()
+
+    assert has_runnable_plan(_WS(tmp_path)) is False
+    assert _latest_plan_id(_WS(tmp_path)) is None
 
 
-# --- the id resolver --------------------------------------------------------
+def test_a_plan_for_a_live_hypothesis_stays_runnable(tmp_path):
+    """The carve-out must not cost the behaviour it guards."""
+    from labpilot.research_engine.conductor.policy import has_runnable_plan
+
+    hstore = HypothesisStore(tmp_path / "knowledge", _COMP)
+    hyp = hstore.create(observation="o", reason="r", prediction="p", confidence=0.5)
+
+    store = PlanStore(tmp_path / "knowledge", _COMP)
+    try:
+        _plan(store, "P-001", PlanStatus.READY, hypothesis_id=hyp.id)
+    finally:
+        store.close()
+
+    assert has_runnable_plan(_WS(tmp_path)) is True
 
 
-def test_latest_plan_id_returns_the_newest_runnable(plans):
-    import labpilot.research_engine.conductor.loop as loop_mod
+def test_a_baseline_plan_is_runnable_with_no_hypothesis(tmp_path):
+    """No hypothesis means no retired idea behind it."""
+    from labpilot.research_engine.conductor.policy import has_runnable_plan
 
-    plans.extend([_Plan("P-001", "ready"), _Plan("P-009", "done"), _Plan("P-004", "ready")])
-    assert loop_mod._latest_plan_id(_WS()) == "P-004"
+    store = PlanStore(tmp_path / "knowledge", _COMP)
+    try:
+        _plan(store, "P-001", PlanStatus.READY, hypothesis_id="")
+    finally:
+        store.close()
 
-
-def test_latest_plan_id_is_none_when_all_are_done(plans):
-    import labpilot.research_engine.conductor.loop as loop_mod
-
-    plans.extend([_Plan("P-001", "done"), _Plan("P-009", "done")])
-    assert loop_mod._latest_plan_id(_WS()) is None
+    assert has_runnable_plan(_WS(tmp_path)) is True

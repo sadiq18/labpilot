@@ -774,34 +774,43 @@ def test_unrun_plan_blocks_queuing_another(monkeypatch):
     assert "run_plan" in tools
 
 
-def test_latest_plan_prefers_a_runnable_one(monkeypatch, tmp_path):
-    """Targeting the newest id hit finished plans: 'status=done; need ready'."""
+def test_latest_plan_prefers_a_runnable_one(tmp_path):
+    """Against a real store, because the runnable filter now lives in SQL.
+
+    A faked plan source would exercise none of it — the join is where "runnable"
+    and "not testing a retired idea" are actually decided.
+    """
+    from datetime import UTC, datetime
+
     import labpilot.research_engine.conductor.loop as loop_mod
+    from labpilot.research_engine.planner.schemas.models import ResearchPlan
+    from labpilot.research_engine.planner.schemas.task_types import PlanStatus
+    from labpilot.research_engine.planner.store import PlanStore
 
-    class _Plan:
-        def __init__(self, pid, status):
-            self.id = pid
-            self.status = status
-            self.metadata = {}
-
-    class _Artifacts:
-        def __init__(self, *a, **k):
-            pass
-
-        def list(self):
-            return [
-                _Plan("P-001", "done"),
-                _Plan("P-002", "ready"),
-                _Plan("P-008", "done"),
-            ]
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr("labpilot.research_engine.artifacts.plan.PlanArtifacts", _Artifacts)
+    store = PlanStore(tmp_path / "knowledge", "demo")
+    try:
+        for pid, status in (
+            ("P-001", PlanStatus.DONE),
+            ("P-002", PlanStatus.READY),
+            ("P-008", PlanStatus.DONE),
+        ):
+            now = datetime.now(UTC)
+            store.upsert_plan(
+                ResearchPlan(
+                    id=pid,
+                    competition="demo",
+                    hypothesis_id="",
+                    goal="g",
+                    status=status,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+    finally:
+        store.close()
 
     class _WS:
-        knowledge_dir = tmp_path
+        knowledge_dir = tmp_path / "knowledge"
         competition = "demo"
 
     assert loop_mod._latest_plan_id(_WS()) == "P-002"

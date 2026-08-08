@@ -19,7 +19,6 @@ from labpilot.research_engine.intelligence.hypothesis.viability import (
     viable_hypothesis_count,
 )
 from labpilot.research_engine.planner.schemas.task_types import (
-    is_runnable_plan_status,
     is_unrun_plan_status,
 )
 from labpilot.research_engine.tools.registry import ToolRegistry
@@ -627,28 +626,26 @@ def has_unrun_plan(workspace: Workspace) -> bool:
 def has_runnable_plan(workspace: Workspace) -> bool:
     """True when a plan can actually be dispatched to the Engineer right now.
 
-    Excludes plans whose hypothesis has been retired. Otherwise `run_plan` and
-    `run_experiment` stay in the allowlist to target work already settled, and
-    the campaign keeps choosing them — which is what happened on rogii after
+    Excludes plans whose hypothesis is retired — otherwise `run_plan` and
+    `run_experiment` stay in the allowlist targeting work already settled, and
+    the campaign keeps choosing them. That is what happened on rogii after
     `H-051` was correctly rejected.
-    """
-    from labpilot.research_engine.artifacts.plan import PlanArtifacts
-    from labpilot.research_engine.intelligence.hypothesis.viability import (
-        plan_is_selectable,
-        retired_hypothesis_ids,
-    )
 
-    retired = retired_hypothesis_ids(workspace.knowledge_dir, workspace.competition)
-    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    One indexed query. The obvious implementation — read the rejected
+    hypotheses, list the plans, filter in Python — costs a file read per
+    rejected hypothesis plus `list_plans()`, which hydrates every plan, its
+    tasks and each task's dependency edges. That is N+2 queries and a full
+    object graph to answer a boolean, on every policy step.
+    """
+    from labpilot.research_engine.planner.store import PlanStore
+
+    store = PlanStore(workspace.knowledge_dir, workspace.competition)
     try:
-        return any(
-            is_runnable_plan_status(p.status) and plan_is_selectable(p, retired)
-            for p in artifacts.list()
-        )
+        return bool(store.selectable_plan_ids())
     except Exception:  # noqa: BLE001 — absent store means nothing runnable
         return False
     finally:
-        artifacts.close()
+        store.close()
 
 
 def untested_hypothesis_count(workspace: Workspace) -> int:
