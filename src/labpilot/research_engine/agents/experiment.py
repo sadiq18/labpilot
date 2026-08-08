@@ -172,5 +172,18 @@ class ExperimentSpecialist:
         if status == "failed" or result.data.get("error"):
             event_payload["error"] = result.data.get("error")
             self._emit(MODEL_FAILED, event_payload)
+            # A failed run did not complete, and saying so cost a campaign.
+            # `metrics` here is whatever was on disk, which after a crash is the
+            # *previous* run's numbers. Emitting `ExperimentCompleted` anyway
+            # published those as this execution's result: measured 2026-08-08,
+            # E-147 died on `import catboost` and the evidence-refresh note
+            # recorded `rmse 13.957107` — E-003's figure from six days earlier.
+            # The Conductor reads that note in `build_observe_bundle`, so its
+            # next decision saw a completed experiment with a real score and
+            # re-ran the same broken file. Sixteen dispatches, no code written.
+            #
+            # Both subscribers of this event — the evidence-refresh note and the
+            # experience-memory writer — record a *result*, and a crash has none.
+            return refs
         self._emit(EXPERIMENT_COMPLETED, event_payload)
         return refs

@@ -100,9 +100,7 @@ class ResearchEngineer:
             # metrics (false-success training marked done).
             self._reset_tasks_for_retry(plan)
             if plan.status != PlanStatus.IN_PROGRESS:
-                self._plan_store.update_plan_status(
-                    execution.plan_id, PlanStatus.IN_PROGRESS
-                )
+                self._plan_store.update_plan_status(execution.plan_id, PlanStatus.IN_PROGRESS)
         return self._run_execution(execution_id)
 
     def _run_execution(self, execution_id: str) -> ResearchExecution:
@@ -162,9 +160,7 @@ class ResearchEngineer:
                 llm_client=self.constraints.get("llm_client"),
             )
         except Exception:
-            logger.exception(
-                "Failed to record execution learning for %s", execution_id
-            )
+            logger.exception("Failed to record execution learning for %s", execution_id)
         return result
 
     def _run_task(
@@ -231,9 +227,7 @@ class ResearchEngineer:
             decision = decide_recovery(task, evidence, attempt=attempt)
             if decision.action == RecoveryAction.RETRY:
                 attempt += 1
-                logger.info(
-                    "Retrying task %s (%s)", task.id, decision.reason
-                )
+                logger.info("Retrying task %s (%s)", task.id, decision.reason)
                 continue
             if decision.action == RecoveryAction.SKIP:
                 self._plan_store.update_task_status(
@@ -250,9 +244,7 @@ class ResearchEngineer:
                 error=decision.reason,
                 metadata_patch={"attempt": attempt},
             )
-            raise EngineerError(
-                f"task {task.id} failed: {decision.reason}"
-            )
+            raise EngineerError(f"task {task.id} failed: {decision.reason}")
 
     def _load_runnable_plan(self, plan_id: str) -> ResearchPlan:
         plan = self._plan_store.get_plan(plan_id)
@@ -268,14 +260,33 @@ class ResearchEngineer:
             assert plan is not None
             logger.info("Reopened abandoned plan %s for retry", plan_id)
         if plan.status not in {PlanStatus.READY, PlanStatus.IN_PROGRESS}:
-            raise EngineerError(
-                f"plan {plan_id} status={plan.status}; need ready or in_progress"
-            )
+            raise EngineerError(f"plan {plan_id} status={plan.status}; need ready or in_progress")
         validate_plan(plan)
         return plan
 
+    #: Tasks whose whole purpose is to prove the generated code runs. When one
+    #: of these fails, the code is the thing that is wrong.
+    _CODE_VALIDATION_TASKS = frozenset({TaskType.RUN_SMOKE_TEST, TaskType.RUN_UNIT_TEST})
+
     def _reset_tasks_for_retry(self, plan: ResearchPlan) -> None:
-        """Reset failed tasks and the train/eval spine so retries re-produce artifacts."""
+        """Reset failed tasks and the train/eval spine so retries re-produce artifacts.
+
+        `WRITE_CODE` is reset too when a code-validation task failed, and that
+        case is why this method exists in its current form. The spine below
+        deliberately covers only *run* artifacts, so a retry resumed after
+        `write_code` and re-executed the identical file — which cannot pass a
+        gate it has already failed. Measured on rogii 2026-08-08: `train.py`
+        imported `catboost` with no dependency declaration, the smoke test
+        failed, and 16 consecutive `run_experiment` dispatches re-ran that same
+        file. Zero `write_code`. The fix for the underlying defect had shipped
+        eight days earlier and could not be reached, because the only step that
+        would have applied it was marked `done`.
+
+        Scoped to smoke/unit failures on purpose. `run_training` can fail for
+        reasons the code cannot fix — a missing dataset, an OOM — and
+        regenerating a correct file in response would discard working code and
+        spend a codegen call to do it.
+        """
         spine = {
             TaskType.RUN_SMOKE_TEST,
             TaskType.RUN_TRAINING,
@@ -289,6 +300,13 @@ class ResearchEngineer:
         failed_ids = {t.id for t in plan.tasks if t.status == TaskStatus.FAILED}
         if not failed_ids:
             return
+
+        code_is_suspect = any(
+            t.status == TaskStatus.FAILED and t.type in self._CODE_VALIDATION_TASKS
+            for t in plan.tasks
+        )
+        if code_is_suspect:
+            spine = spine | {TaskType.WRITE_CODE}
 
         # Transitive dependencies of every failed task (ancestors in the DAG).
         by_id = {t.id: t for t in plan.tasks}

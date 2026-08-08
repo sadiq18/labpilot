@@ -51,6 +51,13 @@ def install_evidence_refresh_subscriber(bus: EventBus) -> None:
         note_path = _evidence_note_path(payload)
         if note_path is None:
             return
+        if str(payload.get("status") or "").lower() == "failed" or payload.get("error"):
+            # Belt and braces: the publisher no longer emits this for a failed
+            # run, but this note is read straight into the Conductor's observe
+            # bundle, so a wrong one steers the campaign rather than merely
+            # misinforming a reader. Two guards on the path that decides what
+            # the system does next is worth the duplication.
+            return
         note = {
             "updated_at": datetime.now(UTC).isoformat(),
             "source_event": EXPERIMENT_COMPLETED,
