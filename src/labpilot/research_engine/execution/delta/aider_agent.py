@@ -212,14 +212,22 @@ class AiderAgent:
                 )
             before = {rel: (scratch / rel).read_bytes() for rel in edit_targets}
 
-            self._run_aider(scratch, edit_targets, instruction)
+            transcript = self._run_aider(scratch, edit_targets, instruction)
 
             changed = [rel for rel in edit_targets if (scratch / rel).read_bytes() != before[rel]]
             if not changed:
                 # §9.6: a no-op run is a failure, not a silent success — the
                 # same lesson as the stale `metrics.json` guard, which asked
                 # "is there a file?" instead of "did this run write one?".
-                raise AiderError("aider made no edit", kind="aider_no_edit")
+                #
+                # Carrying the transcript because aider explains itself when it
+                # declines, and `aider_no_edit` without that explanation is a
+                # count nobody can act on. The tail, since the refusal comes
+                # after the banner.
+                raise AiderError(
+                    f"aider made no edit. Its last words: {transcript[-800:]}",
+                    kind="aider_no_edit",
+                )
 
             files = [
                 CodeFileSpec(path=rel, content=(scratch / rel).read_text(encoding="utf-8"))
@@ -260,7 +268,7 @@ class AiderAgent:
 
     # -- internals ---------------------------------------------------------
 
-    def _run_aider(self, scratch: Path, edit_targets: list[str], instruction: str) -> None:
+    def _run_aider(self, scratch: Path, edit_targets: list[str], instruction: str) -> str:
         """Run aider against a proxy scoped to this call.
 
         The design scopes the proxy to the campaign. Scoping it to the call is
@@ -291,6 +299,13 @@ class AiderAgent:
                 f"aider exited {result.returncode}: {stderr[-500:]}",
                 kind="aider_failed",
             )
+        # Returned so a no-edit run can say *why*. aider exits 0 when it
+        # declines — it will have explained itself in chat, refused a malformed
+        # search block, or simply answered in prose — and discarding that left
+        # `aider_no_edit` as a count with no diagnosis attached. Precisely the
+        # defect this project already fixed once for training failures, where
+        # the stored error was 1523 characters of progress bar.
+        return (getattr(result, "stdout", "") or "").strip()
 
 
 def _instruction(ctx: StructuredContext) -> str:
