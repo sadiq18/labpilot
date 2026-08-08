@@ -3,15 +3,67 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 from labpilot.research_engine.execution.schemas.code_proposal import CodeProposal
 
 ALLOWED_ROOTS = ("pipeline", "src", "configs", "tests", "artifacts")
 
+#: The training entry point. `read_code`'s skill states the contract: *"Always
+#: end `pipeline/train.py` with exact ``if __name__ == "__main__":`` +
+#: ``main()``"*. Checking it here turns a documented promise into a gate.
+TRAIN_RELPATH = "pipeline/train.py"
+
+_MAIN_GUARD = re.compile(r"^if\s+__name__\s*==\s*[\"']__main__[\"']\s*:", re.MULTILINE)
+_PEP723_OPEN = re.compile(r"^#\s*///\s*script\s*$", re.MULTILINE)
+_PEP723_CLOSE = re.compile(r"^#\s*///\s*$", re.MULTILINE)
+
 
 class ApplyError(ValueError):
-    """Proposal rejected (path escape, empty, syntax)."""
+    """Proposal rejected (path escape, empty, syntax, truncation)."""
+
+
+def _check_dependency_block(rel: str, content: str) -> None:
+    """An opened PEP 723 block must be closed.
+
+    `uv` refuses the whole script otherwise — *"An opening tag (`# /// script`)
+    was found without a closing tag"* — so an unterminated block is not a
+    partial win, it is a run that cannot start. Discovered at run time it costs
+    a campaign step; discovered here it is a rejected proposal and a re-ask.
+    """
+    if not _PEP723_OPEN.search(content):
+        return
+    opening = _PEP723_OPEN.search(content)
+    assert opening is not None
+    if not _PEP723_CLOSE.search(content, opening.end()):
+        raise ApplyError(
+            f"unterminated PEP 723 block in {rel}: `# /// script` was opened and "
+            "never closed with `# ///`. uv rejects the whole script, so the run "
+            "cannot start."
+        )
+
+
+def _check_not_truncated(rel: str, content: str) -> None:
+    """`ast.parse` cannot see a file that was cut off inside its comments.
+
+    Measured on rogii 2026-08-08: codegen returned 624 bytes — a docstring and
+    half a `# requires-python = ` line — and the syntax gate passed it, because
+    a docstring followed by comments is valid Python that simply does nothing.
+    The training run then failed on the unterminated dependency block, and the
+    campaign lost seven executions to a file with no code in it.
+
+    Only `train.py` is checked. Helper modules legitimately have no entry point,
+    and requiring one would reject correct code to catch a rare truncation.
+    """
+    if rel != TRAIN_RELPATH:
+        return
+    if not _MAIN_GUARD.search(content):
+        raise ApplyError(
+            f'{rel} has no `if __name__ == "__main__":` guard, so it defines no '
+            "entry point to run. The usual cause is a truncated response: the "
+            "file parses because what survived was a docstring and comments."
+        )
 
 
 def _is_allowed(rel: str) -> bool:
@@ -48,6 +100,10 @@ def apply_proposal(
                 ast.parse(spec.content)
             except SyntaxError as exc:
                 raise ApplyError(f"syntax error in {rel}: {exc}") from exc
+            # Syntax is necessary and not sufficient — both checks below pass
+            # `ast.parse` and still cannot run.
+            _check_dependency_block(rel, spec.content)
+            _check_not_truncated(rel, spec.content)
         target.write_text(spec.content, encoding="utf-8")
         written.append(target)
     return written
