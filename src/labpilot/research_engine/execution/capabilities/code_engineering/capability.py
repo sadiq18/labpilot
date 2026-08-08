@@ -31,6 +31,7 @@ from labpilot.research_engine.execution.capabilities.code_engineering.apply impo
     apply_proposal,
 )
 from labpilot.research_engine.execution.context import TaskContext
+from labpilot.research_engine.execution.delta import check_delta_consistency
 from labpilot.research_engine.execution.micro_agents.code_engineer import CodeEngineerAgent
 from labpilot.research_engine.execution.schemas import TaskEvidence
 from labpilot.research_engine.execution.schemas.code_proposal import (
@@ -124,6 +125,44 @@ def _summarise_profile(profile: dict) -> dict:
     return trimmed
 
 
+def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object]:
+    """Record what the change touched. Observe-only — this gates nothing.
+
+    Only the checks that need **no vocabulary** run here: `touched_functions`
+    and confinement. `keep`/`add`/`combine` are deliberately not passed, and
+    `check_delta_consistency` returns an empty verdict rather than a fabricated
+    one when no claim is supplied.
+
+    That omission is the finding, not an oversight. Those three checks need
+    *code identifiers*; what the system records is *technique names*, and on
+    rogii's most recent campaign 5 of 9 were unusable as identifiers —
+    `feature_engineering` (a category), `add+model` (two names concatenated),
+    and `the` (a regex fallback that captured an article). Feeding those in
+    would make every such experiment report a guaranteed-false violation: the
+    guard would work perfectly on input that was wrong. Nothing maps a
+    technique name to a symbol, and hand-maintaining that map is the
+    curated-set-answering-an-open-world-question pattern already rejected for
+    `KNOWN_TECHNIQUES`, the package allowlist, and the template pack.
+
+    What survives is the check the design calls **the dangerous one**: a delta
+    that added a technique *and* quietly retuned something else, where
+    `technique_attribution` credits the whole `cv_gain` to one name. That is a
+    fact about how wide the change is, so it needs no vocabulary at all.
+    """
+    train = next(
+        (f for f in proposal.files if f.path.endswith("pipeline/train.py")),
+        None,
+    )
+    if train is None:
+        return {}
+    report = check_delta_consistency(prior_train, train.content)
+    meta = report.as_metadata()
+    # No claim was supplied, so `consistent` would report a pass nobody earned.
+    meta.pop("consistent", None)
+    meta.pop("violations", None)
+    return {f"delta_{k}": v for k, v in meta.items()}
+
+
 class CodeEngineeringCapability(BaseCapability):
     name = "code_engineering"
 
@@ -162,8 +201,7 @@ class CodeEngineeringCapability(BaseCapability):
         notes_path = root / "artifacts" / "code_notes.json"
         notes_path.parent.mkdir(parents=True, exist_ok=True)
         notes_path.write_text(
-            json.dumps({"files": notes, "competition": context.competition}, indent=2)
-            + "\n",
+            json.dumps({"files": notes, "competition": context.competition}, indent=2) + "\n",
             encoding="utf-8",
         )
         return evidence(
@@ -343,6 +381,7 @@ class CodeEngineeringCapability(BaseCapability):
 
         digests = {str(p): file_digest(p) for p in written}
         paths = [str(p) for p in written]
+        delta = _observe_delta(prior_train, proposal)
         if backup_path is not None:
             paths.append(str(backup_path))
         return evidence(
@@ -371,9 +410,12 @@ class CodeEngineeringCapability(BaseCapability):
                 "technique_canonical": resolution.canonical,
                 "technique_status": resolution.status,
                 "technique_reason": resolution.reason,
+                **delta,
                 "technique_origin": (
-                    "registry" if resolution.changes_rendering and origin == "template"
-                    else "llm" if origin == "llm"
+                    "registry"
+                    if resolution.changes_rendering and origin == "template"
+                    else "llm"
+                    if origin == "llm"
                     else "none"
                 ),
             },
@@ -419,9 +461,7 @@ class CodeEngineeringCapability(BaseCapability):
                 HypothesisStore,
             )
 
-            hyp = HypothesisStore(context.paths.base_dir, context.competition).get(
-                hyp_id
-            )
+            hyp = HypothesisStore(context.paths.base_dir, context.competition).get(hyp_id)
         except Exception:
             return {}
         if hyp is None:
@@ -463,9 +503,7 @@ class CodeEngineeringCapability(BaseCapability):
                 CodeRenderer,
             )
 
-            template = get_template(
-                choice.problem_type, template_name=choice.template_name
-            )
+            template = get_template(choice.problem_type, template_name=choice.template_name)
             if template is None:
                 return None
             config = load_config()
