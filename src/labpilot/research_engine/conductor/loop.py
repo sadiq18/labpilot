@@ -170,12 +170,15 @@ def _next_hypothesis_id(workspace: Workspace) -> str | None:
         return None
     if not proposed:
         return None
-    ranked = sorted(
-        proposed,
-        key=lambda h: (getattr(h, "confidence", 0.0) or 0.0, h.id),
-        reverse=True,
-    )
-    return ranked[0].id
+    # Ranked by posterior, not by the prior generation wrote once and never
+    # revisited. `confidence` is set at `create()` and updated by nothing, so
+    # sorting on it alone kept `hyp:H-010` at 0.99 through the runs that
+    # disproved it, and ranked a technique measured as *harmful* above one
+    # nobody had tried.
+    from labpilot.research_engine.intelligence.hypothesis.selection import rank_hypotheses
+
+    ranked = rank_hypotheses(proposed, workspace.knowledge_dir, workspace.competition)
+    return ranked[0].id if ranked else None
 
 
 def _baseline_plan_exists(workspace: Workspace) -> bool:
