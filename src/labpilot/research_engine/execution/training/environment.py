@@ -52,7 +52,12 @@ _SCRIPT_BLOCK = re.compile(r"^# /// script\s*$", re.MULTILINE)
 #: Both quote styles: PEP 723 metadata is TOML, single quotes are valid there,
 #: and models emit them. `uv` installs either way, so a double-quote-only parser
 #: would report no dependencies for a script that has them.
-_DEP_ENTRY = re.compile(r"""^#\s*["']([^"']+)["']\s*,?\s*$""", re.MULTILINE)
+#: The backreference matters: `["']...["']` accepts `"catboost>=1.2'`, whose
+#: closing quote does not match its opening one. That is not valid TOML, so `uv`
+#: rejects the whole block at install time — turning a typo into a failed run
+#: rather than one skipped dependency. Matching the pair means a malformed entry
+#: is simply not a dependency, and the rest of the block still parses.
+_DEP_ENTRY = re.compile(r"""^#\s*(["'])([^"']+)\1\s*,?\s*$""", re.MULTILINE)
 
 #: Environment variables never passed to generated code. Prefix matching, because
 #: provider keys arrive under names this list cannot enumerate ahead of time —
@@ -97,7 +102,7 @@ def declared_dependencies(script: Path | str) -> list[str]:
         return []
     end = text.find("# ///", match.end())
     block = text[match.end() : end if end != -1 else len(text)]
-    return [m.group(1).strip() for m in _DEP_ENTRY.finditer(block)]
+    return [m.group(2).strip() for m in _DEP_ENTRY.finditer(block)]
 
 
 def uv_available() -> bool:
@@ -113,9 +118,10 @@ def training_command(script: Path, *, python: str) -> list[str]:
     existing interpreter stays the default — which also keeps every template
     that predates this change working unchanged.
     """
-    if declares_dependencies(script) and uv_available():
+    declares = declares_dependencies(script)
+    if declares and uv_available():
         return ["uv", "run", "--script", str(script)]
-    if declares_dependencies(script):
+    if declares:
         logger.warning(
             "%s declares dependencies but uv is not on PATH; running with the "
             "current interpreter, which will fail if anything declared is missing",
