@@ -78,7 +78,7 @@ provenance.
 |---|---|---|
 | 0 | fitroute OpenAI-compatible proxy | **shipped** (PR #110) |
 | 1a | `CodeAgent` seam + hypothesis-consistency checks | **shipped** (PR #111) |
-| 1b | wire the checks into the whole-file path, observe-only | **next** |
+| 1b | wire the checks into the whole-file path, observe-only | **partly shipped** — confinement only; see below |
 | 1c | `AiderAgent` + copy/diff/propose + per-execution provenance | not started |
 | 2 | opt-in via config; measure the failure rate | not started |
 | 3 | flip the default when the rate justifies it | not started |
@@ -91,10 +91,18 @@ matters most" is already in production** — whole-file regeneration has the sam
 false-attribution failure and hides it better, so waiting for aider would leave
 it running while building its replacement.
 
-Nothing in production calls the checks yet. Two of their heuristics are
-uncalibrated guesses, which is what 1b's observe-only run is for; the open
-problem there is deriving `keep` / `add` / `combine` from a hypothesis, which
-nothing does today.
+**1b found that the planned derivation cannot work.** It was going to read
+`technique` off the plan metadata; on rogii's 19 real plans that field holds
+hypothesis ids, category names, two techniques glued together, and once the
+bare word `the`. The most recent campaign is 5 unusable in 9. Nothing maps a
+technique name to a code identifier, and `TechniqueSpec` has no field for one.
+
+So 1b shipped the half that needs no vocabulary — `touched_functions` and the
+wide-delta flag, now recorded on every evidence card — which is the check that
+catches *two changes, one attribution*. Preservation, addition and combination
+stay dark until a claim can be sourced honestly; the promising route is having
+codegen declare the symbols it kept, added and combined, and verifying the code
+against that.
 
 ## Exit criteria
 

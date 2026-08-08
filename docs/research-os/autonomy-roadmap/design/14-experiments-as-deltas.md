@@ -603,6 +603,45 @@ default-off with a number attached rather than a guess.
    earns its keep, and getting it wrong feeds the checks bad input — the
    *guard exists and its input is wrong* pattern, a dozen instances deep.
 
+   **Measured 2026-08-08, and it changed the plan.** The derivation was going to
+   read `technique` off the plan metadata. On rogii's 19 real plans that field
+   holds `hyp:H-010` (a hypothesis id, 6 plans), `feature_engineering` (a
+   category), `dataset+rolling_features` and `add+model` (two names glued into
+   one string), `test`, and `the` — a regex fallback that captured an article.
+   The most recent campaign, after the miner fix, is **5 unusable in 9**. Only
+   `SWA`, `EMA`, `vit`, `polynomial_features` and `Mixed Precision` are real
+   technique names, and even those are not *code identifiers*: `SWA` is not an
+   importable symbol.
+
+   `TechniqueSpec` carries `name`, `aliases`, `feature_recipes`, `applies_to`,
+   `requires`, `description` — **nothing that maps a technique to a symbol**.
+   Building that map by hand is the curated-set-answering-an-open-world-question
+   pattern rejected three times already.
+
+   So 1b ships the vocabulary-free half only: `touched_functions` and
+   confinement, recorded as `delta_touched_functions` / `delta_flags`. That is
+   not a consolation prize — it is the check §5 calls *the dangerous one*, where
+   a delta does more than it claims and `technique_attribution` credits the
+   whole gain to one name.
+
+   `consistent` and `violations` are **omitted** rather than defaulted to a
+   pass, because no claim was checked and a fabricated verdict is the failure
+   mode this whole module exists to prevent.
+
+   Calibration against rogii's real 331-line `train.py` (8 functions): a
+   targeted technique delta touches 1, a whole-file regeneration touches 8, and
+   the threshold of 5 separates them cleanly. **But the threshold is absolute,
+   not relative** — a 30-function file would flag at 20% changed. Revisit when a
+   second competition provides a second data point.
+
+   **Still open: where do `keep`/`add`/`combine` come from?** The promising
+   answer is that codegen *declares its own claim* — the agent names the symbols
+   it kept, added and combined, and the checks verify the code against that
+   declaration. It cannot catch a model that lies consistently, but it catches
+   the actual failure (code that contradicts its author's stated intent) and it
+   needs no vocabulary at all. Deferred to its own step rather than guessed at
+   here.
+
 3. **1c — `AiderAgent` + copy/diff/propose, pointed at the proxy**, with
    per-execution code provenance (§6).
 4. Opt-in via config; measure `aider_no_edit` and `aider_syntax_fail`.
