@@ -23,6 +23,7 @@ from labpilot.research_engine.shared.experiments.models import (
     HypothesisOrigin,
     HypothesisStatus,
 )
+from labpilot.research_engine.shared.labels import is_record_reference
 
 logger = logging.getLogger(__name__)
 
@@ -476,7 +477,13 @@ def _techniques_from_plan(plan: ResearchPlan) -> list[str]:
     out: list[str] = []
     for t in tags:
         key = str(t).strip()
-        if not key or key.lower() in _skip or key.lower().startswith("fork:"):
+        # `is_record_reference` covers `hyp:` as well as `fork:`. This line
+        # used to test `fork:` alone — the same omission `shared/labels.py`
+        # records as the first failed attempt, repeated here in a third file.
+        # Line 458 above appends `hyp:{hypothesis_id}` for provenance, so this
+        # function *is* the source: 13 record ids reached `techniques.name` on
+        # rogii, and six plans asked codegen to implement `hyp:H-010`.
+        if not key or key.lower() in _skip or is_record_reference(key):
             continue
         if key in seen:
             continue

@@ -23,6 +23,7 @@ from labpilot.research_engine.intelligence.models import (
     ResearchArtifactType,
 )
 from labpilot.research_engine.intelligence.paths import ResearchPaths
+from labpilot.research_engine.shared.labels import is_record_reference
 
 __all__ = ["KnowledgeStore", "SCHEMA_PATH", "SCHEMA_VERSION"]
 
@@ -279,7 +280,25 @@ class KnowledgeStore:
 
         Stub merge policy (Plan 8 owns real merging): non-empty text fields win,
         confidence keeps the max seen. Returns the deterministic technique id.
+
+        Raises `ValueError` for a record reference (`hyp:H-010`, `fork:H-003`).
+        This is the **single door** into the vocabulary, and it was the one
+        place `is_record_reference` was not called — it guarded four readers
+        while the writer stayed open, so `techniques.name` grew from the five
+        record ids `shared/labels.py` measured to thirteen. Filtering readers
+        cannot shrink a table that keeps being written to.
+
+        Loud rather than a silent skip: a caller passing one has a bug, and
+        `labels.py` records that the previous guard failed precisely by
+        *reading as protection while doing nothing*. Returning an empty id
+        would repeat that, and would hand `link_artifact_technique` a dangling
+        row.
         """
+        if is_record_reference(name):
+            raise ValueError(
+                f"{name!r} is a record reference, not a technique name. "
+                "Filter tags with `is_record_reference` before merging."
+            )
         tid = technique_id(name)
         now = _now()
         row = self._conn.execute(
