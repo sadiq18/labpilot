@@ -341,6 +341,12 @@ class CodeEngineeringCapability(BaseCapability):
                 "workspace_root": str(root),
                 "skill_agent_key": "code_engineer",
                 "prior_train_py": prior_train[:120_000],
+                # Why the last attempt failed, set by `_reset_tasks_for_retry`
+                # when it re-queues this task. Without it the model is asked to
+                # try again from the inputs that produced the broken file, and
+                # reproduces the same mistake — measured on rogii 2026-08-08,
+                # where a `Geology: object` column was handed to LightGBM.
+                "retry_reason": str(context.task.metadata.get("retry_reason") or "")[:2000],
                 "parent_hypothesis_id": plan_meta.get("parent_hypothesis_id"),
                 "parent_metrics": plan_meta.get("parent_metrics") or {},
                 **technique_fields,

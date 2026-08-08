@@ -378,6 +378,13 @@ class ResearchEngineer:
                     ancestors.add(dep)
                     stack.append(dep)
 
+        # Why the code is being rebuilt, so codegen is not asked to try again
+        # from the inputs that produced the broken file. Regenerating blind
+        # reproduces the same mistake and burns a step doing it; naming the
+        # failure is the mechanism that took prose-reply failures from
+        # three-in-eight to 30 of 30.
+        retry_reason = self._first_failure_reason(plan) if code_is_suspect else ""
+
         for task in plan.tasks:
             reset = task.id in failed_ids or (
                 task.id in ancestors
@@ -386,12 +393,36 @@ class ResearchEngineer:
             )
             if not reset:
                 continue
+            patch: dict[str, object] = {"retried_after_abandon": True}
+            if retry_reason and task.type == TaskType.WRITE_CODE:
+                patch["retry_reason"] = retry_reason
             self._plan_store.update_task_status(
                 task.id,
                 TaskStatus.PENDING,
-                metadata_patch={"retried_after_abandon": True},
+                metadata_patch=patch,
                 error="",
             )
+
+    @staticmethod
+    def _first_failure_reason(plan: ResearchPlan) -> str:
+        """The error text from the failed task closest to the code.
+
+        Prefers a code-validation failure over anything downstream: a smoke
+        test names what would not run, while `evaluate` failing three steps
+        later describes a consequence.
+        """
+        failed = [
+            t
+            for t in plan.tasks
+            if t.status == TaskStatus.FAILED and str(t.metadata.get("error") or "").strip()
+        ]
+        if not failed:
+            return ""
+        code_first = sorted(
+            failed,
+            key=lambda t: (t.type not in ResearchEngineer._CODE_VALIDATION_TASKS, t.order),
+        )
+        return str(code_first[0].metadata.get("error") or "").strip()
 
 
 def default_stub_registry() -> CapabilityRegistry:
