@@ -268,6 +268,45 @@ class ResearchEngineer:
     #: of these fails, the code is the thing that is wrong.
     _CODE_VALIDATION_TASKS = frozenset({TaskType.RUN_SMOKE_TEST, TaskType.RUN_UNIT_TEST})
 
+    def _train_script_is_unrunnable(self) -> bool:
+        """True when the script we are about to re-run cannot possibly work.
+
+        Asking "which task failed?" is not enough, because the task that
+        notices is not always the one scoped as a code check. Measured on rogii
+        2026-08-08: codegen returned a 624-byte `train.py` — a docstring and
+        half a `# requires-python` line — and **`run_smoke_test` passed it**.
+        A docstring followed by comments executes fine and exits 0, so the gate
+        whose whole purpose is "does this run" saw success. Only `run_training`
+        failed, which is deliberately excluded from the code-suspect set
+        because training also fails for reasons code cannot fix.
+
+        So this asks about the artifact instead of the task: if the file on
+        disk fails the same checks `apply_proposal` enforces, no retry of it
+        can succeed and `write_code` has to run again. Reuses those validators
+        rather than restating them — two copies of this rule would be the
+        third instance of a guard whose input drifted from its twin.
+        """
+        from labpilot.research_engine.execution.capabilities.code_engineering.apply import (
+            TRAIN_RELPATH,
+            ApplyError,
+            _check_dependency_block,
+            _check_not_truncated,
+        )
+
+        root = competition_workspace_path(self.knowledge_dir, self.competition)
+        script = Path(root) / TRAIN_RELPATH
+        try:
+            content = script.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        try:
+            _check_dependency_block(TRAIN_RELPATH, content)
+            _check_not_truncated(TRAIN_RELPATH, content)
+        except ApplyError as exc:
+            logger.info("Re-queuing write_code: %s", exc)
+            return True
+        return False
+
     def _reset_tasks_for_retry(self, plan: ResearchPlan) -> None:
         """Reset failed tasks and the train/eval spine so retries re-produce artifacts.
 
@@ -301,9 +340,12 @@ class ResearchEngineer:
         if not failed_ids:
             return
 
-        code_is_suspect = any(
-            t.status == TaskStatus.FAILED and t.type in self._CODE_VALIDATION_TASKS
-            for t in plan.tasks
+        code_is_suspect = (
+            any(
+                t.status == TaskStatus.FAILED and t.type in self._CODE_VALIDATION_TASKS
+                for t in plan.tasks
+            )
+            or self._train_script_is_unrunnable()
         )
         if code_is_suspect:
             spine = spine | {TaskType.WRITE_CODE}

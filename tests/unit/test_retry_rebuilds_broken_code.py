@@ -65,14 +65,35 @@ def _plan(smoke_status: TaskStatus, *, training_status=TaskStatus.PENDING) -> Re
     )
 
 
-def _reset(plan: ResearchPlan) -> dict[str, TaskStatus]:
+def _reset(plan: ResearchPlan, *, unrunnable: bool = False) -> dict[str, TaskStatus]:
     from labpilot.research_engine.execution.engineer import ResearchEngineer
 
     store = _FakeStore()
     engineer = ResearchEngineer.__new__(ResearchEngineer)
     engineer._plan_store = store  # type: ignore[attr-defined]
+    engineer._train_script_is_unrunnable = lambda: unrunnable  # type: ignore[method-assign]
     engineer._reset_tasks_for_retry(plan)
     return store.updates
+
+
+def test_an_unrunnable_script_on_disk_rebuilds_the_code():
+    """The task that notices is not always a code check.
+
+    rogii 2026-08-08: `run_smoke_test` **passed** a 624-byte `train.py` with no
+    code — a docstring plus comments exits 0 — so only `run_training` failed,
+    and that is excluded from the code-suspect set on purpose.
+    """
+    plan = _plan(TaskStatus.DONE, training_status=TaskStatus.FAILED)
+
+    updates = _reset(plan, unrunnable=True)
+    assert updates.get("T02") == TaskStatus.PENDING
+
+
+def test_a_runnable_script_is_not_rebuilt_on_a_training_failure():
+    """Still no rebuild when the artifact is fine — an OOM is not a code bug."""
+    plan = _plan(TaskStatus.DONE, training_status=TaskStatus.FAILED)
+
+    assert "T02" not in _reset(plan, unrunnable=False)
 
 
 def test_a_failed_smoke_test_rebuilds_the_code():
