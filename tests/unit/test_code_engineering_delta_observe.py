@@ -221,3 +221,28 @@ def test_a_claim_parses_however_the_model_spells_it(payload, expected):
     import json
 
     assert CodeProposal.model_validate_json(json.dumps(payload)).kept == expected
+
+
+def test_a_helper_that_is_defined_but_never_called_is_a_violation():
+    """`check_addition` asks whether the symbol is *called or imported*, not
+    whether it was *defined*. A function nothing calls changes no behaviour, so
+    crediting a technique for it would be a false attribution — the same
+    "added but unused" failure as a discarded second model.
+
+    Found by running the real rogii train.py through this helper: a declared
+    `_blend` that was defined and never wired in reported inconsistent, which
+    is correct.
+    """
+    parent = "def train(X):\n    return X\n"
+    child = "def _blend(a, b):\n    return (a + b) / 2\n\n\ndef train(X):\n    return X\n"
+    meta = _observe_delta(parent, _proposal(child, added=["_blend"]))
+    assert meta["delta_consistent"] is False
+
+
+def test_a_helper_that_is_defined_and_used_passes():
+    parent = "def train(X):\n    return X\n"
+    child = (
+        "def _blend(a, b):\n    return (a + b) / 2\n\n\ndef train(X):\n    return _blend(X, X)\n"
+    )
+    meta = _observe_delta(parent, _proposal(child, added=["_blend"]))
+    assert meta["delta_consistent"] is True, meta["delta_violations"]
