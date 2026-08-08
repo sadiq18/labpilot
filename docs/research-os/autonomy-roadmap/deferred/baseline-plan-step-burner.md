@@ -2,7 +2,7 @@
 
 **Status:** Backlog · **Kind:** live defect, not a deferred feature ·
 **Found:** PR #112 review, 2026-08-08 · **Site:**
-[`conductor/actions.py:194-197`](../../../src/labpilot/research_engine/conductor/actions.py#L194)
+[`conductor/actions.py:194-197`](../../../../src/labpilot/research_engine/conductor/actions.py#L194)
 
 Deferred out of PR #112 deliberately: the fix is a campaign-policy decision, and
 that PR was about delta consistency. Patching campaign policy blind, inside an
@@ -36,7 +36,7 @@ step succeeded.
 
 ## This is defect #7, fixed once, incompletely
 
-[`evidence-log.md`](../autonomy-roadmap/evidence-log.md) records it from the
+[`evidence-log.md`](../evidence-log.md) records it from the
 2026-08-02 rogii run:
 
 | # | Defect | Fix |
@@ -50,7 +50,7 @@ wrong.**
 
 ## When `next_hypothesis_id` is None
 
-[`loop.py:105`](../../../src/labpilot/research_engine/conductor/loop.py#L105)
+[`loop.py:105`](../../../../src/labpilot/research_engine/conductor/loop.py#L105)
 returns the highest-confidence `PROPOSED` hypothesis, or `None` when there are
 none. So the hole is open whenever the ledger holds no proposed hypothesis —
 early in a campaign, or after every proposal has been tested or rejected. That is
@@ -59,7 +59,7 @@ not an exotic state; it is the normal state right after the baseline lands.
 ## Why it is not a one-line fix
 
 Dropping the flag is not sufficient.
-[`handlers/plan.py`](../../../src/labpilot/research_engine/tools/handlers/plan.py)
+[`handlers/plan.py`](../../../../src/labpilot/research_engine/tools/handlers/plan.py)
 raises on receiving neither:
 
 ```python

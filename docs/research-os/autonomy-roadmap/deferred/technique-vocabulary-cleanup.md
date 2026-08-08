@@ -2,8 +2,8 @@
 
 **Status:** Backlog · **Kind:** data repair in existing workspaces ·
 **Found:** PR #112, 2026-08-08 · **Related:**
-[M18 technique vocabulary](../autonomy-roadmap/13-technique-vocabulary.md) ·
-[`shared/labels.py`](../../../src/labpilot/research_engine/shared/labels.py)
+[M18 technique vocabulary](../13-technique-vocabulary.md) ·
+[`shared/labels.py`](../../../../src/labpilot/research_engine/shared/labels.py)
 
 PR #112 guarded the **writers**. It did not clean what earlier runs already
 wrote, because that edits the user's workspace, which is their call.
@@ -65,7 +65,7 @@ because it happened to be one word long.
 
 ## Where it should live
 
-Not a one-off script. [`evidence/repair.py`](../../../src/labpilot/research_engine/evidence/repair.py)
+Not a one-off script. [`evidence/repair.py`](../../../../src/labpilot/research_engine/evidence/repair.py)
 already sets the pattern, and states the reason:
 
 > Repair runs from the campaign, not as a one-off migration script the user must
@@ -76,7 +76,7 @@ Same principle as `ClaimPromoter.revalidate_claims`: correct what is recorded
 before adding to it.
 
 The schema migrator at
-[`accessor/sqlite/migrate.py`](../../../src/labpilot/accessor/sqlite/migrate.py)
+[`accessor/sqlite/migrate.py`](../../../../src/labpilot/accessor/sqlite/migrate.py)
 is the wrong home — it is `CREATE TABLE IF NOT EXISTS` DDL, deliberately, and
 `SCHEMA_VERSION` tracks structure. This is row content, not structure.
 

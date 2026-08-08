@@ -173,6 +173,21 @@ cost. When a plan's rationale seems excessive, they are why.
   guards that looked protective and were not, and three corrections to
   diagnoses stated too confidently.
 
+### Deferred — understood, not yet fixed
+
+[`deferred/`](deferred/) holds work found while driving this roadmap that was
+deliberately not fixed in the PR that found it, with the reason why. Each names
+its site, what it costs, and how to measure the fix — so picking one up does not
+start from scratch.
+
+| Item | Why deferred |
+|---|---|
+| [baseline-plan-step-burner.md](deferred/baseline-plan-step-burner.md) | **Live defect.** [#7](evidence-log.md) fixed only the case where a hypothesis exists; with none proposed the idempotent baseline re-runs and burns steps. The fix is campaign policy, not arg resolution |
+| [technique-vocabulary-cleanup.md](deferred/technique-vocabulary-cleanup.md) | M18's writers were guarded in PR #112; the rows earlier runs wrote remain. Cleaning them edits the user's workspace |
+
+This is not the [post-M6 backlog](../backlog/README.md), which catalogues
+deferred *features*. These are defects and repairs with a known cause.
+
 ---
 
 ## The one habit to break

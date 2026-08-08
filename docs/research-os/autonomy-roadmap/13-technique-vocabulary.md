@@ -55,6 +55,11 @@ in the conductor repair chain, `research techniques report`.
 **Step 2** (PR #101): consumers filter on status — `generate_candidates`,
 `SymbolicFetcher`, claim promotion.
 
+**Still open** (PR #112, 2026-08-08): the writers into `techniques.name` were
+unguarded until then, so record references already in existing workspaces stay —
+12 in rogii, up from the 5 `labels.py` measured. Aging hides them; nothing
+removes them. [deferred/technique-vocabulary-cleanup.md](deferred/technique-vocabulary-cleanup.md).
+
 ### What the review of the first attempt caught
 
 Step 2 was originally bundled into step 1, and the consumer filters made

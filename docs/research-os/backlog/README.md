@@ -26,6 +26,4 @@ milestone or explicit pickup.
 | [experience-pattern-extraction.md](experience-pattern-extraction.md) | Emergent prompt/model/feature/paper patterns from experience usage (post-M6) |
 | [experience-facet-extraction.md](experience-facet-extraction.md) | Evidence-backed facets (confidence → artifact extractors → embeddings → LLM → facet graph) |
 | [experience-facet-extraction-stage2-plan.md](experience-facet-extraction-stage2-plan.md) | Stage 2 design: FacetPipeline roles, files, tests |
-| [baseline-plan-step-burner.md](baseline-plan-step-burner.md) | **Live defect** — `generate_plan(baseline=True)` re-runs when no hypothesis is proposed; evidence-log #7 fixed incompletely |
-| [technique-vocabulary-cleanup.md](technique-vocabulary-cleanup.md) | Repair record references already in `techniques.name` (12 in rogii); writers guarded in #112, rows remain |
 | [backlog-grooming.md](backlog-grooming.md) | Post-M6 recommended pickup order (capability · so what · impact) |
