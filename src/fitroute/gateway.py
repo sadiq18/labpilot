@@ -27,7 +27,17 @@ logger = logging.getLogger("fitroute.gateway")
 
 
 class RoleUnavailable(RuntimeError):
-    """No provider can serve this role, and waiting would exceed the bound."""
+    """No provider can serve this role, and waiting would exceed the bound.
+
+    ``retry_after`` carries how long `select_route` said the wait would be, when
+    it knew. A caller that cannot sleep — the proxy, holding someone else's
+    socket — turns it into a `Retry-After` header, so the client backs off by
+    the real figure instead of a constant.
+    """
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
@@ -203,8 +213,17 @@ class RoleBoundClient:
         decision = self._gateway.preview(self.role)
         return decision.model
 
-    def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
+    def complete(
+        self, system: str, user: str, *, json_mode: bool = False, allow_wait: bool = True
+    ) -> str:
         """Complete for this role, failing over to the next provider if needed.
+
+        ``allow_wait=False`` turns a paced wait into an immediate
+        `RoleUnavailable`. In-process callers want the wait — "everything is
+        limited, the window reopens in 20s" is worth pacing for. A caller
+        holding someone else's socket does not: `server.py` must answer 429 and
+        let the client back off, because sleeping there blocks every other
+        proxied request behind the same lock.
 
         Selection is *predictive*: it knows what our own ledger says we have
         spent, not what the upstream thinks. Those disagree — an OpenRouter
@@ -229,7 +248,10 @@ class RoleBoundClient:
                 # sleeping that cooldown out inside one call trades a fast, and
                 # actionable, error for a stalled campaign.
                 return self._complete_once(
-                    system, user, json_mode=json_mode, allow_wait=attempt == 1
+                    system,
+                    user,
+                    json_mode=json_mode,
+                    allow_wait=allow_wait and attempt == 1,
                 )
             except RoleUnavailable:
                 # Everything we could reach has now been cooled down by this
@@ -285,7 +307,8 @@ class RoleBoundClient:
                         f"over the {spec.max_wait_seconds:.0f}s bound)"
                         if decision.wait_seconds > 0
                         else ""
-                    )
+                    ),
+                    retry_after=decision.wait_seconds or None,
                 )
             logger.info(
                 "role=%s waiting %.0fs (%s)", self.role, decision.wait_seconds, decision.reason
@@ -298,7 +321,10 @@ class RoleBoundClient:
                 credential_resolver=gateway.credential_resolver,
             )
             if decision.provider is None:
-                raise RoleUnavailable(f"role {self.role!r} still unavailable: {decision.reason}")
+                raise RoleUnavailable(
+                    f"role {self.role!r} still unavailable: {decision.reason}",
+                    retry_after=decision.wait_seconds or None,
+                )
 
         provider = decision.provider
         model = decision.model

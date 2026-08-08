@@ -166,22 +166,39 @@ def handle_chat_completion(gateway: LLMGateway, payload: dict[str, Any]) -> dict
     client = gateway.for_role(role)
     json_mode = str((payload.get("response_format") or {}).get("type") or "") == "json_object"
     try:
-        text = client.complete(system, user, json_mode=json_mode)
+        # `allow_wait=False` is the whole point. In-process callers may pace on
+        # `wait_seconds`; this one is holding aider's socket, and the call runs
+        # inside `_GATEWAY_LOCK` — so a paced wait would block every other
+        # proxied request behind it, for up to `max_wait_seconds` (900s for
+        # codegen, whose `on_exhaustion` is `wait`). Refusing fast and letting
+        # the client back off is both faster and honest.
+        text = client.complete(system, user, json_mode=json_mode, allow_wait=False)
     except RoleUnavailable as exc:
-        # Nothing routable. `select_route` already tried every provider and, for
-        # `degrade` roles, every weaker one — so this is genuine exhaustion, and
-        # 429 + Retry-After is the honest answer. litellm honours it natively,
-        # which is better than us holding the connection open: a client-side
-        # timeout mid-wait turns into a retry and makes the pressure worse.
+        # Genuine exhaustion: `select_route` tried every provider and, for
+        # `degrade` roles, every weaker one. 429 + Retry-After is the answer
+        # litellm honours natively, and it reports the wait the router actually
+        # computed rather than a constant — a client told to back off for the
+        # real window retries at the right time.
+        wait = getattr(exc, "retry_after", None)
         raise ProxyError(
-            HTTPStatus.TOO_MANY_REQUESTS, str(exc), retry_after=_MAX_RETRY_AFTER
+            HTTPStatus.TOO_MANY_REQUESTS,
+            str(exc),
+            retry_after=min(int(wait), _MAX_RETRY_AFTER) if wait else _MAX_RETRY_AFTER,
         ) from exc
     return completion_response(text, str(payload.get("model")), client.last_served)
 
 
+#: Roles that always appear in `/v1/models`, whether or not a workspace names
+#: them. A role with no explicit entry still routes — `role_spec` falls back to
+#: `default` — but a client that probes this list first may refuse a model id it
+#: has not seen, so omitting them would break `labpilot/codegen` on exactly the
+#: workspaces that did not bother to configure it.
+_WELL_KNOWN_ROLES = ("default", "codegen", "reasoning", "summarize")
+
+
 def handle_models(gateway: LLMGateway) -> dict[str, Any]:
     """Advertise roles, not providers — litellm probes this on startup."""
-    roles = sorted(set(gateway.routing.roles) | {"default"})
+    roles = sorted(set(gateway.routing.roles) | set(_WELL_KNOWN_ROLES))
     return {
         "object": "list",
         "data": [
@@ -278,6 +295,17 @@ class ProxyServer:
     """
 
     def __init__(self, gateway: LLMGateway, *, host: str = "127.0.0.1", port: int = 0) -> None:
+        # There is no authentication. Bound to loopback that is fine — the only
+        # client is a subprocess this process started. Binding elsewhere turns
+        # it into an unauthenticated spend path against the operator's keys, so
+        # a non-loopback host says so out loud rather than failing quietly the
+        # first time someone copies the line.
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            logger.warning(
+                "fitroute proxy binding to %s: there is no auth on this server, "
+                "so anything that can reach it can spend the configured API keys",
+                host,
+            )
         self._server = ThreadingHTTPServer((host, port), build_handler(gateway))
         self._thread: threading.Thread | None = None
 

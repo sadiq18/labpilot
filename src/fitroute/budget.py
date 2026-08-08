@@ -12,6 +12,7 @@ most providers, lengthens the cooldown.
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +58,11 @@ class BudgetLedger:
         # "SQLite objects created in a thread can only be used in that same
         # thread".
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
+        # The lock lives here, not in the caller. `check_same_thread=False`
+        # makes cross-thread use *possible*; only serialising makes it *safe*,
+        # and a rule that holds solely while every caller remembers to take a
+        # lock is a rule that lapses the first time one does not.
+        self._lock = threading.RLock()
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
@@ -72,22 +78,24 @@ class BudgetLedger:
 
     def record(self, provider: str, *, tokens: int = 0, now: float | None = None) -> None:
         """Log a completed call. Call this even on failure — it consumed quota."""
-        self._conn.execute(
-            "INSERT INTO llm_calls (provider, ts, tokens) VALUES (?, ?, ?)",
-            (provider, now if now is not None else time.time(), int(tokens)),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO llm_calls (provider, ts, tokens) VALUES (?, ?, ?)",
+                (provider, now if now is not None else time.time(), int(tokens)),
+            )
+            self._conn.commit()
 
     def cool_down(self, provider: str, seconds: float, reason: str = "429") -> None:
         """Mark a provider unavailable, honouring a server's Retry-After."""
-        until = time.time() + max(0.0, seconds)
-        self._conn.execute(
-            "INSERT INTO llm_cooldowns (provider, until_ts, reason) VALUES (?, ?, ?) "
-            "ON CONFLICT(provider) DO UPDATE SET until_ts=excluded.until_ts, "
-            "reason=excluded.reason",
-            (provider, until, reason),
-        )
-        self._conn.commit()
+        with self._lock:
+            until = time.time() + max(0.0, seconds)
+            self._conn.execute(
+                "INSERT INTO llm_cooldowns (provider, until_ts, reason) VALUES (?, ?, ?) "
+                "ON CONFLICT(provider) DO UPDATE SET until_ts=excluded.until_ts, "
+                "reason=excluded.reason",
+                (provider, until, reason),
+            )
+            self._conn.commit()
 
     def _count(self, provider: str, window: float, now: float) -> tuple[int, int]:
         row = self._conn.execute(

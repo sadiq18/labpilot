@@ -318,3 +318,130 @@ def test_the_exemption_keeps_other_capabilities():
         plan="free", providers=[], roles={"codegen": RoleSpec(requires={"vision"})}
     )
     assert routing.role_spec("codegen").requires == {"vision"}
+
+
+# --- the blockers PR #110 review caught -------------------------------------
+
+
+def test_the_shipped_config_actually_enables_the_carve_out():
+    """The gap between a unit fixture and production.
+
+    Every carve-out test above builds `RoleSpec()` with no explicit `requires`,
+    so they assert the exemption while `configs/default.yaml` had
+    `requires: [structured_output]` on codegen — an explicit requirement, which
+    outranks the exemption by design. The feature was correct and disabled.
+    """
+    from pathlib import Path
+
+    from labpilot.cli.config_helpers import load_cli_config
+
+    config, _ = load_cli_config(config_path=Path("configs/default.yaml"))
+    routing = config.llm.routing
+    assert not (MANDATORY_CAPS & routing.role_spec("codegen").requires)
+
+
+@pytest.mark.parametrize("role", ["default", "reasoning", "summarize"])
+def test_the_shipped_config_keeps_the_mandate_elsewhere(role):
+    from pathlib import Path
+
+    from labpilot.cli.config_helpers import load_cli_config
+
+    config, _ = load_cli_config(config_path=Path("configs/default.yaml"))
+    assert MANDATORY_CAPS <= config.llm.routing.role_spec(role).requires
+
+
+def test_the_proxy_never_sleeps_on_a_paced_wait(gateway, monkeypatch):
+    """`complete` defaults to `allow_wait=True`, and codegen's `on_exhaustion`
+    is `wait` with `max_wait_seconds: 900`.
+
+    The call runs inside `_GATEWAY_LOCK`, so one paced wait would block every
+    other proxied request for up to fifteen minutes. The earlier test mocked
+    `complete` to raise immediately and never exercised this at all.
+    """
+    seen = {}
+
+    def _capture(self, system, user, *, json_mode=False, allow_wait=True):
+        seen["allow_wait"] = allow_wait
+        raise RoleUnavailable("rate limited", retry_after=42)
+
+    monkeypatch.setattr("fitroute.gateway.RoleBoundClient.complete", _capture)
+    with pytest.raises(ProxyError):
+        handle_chat_completion(gateway, {"model": "labpilot/codegen",
+                                         "messages": [{"role": "user", "content": "hi"}]})
+    assert seen["allow_wait"] is False, "the proxy must refuse fast, not sleep under the lock"
+
+
+def test_retry_after_reports_the_real_window(gateway, monkeypatch):
+    """A constant tells the client to back off for the wrong length of time."""
+    def _unavailable(self, *a, **k):
+        raise RoleUnavailable("rate limited", retry_after=42)
+
+    monkeypatch.setattr("fitroute.gateway.RoleBoundClient.complete", _unavailable)
+    with pytest.raises(ProxyError) as exc:
+        handle_chat_completion(gateway, {"model": "labpilot/default",
+                                         "messages": [{"role": "user", "content": "hi"}]})
+    assert exc.value.retry_after == 42
+
+
+def test_retry_after_is_bounded(gateway, monkeypatch):
+    def _unavailable(self, *a, **k):
+        raise RoleUnavailable("rate limited", retry_after=99999)
+
+    monkeypatch.setattr("fitroute.gateway.RoleBoundClient.complete", _unavailable)
+    with pytest.raises(ProxyError) as exc:
+        handle_chat_completion(gateway, {"model": "labpilot/default",
+                                         "messages": [{"role": "user", "content": "hi"}]})
+    assert exc.value.retry_after == 300
+
+
+def test_in_process_callers_still_get_to_wait():
+    """`allow_wait=False` is the proxy's choice, not a global behaviour change:
+    "everything is limited, the window reopens in 20s" is worth pacing for when
+    nobody else is blocked behind you."""
+    import inspect
+
+    from fitroute.gateway import RoleBoundClient
+
+    assert inspect.signature(RoleBoundClient.complete).parameters["allow_wait"].default is True
+
+
+# --- the ledger is safe on its own, not by convention -----------------------
+
+
+def test_the_ledger_serialises_its_own_writes(tmp_path):
+    """`check_same_thread=False` makes cross-thread use possible; only the lock
+    makes it safe. Putting the lock in the caller means the rule lapses the
+    first time someone forgets it."""
+    import threading
+
+    ledger = BudgetLedger(tmp_path / "concurrent.sqlite")
+    errors: list[str] = []
+
+    def _hammer():
+        try:
+            for _ in range(30):
+                ledger.record("p", tokens=1)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=_hammer) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert ledger._conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 240
+
+
+# --- the probe list ---------------------------------------------------------
+
+
+def test_well_known_roles_are_advertised_even_when_unconfigured(tmp_path, monkeypatch):
+    """A workspace that never names `codegen` still routes it, but a client
+    probing `/v1/models` first may refuse an id it has not seen."""
+    monkeypatch.setenv("TEST_KEY", "k")
+    bare = RoutingConfig(plan="free", providers=[], roles={})
+    gw = LLMGateway(routing=bare, ledger=BudgetLedger(tmp_path / "b.sqlite"), cache=None)
+    ids = {m["id"] for m in handle_models(gw)["data"]}
+    assert {"labpilot/codegen", "labpilot/default", "labpilot/reasoning"} <= ids
