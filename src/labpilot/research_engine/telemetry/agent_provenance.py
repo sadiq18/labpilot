@@ -15,6 +15,7 @@ remaining phases actually consult:
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -36,13 +37,38 @@ logger = logging.getLogger(__name__)
 
 
 class SqliteInvocationSink:
-    """Append-only writer for ``agent_invocations``."""
+    """Append-only writer for ``agent_invocations``.
+
+    Cross-thread by necessity. The sink is installed once per process in the
+    CLI callback, on the main thread, while the experiment path runs through
+    `anyio.to_thread.run_sync` — so `CodeEngineerAgent`, `AiderAgent` and
+    `DeltaBriefAgent` all record from a worker thread.
+
+    Thread-confined, every one of those writes raised inside
+    `record_invocation`, which swallows failures at debug level because
+    telemetry must never break a run. The result was an instrument with a hole
+    exactly where the most important agent runs: measured on rogii 2026-08-09, a
+    campaign in which aider ran three times recorded **three `ConductorPolicy`
+    rows and nothing else** — ConductorPolicy being the one caller on the main
+    thread. It is also why the 08-08 log records `CodeEngineerAgent` invoked
+    "exactly once": it was invoked far more often and the rows were dropped.
+
+    Third instance of this bug in the same codebase, after `BudgetLedger` and
+    `PromptCache`. The lock lives here rather than in the caller for the reason
+    `budget.py` records: a rule that holds only while every caller remembers to
+    take a lock is a rule that lapses the first time one does not.
+    """
 
     def __init__(self, knowledge_dir: Path, competition: str) -> None:
         paths = ResearchPaths(Path(knowledge_dir), competition).ensure()
-        self._client = SqliteClient(paths.db_path)
+        self._client = SqliteClient(paths.db_path, allow_cross_thread=True)
+        self._lock = threading.RLock()
 
     def record(self, invocation: AgentInvocation) -> None:
+        with self._lock:
+            self._record_locked(invocation)
+
+    def _record_locked(self, invocation: AgentInvocation) -> None:
         self._client.conn.execute(
             """
             INSERT INTO agent_invocations (
