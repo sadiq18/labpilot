@@ -279,8 +279,13 @@ class RoleBoundClient:
                     attempt,
                     attempts,
                 )
-        assert last_exc is not None
-        raise last_exc
+        # Unreachable: the loop either returns or raises, because the last
+        # attempt cannot `continue`. Kept because deleting it makes `complete`
+        # fall off the end and mypy reports "Missing return statement" against
+        # `-> str`. The `assert` is what narrows `Exception | None` for the
+        # raise, so the pair goes together or not at all.
+        assert last_exc is not None  # pragma: no cover
+        raise last_exc  # pragma: no cover
 
     def _complete_once(
         self, system: str, user: str, *, json_mode: bool = False, allow_wait: bool = True
