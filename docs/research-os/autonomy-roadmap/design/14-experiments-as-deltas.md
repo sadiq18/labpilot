@@ -570,14 +570,44 @@ default-off with a number attached rather than a guess.
    Scoping it to the campaign means it cannot outlive what it is accounting for.
    A shared daemon is the right shape only once fitroute is genuinely hosted,
    which is the same trigger as the full-HTTP option below.
-1. `CodeAgent` protocol + `AiderAgent` + copy/diff/propose, pointed at the proxy.
-   Includes per-execution code provenance (§6) and the hypothesis-consistency
-   checks (§5) — the checks are what make a delta trustworthy, so shipping the
-   adapter without them would produce confidently mis-attributed evidence, which
-   is worse than the whole-file path it replaces. Nothing calls it yet.
-2. Opt-in via config; measure `aider_no_edit` and `aider_syntax_fail`.
-3. Flip the default when the rate justifies it.
-4. Delete templates **in the same change** that makes delta the default — never
+1. **1a — shipped** (PR #111). `CodeAgent` protocol, `WholeFileAgent`, and the
+   hypothesis-consistency checks (§5). Nothing calls them yet.
+
+   Step 1 was originally one item. It is split because the checks turned out to
+   be independent of aider — they compare a parent to a child, and whole-file
+   regeneration produces exactly that pair. Two bugs found while building them
+   (import aliases uncollected; arithmetic blends unrecognised) also argued for
+   landing them before anything depends on them.
+
+2. **1b — wire the checks into the *existing* whole-file path, observe-only.**
+   Record `consistent` / `violations` / `flags` on the evidence card; gate
+   nothing.
+
+   Ordered before the adapter because §5's defect is **already in production**:
+   whole-file regeneration has the same false-attribution failure and hides it
+   better. Waiting for aider leaves a live defect running while building its
+   replacement.
+
+   It is also the only way to calibrate two heuristics that currently have
+   nothing behind them: `_has_arithmetic_blend` answers "is anything combined?"
+   rather than "are *these* things combined?", and the wide-delta threshold of 5
+   is a guess. Both are calibrated against samples the author wrote — the same
+   setup that produced both 1a bugs. Observe-only yields a false-positive rate
+   before a check can cost a campaign step, and makes flipping to blocking a
+   one-line change with evidence behind it.
+
+   **The hard part is not the wiring.** Nothing yet derives `keep` / `add` /
+   `combine` from a hypothesis; what exists is `technique`, `technique_stack`,
+   `combo_techniques`, `parent_hypothesis_id`. Mapping those to "what must
+   survive, what must appear, what must be blended" is where the M18 vocabulary
+   earns its keep, and getting it wrong feeds the checks bad input — the
+   *guard exists and its input is wrong* pattern, a dozen instances deep.
+
+3. **1c — `AiderAgent` + copy/diff/propose, pointed at the proxy**, with
+   per-execution code provenance (§6).
+4. Opt-in via config; measure `aider_no_edit` and `aider_syntax_fail`.
+5. Flip the default when the rate justifies it.
+6. Delete templates **in the same change** that makes delta the default — never
    before. The discipline M14 phase 3 established, where a removal and the
    precondition that makes it safe must ship together.
 
