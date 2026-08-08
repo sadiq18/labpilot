@@ -445,3 +445,41 @@ def test_well_known_roles_are_advertised_even_when_unconfigured(tmp_path, monkey
     gw = LLMGateway(routing=bare, ledger=BudgetLedger(tmp_path / "b.sqlite"), cache=None)
     ids = {m["id"] for m in handle_models(gw)["data"]}
     assert {"labpilot/codegen", "labpilot/default", "labpilot/reasoning"} <= ids
+
+
+def test_the_ledger_serialises_reads_against_writes(tmp_path):
+    """Reads were left unlocked when the writers were wrapped — safe only while
+    `_GATEWAY_LOCK` happened to cover the whole call, which is the
+    caller-remembers arrangement that moving the lock into the ledger ended.
+
+    `availability` reads cooldowns and call counts and compares them, so an
+    interleaved write can produce a verdict assembled from two states.
+    """
+    import threading
+
+    ledger = BudgetLedger(tmp_path / "rw.sqlite")
+    errors: list[str] = []
+
+    def _write():
+        try:
+            for _ in range(40):
+                ledger.record("p", tokens=1)
+                ledger.cool_down("q", 0.0)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+
+    def _read():
+        try:
+            for _ in range(40):
+                ledger.availability("p", rpm=1000, rpd=10000, tpm=None)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=_write) for _ in range(4)]
+    threads += [threading.Thread(target=_read) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
