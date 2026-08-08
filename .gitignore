@@ -54,7 +54,7 @@ skills/karpathy-guidelines/
 # Local config (developer-specific, not committed)
 # .claude/settings.json - uncomment if adding local overrides
 # .cursor/settings.json - uncomment if adding local overrides
-# CLAUDE.md - uncomment if creating local version
+CLAUDE.md
 
 # Testing
 .pytest_cache/
