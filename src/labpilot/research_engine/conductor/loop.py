@@ -46,6 +46,28 @@ ProgressCallback = Callable[[str], None]
 _MAX_STOP_OVERRIDES = 2
 
 
+#: Tools whose outcome the circuit breaker counts. Only these produce (or fail
+#: to produce) an experiment; a failed `analyze_competition` is a bad step, not
+#: evidence that the campaign cannot work.
+_EXPERIMENT_TOOLS = frozenset({"run_experiment", "run_plan"})
+
+
+def _record_experiment_outcome(
+    store,
+    session_id: str,
+    *,
+    succeeded: bool,
+    error: str = "",
+) -> None:
+    """Fold one experiment outcome into the breaker's counters and persist."""
+    session = store.get_session(session_id)
+    if session is None:
+        return
+    budget_cfg, budget_state = load_budget_pair(session)
+    budget_state.record_execution(succeeded=succeeded, error=error)
+    persist_budgets(store, session_id, budget_cfg, budget_state)
+
+
 def _fail_session_on_degraded_llm(store, session_id, record, decisions, exc) -> None:
     """Record a strict-mode abort before it propagates.
 
@@ -348,22 +370,50 @@ def _run_until_stop_inner(
             allowlist -= SUBMIT_TOOLS
         stop = evaluate_stops(budget_cfg, budget_state)
         if stop != "none":
-            store.update_session_status(session_id, "completed")
+            # `failing` is not a completion. Recording it as one would put the
+            # campaign that could not run a single experiment in the same state
+            # as the campaign that met its target, which is the distinction the
+            # breaker exists to draw.
+            store.update_session_status(
+                session_id, "failed" if stop == "failing" else "completed"
+            )
             if stop != "metric_target":
                 store.increment_metric(session_id, "unmet_goal")
-            _progress(f"Stop condition: {stop}")
+            rationale = f"stop:{stop}"
+            if stop == "failing":
+                # Say what broke. A bare `stop:failing` reproduces the original
+                # complaint — a campaign that ended and did not say why.
+                why = "; ".join(budget_state.recent_failures[-2:]) or "no successful experiment"
+                rationale = (
+                    f"stop:{stop} — {budget_state.consecutive_failures} consecutive "
+                    f"failed execution(s), {budget_state.steps_since_success} step(s) "
+                    f"since the last success. Last: {why}"
+                )
+            _progress(f"Stop condition: {rationale}")
             decisions.append(
                 DecisionRecord(
                     id=store.new_decision_id(),
                     session_id=session_id,
                     tool_name=None,
-                    rationale=f"stop:{stop}",
+                    rationale=rationale,
                     stop=True,
-                    observe={"stop_reason": stop},
+                    observe={
+                        "stop_reason": stop,
+                        "consecutive_failures": budget_state.consecutive_failures,
+                        "steps_since_success": budget_state.steps_since_success,
+                        "recent_failures": budget_state.recent_failures,
+                    },
                 )
             )
             store.append_decision(decisions[-1])
             break
+
+        # One step is about to be spent. Counted here rather than on dispatch so
+        # a step that never reaches a tool still counts: rogii's S-021 spent 30
+        # steps without producing an execution, which no per-execution counter
+        # would have noticed.
+        budget_state.steps_since_success += 1
+        persist_budgets(store, session_id, budget_cfg, budget_state)
 
         if campaign_mode:
             completed = [
@@ -556,6 +606,8 @@ def _run_until_stop_inner(
                         )
                         budget_state.submissions += 1
                         persist_budgets(store, session_id, budget_cfg, budget_state)
+                    if tool_step.tool in _EXPERIMENT_TOOLS:
+                        _record_experiment_outcome(store, session_id, succeeded=True)
                 except LLMDegradedError as exc:
                     # Strict mode (M14 2b) means fatal, and the generic handler
                     # below would reduce it to one lost step with the campaign
@@ -566,6 +618,10 @@ def _run_until_stop_inner(
                     raise
                 except Exception as exc:
                     store.increment_metric(session_id, "tasks_failed")
+                    if tool_step.tool in _EXPERIMENT_TOOLS:
+                        _record_experiment_outcome(
+                            store, session_id, succeeded=False, error=str(exc)
+                        )
                     record.rationale = f"{record.rationale} | dispatch error: {exc}"
                     store.append_decision(record)
                     decisions.append(record)
