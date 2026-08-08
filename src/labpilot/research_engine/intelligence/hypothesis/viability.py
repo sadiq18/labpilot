@@ -10,18 +10,22 @@ a good idea would.
 So the pool defends itself: the only thing that would refresh it is disabled by
 its own size, and size is the one property that says nothing about quality.
 
-### Stale means never chosen, not merely old
+### Stale means passed over, not merely old
 
-A hypothesis proposed long ago that the campaign has *repeatedly declined to
-select* is not a queue of pending work — it is a queue the selector has already
-rejected in practice, silently, once per step.
+A hypothesis is stale when the selector had chances to pick it and picked
+something else. That is measured in **selections** — plans minted against some
+other hypothesis — not in campaigns started and not in wall-clock time.
 
-That is the same judgement M18 applies to techniques: `derive_technique_status`
-retires one that was never measured, never selected, and has outlived
-``DORMANT_AFTER_CAMPAIGNS``. Reusing the rule rather than inventing a second one
-keeps a single answer to "is this still live?", and reuses `campaigns_since`
-rather than wall-clock time — a workspace idle for a week has not declined
-anything.
+Campaign count was the first attempt and it is too generous: a campaign that
+crashed at step three never chose anything, so counting it as a rejection
+punishes a hypothesis for an infrastructure failure. On rogii, 37 campaigns had
+run and many were the failing ones, which is why every hypothesis aged out at
+once.
+
+Wall-clock is worse still: a workspace idle for a week has declined nothing.
+
+Counting selections says exactly what the word means — *this was available N
+times and passed over N times*.
 
 **Counting, not deleting.** Nothing here changes a hypothesis's status. A stale
 row stays exactly where it is and can still be selected if it ranks; it simply
@@ -37,24 +41,20 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-#: Campaigns a never-selected hypothesis may sit through before it stops
-#: counting as pending work. Matches `DORMANT_AFTER_CAMPAIGNS`, deliberately:
-#: two independent staleness clocks would drift and disagree about the same
-#: workspace.
-STALE_AFTER_CAMPAIGNS = 2
+#: Times a hypothesis may be passed over before it stops counting as pending
+#: work. Matches `DORMANT_AFTER_CAMPAIGNS` so the two staleness rules agree
+#: about the same workspace rather than drifting apart.
+STALE_AFTER_SELECTIONS = 2
 
 
 def viable_hypothesis_count(knowledge_dir: Path, competition: str) -> int:
     """`proposed` hypotheses that still represent work the campaign might do.
 
-    Excludes those the selector has passed over for `STALE_AFTER_CAMPAIGNS`
-    campaigns without ever planning them. Never raises: an unreadable store
-    means "nothing queued", which opens the gate rather than closing it — the
-    failure this whole module exists to prevent is a gate stuck shut.
+    Excludes those the selector has passed over `STALE_AFTER_SELECTIONS` times.
+    Never raises: an unreadable store means "nothing queued", which opens the
+    gate rather than closing it — the failure this module exists to prevent is a
+    gate stuck shut.
     """
-    from labpilot.research_engine.execution.technique.vocabulary import (
-        campaign_created_ats,
-    )
     from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
     from labpilot.research_engine.shared.experiments.models import HypothesisStatus
 
@@ -66,16 +66,39 @@ def viable_hypothesis_count(knowledge_dir: Path, competition: str) -> int:
     if not proposed:
         return 0
 
-    try:
-        sessions = tuple(campaign_created_ats(Path(knowledge_dir), competition))
-    except Exception:  # noqa: BLE001 — without a clock nothing can be stale
+    selections = _selection_times(Path(knowledge_dir), competition)
+    if not selections:
+        # Nothing has ever been selected, so nothing has been passed over.
         return len(proposed)
 
-    return sum(1 for hypothesis in proposed if not _is_stale(hypothesis, sessions))
+    return sum(1 for hypothesis in proposed if not _is_stale(hypothesis, selections))
 
 
-def _is_stale(hypothesis: object, sessions: tuple) -> bool:
-    """True when the selector has had chances to pick this and never did.
+def _selection_times(knowledge_dir: Path, competition: str) -> tuple:
+    """When the selector chose *some* hypothesis, oldest first.
+
+    A plan carrying a `hypothesis_id` is a selection: that is the moment one
+    idea was preferred over every other open one.
+    """
+    from labpilot.research_engine.execution.technique.vocabulary import _parse_timestamp
+    from labpilot.research_engine.planner.store import PlanStore
+
+    store = PlanStore(Path(knowledge_dir), competition)
+    try:
+        stamps = [
+            _parse_timestamp(plan.created_at)
+            for plan in store.list_plans()
+            if getattr(plan, "hypothesis_id", None)
+        ]
+    except Exception:  # noqa: BLE001 — no plans means nothing was ever chosen
+        return ()
+    finally:
+        store.close()
+    return tuple(sorted(s for s in stamps if s is not None))
+
+
+def _is_stale(hypothesis: object, selections: tuple) -> bool:
+    """True when the selector chose something else `STALE_AFTER_SELECTIONS` times.
 
     `evidence_for` / `evidence_against` being empty is the proxy for "never
     planned": a hypothesis that reached a plan gets `testing` and leaves
@@ -87,7 +110,7 @@ def _is_stale(hypothesis: object, sessions: tuple) -> bool:
     if getattr(hypothesis, "evidence_for", None) or getattr(hypothesis, "evidence_against", None):
         return False
     try:
-        age = campaigns_since(getattr(hypothesis, "created_at", None), sessions)
+        age = campaigns_since(getattr(hypothesis, "created_at", None), selections)
     except (TypeError, ValueError) as exc:
         # Narrow, and logged. A blanket `except Exception: return False` here
         # swallowed a real `TypeError` — campaign stamps are timezone-aware and
@@ -97,4 +120,4 @@ def _is_stale(hypothesis: object, sessions: tuple) -> bool:
         # paying for, so an unexpected shape says so rather than passing.
         logger.warning("could not age hypothesis; treating as live: %s", exc)
         return False
-    return age >= STALE_AFTER_CAMPAIGNS
+    return age >= STALE_AFTER_SELECTIONS

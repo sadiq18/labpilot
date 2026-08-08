@@ -14,7 +14,7 @@ Reuses M18's `campaigns_since` rather than a second staleness clock.
 from __future__ import annotations
 
 from labpilot.research_engine.intelligence.hypothesis.viability import (
-    STALE_AFTER_CAMPAIGNS,
+    STALE_AFTER_SELECTIONS,
     viable_hypothesis_count,
 )
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
@@ -73,22 +73,26 @@ def test_a_retired_hypothesis_stops_holding_the_gate_shut(tmp_path):
     assert _count(tmp_path) == before - 1
 
 
-def test_no_campaign_clock_means_nothing_is_stale(tmp_path):
-    """A workspace that has never run a campaign has declined nothing, so age
-    cannot mean what it means elsewhere."""
+def test_nothing_selected_means_nothing_is_stale(tmp_path):
+    """A workspace where the selector has never chosen has declined nothing.
+
+    Campaign count was the first measure and was too generous: a campaign that
+    crashed at step three never chose anything, so counting it as a rejection
+    punished a hypothesis for an infrastructure failure.
+    """
     _propose(_store(tmp_path), 3)
 
     assert _count(tmp_path) == 3
 
 
 def test_the_threshold_matches_the_technique_clock():
-    """Two independent staleness clocks would drift and disagree about the same
+    """Two independent staleness rules would drift and disagree about the same
     workspace."""
     from labpilot.research_engine.execution.technique.status_constants import (
         DORMANT_AFTER_CAMPAIGNS,
     )
 
-    assert STALE_AFTER_CAMPAIGNS == DORMANT_AFTER_CAMPAIGNS
+    assert STALE_AFTER_SELECTIONS == DORMANT_AFTER_CAMPAIGNS
 
 
 def test_counting_never_changes_a_status(tmp_path):
