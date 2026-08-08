@@ -298,8 +298,16 @@ class ResearchEngineer:
         script = Path(root) / TRAIN_RELPATH
         try:
             content = script.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return False
+        except OSError as exc:
+            # A script we cannot read is a script that cannot run, and this
+            # method's whole question is "can the thing we are about to re-run
+            # work?". Returning False here answered "yes" for a *missing*
+            # `train.py`: `write_code` stayed `done`, the retry skipped it, and
+            # the plan re-ran a file that was not there — the same
+            # rebuild-never-happens loop this method was added to break, just
+            # reached by a different door.
+            logger.info("Re-queuing write_code: cannot read %s (%s)", TRAIN_RELPATH, exc)
+            return True
         try:
             _check_dependency_block(TRAIN_RELPATH, content)
             _check_not_truncated(TRAIN_RELPATH, content)
