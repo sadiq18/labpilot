@@ -524,6 +524,17 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
         # Same brake one level down: queuing another plan while one is still
         # unrun adds no information and starves the thing that does.
         "generate_plan": not has_unrun_plan(workspace),
+        # `implement` writes code *for* something. With no runnable plan there
+        # is no hypothesis to implement, and the tool was ungated entirely —
+        # so when `run_plan`, `run_experiment` and `generate_plan` all closed,
+        # the policy reached for the one door left open and spent every step
+        # there. Measured on rogii 2026-08-09: 16 dispatches, 5 recorded
+        # `completed`, `train.py` untouched throughout.
+        #
+        # Gating on the same condition as `run_plan` is deliberate: both act on
+        # a plan, so both should disappear together rather than leaving one as
+        # an escape hatch from the other's absence.
+        "implement": has_runnable,
     }
     return {name for name in allowlist if requires.get(name, True)}
 

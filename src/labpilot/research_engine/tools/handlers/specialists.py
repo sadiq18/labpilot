@@ -24,6 +24,16 @@ def _bundle(workspace: Workspace, *, goal: str = "") -> ContextBundle:
     )
 
 
+class ImplementProducedNothingError(RuntimeError):
+    """An implementation step that wrote no files.
+
+    Sibling of `ExperimentProducedNoMetricsError`, for the same reason and with
+    the same remedy: raised rather than returned, so the Conductor records a
+    failed task instead of a successful one. A silent no-op that reports success
+    is an invitation to repeat it.
+    """
+
+
 def implement(
     workspace: Workspace,
     *,
@@ -53,6 +63,21 @@ def implement(
         workspace,
         _bundle(workspace, goal=description),
     )
+    if not refs:
+        # "A tool that changed nothing did not succeed" — M9's own rule, and
+        # this was the clearest violation of it in the system.
+        #
+        # Measured on rogii 2026-08-09: `implement` reported `completed` five
+        # times while `pipeline/train.py` went untouched. Reporting success is
+        # what made the policy keep choosing it — from its side the tool had
+        # just worked — and the campaign spent all eight steps producing
+        # nothing. Raised rather than returned, so the Conductor records a
+        # failed task, exactly as `run_experiment` does for the same failure.
+        raise ImplementProducedNothingError(
+            f"{capability} produced no files. Nothing was written, so there is "
+            "nothing to run or evaluate."
+        )
+
     return ToolResult(
         refs=refs,
         data={
@@ -141,8 +166,7 @@ def run_experiment(
                 " — the metrics file on disk predates this run, so it belongs to "
                 "an earlier execution"
                 if stale
-                else ". The plan may have been a no-op (already done, or nothing "
-                "to train)."
+                else ". The plan may have been a no-op (already done, or nothing to train)."
             )
         )
     return ToolResult(
