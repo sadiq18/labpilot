@@ -103,3 +103,75 @@ def test_a_script_without_any_dependency_block_is_fine(tmp_path):
     legal, opening a block and abandoning it is not."""
     content = '"""B."""\n\n\ndef main():\n    pass\n\n\nif __name__ == "__main__":\n    main()\n'
     assert _apply(tmp_path, content)
+
+
+# --- stdlib over-declaration -------------------------------------------------
+
+_WITH_STDLIB = '''"""B."""
+
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "pandas",
+#   "glob",
+#   "lightgbm>=4.0",
+# ]
+# ///
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def test_a_stdlib_module_is_dropped_from_the_dependencies(tmp_path):
+    """uv resolves the whole set against PyPI, so one stdlib name fails all of
+    them: *"Because glob was not found in the package registry … your
+    requirements are unsatisfiable."* Measured on rogii 2026-08-08."""
+    _apply(tmp_path, _WITH_STDLIB)
+    written = (tmp_path / "pipeline" / "train.py").read_text(encoding="utf-8")
+
+    assert '"glob"' not in written
+    assert '"pandas"' in written
+    assert '"lightgbm>=4.0"' in written
+
+
+def test_the_block_still_closes_after_stripping(tmp_path):
+    _apply(tmp_path, _WITH_STDLIB)
+    written = (tmp_path / "pipeline" / "train.py").read_text(encoding="utf-8")
+
+    assert written.count("# /// script") == 1
+    assert "\n# ///\n" in written
+
+
+def test_a_versioned_stdlib_entry_is_recognised(tmp_path):
+    _apply(tmp_path, _WITH_STDLIB.replace('"glob"', '"glob>=1.0"'))
+    written = (tmp_path / "pipeline" / "train.py").read_text(encoding="utf-8")
+    assert "glob" not in written
+
+
+def test_real_packages_are_never_dropped(tmp_path):
+    """The carve-out must not cost the behaviour it guards."""
+    from labpilot.research_engine.execution.capabilities.code_engineering.apply import (
+        strip_stdlib_dependencies,
+    )
+
+    content, dropped = strip_stdlib_dependencies(_GOOD)
+    assert dropped == []
+    assert content == _GOOD
+
+
+def test_an_unterminated_block_is_left_to_its_own_gate(tmp_path):
+    """Editing a block whose extent is unknown would guess at its end."""
+    from labpilot.research_engine.execution.capabilities.code_engineering.apply import (
+        strip_stdlib_dependencies,
+    )
+
+    broken = '"""B."""\n\n# /// script\n# dependencies = [\n#   "glob",\n'
+    content, dropped = strip_stdlib_dependencies(broken)
+    assert dropped == []
+    assert content == broken

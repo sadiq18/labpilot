@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import logging
 import re
+import sys
 from pathlib import Path
 
 from labpilot.research_engine.execution.schemas.code_proposal import CodeProposal
@@ -20,8 +22,67 @@ _PEP723_OPEN = re.compile(r"^#\s*///\s*script\s*$", re.MULTILINE)
 _PEP723_CLOSE = re.compile(r"^#\s*///\s*$", re.MULTILINE)
 
 
+logger = logging.getLogger(__name__)
+
+#: One dependency line inside a PEP 723 block: `#   "lightgbm>=4.0",`
+_DEP_LINE = re.compile(r"""^#\s*(["'])(?P<spec>[^"']+)\1\s*,?\s*$""")
+
+
 class ApplyError(ValueError):
     """Proposal rejected (path escape, empty, syntax, truncation)."""
+
+
+def _distribution_name(spec: str) -> str:
+    """`lightgbm>=4.0` -> `lightgbm`; `pkg[extra]` -> `pkg`."""
+    return re.split(r"[<>=!~;\[\s]", spec.strip(), maxsplit=1)[0].strip()
+
+
+def strip_stdlib_dependencies(content: str) -> tuple[str, list[str]]:
+    """Drop stdlib modules from a PEP 723 block. Returns (content, dropped).
+
+    `uv` resolves declared dependencies against PyPI, so one stdlib name makes
+    the *whole* set unsatisfiable — measured on rogii 2026-08-08, codegen
+    declared `glob` alongside four real packages and uv refused all five:
+    *"Because glob was not found in the package registry … your requirements
+    are unsatisfiable."* The run never started.
+
+    Repaired rather than rejected, for the reason `code_proposal.py` already
+    gives about coercing `null`: the cost of strictness here is losing an
+    experiment over a line of metadata, while the cost of leniency is a
+    correct file arriving in a slightly different shape. The edit is
+    mechanical and total — a stdlib module is never a PyPI dependency.
+
+    `sys.stdlib_module_names` is the authority, so this is **not** the
+    curated-set-answering-an-open-world-question pattern rejected four times
+    elsewhere: Python itself owns the answer, and it updates with the runtime.
+    """
+    lines = content.splitlines(keepends=True)
+    opening = next(
+        (i for i, line in enumerate(lines) if _PEP723_OPEN.match(line.rstrip("\n"))),
+        None,
+    )
+    if opening is None:
+        return content, []
+    closing = next(
+        (i for i in range(opening + 1, len(lines)) if _PEP723_CLOSE.match(lines[i].rstrip("\n"))),
+        None,
+    )
+    if closing is None:
+        # Unterminated — `_check_dependency_block` owns that failure, and
+        # editing a block whose extent is unknown would guess at its end.
+        return content, []
+
+    dropped: list[str] = []
+    kept: list[str] = []
+    for line in lines[opening + 1 : closing]:
+        match = _DEP_LINE.match(line.rstrip("\n"))
+        if match and _distribution_name(match.group("spec")) in sys.stdlib_module_names:
+            dropped.append(_distribution_name(match.group("spec")))
+            continue
+        kept.append(line)
+    if not dropped:
+        return content, []
+    return "".join(lines[: opening + 1] + kept + lines[closing:]), dropped
 
 
 def _check_dependency_block(rel: str, content: str) -> None:
@@ -95,15 +156,23 @@ def apply_proposal(
 
         target = workspace_root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
+        content = spec.content
         if rel.endswith(".py"):
             try:
-                ast.parse(spec.content)
+                ast.parse(content)
             except SyntaxError as exc:
                 raise ApplyError(f"syntax error in {rel}: {exc}") from exc
             # Syntax is necessary and not sufficient — both checks below pass
             # `ast.parse` and still cannot run.
-            _check_dependency_block(rel, spec.content)
-            _check_not_truncated(rel, spec.content)
-        target.write_text(spec.content, encoding="utf-8")
+            _check_dependency_block(rel, content)
+            _check_not_truncated(rel, content)
+            content, dropped = strip_stdlib_dependencies(content)
+            if dropped:
+                logger.info(
+                    "Dropped stdlib module(s) from %s dependencies: %s",
+                    rel,
+                    ", ".join(dropped),
+                )
+        target.write_text(content, encoding="utf-8")
         written.append(target)
     return written
