@@ -1,0 +1,39 @@
+Competition: {{ competition }}
+Problem type: {{ problem_type }}
+
+## The hypothesis to implement
+
+{% if plan_goal %}Goal: {{ plan_goal }}
+{% endif %}{% if observation %}Observation: {{ observation }}
+{% endif %}{% if reason %}Reason: {{ reason }}
+{% endif %}{% if prediction %}Prediction: {{ prediction }}
+{% endif %}{% if technique %}Named technique: `{{ technique }}`
+{% endif %}
+{% if technique %}
+The technique name is a label, not necessarily a symbol. Translate it into the
+identifiers an implementation would actually use.
+{% endif %}
+
+{% if prior_train_py %}
+## The parent this edit is applied to
+
+The symbols below already exist. Anything the hypothesis builds *on top of*
+belongs in `kept`.
+
+```python
+{{ prior_train_py }}
+```
+{% endif %}
+
+{% if retry_reason %}
+## The previous attempt failed
+
+Take this into account when writing the instruction:
+
+```
+{{ retry_reason }}
+```
+{% endif %}
+
+Return the JSON described in the system prompt. Claim only what this hypothesis
+commits to.

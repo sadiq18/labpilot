@@ -43,6 +43,7 @@ from labpilot.research_engine.execution.schemas.code_proposal import (
     CodeFileSpec,
     CodeProposal,
 )
+from labpilot.research_engine.execution.schemas.delta_brief import DeltaBrief
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,7 @@ class AiderAgent:
         runner: Callable[..., subprocess.CompletedProcess] | None = None,
         role: str = CODEGEN_ROLE,
         timeout: int = _DEFAULT_TIMEOUT_S,
+        brief_agent: object | None = None,
     ) -> None:
         if not callable(getattr(gateway, "for_role", None)):
             # Checked by callable, not by attribute presence: a stub carrying
@@ -148,6 +150,13 @@ class AiderAgent:
         self._runner = runner or _default_runner
         self._role = role
         self._timeout = timeout
+        if brief_agent is None:
+            from labpilot.research_engine.execution.micro_agents.delta_brief import (
+                DeltaBriefAgent,
+            )
+
+            brief_agent = DeltaBriefAgent(llm_client=gateway)
+        self._brief_agent = brief_agent
 
     # -- the protocol ------------------------------------------------------
 
@@ -191,7 +200,8 @@ class AiderAgent:
         if not parent.is_dir():
             raise AiderError(f"parent tree not found: {parent}", kind="no_parent")
 
-        instruction = _instruction(ctx)
+        brief = self._brief(ctx)
+        instruction = brief.instruction.strip() or _instruction(ctx)
         with tempfile.TemporaryDirectory(prefix="labpilot-aider-") as scratch_str:
             scratch = Path(scratch_str)
             edit_targets = _copy_tree(parent, scratch)
@@ -220,7 +230,33 @@ class AiderAgent:
             summary=f"aider edited {len(files)} file(s)",
             rationale=instruction,
             files=files,
+            # The claim the brief committed to *before* aider ran. Carrying it
+            # here is what lets §5's preservation, addition and combination
+            # checks see an aider delta at all — without it every one of them
+            # landed `delta_unchecked`, going dark exactly when deltas arrived.
+            kept=list(brief.kept),
+            added=list(brief.added),
+            combined=list(brief.combined),
         )
+
+    def _brief(self, ctx: StructuredContext) -> DeltaBrief:
+        """Ask for the instruction and the claim, before editing anything.
+
+        Soft-fails to an empty brief. A delta with no claim is `delta_unchecked`
+        — the honest state 1b already defines — whereas losing the experiment
+        because a *metadata* call failed would be the worse trade. The rate of
+        empty briefs is itself worth knowing, which is why the failure is
+        recorded rather than swallowed.
+        """
+        from labpilot.accessor.common.micro_agents import run_or_none
+
+        if self._brief_agent is None:
+            return DeltaBrief()
+        result = run_or_none(self._brief_agent, ctx)
+        if isinstance(result, DeltaBrief):
+            return result
+        logger.info("no delta brief produced; the delta will be recorded unchecked")
+        return DeltaBrief()
 
     # -- internals ---------------------------------------------------------
 
