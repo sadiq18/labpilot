@@ -15,11 +15,12 @@ from labpilot.research_engine.conductor.actions import (
     resolve_step_args,
 )
 from labpilot.research_engine.conductor.approvals import (
+    SUBMIT_TOOLS,
     ApprovalPrompt,
     OfflineFallbackPrompt,
     maybe_approve,
 )
-from labpilot.research_engine.conductor.budgets import evaluate_stops
+from labpilot.research_engine.conductor.budgets import evaluate_stops, submit_tools_allowed
 from labpilot.research_engine.conductor.checkpoint import (
     load_budget_pair,
     persist_budgets,
@@ -339,6 +340,12 @@ def _run_until_stop_inner(
             break
 
         budget_cfg, budget_state = load_budget_pair(session)
+        if not submit_tools_allowed(budget_cfg):
+            # A campaign told never to submit must not be *offered* the tool.
+            # Relying on the approval gate would not hold: `--yes` maps every
+            # gated tool to `auto_approve`, so a non-interactive run has no
+            # brake between "selected submit_learn" and "uploaded to Kaggle".
+            allowlist -= SUBMIT_TOOLS
         stop = evaluate_stops(budget_cfg, budget_state)
         if stop != "none":
             store.update_session_status(session_id, "completed")
@@ -397,7 +404,12 @@ def _run_until_stop_inner(
                         suggested_tools=[next_tool.tool],
                     )
             # Re-read after policy/offline so same-step registration is visible.
+            # The submit carve-out has to be re-applied: this is the allowlist
+            # that reaches `map_research_action`, so a plain re-read would hand
+            # the tools back at exactly the point they get selected.
             allowlist = set(registry.names())
+            if not submit_tools_allowed(budget_cfg):
+                allowlist -= SUBMIT_TOOLS
             plan = map_research_action(research, allowlist)
             if research.stop and _objective_unmet(budget_cfg, budget_state):
                 # Goal persistence. The policy tends to call it done once it has

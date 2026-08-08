@@ -60,18 +60,29 @@ def evaluate_stops(
     *,
     now: datetime | None = None,
 ) -> StopReason:
-    """Return the first matching automatic stop reason, or ``none``."""
-    if config.max_submissions is not None and state.submissions >= config.max_submissions:
+    """Return the first matching automatic stop reason, or ``none``.
+
+    ``max_submissions=0`` means **do not submit**, not **do not run**. The cap
+    is a limit on an action the campaign may take; reaching it is only a reason
+    to stop once the campaign has actually taken it. Evaluated before the first
+    step, ``0 >= 0`` ended a campaign having done nothing — one `stop` decision
+    and no research — so the natural way to ask for "run, but never upload"
+    silently asked for nothing at all.
+
+    `submit_tools_allowed` is what enforces the zero; this only stops on a cap
+    the campaign has spent.
+    """
+    if (
+        config.max_submissions is not None
+        and config.max_submissions > 0
+        and state.submissions >= config.max_submissions
+    ):
         return "submission_budget"
     if config.max_wall_s is not None and state.elapsed_s(now=now) >= config.max_wall_s:
         return "wall_time"
     if config.max_cost_usd is not None and state.llm_cost_usd >= config.max_cost_usd:
         return "cost_budget"
-    if (
-        config.target_metric
-        and config.target_value is not None
-        and state.last_metric is not None
-    ):
+    if config.target_metric and config.target_value is not None and state.last_metric is not None:
         if config.maximize and state.last_metric >= config.target_value:
             return "metric_target"
         if not config.maximize and state.last_metric <= config.target_value:
@@ -84,6 +95,18 @@ def evaluate_stops(
         if gain <= config.plateau_epsilon:
             return "plateau"
     return "none"
+
+
+def submit_tools_allowed(config: BudgetConfig) -> bool:
+    """False when the campaign is configured never to submit.
+
+    Enforced by removing the submit tools from the allowlist rather than by
+    approving and then refusing them. `--yes` maps every gated tool to
+    `auto_approve`, so approval is not a brake in a non-interactive run: a
+    campaign told not to submit could still upload to Kaggle because nobody was
+    at the terminal to say no.
+    """
+    return not (config.max_submissions is not None and config.max_submissions <= 0)
 
 
 def budgets_from_metadata(meta: dict[str, Any]) -> tuple[BudgetConfig, BudgetState]:
