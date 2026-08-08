@@ -291,6 +291,7 @@ class ResearchEngineer:
             ApplyError,
             _check_dependency_block,
             _check_not_truncated,
+            strip_stdlib_dependencies,
         )
 
         root = competition_workspace_path(self.knowledge_dir, self.competition)
@@ -304,6 +305,19 @@ class ResearchEngineer:
             _check_not_truncated(TRAIN_RELPATH, content)
         except ApplyError as exc:
             logger.info("Re-queuing write_code: %s", exc)
+            return True
+        # A stdlib name makes uv reject the *whole* dependency set, so a file
+        # carrying one cannot run. Regenerating is the way out rather than
+        # editing the file here: `apply_proposal` is the only writer, and it
+        # strips these on the way in.
+        _, stdlib_deps = strip_stdlib_dependencies(content)
+        if stdlib_deps:
+            logger.info(
+                "Re-queuing write_code: %s declares stdlib module(s) as "
+                "dependencies (%s), which makes uv reject every dependency",
+                TRAIN_RELPATH,
+                ", ".join(stdlib_deps),
+            )
             return True
         return False
 
