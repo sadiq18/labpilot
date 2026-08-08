@@ -82,8 +82,8 @@ provenance.
 | 1b | wire the checks into the whole-file path, observe-only | **shipped** (PR #112) — four of §5's five checks |
 | — | **validation-region flagging**, §5's fifth check | **not built** — see below |
 | — | per-execution code provenance (§6) | **shipped** (PR #113) — `runs/<execution_id>/` |
-| 1c | `AiderAgent` + copy/diff/propose + **campaign circuit breaker** | not started |
-| 2 | opt-in via config; measure the failure rate | not started |
+| 1c | `AiderAgent` + copy/diff/propose + **campaign circuit breaker** | **shipped** (PR #115) — default off |
+| 2 | opt-in via config; measure the failure rate | **blocked** — see "What 1c measured" |
 | 3 | flip the default when the rate justifies it | not started |
 | 4 | delete templates in that same change | not started |
 
@@ -162,6 +162,65 @@ gives the first data point either way.
 **The full account of all fifteen defects is in
 [evidence-log-2026-08-08.md](evidence-log-2026-08-08.md).** Thirteen were fixed
 in PR #113; the eight that share one shape are why M20 exists.
+
+## What 1c measured
+
+**The adapter works.** Measured 2026-08-09 on rogii's real 331-line `train.py`,
+same SWA-style request as the 08-07 spike:
+
+| | delta | discipline touched | tokens | time |
+|---|---|---|---|---|
+| **diff (pinned)** | **+18 / −7** | **none** | **7.4k** | **16 s** |
+| whole (aider's default) | +23 / −7 | none | 9.1k | 48 s |
+| *spike, ultra-550b* | *+24 / −8* | *none* | — | — |
+
+Tighter than the design's best recorded result, on a cheaper model, for 19%
+fewer tokens — and the call was **metered in the budget ledger**, which was §4's
+whole justification for building the proxy as step 0 and had never been tested.
+
+**The edit format had to be pinned.** aider chose `whole` on its own: it has no
+context-window or capability data for `labpilot/codegen`, a name that exists
+only inside our proxy, so it falls back to the format that always works. Left
+alone, 1c would have shipped the adapter and kept the whole-file cost. The
+failure mode is a bill, not an error. Worth generalising — **routing by role
+hides the model's identity from every client downstream**, so anything else
+pointed at this proxy needs its defaults checked rather than trusted.
+
+**§5's claim needed a new source.** aider returns a diff and no structured
+claim, so every aider delta landed `delta_unchecked` — three of the four checks
+going dark exactly when deltas arrived. `DeltaBriefAgent` now produces the
+instruction *and* the claim from the hypothesis **before** aider runs, which is
+what keeps the claim independent of the code it checks. Third mechanism proposed
+for this job, after `technique` metadata and a technique→symbol map, and the
+first that preserves the ordering §5 depends on.
+
+## Why step 2 is blocked, and it is not the adapter
+
+Four campaigns ran with `codegen.strategy: delta`. Not one produced a successful
+delta experiment, and aider was right every time:
+
+> *"The code currently: 1 Trains a LightGBM model … 3 Averages predictions from
+> both models … Since no modifications are required, there are no
+> SEARCH/REPLACE blocks to output."*
+
+The hypothesis was **redundant** — `train.py` already ensembles two models. The
+campaign kept re-selecting P-021 because nothing marks a hypothesis as already
+implemented, so it stayed `proposed` and was chosen again.
+
+Two consequences for step 2:
+
+1. **`aider_no_edit` conflates two opposite findings** — "the model could not do
+   it" and "the change was already there". A redundancy rate read as a failure
+   rate would conclude delta does not work, from evidence that it does.
+2. **The backlog gate is a ratchet.** `should_gather_evidence` shuts when
+   `backlog >= 3`; rogii holds **46 `proposed`**, so `analyze_competition` and
+   `search_papers` are removed from the allowlist permanently. The only thing
+   that would refresh the pool is disabled *by* the pool. M16 already names this
+   — *"a backlog is not a good backlog"* — and it is now load-bearing.
+
+So the measurement step 2 needs is not available until hypothesis selection can
+retire an idea it has already implemented. That work is sequenced in
+[16-hypothesis-selection.md](16-hypothesis-selection.md).
 
 ## Exit criteria
 
