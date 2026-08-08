@@ -157,8 +157,12 @@ def test_it_never_claims_consistency_it_did_not_check():
     assert "delta_violations" not in meta
 
 
-def test_a_narrow_delta_carries_no_flag():
-    assert _observe_delta(PARENT, _proposal(TOUCHED_ONE))["delta_flags"] == []
+def test_a_narrow_delta_carries_no_wide_delta_flag():
+    """Specifically the *confinement* flag. A claimless delta also carries the
+    "unchecked" flag, which is a different statement — about what was not
+    verified, not about how wide the change was."""
+    flags = _observe_delta(PARENT, _proposal(TOUCHED_ONE, added=["scaled"]))["delta_flags"]
+    assert not any("touches" in f for f in flags)
 
 
 def test_a_wide_delta_is_flagged():
@@ -246,3 +250,40 @@ def test_a_helper_that_is_defined_and_used_passes():
     )
     meta = _observe_delta(parent, _proposal(child, added=["_blend"]))
     assert meta["delta_consistent"] is True, meta["delta_violations"]
+
+
+# --- an unchecked delta must not look like a clean one ----------------------
+
+
+def test_a_delta_that_declares_nothing_is_marked_unchecked():
+    """Without this, a delta that skipped the claim and one that passed every
+    check are indistinguishable on the card: both show no verdict and no
+    violations. An unchecked experiment would read as a clean one."""
+    meta = _observe_delta(_PARENT_LGB, _proposal(_ENSEMBLED))
+    assert meta["delta_unchecked"] is True
+    assert meta["delta_claim_declared"] is False
+    assert any("declared no kept/added/combined" in f for f in meta["delta_flags"])
+
+
+def test_a_baseline_that_declares_nothing_is_not_marked_unchecked():
+    """A baseline claims nothing because there is nothing to claim — there is
+    no parent to preserve anything from."""
+    meta = _observe_delta("", _proposal(_ENSEMBLED))
+    assert "delta_unchecked" not in meta
+    assert meta["delta_claim_declared"] is False
+    assert meta["delta_flags"] == []
+
+
+def test_a_declared_delta_is_not_marked_unchecked():
+    meta = _observe_delta(_PARENT_LGB, _proposal(_ENSEMBLED, **_CLAIM))
+    assert "delta_unchecked" not in meta
+    assert meta["delta_claim_declared"] is True
+
+
+def test_the_missing_claim_is_recorded_not_refused():
+    """Observe-only holds here too: the rate is what is worth knowing first.
+    If codegen routinely omits the claim that is a prompt problem to fix with a
+    number attached, not a reason to fail runs today."""
+    meta = _observe_delta(_PARENT_LGB, _proposal(_ENSEMBLED))
+    assert isinstance(meta, dict)
+    assert "delta_consistent" not in meta

@@ -651,6 +651,14 @@ default-off with a number attached rather than a guess.
    would be read by the retry path as a malformed response and re-asked, costing
    a step from a 30-step campaign over optional metadata.
 
+   **A delta that declares nothing is marked `delta_unchecked`.** A baseline
+   claims nothing because there is nothing to claim; a delta that claims nothing
+   was simply never checked. Without the distinction both look identical on the
+   card — no verdict, no violations — so an unchecked experiment reads as a
+   clean one, which is the fabricated-pass failure arriving by omission instead
+   of by assertion. Recorded, not refused: if codegen routinely omits the claim
+   that is a prompt problem to fix with a rate attached.
+
 3. **1c — `AiderAgent` + copy/diff/propose, pointed at the proxy**, with
    per-execution code provenance (§6).
 4. Opt-in via config; measure `aider_no_edit` and `aider_syntax_fail`.

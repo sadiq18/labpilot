@@ -166,10 +166,11 @@ def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object
     )
     meta = report.as_metadata()
     claimed = bool(proposal.kept or proposal.added or proposal.combined)
+    has_parent = bool(prior_train.strip())
     if not claimed:
         # Nothing was claimed, so `consistent: true` would be a pass nobody
         # earned — the fabricated-verdict failure, in the module written to
-        # prevent it. A baseline legitimately claims nothing.
+        # prevent it.
         meta.pop("consistent", None)
         meta.pop("violations", None)
     out: dict[str, object] = {f"delta_{k}": v for k, v in meta.items()}
@@ -178,6 +179,25 @@ def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object
         "added": list(proposal.added),
         "combined": list(proposal.combined),
     }
+    # A baseline claims nothing because there is nothing to claim. A *delta*
+    # that claims nothing was simply never checked — and without this, the two
+    # are indistinguishable on the card: both show no verdict and no
+    # violations, so an unchecked experiment reads exactly like a clean one.
+    #
+    # Recorded rather than refused, for the same reason the checks are
+    # observe-only: the rate is the thing worth knowing first. If codegen
+    # routinely omits the claim, that is a prompt problem to fix with a number
+    # attached, not a reason to fail runs today.
+    out["delta_claim_declared"] = claimed
+    if has_parent and not claimed:
+        out["delta_unchecked"] = True
+        flags = list(out.get("delta_flags") or [])
+        flags.append(
+            "the change has a parent but declared no kept/added/combined, so "
+            "preservation, addition and combination were not checked — this "
+            "card carries no evidence that the delta tested its hypothesis"
+        )
+        out["delta_flags"] = flags
     return out
 
 
