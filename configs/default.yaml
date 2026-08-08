@@ -81,7 +81,13 @@ llm:
       # A model that cannot constrain output to JSON will answer a JSON-only
       # prompt in prose and return HTTP 200 — so structured_output is required,
       # not preferred.
-      codegen:   {requires_strong: true,  requires: [structured_output], on_exhaustion: wait}
+      # No `requires: [structured_output]` here, deliberately. codegen's output
+      # is a file edit, validated by `ast.parse` and then by the training run —
+      # never by JSON parsing. Naming the cap explicitly would outrank the
+      # `CAPS_EXEMPT_ROLES` carve-out (an explicit requires always does) and
+      # exclude models that are excellent editors for a capability the work
+      # never uses. Every other role keeps the mandate via `MANDATORY_CAPS`.
+      codegen:   {requires_strong: true,  on_exhaustion: wait}
       reasoning: {requires_strong: true,  requires: [structured_output], on_exhaustion: wait}
       summarize: {requires_strong: false, requires: [structured_output], on_exhaustion: degrade}
       default:   {requires_strong: false, requires: [structured_output], on_exhaustion: degrade}

@@ -22,7 +22,7 @@ from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 #: Vendor facts shipped with the router: endpoints, models and measured limits.
 #: Deliberately *not* enabled by default — a deployment names what it wants via
@@ -99,6 +99,20 @@ class ProviderSpec(BaseModel):
 #: See `RoleSpec.requires` for why this one cannot be relaxed.
 MANDATORY_CAPS: frozenset[str] = frozenset({"structured_output"})
 
+#: Roles exempt from `MANDATORY_CAPS`, because the mandate is about *parsing*.
+#:
+#: `structured_output` is required everywhere else because those roles read the
+#: reply as JSON, and with the rule engines gone (M14 phase 3) nothing catches a
+#: model that answers in prose. `codegen` does not parse JSON: its output is a
+#: file edit, validated by `ast.parse` and then by the training run itself. Ask
+#: it for JSON mode and the router excludes models that are excellent editors
+#: for a capability the work never uses.
+#:
+#: Deliberately narrow. Every other role — `default` (the Conductor policy),
+#: `reasoning`, `summarize` — keeps the mandate, and relaxing them would reopen
+#: the prose-reply failure that phase 3 removed the net for.
+CAPS_EXEMPT_ROLES: frozenset[str] = frozenset({"codegen"})
+
 
 class RoleSpec(BaseModel):
     """What a class of work needs, and what to do when it cannot be had."""
@@ -122,6 +136,15 @@ class RoleSpec(BaseModel):
     # indistinguishable from a hang.
     max_wait_seconds: float = 900.0
 
+    #: What `_enforce_mandatory_caps` added that the config did not ask for.
+    #:
+    #: Needed because `role_spec` must exempt `codegen` from the *mandate*
+    #: without discarding an explicit `requires={"structured_output"}` — and
+    #: after the validator runs the two are indistinguishable in `requires`
+    #: (`model_fields_set` is no help; assigning in the validator marks the
+    #: field set either way).
+    _auto_caps: set[str] = PrivateAttr(default_factory=set)
+
     @model_validator(mode="after")
     def _enforce_mandatory_caps(self) -> RoleSpec:
         """Union in any mandatory capability the config left out or removed.
@@ -137,6 +160,7 @@ class RoleSpec(BaseModel):
         missing = MANDATORY_CAPS - self.requires
         if missing:
             self.requires = set(self.requires) | missing
+            self._auto_caps = set(missing)
         return self
 
 
@@ -201,7 +225,23 @@ class RoutingConfig(BaseModel):
         return self
 
     def role_spec(self, role: str) -> RoleSpec:
-        return self.roles.get(role) or self.roles.get("default") or RoleSpec()
+        """The spec for ``role``, with the mandatory-capability rule applied.
+
+        The rule is enforced twice, at different scopes, and both are needed.
+        `RoleSpec`'s validator adds `MANDATORY_CAPS` unconditionally — it has no
+        idea which role it belongs to. Only here is the name known, so only here
+        can `codegen` be exempted (see `CAPS_EXEMPT_ROLES`).
+        """
+        spec = self.roles.get(role) or self.roles.get("default") or RoleSpec()
+        # Only what the mandate added — an explicit `requires` is the config's
+        # decision and outranks the exemption. A deployment that deliberately
+        # wants JSON mode on codegen gets it.
+        exempt = spec._auto_caps & MANDATORY_CAPS if role in CAPS_EXEMPT_ROLES else set()
+        if exempt:
+            # Copy: the stored spec is shared, and a `default` fallback would
+            # otherwise be mutated for every role that falls through to it.
+            return spec.model_copy(update={"requires": spec.requires - exempt})
+        return spec
 
 
 def allowed_tiers(plan: str) -> set[str]:
