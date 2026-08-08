@@ -213,6 +213,10 @@ def test_reformatting_is_not_recorded_as_a_change():
         ({"kept": "lgb"}, ["lgb"]),
         ({"kept": ""}, []),
         ({"kept": ["lgb", "cb"]}, ["lgb", "cb"]),
+        ({"kept": " lgb "}, ["lgb"]),
+        ({"kept": "   "}, []),
+        ({"kept": [" lgb ", "cb "]}, ["lgb", "cb"]),
+        ({"kept": ["lgb", " ", "cb"]}, ["lgb", "cb"]),
     ],
 )
 def test_a_claim_parses_however_the_model_spells_it(payload, expected):

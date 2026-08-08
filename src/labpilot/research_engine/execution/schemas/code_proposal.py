@@ -62,9 +62,21 @@ class CodeProposal(BaseModel):
         the failure mode of being strict here is losing an experiment, while
         the failure mode of being lenient is an accurate claim in a slightly
         different shape.
+
+        Each name is stripped, because the check matches it against symbols the
+        AST parser extracts *without* surrounding whitespace: a stray `" lgb "`
+        would never match the `lgb` in the file and would report a correct
+        experiment as inconsistent. Blanks drop out for the same reason `""`
+        does — they name nothing.
         """
         if value is None:
             return []
         if isinstance(value, str):
-            return [value] if value.strip() else []
+            value = [value]
+        if isinstance(value, list):
+            return [
+                item.strip() if isinstance(item, str) else item
+                for item in value
+                if not isinstance(item, str) or item.strip()
+            ]
         return value
