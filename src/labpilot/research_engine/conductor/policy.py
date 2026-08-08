@@ -15,6 +15,9 @@ from labpilot.research_engine.conductor.approvals import (
 )
 from labpilot.research_engine.conductor.models import NextAction
 from labpilot.research_engine.conductor.store import ConductorStore
+from labpilot.research_engine.intelligence.hypothesis.viability import (
+    viable_hypothesis_count,
+)
 from labpilot.research_engine.planner.schemas.task_types import (
     is_runnable_plan_status,
     is_unrun_plan_status,
@@ -83,13 +86,22 @@ def build_observe_bundle(
             for f in feedback
         ],
         "recent_rationales": [
-            {"tool": d.tool_name, "rationale": d.rationale, "stop": d.stop}
-            for d in decisions[-5:]
+            {"tool": d.tool_name, "rationale": d.rationale, "stop": d.stop} for d in decisions[-5:]
         ],
     }
-    # Backlog is the campaign's core scheduling signal: test what is queued,
-    # gather more evidence only when the queue runs dry.
-    observe["untested_hypotheses"] = untested_hypothesis_count(workspace)
+    # Backlog is the campaign's core scheduling signal. The policy is shown the
+    # *viable* count — the same number `should_gather_evidence` decides on — so
+    # its reasoning and the allowlist cannot disagree about the same workspace.
+    # On rogii that difference was 46 versus a handful, and a policy told "46
+    # queued" will never conclude it needs better ideas.
+    #
+    # The raw count is kept beside it rather than dropped: "46 proposed, 3
+    # viable" is a more useful observation than either number alone, and the
+    # gap between them is itself a signal that the pool has gone stale.
+    observe["untested_hypotheses"] = viable_hypothesis_count(
+        workspace.knowledge_dir, workspace.competition
+    )
+    observe["proposed_hypotheses_total"] = untested_hypothesis_count(workspace)
     observe["hours_since_last_artifact"] = hours_since_last_artifact(workspace)
     _attach_evidence_refresh(observe, workspace)
     if include_context:
@@ -172,11 +184,7 @@ def offline_next_action(
     # from the subscript — a malformed feedback row taking the offline policy
     # down with it. `build_observe_bundle` always writes both, but this reads
     # whatever is in the store, including rows written before it did.
-    rejected = {
-        f.get("gated_tool")
-        for f in feedback
-        if f.get("decision") == "reject"
-    }
+    rejected = {f.get("gated_tool") for f in feedback if f.get("decision") == "reject"}
     rejected.discard(None)
     for name in _DEFAULT_ORDER:
         if name not in allowlist:
@@ -370,9 +378,7 @@ def _invoke_llm_next_action(
         # Absent `all_tools` we cannot distinguish the two, so report the
         # weaker claim ("not available") rather than assert either.
         catalog = all_tools if all_tools is not None else allowlist
-        raise _GatedToolError(
-            action.tool, sorted(allowlist), known=action.tool in catalog
-        )
+        raise _GatedToolError(action.tool, sorted(allowlist), known=action.tool in catalog)
     return validated
 
 
@@ -416,13 +422,13 @@ def llm_next_action(
                 # ever being told what was wrong. Bounded by the same budget.
                 rejected.append((exc.tool, exc.known))
                 gated_retries += 1
-                logger.info(
-                    "Policy asked for gated tool %r; retrying with it ruled out", exc.tool
-                )
+                logger.info("Policy asked for gated tool %r; retrying with it ruled out", exc.tool)
                 if gated_retries <= max_llm_retries:
                     continue
-                reason = ("LLM policy kept choosing unavailable tools: "
-                          f"{sorted({t for t, _ in rejected})}")
+                reason = (
+                    "LLM policy kept choosing unavailable tools: "
+                    f"{sorted({t for t, _ in rejected})}"
+                )
                 logger.warning("%s", reason)
             except Exception as exc:
                 reason = f"LLM policy failed: {exc}"
@@ -446,28 +452,35 @@ def llm_next_action(
         # retry
         retries += 1
         if retries > max_llm_retries:
-            logger.warning(
-                "Exceeded max LLM retries (%s); treating as deny", max_llm_retries
-            )
+            logger.warning("Exceeded max LLM retries (%s); treating as deny", max_llm_retries)
             return NextAction(
                 tool=None,
-                rationale=(
-                    f"operator retry exhausted after {max_llm_retries} attempts "
-                    f"({reason})"
-                ),
+                rationale=(f"operator retry exhausted after {max_llm_retries} attempts ({reason})"),
                 stop=True,
             )
         logger.info("Operator requested LLM policy retry (%d/%d)", retries, max_llm_retries)
 
 
-# A campaign only needs a handful of untested ideas in front of it. Below this
-# it is worth spending minutes gathering more evidence; at or above it, that
-# time is better spent testing what is already queued.
-_HYPOTHESIS_BACKLOG_TARGET = int(os.environ.get("LABPILOT_HYPOTHESIS_BACKLOG_TARGET", "3"))
+# A campaign only needs a handful of *viable* ideas in front of it. Below this,
+# minutes spent gathering evidence are worth more than minutes spent testing.
+#
+# Counted by `viable_hypothesis_count`, not by row count: the previous version
+# counted every `proposed` row, so 46 stale entries — most never selected, some
+# off-domain for the competition — held the gate shut as firmly as 46 good ones.
+_VIABLE_TARGET = int(os.environ.get("LABPILOT_VIABLE_HYPOTHESIS_TARGET", "5"))
 # Re-sweeping the same kernels and papers minutes apart mostly re-ingests the
-# same sources under new artifact ids, bloating the store without adding
-# information. Evidence has to be allowed to go stale before refetching.
-_EVIDENCE_COOLDOWN_HOURS = float(os.environ.get("LABPILOT_EVIDENCE_COOLDOWN_HOURS", "6.0"))
+# same sources under new artifact ids. A day is long enough that a competition's
+# kernels and discussions have plausibly moved, and short enough that a
+# long-running campaign refreshes what it knows rather than compounding one
+# morning's snapshot.
+#
+# Measured from the newest `research_artifacts` row — the last *fetch* — not
+# from hypothesis age, so testing activity never masks stale evidence.
+_EVIDENCE_COOLDOWN_HOURS = float(os.environ.get("LABPILOT_EVIDENCE_COOLDOWN_HOURS", "24.0"))
+# Hard floor between sweeps, whatever else is true. Without it, a pool that
+# stays thin — a sweep that found nothing, or one whose candidates were all
+# deduped away — would gather on every single step.
+_MIN_RESWEEP_HOURS = float(os.environ.get("LABPILOT_MIN_RESWEEP_HOURS", "0.5"))
 
 
 def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
@@ -542,24 +555,56 @@ def hours_since_last_artifact(workspace: Workspace) -> float | None:
 
 
 def should_gather_evidence(workspace: Workspace) -> tuple[bool, str]:
-    """Decide whether pulling more artifacts is worth it right now.
+    """Gather when the pool is thin **or** the evidence is stale.
 
-    Two independent brakes, because either one alone lets the store bloat:
-    a queue of untested ideas means the bottleneck is *testing*, not evidence;
-    and a recent sweep means another one would mostly re-ingest the same
-    kernels and papers under new artifact ids.
+    This was two brakes in series — gather only if the backlog was thin *and*
+    the last sweep was old — which made either one a veto. The backlog clause
+    was checked first, so on rogii 2026-08-09 with **46 proposed hypotheses**
+    the staleness clause was never evaluated at all, and
+    `analyze_competition` / `search_papers` left the allowlist permanently.
+
+    That is a ratchet: the pool blocks the only thing that could refresh it, and
+    the pool grows. It also inverted the intent — a queue of stale ideas is the
+    strongest reason to go and find better ones, not a reason to stop looking.
+
+    So the conditions are now independent. Either is sufficient:
+
+    * **thin** — fewer than `_VIABLE_TARGET` hypotheses the campaign might
+      actually pick, counted by `viable_hypothesis_count` so that rows the
+      selector has passed over for two campaigns stop voting;
+    * **stale** — no artifact newer than `_EVIDENCE_COOLDOWN_HOURS`, which
+      guarantees recovery no matter how large the pool grows.
+
+    The cost of gathering when it was not needed is a sweep that mostly
+    re-ingests known kernels. The cost of *not* gathering was four campaigns
+    that could not improve, so the asymmetry is deliberate.
     """
-    backlog = untested_hypothesis_count(workspace)
-    if backlog >= _HYPOTHESIS_BACKLOG_TARGET:
-        return False, f"{backlog} untested hypotheses already queued"
-
     age_hours = hours_since_last_artifact(workspace)
-    if age_hours is not None and age_hours < _EVIDENCE_COOLDOWN_HOURS:
-        return False, f"evidence gathered {age_hours:.1f}h ago (cooldown)"
+
+    # A floor under both clauses, not a third gate. Making the conditions
+    # independent introduces a failure the AND version could not have: a
+    # campaign whose pool stays thin — because a sweep found nothing new, or
+    # because dedupe dropped it all — would sweep again every step. That is the
+    # old ratchet inverted, and just as expensive.
+    #
+    # Minutes, not hours: long enough that no campaign re-sweeps inside a single
+    # loop, short enough that it never becomes the reason evidence goes stale.
+    if age_hours is not None and age_hours < _MIN_RESWEEP_HOURS:
+        return False, f"evidence gathered {age_hours * 60:.0f} minutes ago"
+
+    viable = viable_hypothesis_count(workspace.knowledge_dir, workspace.competition)
+    if viable < _VIABLE_TARGET:
+        return True, f"only {viable} viable hypotheses queued"
 
     if age_hours is None:
         return True, "no evidence gathered yet"
-    return True, f"backlog {backlog} is thin and evidence is {age_hours:.1f}h old"
+    if age_hours >= _EVIDENCE_COOLDOWN_HOURS:
+        return True, f"evidence is {age_hours:.1f}h old"
+
+    return (
+        False,
+        f"{viable} viable hypotheses queued and evidence gathered {age_hours:.1f}h ago",
+    )
 
 
 def _plan_statuses(workspace: Workspace) -> list[str]:
