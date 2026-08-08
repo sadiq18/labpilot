@@ -59,6 +59,33 @@ CONTEXT_FILES: tuple[str, ...] = ("config.yaml", "profile.json")
 #: proxy accepts — naming a provider model would bypass role selection.
 CODEGEN_ROLE = "codegen"
 
+#: Pinned, not left to aider's own choice.
+#:
+#: Left unset, aider picked `whole` for `labpilot/codegen` — it has no context
+#: window or capability data for a model name it has never seen, so it falls
+#: back to the format that always works. `whole` re-emits the entire file, which
+#: is precisely the waste M19 exists to remove: the parent goes out in the
+#: prompt and comes back as a near-copy.
+#:
+#: Measured 2026-08-09 on rogii's real 331-line `train.py`, same SWA-style
+#: request as the 2026-08-07 spike:
+#:
+#: | format | delta | discipline touched | tokens | time |
+#: |---|---|---|---|---|
+#: | **diff** | **+20 / −7** | none | **8.0k** | 41 s |
+#: | whole | +23 / −7 | none | 9.1k | 48 s |
+#: | *spike, ultra-550b* | *+24 / −8* | *none* | — | — |
+#:
+#: `diff` is tighter than the design's best recorded result, on a cheaper model,
+#: for 14% fewer tokens. Both left `_driver_columns`,
+#: `_add_partition_features`, `_known_rows` and `partition_suffix_holdout`
+#: untouched — M19's core requirement, now confirmed on a third run.
+#:
+#: Pinned rather than defaulted because the choice is invisible when it goes
+#: wrong: a `whole`-format run still succeeds, still edits correctly, and simply
+#: costs more — the failure mode is a bill, not an error.
+EDIT_FORMAT = "diff"
+
 _DEFAULT_TIMEOUT_S = 900
 
 
@@ -258,6 +285,8 @@ def _aider_command(
         "aider",
         "--model",
         f"openai/labpilot/{role}",
+        "--edit-format",
+        EDIT_FORMAT,
         "--openai-api-base",
         base_url,
         "--no-stream",
