@@ -261,8 +261,21 @@ def test_a_declaring_template_declares_every_third_party_import(path):
         pytest.skip(f"{path.parent.name} does not declare dependencies")
 
     declared = " ".join(declared_dependencies(body))
-    stdlib_ok = {"json", "os", "sys", "pathlib", "typing", "dataclasses", "math",
-                 "itertools", "collections", "warnings", "time", "re", "logging"}
+    stdlib_ok = {
+        "json",
+        "os",
+        "sys",
+        "pathlib",
+        "typing",
+        "dataclasses",
+        "math",
+        "itertools",
+        "collections",
+        "warnings",
+        "time",
+        "re",
+        "logging",
+    }
     alias = {"sklearn": "scikit-learn", "yaml": "pyyaml"}
     imported = {m or n for m, n in re.findall(r"^import (\w+)|^from (\w+)", body, re.M)}
     for mod in sorted(imported - stdlib_ok):
@@ -300,3 +313,45 @@ def test_the_runner_uses_the_ephemeral_command_and_scrubbed_env(tmp_path, monkey
     assert seen["cmd"][:3] == ["uv", "run", "--script"]
     assert seen["env"] is not None, "the child must not inherit the parent environment"
     assert "OPENROUTER_API_KEY" not in seen["env"]
+
+
+def test_a_mismatched_quote_is_not_a_dependency():
+    """`["']...["']` accepted `"catboost>=1.2'` — a closing quote that does not
+    match its opening one. That is not valid TOML, so `uv` rejects the whole
+    block at install time, turning one typo into a failed run rather than one
+    skipped dependency. The backreference makes a malformed entry simply not a
+    dependency, leaving the rest of the block usable.
+    """
+    from labpilot.research_engine.execution.training.environment import (
+        declared_dependencies,
+    )
+
+    script = (
+        '# /// script\n# dependencies = [\n#   "catboost>=1.2\',\n#   "lightgbm",\n# ]\n# ///\n'
+    )
+    assert declared_dependencies(script) == ["lightgbm"]
+
+
+def test_both_quote_styles_still_parse():
+    """PEP 723 metadata is TOML, single quotes are valid, and models emit them."""
+    from labpilot.research_engine.execution.training.environment import (
+        declared_dependencies,
+    )
+
+    script = (
+        "# /// script\n# dependencies = [\n#   \"catboost>=1.2\",\n#   'lightgbm',\n# ]\n# ///\n"
+    )
+    assert declared_dependencies(script) == ["catboost>=1.2", "lightgbm"]
+
+
+def test_a_block_with_no_closing_fence_still_parses():
+    """`text.find` returns -1 when the closing marker is absent; line 104
+    already substitutes `len(text)`. Pinned because a review reported this as
+    unhandled."""
+    from labpilot.research_engine.execution.training.environment import (
+        declared_dependencies,
+    )
+
+    assert declared_dependencies('# /// script\n# dependencies = [\n#   "catboost",\n') == [
+        "catboost"
+    ]

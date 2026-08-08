@@ -31,6 +31,7 @@ from labpilot.research_engine.execution.capabilities.code_engineering.apply impo
     apply_proposal,
 )
 from labpilot.research_engine.execution.context import TaskContext
+from labpilot.research_engine.execution.delta import check_delta_consistency
 from labpilot.research_engine.execution.micro_agents.code_engineer import CodeEngineerAgent
 from labpilot.research_engine.execution.schemas import TaskEvidence
 from labpilot.research_engine.execution.schemas.code_proposal import (
@@ -124,6 +125,82 @@ def _summarise_profile(profile: dict) -> dict:
     return trimmed
 
 
+def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object]:
+    """Check the change against the claim its own author made. Gates nothing.
+
+    The claim comes from `proposal.kept` / `added` / `combined` — code
+    identifiers named by the agent that wrote the file. Not from the plan's
+    `technique` field, which cannot serve: `SWA` is not an importable symbol,
+    and rogii's plans recorded `feature_engineering` (a category), `add+model`
+    (two names concatenated) and once the bare word `the`. Passing those in
+    would make a working guard fire on wrong input — the defect this module
+    exists to catch, reproduced inside it.
+
+    Self-reported, and that limit is real: a model that lies consistently is not
+    caught. The failure that actually happens is carelessness — code that
+    contradicts its author's own stated intent — and the gap between the
+    declaration and the file is exactly what makes an evidence card wrong.
+
+    Confinement runs regardless, because it needs no claim at all, and it covers
+    the case §5 calls **the dangerous one**: a delta that added a technique *and*
+    quietly retuned something else, where `technique_attribution` credits the
+    whole `cv_gain` to one name.
+
+    **Observe-only on purpose.** These three checks have only ever been
+    calibrated against hand-written samples, and that is precisely how the two
+    bugs in step 1a got in. The first real campaign supplies a false-positive
+    rate; blocking is a one-line change after that, with evidence behind it.
+    """
+    train = next(
+        (f for f in proposal.files if f.path.endswith("pipeline/train.py")),
+        None,
+    )
+    if train is None:
+        return {}
+    report = check_delta_consistency(
+        prior_train,
+        train.content,
+        keep=list(proposal.kept),
+        add=list(proposal.added),
+        combine=list(proposal.combined),
+    )
+    meta = report.as_metadata()
+    claimed = bool(proposal.kept or proposal.added or proposal.combined)
+    has_parent = bool(prior_train.strip())
+    if not claimed:
+        # Nothing was claimed, so `consistent: true` would be a pass nobody
+        # earned — the fabricated-verdict failure, in the module written to
+        # prevent it.
+        meta.pop("consistent", None)
+        meta.pop("violations", None)
+    out: dict[str, object] = {f"delta_{k}": v for k, v in meta.items()}
+    out["delta_claim"] = {
+        "kept": list(proposal.kept),
+        "added": list(proposal.added),
+        "combined": list(proposal.combined),
+    }
+    # A baseline claims nothing because there is nothing to claim. A *delta*
+    # that claims nothing was simply never checked — and without this, the two
+    # are indistinguishable on the card: both show no verdict and no
+    # violations, so an unchecked experiment reads exactly like a clean one.
+    #
+    # Recorded rather than refused, for the same reason the checks are
+    # observe-only: the rate is the thing worth knowing first. If codegen
+    # routinely omits the claim, that is a prompt problem to fix with a number
+    # attached, not a reason to fail runs today.
+    out["delta_claim_declared"] = claimed
+    if has_parent and not claimed:
+        out["delta_unchecked"] = True
+        flags = list(out.get("delta_flags") or [])
+        flags.append(
+            "the change has a parent but declared no kept/added/combined, so "
+            "preservation, addition and combination were not checked — this "
+            "card carries no evidence that the delta tested its hypothesis"
+        )
+        out["delta_flags"] = flags
+    return out
+
+
 class CodeEngineeringCapability(BaseCapability):
     name = "code_engineering"
 
@@ -162,8 +239,7 @@ class CodeEngineeringCapability(BaseCapability):
         notes_path = root / "artifacts" / "code_notes.json"
         notes_path.parent.mkdir(parents=True, exist_ok=True)
         notes_path.write_text(
-            json.dumps({"files": notes, "competition": context.competition}, indent=2)
-            + "\n",
+            json.dumps({"files": notes, "competition": context.competition}, indent=2) + "\n",
             encoding="utf-8",
         )
         return evidence(
@@ -343,6 +419,7 @@ class CodeEngineeringCapability(BaseCapability):
 
         digests = {str(p): file_digest(p) for p in written}
         paths = [str(p) for p in written]
+        delta = _observe_delta(prior_train, proposal)
         if backup_path is not None:
             paths.append(str(backup_path))
         return evidence(
@@ -371,9 +448,12 @@ class CodeEngineeringCapability(BaseCapability):
                 "technique_canonical": resolution.canonical,
                 "technique_status": resolution.status,
                 "technique_reason": resolution.reason,
+                **delta,
                 "technique_origin": (
-                    "registry" if resolution.changes_rendering and origin == "template"
-                    else "llm" if origin == "llm"
+                    "registry"
+                    if resolution.changes_rendering and origin == "template"
+                    else "llm"
+                    if origin == "llm"
                     else "none"
                 ),
             },
@@ -419,9 +499,7 @@ class CodeEngineeringCapability(BaseCapability):
                 HypothesisStore,
             )
 
-            hyp = HypothesisStore(context.paths.base_dir, context.competition).get(
-                hyp_id
-            )
+            hyp = HypothesisStore(context.paths.base_dir, context.competition).get(hyp_id)
         except Exception:
             return {}
         if hyp is None:
@@ -463,9 +541,7 @@ class CodeEngineeringCapability(BaseCapability):
                 CodeRenderer,
             )
 
-            template = get_template(
-                choice.problem_type, template_name=choice.template_name
-            )
+            template = get_template(choice.problem_type, template_name=choice.template_name)
             if template is None:
                 return None
             config = load_config()

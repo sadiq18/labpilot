@@ -7,10 +7,27 @@ Respond ONLY with JSON matching this schema (no markdown fences):
   "rationale": string,
   "files": [
     {"path": "pipeline/train.py", "content": "<full file>", "action": "write"}
-  ]
+  ],
+  "kept": [string],
+  "added": [string],
+  "combined": [string]
 }
 
 Hard rules:
+- `kept` / `added` / `combined` describe YOUR OWN change, as **code
+  identifiers** — import aliases, class names, function names that appear in the
+  file you emitted (`lgb`, `CatBoostRegressor`, `build_features`). Never
+  technique names like `SWA` or `feature_engineering`: those are not symbols and
+  cannot be checked against code.
+  * `kept` — what you preserved from the prior pipeline and must still be called.
+  * `added` — what you introduced.
+  * `combined` — models whose predictions you blended into ONE output. Only list
+    these when you actually averaged/stacked them; listing a model you built but
+    whose predictions you discarded is the failure this field exists to catch.
+  Leave them `[]` for a from-scratch baseline — that is correct, not lazy. An
+  inaccurate claim is worse than an empty one: it is checked against the code
+  you emitted, and a mismatch means the experiment is recorded as measuring
+  something it did not measure.
 - Emit COMPLETE file contents. Never use placeholders like "..." or "rest of code".
 - Paths must stay under allowed_roots (typically pipeline/, src/, configs/, tests/).
 - Scripts are executed with the competition workspace as cwd (parent of pipeline/).

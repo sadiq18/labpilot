@@ -1,6 +1,6 @@
 # M19 — An experiment is a change to its parent
 
-**Status:** not started · **Design:**
+**Status:** step 0 and step 1a shipped · **Design:**
 [design/14-experiments-as-deltas.md](design/14-experiments-as-deltas.md) ·
 **Supersedes:** the Jinja template pack ·
 **Subsumes:** the technique registry, the `applied`/`candidate` split
@@ -71,6 +71,41 @@ So M19 ships an *adapter*: aider runs in a workspace copy, the diff becomes a
 `CodeProposal`, and the existing validation and apply path is unchanged. That
 keeps propose-then-apply, the never-edit-the-workspace rule, and M14's
 provenance.
+
+## Where this stands
+
+| step | what | state |
+|---|---|---|
+| 0 | fitroute OpenAI-compatible proxy | **shipped** (PR #110) |
+| 1a | `CodeAgent` seam + hypothesis-consistency checks | **shipped** (PR #111) |
+| 1b | wire the checks into the whole-file path, observe-only | **shipped** — all four checks, observe-only |
+| 1c | `AiderAgent` + copy/diff/propose + per-execution provenance | not started |
+| 2 | opt-in via config; measure the failure rate | not started |
+| 3 | flip the default when the rate justifies it | not started |
+| 4 | delete templates in that same change | not started |
+
+Step 1 was split once the consistency checks proved independent of aider: they
+compare a parent to a child, and whole-file regeneration already produces that
+pair. **1b comes before the adapter because the defect in "The check that
+matters most" is already in production** — whole-file regeneration has the same
+false-attribution failure and hides it better, so waiting for aider would leave
+it running while building its replacement.
+
+**1b found that the planned derivation cannot work.** It was going to read
+`technique` off the plan metadata; on rogii's 19 real plans that field holds
+hypothesis ids, category names, two techniques glued together, and once the
+bare word `the`. The most recent campaign is 5 unusable in 9. Nothing maps a
+technique name to a code identifier, and `TechniqueSpec` has no field for one.
+
+The fix was to stop trying to derive the claim and ask the author for it.
+`CodeProposal` now carries `kept` / `added` / `combined` as **code
+identifiers**, named by the agent that wrote the file, so all four checks run
+with nothing to maintain. Every evidence card records the verdict, the
+violations, the wide-delta flag and the claim itself.
+
+Self-reported, so a consistently lying model is not caught — but carelessness
+is the failure that happens, and the gap between what the author says it did
+and what the file does is exactly what makes attribution false.
 
 ## Exit criteria
 

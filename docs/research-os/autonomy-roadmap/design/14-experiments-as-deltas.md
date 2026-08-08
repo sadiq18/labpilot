@@ -570,14 +570,100 @@ default-off with a number attached rather than a guess.
    Scoping it to the campaign means it cannot outlive what it is accounting for.
    A shared daemon is the right shape only once fitroute is genuinely hosted,
    which is the same trigger as the full-HTTP option below.
-1. `CodeAgent` protocol + `AiderAgent` + copy/diff/propose, pointed at the proxy.
-   Includes per-execution code provenance (§6) and the hypothesis-consistency
-   checks (§5) — the checks are what make a delta trustworthy, so shipping the
-   adapter without them would produce confidently mis-attributed evidence, which
-   is worse than the whole-file path it replaces. Nothing calls it yet.
-2. Opt-in via config; measure `aider_no_edit` and `aider_syntax_fail`.
-3. Flip the default when the rate justifies it.
-4. Delete templates **in the same change** that makes delta the default — never
+1. **1a — shipped** (PR #111). `CodeAgent` protocol, `WholeFileAgent`, and the
+   hypothesis-consistency checks (§5). Nothing calls them yet.
+
+   Step 1 was originally one item. It is split because the checks turned out to
+   be independent of aider — they compare a parent to a child, and whole-file
+   regeneration produces exactly that pair. Two bugs found while building them
+   (import aliases uncollected; arithmetic blends unrecognised) also argued for
+   landing them before anything depends on them.
+
+2. **1b — wire the checks into the *existing* whole-file path, observe-only.**
+   Record `consistent` / `violations` / `flags` on the evidence card; gate
+   nothing.
+
+   Ordered before the adapter because §5's defect is **already in production**:
+   whole-file regeneration has the same false-attribution failure and hides it
+   better. Waiting for aider leaves a live defect running while building its
+   replacement.
+
+   It is also the only way to calibrate two heuristics that currently have
+   nothing behind them: `_has_arithmetic_blend` answers "is anything combined?"
+   rather than "are *these* things combined?", and the wide-delta threshold of 5
+   is a guess. Both are calibrated against samples the author wrote — the same
+   setup that produced both 1a bugs. Observe-only yields a false-positive rate
+   before a check can cost a campaign step, and makes flipping to blocking a
+   one-line change with evidence behind it.
+
+   **The hard part is not the wiring.** Nothing yet derives `keep` / `add` /
+   `combine` from a hypothesis; what exists is `technique`, `technique_stack`,
+   `combo_techniques`, `parent_hypothesis_id`. Mapping those to "what must
+   survive, what must appear, what must be blended" is where the M18 vocabulary
+   earns its keep, and getting it wrong feeds the checks bad input — the
+   *guard exists and its input is wrong* pattern, a dozen instances deep.
+
+   **Measured 2026-08-08, and it changed the plan.** The derivation was going to
+   read `technique` off the plan metadata. On rogii's 19 real plans that field
+   holds `hyp:H-010` (a hypothesis id, 6 plans), `feature_engineering` (a
+   category), `dataset+rolling_features` and `add+model` (two names glued into
+   one string), `test`, and `the` — a regex fallback that captured an article.
+   The most recent campaign, after the miner fix, is **5 unusable in 9**. Only
+   `SWA`, `EMA`, `vit`, `polynomial_features` and `Mixed Precision` are real
+   technique names, and even those are not *code identifiers*: `SWA` is not an
+   importable symbol.
+
+   `TechniqueSpec` carries `name`, `aliases`, `feature_recipes`, `applies_to`,
+   `requires`, `description` — **nothing that maps a technique to a symbol**.
+   Building that map by hand is the curated-set-answering-an-open-world-question
+   pattern rejected three times already.
+
+   So 1b ships the vocabulary-free half only: `touched_functions` and
+   confinement, recorded as `delta_touched_functions` / `delta_flags`. That is
+   not a consolation prize — it is the check §5 calls *the dangerous one*, where
+   a delta does more than it claims and `technique_attribution` credits the
+   whole gain to one name.
+
+   `consistent` and `violations` are **omitted** rather than defaulted to a
+   pass, because no claim was checked and a fabricated verdict is the failure
+   mode this whole module exists to prevent.
+
+   Calibration against rogii's real 331-line `train.py` (8 functions): a
+   targeted technique delta touches 1, a whole-file regeneration touches 8, and
+   the threshold of 5 separates them cleanly. **But the threshold is absolute,
+   not relative** — a 30-function file would flag at 20% changed. Revisit when a
+   second competition provides a second data point.
+
+   **Resolved: codegen declares its own claim.** `CodeProposal` gained `kept` /
+   `added` / `combined` — code identifiers named by the agent that wrote the
+   file, so no technique→symbol map is needed and nothing has to be maintained.
+   All four checks now run on the whole-file path, observe-only, and the
+   declaration is recorded as `delta_claim` so a reader can audit it against the
+   hypothesis rather than trusting a bare verdict.
+
+   The limit, stated plainly: this is **self-reported**, so a model that lies
+   consistently is not caught. The failure that actually occurs is carelessness
+   — the declaration is *intent*, the file is *execution*, and the gap between
+   them is what makes a card read "ensembling improved MSE" for a run that
+   substituted.
+
+   `null` and bare strings coerce to lists. A `ValidationError` on this field
+   would be read by the retry path as a malformed response and re-asked, costing
+   a step from a 30-step campaign over optional metadata.
+
+   **A delta that declares nothing is marked `delta_unchecked`.** A baseline
+   claims nothing because there is nothing to claim; a delta that claims nothing
+   was simply never checked. Without the distinction both look identical on the
+   card — no verdict, no violations — so an unchecked experiment reads as a
+   clean one, which is the fabricated-pass failure arriving by omission instead
+   of by assertion. Recorded, not refused: if codegen routinely omits the claim
+   that is a prompt problem to fix with a rate attached.
+
+3. **1c — `AiderAgent` + copy/diff/propose, pointed at the proxy**, with
+   per-execution code provenance (§6).
+4. Opt-in via config; measure `aider_no_edit` and `aider_syntax_fail`.
+5. Flip the default when the rate justifies it.
+6. Delete templates **in the same change** that makes delta the default — never
    before. The discipline M14 phase 3 established, where a removal and the
    precondition that makes it safe must ship together.
 
