@@ -241,11 +241,46 @@ def check_effect(parent: ast.Module, child: ast.Module) -> list[str]:
     ]
 
 
-def unreachable_functions(tree: ast.Module) -> set[str]:
-    """Locally-defined functions that nothing in this module calls.
+def referenced_names(tree: ast.Module) -> set[str]:
+    """Every name the module mentions as a value, plus attribute names.
 
-    Empty for a module with no entry point, where "nothing calls it here" says
-    only that the caller lives elsewhere.
+    Mentions, not calls. A function handed to something else runs perfectly
+    well without ever being the target of a `Call` node — `df.apply(helper,
+    axis=1)`, `.transform(helper)`, `sorted(key=helper)`, a decorator, a
+    dispatch dict. Reported on PR #117 and reproduced: a real behaviour-changing
+    delta to a `df.apply` callback came back
+    `the delta only changed 'helper', which nothing in the result calls`, and
+    row-wise feature engineering is precisely the idiom this system's own
+    codegen writes.
+
+    A `Name` node covers direct calls too, since `helper()` puts one in
+    `Call.func`. Being mentioned without running is a far cheaper mistake here
+    than a false violation, which costs a re-ask on a correct experiment.
+    """
+    found = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    found |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    return found
+
+
+def unreachable_functions(tree: ast.Module) -> set[str]:
+    """Locally-defined functions this module never *mentions* again.
+
+    Mentions, not calls. A function handed to something else runs perfectly
+    well without ever being the target of a `Call` node — `df.apply(helper,
+    axis=1)`, `.transform(helper)`, `sorted(key=helper)`, a decorator, a
+    dispatch dict. Reported on PR #117 and reproduced: a real behaviour-changing
+    delta to a `df.apply` callback came back
+    `the delta only changed 'helper', which nothing in the result calls`, and
+    row-wise feature engineering is precisely the idiom this system's own
+    codegen writes.
+
+    So the question is whether the name appears anywhere as a value. A `Name`
+    node covers both — `helper()` puts one in `Call.func` too — and being
+    referenced without running is a far cheaper mistake here than a false
+    violation, which costs a re-ask on a correct experiment.
+
+    Empty for a module with no entry point, where "nothing mentions it here"
+    says only that the caller lives elsewhere.
     """
     if not _has_entry_point(tree):
         return set()
@@ -254,7 +289,7 @@ def unreachable_functions(tree: ast.Module) -> set[str]:
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
-    return defined - called_names(tree)
+    return defined - referenced_names(tree)
 
 
 def strip_unreachable(tree: ast.Module) -> ast.Module:
@@ -340,13 +375,12 @@ def check_reachability(child: ast.Module, touched: list[str]) -> list[str]:
     """
     if not touched or not _has_entry_point(child):
         return []
-    reachable = called_names(child)
-    dead = [name for name in touched if name not in reachable]
+    dead = [name for name in touched if name not in referenced_names(child)]
     if len(dead) != len(touched):
         return []
     listed = ", ".join(repr(name) for name in sorted(dead))
     return [
-        f"the delta only changed {listed}, which nothing in the result calls — "
+        f"the delta only changed {listed}, which nothing in the result mentions — "
         "the change cannot execute, so any score it produces measures the parent"
     ]
 

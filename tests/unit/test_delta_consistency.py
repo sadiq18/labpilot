@@ -516,3 +516,74 @@ def test_a_baseline_has_no_parent_to_be_identical_to():
     from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
 
     assert check_delta_consistency("", _EFFECT_PARENT, add=["rolling"]).ok is True
+
+
+# --- a callback runs without ever being a Call target ------------------------
+
+
+_CALLBACK_PARENT = """import pandas as pd
+
+
+def helper(row):
+    return row["a"]
+
+
+def main():
+    df = pd.read_csv("x.csv")
+    df["z"] = df.apply(helper, axis=1)
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+
+def test_a_delta_to_an_apply_callback_is_not_dead_code():
+    """Reported on PR #117 and reproduced.
+
+    `check_reachability` asked whether the function was the target of a `Call`
+    node. `df.apply(helper, axis=1)` passes it as a value, so a real
+    behaviour-changing edit to `helper` came back "nothing in the result calls
+    it" — and row-wise feature engineering is exactly the idiom this system's
+    own codegen writes, so the false violation would have corrupted the very
+    failure rate step 2 collects.
+    """
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _CALLBACK_PARENT.replace('return row["a"]', 'return row["a"] * 2')
+
+    report = check_delta_consistency(_CALLBACK_PARENT, child)
+
+    assert report.ok is True, report.violations
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        'df["z"] = df.apply(helper, axis=1)',
+        'df["z"] = df.groupby("p")["a"].transform(helper)',
+        "rows = sorted(df.index, key=helper)",
+        "dispatch = {'h': helper}",
+    ],
+)
+def test_every_way_of_handing_a_function_along_counts(call):
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = _CALLBACK_PARENT.replace('df["z"] = df.apply(helper, axis=1)', call)
+    child = parent.replace('return row["a"]', 'return row["a"] * 2')
+
+    assert check_delta_consistency(parent, child).ok is True
+
+
+def test_a_function_nothing_mentions_at_all_is_still_dead():
+    """The carve-out must not cost the behaviour it guards — the rogii case,
+    where `main()` never names `engineer_features` in any form."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = _CALLBACK_PARENT.replace('df["z"] = df.apply(helper, axis=1)', "pass")
+    child = parent.replace('return row["a"]', 'return row["a"] * 2')
+
+    report = check_delta_consistency(parent, child)
+
+    assert report.ok is False
+    assert any("cannot execute" in v for v in report.violations)

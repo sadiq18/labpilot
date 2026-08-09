@@ -21,6 +21,7 @@ from pathlib import Path
 from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.execution.capabilities._helpers import (
     evidence,
+    failure_excerpt,
     file_digest,
     is_dry_run,
 )
@@ -129,29 +130,10 @@ def _summarise_profile(profile: dict) -> dict:
     return trimmed
 
 
-#: How much of a failure to hand back to codegen.
+#: How much of a failure to hand back to codegen. Larger than the smoke gate's
+#: own excerpt because the editor is being asked to *fix* the error, not just
+#: to report it.
 _RETRY_EXCERPT = 2000
-
-
-def _failure_excerpt(reason: object, limit: int = _RETRY_EXCERPT) -> str:
-    """The **end** of a failure, because that is where the error is.
-
-    This took the first 2000 characters, which on a Python traceback is the
-    frame list — file paths and library internals — and never reaches the
-    exception on the last line. Measured on rogii 2026-08-09: two retries in a
-    row produced no edit at all while `retry_reason` began
-    `Traceback (most recent call last):\\n  File "/U…`, and `KeyError: 'TVT'`
-    sat past the cut. The editor was handed a stack of paths and asked to fix
-    something.
-
-    Exactly the defect this project already fixed once for training errors,
-    where the stored failure was 1523 characters of progress bar — head-first
-    truncation keeping the noise. Same lesson, different caller.
-    """
-    text = str(reason or "").strip()
-    if len(text) <= limit:
-        return text
-    return "…\n" + text[-limit:]
 
 
 def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object]:
@@ -494,8 +476,14 @@ class CodeEngineeringCapability(BaseCapability):
                 # try again from the inputs that produced the broken file, and
                 # reproduces the same mistake — measured on rogii 2026-08-08,
                 # where a `Geology: object` column was handed to LightGBM.
-                "retry_reason": _failure_excerpt(
-                    context.task.metadata.get("retry_reason") or ""
+                # Shared with the smoke gate, which learned the same lesson
+                # first: keep the *tail*, and collapse tqdm's `\r` frames so a
+                # progress bar cannot fill the budget. Two implementations of
+                # one idiom is how the `\r` fix lands in only one of them.
+                "retry_reason": failure_excerpt(
+                    str(context.task.metadata.get("retry_reason") or ""),
+                    "",
+                    limit=_RETRY_EXCERPT,
                 ),
                 "parent_hypothesis_id": plan_meta.get("parent_hypothesis_id"),
                 "parent_metrics": plan_meta.get("parent_metrics") or {},

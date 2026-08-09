@@ -359,24 +359,39 @@ class TabularProfiler:
         # concatenated frame, and it is what makes a column's sparsity visible
         # to whoever decides whether to use it.
         union_frames = list(frames)
+        # Rows are estimated per kind and summed, because `load_data`
+        # concatenates every CSV under `train/`. Scaling the primary kind's
+        # mean by the primary kind's file count undercounts the training set by
+        # whatever the other kinds contribute — the same mistake as profiling
+        # one kind's columns, one field over.
+        row_count = int(sum(len(f) for f in frames) / len(frames) * len(kinds[primary_kind]))
         for kind, paths in kinds.items():
             if kind == primary_kind:
                 continue
             kind_limit = max(1, min(self.config.max_files_sample, len(paths)))
-            union_frames.extend(
+            kind_frames = [
                 pd.read_csv(p, nrows=self.config.max_rows_sample) for p in paths[:kind_limit]
-            )
+            ]
+            union_frames.extend(kind_frames)
+            row_count += int(sum(len(f) for f in kind_frames) / len(kind_frames) * len(paths))
         sample_df = pd.concat(union_frames, ignore_index=True)
 
-        mean_rows = sum(len(f) for f in frames) / len(frames)
-        row_count = int(mean_rows * len(kinds[primary_kind]))
-
+        # Test columns from **every** kind, for the same reason the sample frame
+        # spans every kind. Read from the primary kind alone, a column that
+        # exists in another kind's train *and* test looked train-only — and
+        # `train_only[-1]` is the target fallback, so `Geology` (a categorical
+        # feature present on both sides of its own kind) was inferred as the
+        # label while the real target `TVT` was passed over. Codegen then trains
+        # against the wrong column entirely.
         test_columns: set[str] = set()
-        test_kind_files = [
-            p for p in test_files if self._split_entity_kind(p.stem)[1] == primary_kind
-        ]
-        for path in test_kind_files[:limit]:
-            test_columns.update(pd.read_csv(path, nrows=0).columns)
+        test_by_kind: dict[str, list[Path]] = {}
+        for path in test_files:
+            test_by_kind.setdefault(self._split_entity_kind(path.stem)[1], []).append(path)
+        for kind, paths in test_by_kind.items():
+            kind_limit = max(1, min(self.config.max_files_sample, len(paths)))
+            for path in paths[:kind_limit]:
+                test_columns.update(pd.read_csv(path, nrows=0).columns)
+        test_kind_files = test_by_kind.get(primary_kind, [])
 
         submission_columns: list[str] = []
         if sample_path is not None:

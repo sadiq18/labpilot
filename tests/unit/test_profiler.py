@@ -3,14 +3,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
+from labpilot.config import ProfilerConfig
 from labpilot.research_engine.execution.baseline.selector import BaselineSelector
 from labpilot.research_engine.intelligence.competition.models import (
     CompetitionSpec,
     MetricSpec,
     ProblemType,
 )
-from labpilot.config import ProfilerConfig
-from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
 
 
 @pytest.fixture
@@ -237,8 +237,8 @@ def partitioned_data_dir(tmp_path):
 
 
 def _profiler():
-    from labpilot.config import ProfilerConfig
     from labpilot.accessor.profiler.tabular import TabularProfiler
+    from labpilot.config import ProfilerConfig
 
     return TabularProfiler(ProfilerConfig())
 
@@ -267,8 +267,15 @@ def test_partitioned_warns_that_rows_are_not_iid(partitioned_data_dir):
 
 
 def test_partitioned_row_count_is_estimated_not_zero(partitioned_data_dir):
+    """Every kind counts, because `load_data` concatenates every CSV.
+
+    This asserted 60 — the primary kind alone, 6 files x 10 rows — while the
+    fixture also holds 6 `__ref` files of 4 rows. The frame the pipeline builds
+    has 84. Counting one kind's columns and another kind's rows was the same
+    asymmetry, one field apart.
+    """
     profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
-    assert profile.row_count == 60  # 6 partitions x 10 rows
+    assert profile.row_count == 84  # 6x10 main + 6x4 ref
     assert profile.row_count_estimated is True
     assert profile.column_count == 5
 
@@ -546,3 +553,38 @@ def test_a_single_kind_dataset_is_unchanged(tmp_path):
 
     assert {c.name for c in profile.columns} == {"MD", "GR", "TVT"}
     assert all(c.is_numeric for c in profile.columns)
+
+
+def test_a_column_in_a_non_primary_kinds_test_files_is_not_train_only(tmp_path):
+    """Reported on PR #117 and reproduced.
+
+    The sample frame spans every kind, but `test_columns` was read from the
+    primary kind's test files alone — so a column present in *another* kind's
+    train **and** test looked train-only. `train_only[-1]` is the target
+    fallback, so a categorical feature could be inferred as the label while the
+    real target was passed over, and codegen would train against the wrong
+    column entirely.
+    """
+    import pandas as pd
+
+    root = tmp_path / "two-kinds"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in range(4):
+        pd.DataFrame({"MD": [1.0, 2.0], "TVT": [3.0, 4.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+        pd.DataFrame({"MD": [1.0, 2.0]}).to_csv(root / "test" / f"e{i}__main.csv", index=False)
+        # `Geology` lives only in this kind, on *both* sides — a feature, not a label.
+        pd.DataFrame({"GR": [5.0, 6.0], "Geology": ["shale", "sand"], "TVT": [7.0, 8.0]}).to_csv(
+            root / "train" / f"e{i}__ref.csv", index=False
+        )
+        pd.DataFrame({"GR": [5.0, 6.0], "Geology": ["shale", "sand"]}).to_csv(
+            root / "test" / f"e{i}__ref.csv", index=False
+        )
+    pd.DataFrame({"id": [0], "TVT": [0.0]}).to_csv(root / "sample_submission.csv", index=False)
+
+    profile = _profiler().profile_directory(root, "demo")
+
+    assert "Geology" not in profile.train_only_columns
+    assert profile.target_column == "TVT"
