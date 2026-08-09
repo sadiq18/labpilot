@@ -116,3 +116,34 @@ def test_metrics_written_by_this_run_pass(workspace):
 
     assert result.passed is True, result.error
     assert result.metrics["cv_rmse"] == 1.0
+
+
+def test_the_real_e227_file_would_now_be_rejected(workspace):
+    """The actual artifact that made P-025 green, reproduced from its recorded
+    contents and mtime. No training run — the guard is a filesystem question.
+
+    `cv_rmse: 194.80084243002463` is the parent H-003 number, which is how the
+    card came to carry a result from a different experiment.
+    """
+    import os
+
+    stale = workspace / "metrics.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "cv_rmse": 194.80084243002463,
+                "mse": 194.80084243002463,
+                "rmse": 13.957107237175784,
+                "n_features": 20,
+            }
+        ),
+        encoding="utf-8",
+    )
+    # 2026-08-08 20:35 against a run starting 2026-08-09 07:52.
+    written_yesterday = time.time() - (11 * 3600 + 17 * 60)
+    os.utime(stale, (written_yesterday, written_yesterday))
+
+    result = _run(workspace)
+
+    assert result.passed is False
+    assert "earlier execution" in (result.error or "")
