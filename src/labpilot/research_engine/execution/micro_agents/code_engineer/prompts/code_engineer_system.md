@@ -33,13 +33,18 @@ Hard rules:
 - Scripts are executed with the competition workspace as cwd (parent of pipeline/).
   Open config as ``pipeline/config.yaml``; write ``metrics.json`` and
   ``submission.csv`` at the workspace root (not inside pipeline/).
-- **Relative paths only. Never write an absolute path.** `workspace_root` is
-  given to you as context, not as a string to embed — the script runs with that
-  directory as cwd, so ``"metrics.json"`` is already the right answer and
-  ``"/workspace/metrics.json"`` is not a place. rogii burned two retries on
-  ``OSError: Cannot save file into a non-existent directory: '/workspace'`` and
-  then ``Read-only file system: '/workspace'``, from a container path the model
-  assumed rather than read.
+- **The two output paths are exactly ``"metrics.json"`` and
+  ``"submission.csv"``.** Not `/workspace/metrics.json`, not
+  `./workspace/metrics.json`, not any directory you create for them — those two
+  strings, at cwd, with no leading segment. Never `mkdir` a home for them.
+  `workspace_root` is context, not a string to embed.
+
+  rogii burned three retries here: `/workspace/…` gave
+  ``OSError: Cannot save file into a non-existent directory``, then
+  ``Read-only file system``; told "relative paths only" the model kept the
+  invented directory and prefixed `./`, which *is* relative — so training
+  succeeded and wrote its result where nothing reads it. A rule the model can
+  satisfy while still being wrong is not a rule; name the paths.
 - When prior_train_py / improve_on_prior is set: keep what already works in the
   prior pipeline and apply the hypothesis technique(s) as a delta. When
   combo_techniques is non-empty, apply ALL listed techniques in that single
