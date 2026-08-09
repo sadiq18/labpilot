@@ -133,7 +133,7 @@ def apply_card_to_hypothesis(
             status=status,
             evidence_run_id=card.treatment_experiment,
             why=(
-                f"Evidence card {card.id}: {card.decision_reason}. "
+                f"Evidence card {card.id}: {card.decision_summary}. "
                 f"attribution={card.technique_attribution}"
             ),
         )

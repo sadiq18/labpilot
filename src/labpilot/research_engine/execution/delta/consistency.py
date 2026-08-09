@@ -1024,10 +1024,13 @@ def validation_region(tree: ast.Module, signals: ValidationSignals) -> set[str]:
     — a flag on everything is a flag nobody reads. So the module's entry point
     is exempt from reaching the region by delegation alone.
 
-    Only the entry point. The first version exempted *every* caller, which hid
-    a wrapper doing consequential work of its own: `prepare_and_split` reseeds
-    and reshuffles before delegating, which changes exactly which rows land in
-    the holdout. Reported on PR #119.
+    Only the entry point, and only the one the `if __name__` guard names. The
+    first version exempted *every* caller, which hid a wrapper doing
+    consequential work of its own: `prepare_and_split` reseeds and reshuffles
+    before delegating, which changes exactly which rows land in the holdout.
+    The second exempted anything called at module level, which handed the same
+    escape back to a notebook-shaped script with no `main()`. Both reported on
+    PR #119.
 
     Identifiers only — see `_identifiers_used`. Naming the scheme in a string
     is reporting, not running: rogii's `main` writes
@@ -1048,7 +1051,7 @@ def validation_region(tree: ast.Module, signals: ValidationSignals) -> set[str]:
         node for node in tree.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     ]
     region = {node.name for node in functions if _matches_scheme(node.name, scheme_parts)}
-    delegators = _module_level_calls(tree)
+    delegators = _guarded_entry_points(tree)
     for node in functions:
         if node.name in region:
             continue
@@ -1065,16 +1068,37 @@ def validation_region(tree: ast.Module, signals: ValidationSignals) -> set[str]:
     return region
 
 
-def _module_level_calls(tree: ast.Module) -> set[str]:
-    """Top-level functions called from module level — the entry points."""
+def _guarded_entry_points(tree: ast.Module) -> set[str]:
+    """Functions called from the `if __name__ == "__main__":` guard.
+
+    Narrower than "called at module level", which was the first version and was
+    too generous by exactly the amount that reopened the bug it shipped
+    alongside: in a notebook-shaped script with no `main()`, every top-level
+    call is a module-level call, so `prepare_and_split(...)` became its own
+    entry point and got the delegation exemption back. Reported on PR #119.
+
+    The guard is the one construct that means *this is how the module starts*.
+    A script without one grants the exemption to nobody, which is the safe
+    direction: a wrapper stays in the region rather than escaping it.
+    """
     called: set[str] = set()
     for statement in tree.body:
-        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        if not isinstance(statement, ast.If) or not _is_main_guard(statement.test):
             continue
         for inner in ast.walk(statement):
             if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name):
                 called.add(inner.func.id)
     return called
+
+
+def _is_main_guard(test: ast.expr) -> bool:
+    """`__name__ == "__main__"`, however the comparison is spelled."""
+    if not isinstance(test, ast.Compare):
+        return False
+    operands = [test.left, *test.comparators]
+    names = {node.id for node in operands if isinstance(node, ast.Name)}
+    literals = {node.value for node in operands if isinstance(node, ast.Constant) and node.value}
+    return "__name__" in names and "__main__" in literals
 
 
 def check_validation_region(
@@ -1205,12 +1229,20 @@ def check_leakage_discipline(child: ast.Module, signals: ValidationSignals) -> l
     ]
 
 
-#: Attributes that hand back the frame's own column set. A file reaching for one
+#: Attributes that hand back a *frame's* own column set. A file reaching for one
 #: of these is deriving features from whatever the data happens to hold, which
-#: is the shape leakage exclusion exists for. `columns` alone was the first
-#: version and missed `select_dtypes`, `keys` and `dtypes` — all equally common
-#: and none of them an explicit allowlist. Reported on PR #119.
-_FRAME_COLUMN_SOURCES = frozenset({"columns", "keys", "select_dtypes", "dtypes", "items"})
+#: is the shape leakage exclusion exists for.
+#:
+#: Pandas-specific names only, because this matches an attribute without knowing
+#: the receiver's type. `keys` and `items` were here for one round and had to
+#: go: `Counter.items()` in an unrelated word-count function made a file that
+#: never touches a DataFrame read as deriving features from one — and worse, it
+#: defeated the *"explicit allowlist"* exemption, so a file correctly doing
+#: `df[["GR", "MD"]]` was flagged for a `.items()` call elsewhere in the module.
+#: Reported on PR #119. `df.keys()` is now a miss; a false positive that fires
+#: on ordinary dict code is worse than a miss, because it is the one that gets
+#: the check turned off.
+_FRAME_COLUMN_SOURCES = frozenset({"columns", "select_dtypes", "dtypes"})
 
 
 def _derives_from_frame(tree: ast.Module) -> bool:
@@ -1230,22 +1262,42 @@ def _derives_from_frame(tree: ast.Module) -> bool:
 
 
 def _selected_columns(tree: ast.Module) -> set[str]:
-    """Column names a subscript reads out of a frame: `df["a"]`, `df[["a", "b"]]`.
+    """Column names a *list* subscript reads out of a frame.
 
-    Load context only. `df["Geology"] = …` writes a column rather than choosing
-    one as a feature, and `df.drop(columns=[...])` is a keyword argument, not a
-    subscript — so neither is read as inclusion.
+    `df[["a", "b"]]` and `df.loc[:, ["a", "b"]]` both select columns, and the
+    second was invisible: a `.loc` slice is a `Tuple` holding the `List`, and
+    the first version only looked one level down. Reported on PR #119.
+
+    **List slices only.** A single-string subscript is far too ambiguous to
+    read as selection — `df[df["Geology"] > 0]` filters rows, and the mask's
+    inner `df["Geology"]` is a `Subscript(Load)` indistinguishable from a
+    feature pick once `ast.walk` has separated it from the `Compare` it belongs
+    to. That produced "the code selects 'Geology' as a feature" for code that
+    selects no features at all — a false positive in the exact direction this
+    check was rebuilt to remove. Reported on PR #119.
+
+    The cost is a missed `X = df["Geology"]`, and it is worth paying: a
+    multi-column selection is how a feature set is written, and a check that
+    cries leak at row filtering is a check that gets switched off.
     """
     found: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Subscript) or not isinstance(node.ctx, ast.Load):
             continue
-        targets = node.slice.elts if isinstance(node.slice, ast.List | ast.Tuple) else [node.slice]
-        found.update(
-            element.value
-            for element in targets
-            if isinstance(element, ast.Constant) and isinstance(element.value, str)
-        )
+        found.update(_string_elements(node.slice))
+    return found
+
+
+def _string_elements(node: ast.expr) -> set[str]:
+    """String constants in a (possibly nested) list or tuple literal."""
+    if not isinstance(node, ast.List | ast.Tuple):
+        return set()
+    found: set[str] = set()
+    for element in node.elts:
+        if isinstance(element, ast.Constant) and isinstance(element.value, str):
+            found.add(element.value)
+        else:
+            found |= _string_elements(element)
     return found
 
 

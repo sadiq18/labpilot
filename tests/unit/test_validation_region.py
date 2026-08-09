@@ -363,10 +363,6 @@ def test_a_wrapper_with_logic_of_its_own_is_in_the_region():
             "select_dtypes takes everything",
             'def b(df):\n    return df.select_dtypes(include="number")\n',
         ),
-        (
-            "keys() is columns by another name",
-            "def b(df):\n    return df[[c for c in df.keys()]]\n",
-        ),
     ],
 )
 def test_leaking_shapes_are_flagged(label, source):
@@ -550,3 +546,141 @@ def test_leakage_is_still_checked_on_a_first_ever_write():
     report = check_delta_consistency("", leaky, validation=_ROGII)
 
     assert any("Geology" in flag for flag in report.flags)
+
+
+# --- PR #119 round 3 ---------------------------------------------------------
+
+
+def test_the_flag_summary_survives_a_leaderboard_patch():
+    """Reported on PR #119, against the previous round's own headline fix.
+
+    Three writers recompute `decision_reason` after a card is built —
+    `submit_learn` when leaderboard results land, `repair` twice — and each
+    overwrote the appended flag text wholesale. It vanished exactly when a
+    hypothesis reached the leaderboard, which is the confirmed case the fix
+    named as mattering most. The flags live in metadata now and the summary is
+    derived, so no writer can drop them by rewriting a sentence.
+    """
+    from labpilot.research_engine.evidence.models import EvidenceCard
+
+    card = EvidenceCard(
+        decision_reason="cv_gain_positive",
+        metadata={"delta_flags": ["the delta landed in the validation region"]},
+    )
+    patched = card.model_copy(update={"decision_reason": "lb_gain_non_negative"})
+
+    assert "validation region" in card.decision_summary
+    assert "validation region" in patched.decision_summary
+    assert patched.decision_summary.startswith("lb_gain_non_negative")
+
+
+def test_a_card_without_flags_reads_exactly_as_before():
+    from labpilot.research_engine.evidence.models import EvidenceCard
+
+    card = EvidenceCard(decision_reason="cv_gain_positive")
+
+    assert card.decision_summary == "cv_gain_positive"
+    assert card.delta_flags == []
+
+
+def test_the_readers_use_the_summary_not_the_raw_field():
+    """A check nothing reads is the failure this milestone exists to end, and
+    the summary is only worth deriving if the places a verdict is read use it."""
+    import inspect
+
+    from labpilot.research_engine.context.providers import experiments
+    from labpilot.research_engine.evidence import apply
+
+    assert "decision_summary" in inspect.getsource(experiments)
+    assert "decision_summary" in inspect.getsource(apply)
+
+
+def test_a_notebook_shaped_script_grants_no_delegation_exemption():
+    """Reported on PR #119: "called at module level" made every top-level call
+    its own entry point, so a script with no `main()` handed `prepare_and_split`
+    back the exemption the same round had just taken away."""
+    source = (
+        "def partition_suffix_holdout_split(df):\n    return df.iloc[:5], df.iloc[5:]\n\n\n"
+        "def prepare_and_split(df, seed=42):\n"
+        "    df = df.sample(frac=1.0, random_state=seed)\n"
+        "    return partition_suffix_holdout_split(df)\n\n\n"
+        "def train_model(a):\n    return a\n\n\n"
+        "tr, va = prepare_and_split(None)\ntrain_model(tr)\n"
+    )
+
+    assert validation_region(_tree(source), _ROGII) == {
+        "partition_suffix_holdout_split",
+        "prepare_and_split",
+    }
+
+
+def test_the_guarded_entry_point_is_still_exempt():
+    """The carve-out must not cost the behaviour it guards: `main` calls
+    everything, so calling says nothing about it."""
+    source = (
+        "def partition_suffix_holdout_split(df):\n    return df.iloc[:5], df.iloc[5:]\n\n\n"
+        "def main():\n    return partition_suffix_holdout_split(None)\n"
+        '\n\nif __name__ == "__main__":\n    main()\n'
+    )
+
+    assert validation_region(_tree(source), _ROGII) == {"partition_suffix_holdout_split"}
+
+
+def test_a_boolean_mask_is_not_feature_selection():
+    """Reported on PR #119: `df[df["Geology"] > 0]` filters rows, and `ast.walk`
+    separated the mask's inner subscript from the `Compare` it belongs to — so
+    row filtering read as "the code selects 'Geology' as a feature", a false
+    positive in the direction this check was rebuilt to remove."""
+    source = (
+        "def b(df):\n"
+        '    ex = {"Geology", "ANCC", "BUDA"}\n'
+        '    d = df[df["Geology"] > 0]\n'
+        "    return d[[c for c in d.columns if c not in ex]]\n"
+    )
+
+    assert check_leakage_discipline(_tree(source), _KFOLD) == []
+
+
+def test_a_loc_selection_is_the_same_leak_as_a_plain_one():
+    """`df.loc[:, ["Geology", "GR"]]` — a `Tuple` holding the `List`, which the
+    first version only looked one level into. Reported on PR #119."""
+    source = 'def b(df):\n    return df.loc[:, ["Geology", "GR"]]\n'
+
+    assert check_leakage_discipline(_tree(source), _KFOLD)
+
+
+def test_frame_detection_is_a_known_miss_on_keys():
+    """`df.keys()` is columns by another name, and it was detected for one
+    round. It is a miss now, on purpose: `keys` and `items` are dict methods,
+    and matching them by name flagged files with no DataFrame in them at all. A
+    false positive that fires on ordinary dict code is worse than a miss —
+    it is the one that gets the check turned off. Written as a test so the trade
+    is visible rather than inferred from a frozenset."""
+    source = "def b(df):\n    return df[[c for c in df.keys()]]\n"
+
+    assert check_leakage_discipline(_tree(source), _KFOLD) == []
+
+
+def test_an_unrelated_items_call_is_not_a_dataframe():
+    """Reported on PR #119: `Counter(words).items()` made a file that never
+    touches a frame read as deriving features from one."""
+    source = (
+        "def b(words):\n"
+        "    from collections import Counter\n"
+        "    return [w for w, n in Counter(words).items()]\n"
+    )
+
+    assert check_leakage_discipline(_tree(source), _KFOLD) == []
+
+
+def test_an_allowlist_survives_an_unrelated_items_call():
+    """The worse half of the same bug: a file correctly selecting features by
+    name was flagged for a `.items()` call elsewhere in the module."""
+    source = (
+        "def b(df, mapping):\n"
+        "    for key, value in mapping.items():\n"
+        "        pass\n"
+        '    return df[["GR", "MD"]]\n'
+    )
+
+    assert check_leakage_discipline(_tree(source), _KFOLD) == []

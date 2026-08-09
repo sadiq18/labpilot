@@ -447,12 +447,11 @@ def build_evidence_card(
         impact_error = cv_gain - expected_cv
 
     # The flags the write-code checks raised, carried onto the card that
-    # actually gets read. Appended to `decision_reason` as well as stored,
-    # because a confirmed hypothesis is where a validation-region flag matters
-    # most and metadata is not where a verdict is read.
+    # actually gets read. Stored, not spliced into `decision_reason`: three
+    # writers recompute that field after the card is built, and each would drop
+    # the qualification. `EvidenceCard.decision_summary` derives it from here
+    # instead, so no writer can lose it. Reported on PR #119.
     flags = delta_flags_for(knowledge_dir, competition, treatment_execution_id)
-    if flags:
-        reason = f"{reason} · {len(flags)} delta flag(s): {flags[0]}" if reason else flags[0]
 
     card = EvidenceCard(
         competition=competition,

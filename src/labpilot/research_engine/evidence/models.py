@@ -80,6 +80,35 @@ class EvidenceCard(BaseModel):
     noise_epsilon: float = 0.001
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @property
+    def delta_flags(self) -> list[str]:
+        """Consistency flags the write-code checks raised for this run."""
+        recorded = (self.metadata or {}).get("delta_flags")
+        return [str(flag) for flag in recorded] if isinstance(recorded, list) else []
+
+    @property
+    def decision_summary(self) -> str:
+        """`decision_reason`, qualified by the flags that should temper it.
+
+        Derived rather than stored, and that is the whole point. The first
+        version appended the flags to `decision_reason` when the card was
+        built — and three separate writers recompute that field afterwards
+        (`submit_learn` when leaderboard results land, `repair` when a
+        direction is corrected, twice), each overwriting the text wholesale.
+        The flags vanished precisely when a hypothesis reached the
+        leaderboard, which is the confirmed case they matter most for.
+        Reported on PR #119.
+
+        `metadata["delta_flags"]` survives every one of those updates because
+        none of them touch the key. Deriving from it means no future writer can
+        lose the qualification by rewriting a sentence.
+        """
+        flags = self.delta_flags
+        if not flags:
+            return self.decision_reason
+        listed = "; ".join(flags)
+        return f"{self.decision_reason} · {len(flags)} delta flag(s): {listed}".lstrip(" ·")
+
     def to_comparison_dict(self) -> dict[str, Any]:
         """Keys outcome._learning_deltas expects on comparison.json."""
         cv = self.observed.cv_gain

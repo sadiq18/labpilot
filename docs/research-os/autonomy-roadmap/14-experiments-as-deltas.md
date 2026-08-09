@@ -165,6 +165,15 @@ exists and protects nothing, which is the shape `00-diagnosis.md` opens with —
 *"every milestone shipped its structure but not its function"* — arriving in the
 milestone written to end it.
 
+And the first fix for it was half a fix, which is the same lesson again. The
+flags were appended to `decision_reason` when the card was built, and three
+writers recompute that field afterwards — `submit_learn` when leaderboard
+results land, `repair` twice — each overwriting the sentence. The qualification
+vanished exactly when a hypothesis reached the leaderboard, the confirmed case
+it was added for. `metadata["delta_flags"]` survives all three, so
+`EvidenceCard.decision_summary` derives the text from there and no future writer
+can lose it by rewriting a sentence.
+
 **F7 ships with it**, because step 4 turned that gap from missing detection into
 missing enforcement. `check_leakage_discipline` asks two questions in order,
 and the first is the one that survived review.
