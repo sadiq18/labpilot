@@ -47,6 +47,15 @@ Hard rules:
   ``DataFrame.reindex(columns=feature_cols, fill_value=0)`` (or intersection of
   train/test columns) **before** indexing — never ``df[feature_cols]`` when
   columns may be missing. Train-only columns must not be required at inference.
+- The **target column exists only in train**. Test files have no label — that is
+  what makes them test files. So: derive `feature_cols` from the *train* frame
+  once, drop the target and ids there, and build the test matrix with
+  ``test_df.reindex(columns=feature_cols, fill_value=0)``. Never look the target
+  up in the test frame, never pass it to a shared helper that runs on both, and
+  never include it in a list you then index on test.
+  rogii failed three times in a row here — ``KeyError: 'TVT'``, then
+  ``KeyError: "['TVT'] not in index"`` — from a `get_feature_columns(df,
+  target_col=...)` helper called on train *and* test.
 - Select model features **by dtype, not by exclusion list**. An exclusion list
   only holds until a column you did not anticipate appears — and on a
   partitioned dataset the concatenated frame is the union of every file's
