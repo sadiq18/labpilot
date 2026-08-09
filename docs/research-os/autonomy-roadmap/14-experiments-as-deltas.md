@@ -1,7 +1,7 @@
 # M19 — An experiment is a change to its parent
 
-**Status:** steps 0, 1a, 1b, 1c and §6 provenance shipped — **step 2 in progress:
-first delta experiment completed end to end, 2026-08-09** ·
+**Status:** **complete** — steps 0 through 4 shipped; `delta` is the default and
+the Jinja pack is deleted, 2026-08-09 ·
 **Design:**
 [design/14-experiments-as-deltas.md](design/14-experiments-as-deltas.md) ·
 **Supersedes:** the Jinja template pack ·
@@ -84,9 +84,9 @@ provenance.
 | — | **validation-region flagging**, §5's fifth check | **not built** — see below |
 | — | per-execution code provenance (§6) | **shipped** (PR #113) — `runs/<execution_id>/` |
 | 1c | `AiderAgent` + copy/diff/propose + **campaign circuit breaker** | **shipped** (PR #115) — default off |
-| 2 | opt-in via config; measure the failure rate | **in progress** — unblocked by M21; first delta measured, see below |
-| 3 | flip the default when the rate justifies it | not started |
-| 4 | delete templates in that same change | not started |
+| 2 | opt-in via config; measure the failure rate | **shipped** — 18 attempts, 1 failure (5.6%); see below |
+| 3 | flip the default when the rate justifies it | **shipped** — `CodegenConfig.strategy` defaults to `delta` |
+| 4 | delete templates in that same change | **shipped** — same commit, as §5 requires |
 
 Step 1 was split once the consistency checks proved independent of aider: they
 compare a parent to a child, and whole-file regeneration already produces that
@@ -371,16 +371,92 @@ reverting the fix and confirming the new test goes red — and the habit that
 keeps costing is inferring intent from a number instead of reading where it
 comes from.
 
+## Steps 2–4 — 2026-08-09
+
+### The rate
+
+`delta_rate()` reads it from `agent_invocations`, so the number in this doc and
+the number a reviewer gets come from the same query. Redundancy declines are
+excused — the parent already implementing a change says nothing about whether
+the adapter can edit code — but stay visible in `by_kind`.
+
+| window | attempts | usable | failed | rate |
+|---|---|---|---|---|
+| every fix in place | 8 | 8 | 0 | **0%** |
+| from the first retry fix onward | 18 | 17 | 1 | **5.6%** |
+
+The single failure was `aider_no_edit`. Step 1c's format comparison stands:
+`diff` at +18/−7 against `whole` at +23/−7, for 19% fewer tokens.
+
+Measured with `--dry-run`, which skips training but runs codegen for real. The
+adapter's failure rate is decided at `write_code`; making each data point pay
+for a ten-minute training run would have bought nothing the question needed.
+
+### Why deleting the templates was safe
+
+Exit criterion 5 asks for the removal and its precondition in one change. The
+precondition is that codegen no longer needs a floor:
+
+| window | llm | aider | **template** |
+|---|---|---|---|
+| all recorded history | 57 | 23 | **15** |
+| since the codegen fixes | 8 | 18 | **0** |
+
+Every one of the fifteen template fallbacks predates the fixes. And the floor
+was never neutral: a rendered baseline is *a* baseline, not the experiment the
+hypothesis asked for, and it was recorded as a **successful step** — twelve
+distinct hypotheses once scored MSE 194.80 identically because each got the same
+file. Codegen producing nothing now fails the step, which is the only honest
+answer.
+
+### What the deletion turned out to include
+
+More than the `.j2` files, because the pack was load-bearing in ways the plan
+did not name:
+
+* **It was the baseline registry.** `list_templates()` scanned the template
+  directories and kept the entries whose directory existed, so deleting the pack
+  emptied the catalogue and took baseline selection — and with it the validation
+  plan and metric key — down with it. The catalogue is declared now: it answers
+  what model family and validation plan a problem type starts from, which the
+  codegen prompt reads whatever writes the code.
+* **It carried the technique gates.** `gated_recipes()` read `{% if %}` blocks
+  out of the template source to decide whether a recipe could execute. With no
+  render path left to be un-actionable, the check would have answered
+  `not_applicable` for every recipe-backed technique; codegen implements them
+  from the hypothesis description instead. This is the header's *"subsumes the
+  technique registry"* arriving in practice.
+* **Two rules moved rather than died.** Syntax validation is asked of every
+  proposal whoever wrote it. And *a PEP 723 script must not import labpilot* —
+  caught in PR #102's review over two templates that did exactly that — now runs
+  in `apply`, the gate every proposal passes through. It was never really about
+  templates.
+
+### Prerequisites cleared on the way
+
+* **Exit criterion 2** (`apply_proposal`): validation and writing shared one
+  loop, so a proposal rejected on its third file had already written the first
+  two — a tree that is neither the parent nor the proposal, which the next
+  experiment then diffs against. Validate all, then write all.
+* **The rate had no reader.** `agent_invocations` recorded every aider outcome
+  and nothing could total them, so "the rate justifies it" had no way to be
+  checked by anyone but its author.
+
 ## Exit criteria
 
-1. A child experiment produces a delta; a baseline still produces a whole file.
-2. The workspace is untouched when a proposal is rejected.
-3. Validation logic survives a feature-adding delta **byte-identical**.
-4. Failure rate is recorded in `agent_invocations`, so making delta the default
-   is an evidence-based decision rather than a judgement call.
-5. Templates are deleted **in the same change** that makes delta the default —
-   the discipline M14 phase 3 established, where a removal and the precondition
-   that makes it safe must ship together.
+All five met, 2026-08-09.
+
+1. **Met.** A child experiment produces a delta; a baseline still produces a
+   whole file — `delta` degrades to `whole_file` when there is no parent, which
+   is what a baseline is.
+2. **Met.** `apply_proposal` validates every file before writing any, so a
+   rejected proposal leaves the workspace exactly as it found it. It used to
+   validate and write in one loop.
+3. **Met** on E-234, where a feature-adding delta left the validation logic
+   untouched.
+4. **Met.** `delta_rate()` totals `agent_invocations`, so the decision in §3 is
+   checkable by someone who did not make it.
+5. **Met.** One commit carries the flip and the deletion.
 
 ## The check that matters most
 
