@@ -137,3 +137,54 @@ def test_every_raised_kind_is_classified():
     assert not unclassified, f"classify these in delta_rate: {sorted(unclassified)}"
     phantom = (EXCUSED_KINDS | COUNTED_KINDS) - raised
     assert not phantom, f"classified but never raised: {sorted(phantom)}"
+
+
+# --- PR #118 round 3 ---------------------------------------------------------
+
+
+def test_reading_a_rate_does_not_create_a_database(tmp_path):
+    """Reported on PR #118. `SqliteClient.__init__` mkdirs, connects and
+    migrates, so *constructing* one writes. `research conduct status` calls this
+    for every competition, and a status query that leaves a `knowledge.db`
+    behind for a competition that never had one is a write dressed as a read."""
+    knowledge = tmp_path / "never-existed"
+
+    rate = delta_rate(knowledge, "never-touched")
+
+    assert rate.attempts == 0
+    assert not knowledge.exists()
+
+
+def test_a_failure_kind_without_a_reason_is_not_a_success(tmp_path):
+    """Reported on PR #118: success was read off a blank `failure_reason`
+    alone, so a row carrying only a kind counted as a success and inflated the
+    rate a default-flip is decided on."""
+    _record(tmp_path, failure_reason="", failure_kind="aider_no_edit")
+
+    rate = delta_rate(tmp_path, _COMP)
+
+    assert rate.succeeded == 0
+    assert rate.failed == 1
+
+
+def test_an_unrecognised_kind_is_counted_and_flagged(tmp_path):
+    """`COUNTED_KINDS` was decorative — `if excused else failed` never read it,
+    so a kind added to `AiderAgent` and to neither list moved the rate with
+    nothing to show for it. It still counts against the adapter, which is the
+    safe direction, and now says it was not recognised."""
+    _record(tmp_path, failure_reason="something new", failure_kind="aider_exploded")
+
+    rate = delta_rate(tmp_path, _COMP)
+
+    assert rate.failed == 1
+    assert rate.unclassified == 1
+    assert rate.by_kind["aider_exploded"] == 1
+
+
+def test_a_recognised_failure_is_not_flagged_as_unclassified(tmp_path):
+    _record(tmp_path, failure_reason="no edit", failure_kind="aider_no_edit")
+
+    rate = delta_rate(tmp_path, _COMP)
+
+    assert rate.failed == 1
+    assert rate.unclassified == 0

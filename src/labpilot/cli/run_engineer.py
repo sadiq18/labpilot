@@ -28,6 +28,13 @@ from labpilot.research_engine.execution import (
 console = Console()
 
 
+def _codegen_strategy(workspace) -> str:
+    """`codegen.strategy` for this workspace — the same reader `run_plan` uses."""
+    from labpilot.research_engine.tools.handlers.run import _codegen_strategy as read
+
+    return read(workspace)
+
+
 def _engineer_constraints(
     *,
     config,
@@ -37,6 +44,12 @@ def _engineer_constraints(
     llm_client=None,
 ) -> dict:
     constraints = {
+        # `research resume` runs the same capability as `research plan run`, so
+        # it reads the same setting through the same helper. It did not, and
+        # the capability's own fallback still said `whole_file`, so resume took
+        # the whole-file path however the workspace was configured. Reported on
+        # PR #118.
+        "codegen_strategy": _codegen_strategy(workspace) if workspace is not None else "",
         "dry_run": dry_run,
         "allow_upload": submit,
         "smoke_syntax_only": dry_run,

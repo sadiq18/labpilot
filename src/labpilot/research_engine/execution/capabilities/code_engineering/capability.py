@@ -312,8 +312,13 @@ class CodeEngineeringCapability(BaseCapability):
         Four ways this declines, and each is a routing decision rather than a
         failure:
 
-        * not configured — `codegen.strategy` defaults to `whole_file` (§10:
-          both paths coexist while the rate is measured);
+        * not configured — the fallback is `CodegenConfig`'s own default, not a
+          literal repeated here. It read `"whole_file"`, which stopped being
+          the default in this milestone, so every caller that did not set the
+          constraint silently took the whole-file path — `research resume` was
+          one, and regenerated whole files however the workspace was
+          configured. Reported on PR #118. A default named in two places is a
+          default that drifts, and this was the second place;
         * no parent — a baseline has nothing to diff against, which is
           `WholeFileAgent`'s job by design;
         * no gateway — aider without the proxy bypasses the budget ledger, rate
@@ -321,7 +326,10 @@ class CodeEngineeringCapability(BaseCapability):
           feature. Declining beats routing around M10;
         * aider failed — recorded with its kind, then handed on.
         """
-        if str(context.constraints.get("codegen_strategy") or "whole_file") != "delta":
+        from labpilot.config import CodegenConfig
+
+        configured = context.constraints.get("codegen_strategy") or CodegenConfig().strategy
+        if str(configured) != "delta":
             return None, ""
         if not prior_train.strip():
             return None, ""

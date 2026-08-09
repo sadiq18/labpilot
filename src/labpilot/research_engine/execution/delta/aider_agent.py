@@ -34,8 +34,10 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.accessor.common.provenance import record_invocation
@@ -177,6 +179,7 @@ class AiderAgent:
         micro agents via `BaseMicroAgent.run`; this agent is a subprocess and
         would otherwise be the one important call the instrument cannot see.
         """
+        started = time.monotonic()
         try:
             proposal = self._propose(ctx, parent)
         except AiderError as exc:
@@ -191,7 +194,16 @@ class AiderAgent:
                 failure_kind=exc.kind,
             )
             raise
-        record_invocation(agent=self.name, generated_by="aider", llm_role=self._role)
+        # `record_invocation` reads latency off `served`, which the gateway
+        # supplies for a direct LLM call and nothing supplies for a subprocess.
+        # Without it `DeltaRate.median_latency_ms` was permanently `None` while
+        # appearing live on `research conduct status`. Reported on PR #118.
+        record_invocation(
+            agent=self.name,
+            generated_by="aider",
+            llm_role=self._role,
+            served=SimpleNamespace(latency_ms=int((time.monotonic() - started) * 1000)),
+        )
         return proposal
 
     def _propose(self, ctx: StructuredContext, parent: Path | None) -> CodeProposal:

@@ -8,6 +8,9 @@ whatever the half-apply left behind.
 
 from __future__ import annotations
 
+from pathlib import Path
+from unittest import mock
+
 import pytest
 
 from labpilot.research_engine.execution.capabilities.code_engineering.apply import (
@@ -132,3 +135,123 @@ def test_a_real_import_is_still_caught(tmp_path):
 
     with pytest.raises(ApplyError, match="ephemeral environment"):
         apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))
+
+
+# --- PR #118 round 3 ---------------------------------------------------------
+
+_GUARD = '\n\nif __name__ == "__main__":\n    main()\n'
+
+
+def test_a_traversal_is_rejected_not_erased(tmp_path):
+    """Reported on PR #118: `lstrip("./")` strips a character set, not a prefix,
+    so `../pipeline/evil.py` arrived as `pipeline/evil.py` and `_is_allowed`
+    never saw the `..` it exists to reject. Nothing escaped the workspace — what
+    was lost was the error telling the model its path was wrong."""
+    with pytest.raises(ApplyError, match="path not allowed"):
+        apply_proposal(tmp_path, _proposal(("../pipeline/evil.py", "x = 1\n")))
+
+
+def test_a_leading_dot_slash_is_still_normalised(tmp_path):
+    """The carve-out must not cost the behaviour it guards."""
+    script = "def main():\n    return 1\n" + _GUARD
+    written = apply_proposal(tmp_path, _proposal(("./pipeline/train.py", script)))
+
+    assert written == [tmp_path / "pipeline" / "train.py"]
+
+
+def test_an_undeclared_import_is_refused(tmp_path):
+    """Reported on PR #118. `uv run --script` builds the environment from the
+    PEP 723 block alone, so an import it does not name is a ModuleNotFoundError
+    one campaign step later. PR #102 fixed this once for the template pack; M19
+    §2 deleted the pack and the test with it, and every `train.py` is now
+    model-written."""
+    content = (
+        "# /// script\n"
+        '# dependencies = ["lightgbm>=4.0"]\n'
+        "# ///\n"
+        "import lightgbm as lgb\n"
+        "import joblib\n"
+        "\n\n"
+        "def main():\n"
+        "    return lgb, joblib\n"
+        "\n\n"
+        'if __name__ == "__main__":\n'
+        "    main()\n"
+    )
+
+    with pytest.raises(ApplyError, match="joblib"):
+        apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))
+
+
+def test_the_inline_dependency_form_is_read(tmp_path):
+    """Both PEP 723 spellings are legal and a model writes each about half the
+    time. Reading only the one-per-line form would report every inline-form
+    script as missing every dependency it has."""
+    content = (
+        "# /// script\n"
+        '# dependencies = ["lightgbm>=4.0", "pandas"]\n'
+        "# ///\n"
+        "import lightgbm as lgb\n"
+        "import pandas as pd\n"
+        "\n\n"
+        "def main():\n"
+        "    return lgb, pd\n"
+        "\n\n"
+        'if __name__ == "__main__":\n'
+        "    main()\n"
+    )
+
+    assert apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))
+
+
+def test_an_import_named_differently_from_its_distribution_passes(tmp_path):
+    content = (
+        "# /// script\n"
+        '# dependencies = ["scikit-learn"]\n'
+        "# ///\n"
+        "import sklearn\n"
+        "\n\n"
+        "def main():\n"
+        "    return sklearn\n"
+        "\n\n"
+        'if __name__ == "__main__":\n'
+        "    main()\n"
+    )
+
+    assert apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))
+
+
+def test_a_script_with_no_block_is_not_asked_about_dependencies(tmp_path):
+    """No block means `uv run --script` is not what runs it."""
+    content = "import lightgbm as lgb\n\n\ndef main():\n    return lgb\n" + _GUARD
+
+    assert apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))
+
+
+def test_a_write_failure_puts_the_earlier_files_back(tmp_path):
+    """Reported on PR #118. Validating everything before writing anything covers
+    a *later* file being refused; it said nothing about the write loop, where a
+    failure on file N left files 1..N-1 on disk — the "neither the parent nor
+    the proposal" state this module exists to prevent."""
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text("original\n", encoding="utf-8")
+
+    real_write = Path.write_text
+
+    def _fail_on_the_second(self, data, *args, **kwargs):
+        if self.name == "infer.py":
+            raise OSError("disk full")
+        return real_write(self, data, *args, **kwargs)
+
+    with mock.patch.object(Path, "write_text", _fail_on_the_second):
+        with pytest.raises(ApplyError, match="Nothing was applied"):
+            apply_proposal(
+                tmp_path,
+                _proposal(
+                    ("pipeline/train.py", "def main():\n    return 2\n" + _GUARD),
+                    ("pipeline/infer.py", "def main():\n    return 1\n" + _GUARD),
+                ),
+            )
+
+    assert (tmp_path / "pipeline" / "train.py").read_text(encoding="utf-8") == "original\n"
+    assert not (tmp_path / "pipeline" / "infer.py").exists()

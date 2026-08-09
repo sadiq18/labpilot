@@ -427,7 +427,7 @@ def check_effect(parent: ast.Module, child: ast.Module) -> list[str]:
     ]
 
 
-def referenced_names(tree: ast.Module, *, ignoring: str = "") -> set[str]:
+def referenced_names(tree: ast.Module) -> set[str]:
     """Every name the module mentions as a value, plus attribute names.
 
     Mentions, not calls. A function handed to something else runs perfectly
@@ -452,24 +452,14 @@ def referenced_names(tree: ast.Module, *, ignoring: str = "") -> set[str]:
     `Call.func`. Being mentioned without running is a far cheaper mistake here
     than a false violation, which costs a re-ask on a correct experiment.
 
-    `ignoring` drops one function's own body from the scan, so a function that
-    only calls itself does not vouch for its own reachability. Reported on PR
-    #118: `def helper(): return helper()`, never wired into `main()`, counted
-    its own recursive call and escaped the check built to catch exactly that.
+    Self- and mutual recursion used to be handled here, by dropping one
+    function's own body from the scan. That answered "does anything *other than
+    this* mention it", which is still not reachability — a dead pair calling
+    each other passed. Both cases now belong to `unreachable_functions`, which
+    walks the call graph from the entry point and gets them for free. Reported
+    on PR #118.
     """
     scope: ast.AST = tree
-    if ignoring:
-        scope = ast.Module(
-            body=[
-                node
-                for node in tree.body
-                if not (
-                    isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-                    and node.name == ignoring
-                )
-            ],
-            type_ignores=list(tree.type_ignores),
-        )
     found = {
         node.id
         for node in ast.walk(scope)
@@ -618,23 +608,46 @@ def _without_unused_imports(tree: ast.Module) -> ast.Module:
 def _has_entry_point(tree: ast.Module) -> bool:
     """Does this module run something of its own when executed?
 
-    True when a locally-defined function is called from module level — directly
-    or inside the `if __name__ == "__main__":` guard, which is how every
-    generated `pipeline/train.py` ends.
+    True when a locally-defined function is called from **module level** —
+    directly or inside the `if __name__ == "__main__":` guard, which is how
+    every generated `pipeline/train.py` ends.
 
     Without this, `check_reachability` would condemn any module that defines
     functions for someone else to call, which is most of them.
+
+    "Module level" is the whole point and used to be approximated by walking
+    each top-level statement, `ast.walk` and all — which descends *into* a
+    function body, so one helper calling another looked like an entry point.
+    Any two-function library passed the precondition, and with reachability
+    walked from the entry point that seeds nothing, so both functions came back
+    unreachable. Reported on PR #118 by way of the check it broke: a helper
+    defined and used, in a file with no `__main__` guard at all.
     """
     defined = {
         node.name
         for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
     if not defined:
         return False
-    for node in tree.body:
-        statements = node.body if isinstance(node, ast.If) else [node]
-        for statement in statements:
+
+    def runs_at_import(body: list[ast.stmt]) -> bool:
+        for statement in body:
+            if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                # Defining is not running. Its body executes only if something
+                # calls it, which is the question being asked.
+                continue
+            if isinstance(statement, ast.If | ast.Try | ast.With | ast.For | ast.While):
+                nested = [
+                    *statement.body,
+                    *getattr(statement, "orelse", []),
+                    *getattr(statement, "finalbody", []),
+                ]
+                for handler in getattr(statement, "handlers", []):
+                    nested.extend(handler.body)
+                if runs_at_import(nested):
+                    return True
+                continue
             for inner in ast.walk(statement):
                 if (
                     isinstance(inner, ast.Call)
@@ -642,7 +655,9 @@ def _has_entry_point(tree: ast.Module) -> bool:
                     and inner.func.id in defined
                 ):
                     return True
-    return False
+        return False
+
+    return runs_at_import(tree.body)
 
 
 def check_reachability(child: ast.Module, touched: list[str]) -> list[str]:
@@ -665,21 +680,34 @@ def check_reachability(child: ast.Module, touched: list[str]) -> list[str]:
     one question that separates "the experiment ran" from "the experiment
     produced a number".
 
-    Conservative in three ways, because a violation costs a re-ask and a
-    re-ask spent on a correct experiment is a step a campaign does not get back:
+    **The dead set comes from `unreachable_functions`, not from a second
+    mechanism.** This asked "is the name mentioned anywhere else" for a while,
+    which is a weaker question with its own bugs — a self-call vouched for its
+    own function, then a mutually recursive pair vouched for each other, each
+    fixed here one at a time while the sibling walk in this same file already
+    answered all of them. Reported on PR #118: `A` calls `B`, `B` calls `A`,
+    `main()` calls neither, and this returned no violation. Two primitives for
+    one question means every bug gets found twice, so there is now one.
+
+    The walk is also the *stronger* answer, and deliberately so. An earlier
+    version of this docstring called entry-point reachability too aggressive
+    because it "would also condemn a function called only by another dead one"
+    — but such a function genuinely cannot run, so that is a true positive, not
+    a false one.
+
+    Conservative in two ways, because a violation costs a re-ask and a re-ask
+    spent on a correct experiment is a step a campaign does not get back:
 
     * it asks only of files that **run themselves** — a module with no entry
       point is a library, where an uncalled function is called by someone else
       and "unreachable" is not a fact this file can establish;
-    * **every** touched function must be uncalled, so a delta that edits three
-      functions and leaves one helper dead still passes;
-    * it asks whether the name is called *anywhere*, not whether it is reachable
-      from the entry point, which would also condemn a function called only by
-      another dead one. Fewer true positives, no false ones.
+    * **every** touched function must be dead, so a delta that edits three
+      functions and leaves one helper dead still passes.
     """
     if not touched or not _has_entry_point(child):
         return []
-    dead = [name for name in touched if name not in referenced_names(child, ignoring=name)]
+    unreachable = unreachable_functions(child)
+    dead = [name for name in touched if name in unreachable]
     if len(dead) != len(touched):
         return []
     listed = ", ".join(repr(name) for name in sorted(dead))
@@ -784,8 +812,13 @@ def check_delta_consistency(
     report = ConsistencyReport()
     child_tree = _parse(child_source, "the proposed result")
     if child_tree is None:
+        # Through `record`, like every other violation. Appending straight to
+        # the list skipped `claim_free_violations`, so `_observe_delta` — which
+        # reads that list when nothing was claimed — saw an empty one and
+        # reported nothing wrong about a result that does not parse. Reported
+        # on PR #118. Nothing claimed this, so it is claim-free by definition.
         report.ok = False
-        report.violations.append("the result does not parse as Python")
+        report.record(["the result does not parse as Python"], needs_claim=False)
         return report
 
     parent_tree = _parse(parent_source, "the parent") if parent_source else None

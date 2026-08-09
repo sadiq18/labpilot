@@ -762,3 +762,72 @@ def test_a_claim_violation_is_not_marked_claim_free():
 
     assert report.violations
     assert not [v for v in report.claim_free_violations if "catboost" in v]
+
+
+# --- one reachability primitive (PR #118, round 3) ---------------------------
+
+
+def test_check_reachability_sees_a_mutually_recursive_dead_pair():
+    """Reported on PR #118. `unreachable_functions` was fixed for this case and
+    `check_reachability` — the one actually wired into the delta checks — was
+    not, because it carried its own weaker mechanism. It now asks the walk."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_reachability
+
+    src = (
+        "def A():\n    return B()\n\n\ndef B():\n    return A()\n\n\n"
+        "def main():\n    pass\n" + _ENTRY_SUFFIX
+    )
+
+    assert check_reachability(ast.parse(src), ["A", "B"])
+
+
+def test_check_reachability_sees_a_self_recursive_dead_function():
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_reachability
+
+    src = "def solo():\n    return solo()\n\n\ndef main():\n    pass\n" + _ENTRY_SUFFIX
+
+    assert check_reachability(ast.parse(src), ["solo"])
+
+
+def test_a_library_module_is_not_an_entry_point():
+    """Reported on PR #118: `_has_entry_point` walked *into* function bodies, so
+    one helper calling another read as module-level execution. Every two-function
+    library then failed the reachability check with both functions condemned."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import (
+        _has_entry_point,
+        check_reachability,
+    )
+
+    src = "def _blend(a, b):\n    return (a + b) / 2\n\n\ndef train(X):\n    return _blend(X, X)\n"
+
+    assert _has_entry_point(ast.parse(src)) is False
+    assert check_reachability(ast.parse(src), ["_blend", "train"]) == []
+
+
+def test_a_guarded_call_is_still_an_entry_point():
+    """The carve-out must not cost the behaviour it guards."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import _has_entry_point
+
+    src = "def main():\n    return 1\n" + _ENTRY_SUFFIX
+
+    assert _has_entry_point(ast.parse(src)) is True
+
+
+def test_an_unparseable_result_is_a_claim_free_violation():
+    """Reported on PR #118: the early return appended straight to `violations`,
+    so `_observe_delta` — which reads `claim_free_violations` when nothing was
+    claimed — reported nothing wrong about a result that does not parse."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    report = check_delta_consistency("def main():\n    return 1\n", "def broken(:\n")
+
+    assert report.ok is False
+    assert report.claim_free_violations == report.violations

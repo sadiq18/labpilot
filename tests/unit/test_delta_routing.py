@@ -71,12 +71,35 @@ def test_the_delta_path_runs_when_configured_with_a_parent(tmp_path, monkeypatch
     assert proposal is PROPOSAL
 
 
-def test_it_declines_when_not_configured(tmp_path, monkeypatch):
-    """§10: both paths coexist while the rate is measured, default `whole_file`."""
+def test_an_unset_constraint_follows_the_configured_default(tmp_path, monkeypatch):
+    """The fallback is `CodegenConfig().strategy`, not a literal repeated here.
+
+    This asserted `whole_file` for an unset constraint, which was the default
+    until this milestone changed it — so the stale literal in the capability
+    had a test holding it in place while `research resume`, which never set the
+    constraint, quietly took the whole-file path. Reported on PR #118.
+    """
+    from labpilot.config import CodegenConfig
+
     _patch_agent(monkeypatch, result=PROPOSAL)
     cap = _capability(_Gateway())
 
-    assert cap._propose_delta(_Ctx(tmp_path), object(), "prior\n") == (None, "")
+    proposal, origin = cap._propose_delta(_Ctx(tmp_path), object(), "prior\n")
+
+    took_delta = proposal is not None
+    assert took_delta is (CodegenConfig().strategy == "delta")
+    assert origin == ("aider" if took_delta else "")
+
+
+def test_it_declines_when_whole_file_is_configured(tmp_path, monkeypatch):
+    """§10: both paths coexist while the rate is measured, and asking for the
+    whole-file path still gets it."""
+    _patch_agent(monkeypatch, result=PROPOSAL)
+    cap = _capability(_Gateway())
+
+    assert cap._propose_delta(
+        _Ctx(tmp_path, codegen_strategy="whole_file"), object(), "prior\n"
+    ) == (None, "")
 
 
 @pytest.mark.parametrize("prior", ["", "   \n"])
@@ -151,3 +174,18 @@ def test_an_empty_proposal_is_not_accepted(tmp_path, monkeypatch):
         None,
         "",
     )
+
+
+def test_resume_sets_the_strategy_constraint():
+    """Reported on PR #118. `research resume` built its constraints without
+    `codegen_strategy`, and the capability's fallback still said `whole_file`,
+    so resume regenerated whole files however the workspace was configured. The
+    two commands now read the setting through one helper."""
+    import inspect
+
+    from labpilot.cli import run_engineer
+
+    source = inspect.getsource(run_engineer._engineer_constraints)
+
+    assert "codegen_strategy" in source
+    assert "_codegen_strategy(" in source

@@ -19,16 +19,27 @@ Four outcomes, and the distinctions between them are the point:
 ``rejected``        provably not a technique — a record reference like
                     ``hyp:H-010``. The only outcome that asserts "this is junk".
 
-**On F7 (leakage).** This module does *not* implement the design's F7 rule.
-F7 rejects a recipe whose **input columns** intersect
-``validation.exclude_features``; recipes here declare no input columns, so the
-check is not expressible yet. Exclusion is enforced one level down, in the
-templates: `tabular_regression_partitioned` skips
-``column in set(EXCLUDE_FEATURES)`` when deriving features, which is what keeps
-``TVT``/``ANCC`` out on rogii. Any new gate must follow that pattern. An earlier
-version of this file intersected exclude_features with *recipe names*, which
-could never fire on a real column list — a guard that looked protective and was
-not, exactly the class of defect this milestone keeps finding.
+**On F7 (leakage).** This module does *not* implement the design's F7 rule,
+and — since M19 §2 — **nothing else does either**. F7 rejects a recipe whose
+**input columns** intersect ``validation.exclude_features``; recipes here
+declare no input columns, so the check is not expressible at this level. It was
+enforced one level down, in the Jinja pack: `tabular_regression_partitioned`
+skipped ``column in set(EXCLUDE_FEATURES)`` when deriving features, which is
+what kept ``TVT``/``ANCC`` out on rogii. That pack is deleted, so the only
+thing standing between a hypothesis and a leakage column is a bullet in
+``code_engineer_system.md`` — an instruction to a model, with no check behind
+it. Reported on PR #118, and left open rather than papered over: the honest
+replacement is a runtime assertion over the columns the generated code
+actually trains on, which is M19 §5's unbuilt fifth check
+(``docs/research-os/autonomy-roadmap/14-experiments-as-deltas.md``). Until it
+exists this docstring says so, because the previous version described the
+deleted mechanism as though it were still there.
+
+An earlier version of this file intersected exclude_features with *recipe
+names*, which could never fire on a real column list — a guard that looked
+protective and was not, exactly the class of defect this milestone keeps
+finding, and the reason the gap above is stated rather than filled with
+another one.
 """
 
 from __future__ import annotations
@@ -219,6 +230,17 @@ def resolve_technique(
     # hypothesis description instead, which is what `prompt_technique_fields`
     # has always carried.
 
+    # `applied` is a verdict about *preconditions*, not about the code that
+    # follows. It is stamped before codegen runs, from the dataset profile
+    # alone, and nothing downstream compares `feature_recipes` against what the
+    # delta actually computed — `check_delta_consistency` reads the model's own
+    # `kept`/`added`/`combined` claims, which are about identifiers, not
+    # recipes. Reported on PR #118. The gate that used to close this
+    # (`gated_recipes`) tested the template's capability, not the emitted code,
+    # so it never closed it either. Named here rather than renamed: the label
+    # is stored on evidence cards and in `baseline_choice.json`, and a rename
+    # without a migration would make old records unreadable while leaving the
+    # verification gap exactly where it is.
     return TechniqueResolution(
         requested=requested,
         canonical=spec.name,

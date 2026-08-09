@@ -6,9 +6,25 @@ import ast
 import logging
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 from labpilot.research_engine.execution.schemas.code_proposal import CodeProposal
+
+#: Modules whose import name differs from the distribution that provides them.
+#:
+#: Deliberately short. A long curated list answering an open-world question is
+#: the pattern this codebase has rejected repeatedly — it goes stale silently
+#: and starts refusing correct code. These are the ones a `train.py` actually
+#: reaches for; anything else is compared by name, which is right far more
+#: often than not, and a wrong guess here costs a re-ask rather than a run.
+IMPORT_ALIASES: dict[str, str] = {
+    "sklearn": "scikit-learn",
+    "cv2": "opencv-python",
+    "PIL": "pillow",
+    "yaml": "pyyaml",
+    "skimage": "scikit-image",
+}
 
 ALLOWED_ROOTS = ("pipeline", "src", "configs", "tests", "artifacts")
 
@@ -105,6 +121,84 @@ def _check_dependency_block(rel: str, content: str) -> None:
         )
 
 
+def _declared_dependencies(content: str) -> set[str] | None:
+    """Distribution names in the PEP 723 block, or None when there is none.
+
+    Parsed as TOML, which is what PEP 723 says the block is, rather than by the
+    line regex next door. That regex reads one quoted spec per line and misses
+    `# dependencies = ["lightgbm>=4.0"]` — the inline form, which is both legal
+    and what a model writes about half the time. A completeness check that
+    cannot see the declarations would report every such script as missing all
+    of them.
+    """
+    lines = content.splitlines()
+    opening = next((i for i, line in enumerate(lines) if _PEP723_OPEN.match(line)), None)
+    if opening is None:
+        return None
+    closing = next(
+        (i for i in range(opening + 1, len(lines)) if _PEP723_CLOSE.match(lines[i])),
+        None,
+    )
+    if closing is None:
+        return None
+    body = "\n".join(
+        line[2:] if line.startswith("# ") else line.lstrip("#")
+        for line in lines[opening + 1 : closing]
+    )
+    try:
+        declared = tomllib.loads(body).get("dependencies") or []
+    except tomllib.TOMLDecodeError:
+        # Malformed metadata is uv's complaint to make, not a reason to refuse
+        # a script over an import it may well have declared.
+        return None
+    if not isinstance(declared, list):
+        return None
+    return {_distribution_name(str(spec)).lower() for spec in declared}
+
+
+def _check_dependencies_are_complete(rel: str, content: str, tree: ast.Module) -> None:
+    """Every third-party module the script imports must be declared.
+
+    `uv run --script` builds the environment from the PEP 723 block *only*, so
+    an import the block does not name is a `ModuleNotFoundError` at run time —
+    one campaign step spent to learn that codegen forgot a line of metadata.
+    PR #102 fixed this once for the Jinja pack, where a test checked the same
+    property over `.j2` source; M19 §2 deleted the pack and the test with it,
+    and every `train.py` is now model-written, which is where the mistake is
+    *more* likely, not less. Reported on PR #118.
+
+    Only top-level imports count, and only when a block exists at all: a script
+    with no block is not run by `uv run --script`, and an import inside a
+    `try:` is usually the optional-dependency idiom. `IMPORT_ALIASES` covers
+    the handful of modules whose import name differs from their distribution
+    name; anything else is compared directly, which is right far more often
+    than not and errs toward silence when it is not.
+    """
+    declared = _declared_dependencies(content)
+    if declared is None:
+        return
+    imported: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imported.add(node.module.split(".")[0])
+    missing = sorted(
+        module
+        for module in imported
+        if module not in sys.stdlib_module_names
+        and module != "labpilot"
+        and IMPORT_ALIASES.get(module, module).lower() not in declared
+    )
+    if missing:
+        raise ApplyError(
+            f"{rel} imports {', '.join(missing)} but its PEP 723 block does not "
+            "declare " + ("it" if len(missing) == 1 else "them") + ". "
+            "`uv run --script` builds the environment from that block alone, so "
+            "the run would fail with ModuleNotFoundError."
+        )
+
+
 def _imports_labpilot(tree: ast.Module) -> str:
     """The first real `labpilot` import, or "" — read from the AST.
 
@@ -180,8 +274,25 @@ def _check_not_truncated(rel: str, content: str) -> None:
         )
 
 
+def _normalise(path: str) -> str:
+    """`./pipeline/x.py` -> `pipeline/x.py`, leaving every other segment alone.
+
+    `lstrip("./")` strips a *character set*, not a prefix, so
+    `"../pipeline/evil.py"` came back as `"pipeline/evil.py"` — the traversal
+    erased before `_is_allowed` could see the `..` it exists to reject. The
+    stripped result still lands under an allowed root, so nothing escaped the
+    workspace; what was lost was the error. A model that wrote `..` meaning one
+    level up got a silent write somewhere else instead of a rejection telling
+    it so. Reported on PR #118.
+    """
+    norm = path.replace("\\", "/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    return norm
+
+
 def _is_allowed(rel: str) -> bool:
-    norm = rel.replace("\\", "/").lstrip("./")
+    norm = _normalise(rel)
     if not norm or norm.startswith("/") or ".." in Path(norm).parts:
         return False
     return any(norm == root or norm.startswith(f"{root}/") for root in ALLOWED_ROOTS)
@@ -217,7 +328,7 @@ def apply_proposal(
 
     staged: list[tuple[Path, str]] = []
     for spec in proposal.files:
-        rel = spec.path.replace("\\", "/").lstrip("./")
+        rel = _normalise(spec.path)
         if not _is_allowed(rel) or not any(
             rel == root or rel.startswith(f"{root}/") for root in allowed_roots
         ):
@@ -234,7 +345,12 @@ def apply_proposal(
             # Syntax is necessary and not sufficient — both checks below pass
             # `ast.parse` and still cannot run.
             _check_dependency_block(rel, content)
+            # Before completeness: `labpilot` is undeclared *and* undeclarable,
+            # and `_check_standalone_script` says why in terms the model can
+            # act on. Completeness would report it as a missing dependency and
+            # send the next attempt to add it to the block, which cannot work.
             _check_standalone_script(rel, content, tree)
+            _check_dependencies_are_complete(rel, content, tree)
             _check_not_truncated(rel, content)
             content, dropped = strip_stdlib_dependencies(content)
             if dropped:
@@ -245,9 +361,27 @@ def apply_proposal(
                 )
         staged.append((workspace_root / rel, content))
 
+    # Validation guarantees nothing is written when a *later* file is refused.
+    # It said nothing about the write loop itself: a failure on file N left
+    # files 1..N-1 on disk, which is precisely the "neither the parent nor the
+    # proposal" state this function exists to prevent — the docstring above
+    # claimed the property and the code held it only for one of the two ways to
+    # lose it. Reported on PR #118. So the prior bytes are kept and put back.
+    previous: dict[Path, bytes | None] = {
+        target: (target.read_bytes() if target.is_file() else None) for target, _ in staged
+    }
     written: list[Path] = []
-    for target, content in staged:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        written.append(target)
+    try:
+        for target, content in staged:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            written.append(target)
+    except OSError as exc:
+        for target in written:
+            original = previous[target]
+            if original is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.write_bytes(original)
+        raise ApplyError(f"could not write {target}: {exc}. Nothing was applied.") from exc
     return written

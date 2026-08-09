@@ -446,3 +446,39 @@ def test_without_a_retry_reason_redundancy_still_retires(tmp_path):
         agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
 
     assert caught.value.kind == "hypothesis_redundant"
+
+
+def test_a_successful_run_records_its_latency(tmp_path):
+    """Reported on PR #118: `record_invocation` reads latency off `served`,
+    which the gateway supplies for a direct LLM call and nothing supplies for a
+    subprocess — so `DeltaRate.median_latency_ms` was permanently `None` while
+    appearing live on `research conduct status`."""
+    from labpilot.accessor.common import provenance
+
+    recorded: list[object] = []
+
+    class _Sink:
+        def record(self, invocation):
+            recorded.append(invocation)
+
+    edited = _ENSEMBLE + "\n\ndef extra():\n    return 1\n"
+
+    def _edits(cmd, cwd, timeout):
+        (Path(cwd) / "pipeline" / "train.py").write_text(edited, encoding="utf-8")
+
+        class _Result:
+            stdout = "applied"
+            stderr = ""
+            returncode = 0
+
+        return _Result()
+
+    agent = _agent(DeltaBrief(instruction="add a helper", added=["extra"]), runner=_edits)
+    token = provenance._sink.set(_Sink())
+    try:
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
+    finally:
+        provenance._sink.reset(token)
+
+    assert recorded
+    assert isinstance(recorded[-1].latency_ms, int)

@@ -55,6 +55,12 @@ class DeltaRate:
     failed: int = 0
     #: Failures excused by `EXCUSED_KINDS`, kept visible rather than dropped.
     excused: int = 0
+    #: Failures whose kind is in neither `EXCUSED_KINDS` nor `COUNTED_KINDS`.
+    #: A subset of `failed`, not a third bucket: a failure is not excused by
+    #: being unrecognised, and understating the rate is the dangerous
+    #: direction for a decision about flipping the default. Counted separately
+    #: so a drifted vocabulary is visible in the report itself.
+    unclassified: int = 0
     by_kind: dict[str, int] = field(default_factory=dict)
     latencies_ms: list[int] = field(default_factory=list)
 
@@ -87,7 +93,15 @@ def _rows(knowledge_dir: Path, competition: str, agent: str) -> Iterable[dict]:
     from labpilot.accessor.sqlite import SqliteClient
     from labpilot.research_engine.intelligence.paths import ResearchPaths
 
-    paths = ResearchPaths(Path(knowledge_dir), competition).ensure()
+    paths = ResearchPaths(Path(knowledge_dir), competition)
+    if not paths.db_path.is_file():
+        # `SqliteClient.__init__` unconditionally mkdirs, connects and migrates,
+        # so constructing one *creates* the database. `research conduct status`
+        # calls this for every competition, and a status query that leaves a
+        # `knowledge.db` behind for a competition that never had one is a write
+        # dressed as a read. `agent_provenance._rows` already guards this way.
+        # Reported on PR #118.
+        return []
     client = SqliteClient(paths.db_path, allow_cross_thread=True)
     try:
         return [
@@ -126,7 +140,12 @@ def delta_rate(
         rate.attempts += 1
         kind = str(row.get("failure_kind") or "").strip()
         reason = str(row.get("failure_reason") or "").strip()
-        if not reason:
+        # Either field marks a failure. Reading success off a blank
+        # `failure_reason` alone meant a row carrying a `failure_kind` with no
+        # message counted as a success — unreachable today, since the one
+        # writer sets both, but nothing enforces that and the error would be
+        # invisible: the rate simply reads better. Reported on PR #118.
+        if not reason and not kind:
             rate.succeeded += 1
             latency = row.get("latency_ms")
             if isinstance(latency, int):
@@ -136,6 +155,13 @@ def delta_rate(
         rate.by_kind[label] = rate.by_kind.get(label, 0) + 1
         if label in EXCUSED_KINDS:
             rate.excused += 1
-        else:
-            rate.failed += 1
+            continue
+        rate.failed += 1
+        if label not in COUNTED_KINDS:
+            # Still counted against the adapter — a failure is not excused by
+            # being unrecognised. Flagged, though: "everything not excused is a
+            # failure" left `COUNTED_KINDS` decorative, so a kind added to
+            # `AiderAgent` and to neither list changed the rate with nothing to
+            # show for it. Reported on PR #118.
+            rate.unclassified += 1
     return rate
