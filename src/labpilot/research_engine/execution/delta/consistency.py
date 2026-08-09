@@ -134,8 +134,24 @@ def present_names(tree: ast.Module) -> set[str]:
     `called_names`, and when those three were switched, `check_redundancy` and
     the aggregator scan were still left behind. Each round the fix was correct
     and incomplete. A consumer that calls this cannot be the one forgotten.
+
+    A bare name counts only when it refers to a **function this module
+    defines** — the callback case these checks were switched for,
+    `df.apply(helper)`. `referenced_names` alone was too generous in the other
+    direction: reported on PR #117, `for rolling in range(3): print(rolling)`
+    made a hypothesis proposing a real rolling-window feature read as already
+    implemented, and an unrelated `for mean in [...]` let a delta that discards
+    both predictions pass as an ensemble. Load context does not separate those
+    — `print(rolling)` is a load — but "is this a function here" does.
     """
-    return referenced_names(tree) | imported_modules(tree)
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    }
+    callbacks = {name for name in referenced_names(tree) if name in defined}
+    attributes = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    return called_names(tree) | imported_modules(tree) | attributes | callbacks
 
 
 def bound_names(tree: ast.Module) -> set[str]:
@@ -146,7 +162,11 @@ def bound_names(tree: ast.Module) -> set[str]:
     `df.time` made `import time` look alive, so a dead helper's import survived
     pruning. Reported on PR #117.
     """
-    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    return {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
 
 
 #: Named aggregations. Necessary but nowhere near sufficient — see below.
@@ -277,11 +297,24 @@ def referenced_names(tree: ast.Module) -> set[str]:
     row-wise feature engineering is precisely the idiom this system's own
     codegen writes.
 
+    **Load context only.** `ast.Name` covers assignment as well as use, and
+    `called_names` — which these checks used before — could only ever see a
+    `Call.func`, so the imprecision was invisible until they switched. Reported
+    on PR #117: `for rolling in range(3)` binds `rolling`, which made a
+    hypothesis proposing a real rolling-window feature read as already
+    implemented, and an unrelated `for mean in [...]` made a delta that
+    discards both predictions pass as an ensemble. Being bound is not being
+    used.
+
     A `Name` node covers direct calls too, since `helper()` puts one in
     `Call.func`. Being mentioned without running is a far cheaper mistake here
     than a false violation, which costs a re-ask on a correct experiment.
     """
-    found = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    found = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
     found |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
     return found
 
@@ -319,21 +352,24 @@ def unreachable_functions(tree: ast.Module) -> set[str]:
     if not defined:
         return set()
 
-    seeds = ast.Module(
-        body=[
-            node
-            for node in tree.body
-            if not (
-                isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in defined
-            )
-        ],
-        type_ignores=[],
-    )
+    # Decorators execute at import, whether or not the function they wrap is
+    # ever called, so they seed reachability alongside module-level statements.
+    # Reported on PR #117.
+    seed_body: list[ast.stmt] = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in defined:
+            seed_body.extend(ast.Expr(value=d) for d in node.decorator_list)
+            continue
+        seed_body.append(node)
+    seeds = ast.Module(body=seed_body, type_ignores=[])
     reachable = {name for name in defined if name in referenced_names(seeds)}
     frontier = list(reachable)
     while frontier:
         node = defined[frontier.pop()]
-        for name in referenced_names(ast.Module(body=list(node.body), type_ignores=[])):
+        # The whole node, not just its body: default arguments and decorators
+        # reference names too, and a reachable function's decorator is itself
+        # reachable.
+        for name in referenced_names(ast.Module(body=[node], type_ignores=[])):
             if name in defined and name not in reachable:
                 reachable.add(name)
                 frontier.append(name)

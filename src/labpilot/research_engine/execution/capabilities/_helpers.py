@@ -57,6 +57,20 @@ _EXCERPT_CHARS = 1500
 _PROGRESS_LINE = re.compile(r"\d+%\|| \d+\.?\d*(it|s)/(s|it)\]")
 
 
+def _same_bar(line: str, previous: str) -> bool:
+    """Are these two progress lines frames of the *same* bar?
+
+    Keyed on the label before the percentage, because collapsing any two
+    adjacent progress-shaped lines merges interleaved bars destructively —
+    alternating `Training:` and `Validation:` frames collapsed to one
+    `Validation:` line and threw away every frame of both. Reported on PR #117.
+    """
+    here, there = _PROGRESS_LINE.search(line), _PROGRESS_LINE.search(previous)
+    if here is None or there is None:
+        return False
+    return line[: here.start()] == previous[: there.start()]
+
+
 def failure_excerpt(stderr: str, stdout: str, *, limit: int = _EXCERPT_CHARS) -> str:
     """The part of a failed run worth reading: the end, minus progress bars.
 
@@ -83,7 +97,7 @@ def failure_excerpt(stderr: str, stdout: str, *, limit: int = _EXCERPT_CHARS) ->
     for line in collapsed.splitlines():
         if not line.strip():
             continue
-        if _PROGRESS_LINE.search(line) and kept and _PROGRESS_LINE.search(kept[-1]):
+        if _same_bar(line, kept[-1] if kept else ""):
             kept[-1] = line
             continue
         kept.append(line)

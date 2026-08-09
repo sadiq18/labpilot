@@ -303,3 +303,31 @@ def test_a_progress_bar_cannot_crowd_out_the_traceback():
     assert "KeyError: 'TVT'" in out
     # A traceback's own consecutive lines look alike too, and every one matters.
     assert 'File "a.py"' in out
+
+
+def test_two_interleaved_bars_are_not_merged():
+    """Reported on PR #117: collapsing any two adjacent progress-shaped lines
+    merged interleaved bars destructively — alternating `Training:` and
+    `Validation:` frames became one `Validation:` line, discarding both."""
+    from labpilot.research_engine.execution.capabilities._helpers import failure_excerpt
+
+    lines = []
+    for i in range(4):
+        lines.append(f"Training: {i}%|##")
+        lines.append(f"Validation: {i}%|##")
+
+    out = failure_excerpt("\n".join(lines) + "\nKeyError: 'TVT'", "", limit=2000)
+
+    assert "Training:" in out
+    assert "Validation:" in out
+    assert "KeyError: 'TVT'" in out
+
+
+def test_one_bar_still_collapses():
+    from labpilot.research_engine.execution.capabilities._helpers import failure_excerpt
+
+    bar = "\n".join(f"Training: {i}%|##" for i in range(300))
+
+    out = failure_excerpt(bar + "\nKeyError: 'TVT'", "", limit=2000)
+
+    assert out.count("Training:") == 1

@@ -688,3 +688,40 @@ def test_an_aggregator_handed_to_apply_counts_as_combining():
     child = ast.parse("import numpy as np\n\n\ndef main(preds):\n    return preds.apply(np.mean)\n")
 
     assert present_names(child) & _AGGREGATORS
+
+
+def test_a_loop_variable_does_not_pass_as_an_ensemble():
+    """Reported on PR #117: an unrelated `for mean in [...]` let a delta that
+    computes two predictions and discards both pass the aggregator check."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = "def main():\n    pass\n" + _ENTRY_SUFFIX
+    child = (
+        "def main(a, b):\n"
+        "    pa = a.predict()\n"
+        "    pb = b.predict()\n"
+        "    for mean in ['c1', 'c2']:\n"
+        "        print(mean)\n"
+        "    return pa\n" + _ENTRY_SUFFIX
+    )
+
+    report = check_delta_consistency(parent, child, combine=["a", "b"])
+
+    assert report.ok is False
+
+
+def test_a_decorator_on_a_reachable_function_is_reachable():
+    """Reported on PR #117: the BFS walked a function's body only, so a
+    decorator — which executes at import whether or not the function is ever
+    called — was invisible to it."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import unreachable_functions
+
+    src = (
+        "def memo(fn):\n    return fn\n\n\n"
+        "@memo\ndef helper():\n    return 1\n\n\n"
+        "def main():\n    return helper()\n" + _ENTRY_SUFFIX
+    )
+
+    assert unreachable_functions(ast.parse(src)) == set()

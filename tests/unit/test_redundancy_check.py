@@ -284,3 +284,38 @@ def test_an_unrelated_attribute_does_not_keep_a_dead_import_alive():
     )
 
     assert imported_modules(strip_unreachable(ast.parse(parent))) == set()
+
+
+def test_a_local_variable_does_not_satisfy_a_claim():
+    """Reported on PR #117 as a regression from switching to `present_names`.
+
+    `for rolling in range(3): print(rolling)` binds and loads a local, and a
+    hypothesis proposing a real rolling-window feature read as already
+    implemented — retired before aider ever ran. Load context does not separate
+    those (`print(rolling)` is a load); "is this a function this module
+    defines" does.
+    """
+    parent = (
+        "import pandas as pd\n\n\n"
+        "def engineer_features(df):\n"
+        "    for rolling in range(3):\n"
+        "        print(rolling)\n"
+        "    return df\n\n\n"
+        "def main():\n    engineer_features(None)\n\n\n"
+        'if __name__ == "__main__":\n    main()\n'
+    )
+
+    assert check_redundancy(parent, ["rolling"]).redundant is False
+
+
+def test_a_real_rolling_call_still_satisfies_it():
+    """The carve-out must not cost the behaviour it guards."""
+    parent = (
+        "import pandas as pd\n\n\n"
+        "def engineer_features(df):\n"
+        "    return df.groupby('p')['x'].rolling(5).mean()\n\n\n"
+        "def main():\n    engineer_features(None)\n\n\n"
+        'if __name__ == "__main__":\n    main()\n'
+    )
+
+    assert check_redundancy(parent, ["rolling"]).redundant is True

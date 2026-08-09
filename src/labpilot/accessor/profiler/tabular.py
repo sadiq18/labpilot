@@ -414,15 +414,25 @@ class TabularProfiler:
             # fix itself, and invisible whenever a `sample_submission.csv`
             # names the target, which is why the tests added with that fix
             # missed it.
-            # Every sampled file of the primary kind, in order — not just the
-            # first. Schema drift *within* a kind reproduces the cross-kind bug
-            # one layer down: a `QCFlag` column in the first file and the real
-            # target only in later ones inferred `QCFlag` as the label.
-            # Reported on PR #117.
-            primary_columns: list[str] = []
+            # The primary kind, and within it the columns *every* sampled file
+            # carries. Reading only `frames[0]` missed a target absent from the
+            # first file; reading the union in order then let a quirk column
+            # appearing only in a later file win instead, because the fallback
+            # takes the last. Both reported on PR #117, one round apart, and
+            # both are the same mistake: position standing in for evidence.
+            #
+            # A label is in every partition of its kind. A stray note column is
+            # not, so requiring presence everywhere separates them without
+            # relying on order at all. The union is the fallback's fallback,
+            # for a kind whose files genuinely share nothing.
+            shared = set(frames[0].columns)
+            union: list[str] = []
             for frame in frames:
-                primary_columns.extend(c for c in frame.columns if c not in primary_columns)
-            primary_only = [c for c in primary_columns if c not in test_columns]
+                shared &= set(frame.columns)
+                union.extend(c for c in frame.columns if c not in union)
+            primary_only = [c for c in union if c in shared and c not in test_columns] or [
+                c for c in union if c not in test_columns
+            ]
             target = (primary_only or train_only)[-1]
 
         profile = self.profile_file(sampled[0])

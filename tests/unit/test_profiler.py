@@ -654,3 +654,30 @@ def test_the_target_fallback_reads_every_primary_kind_file(tmp_path):
     profile = _profiler().profile_directory(root, "demo")
 
     assert profile.target_column == "TVT"
+
+
+def test_a_quirk_column_in_a_later_file_does_not_win_the_fallback(tmp_path):
+    """Reported on PR #117, the mirror image of the previous round's fix.
+
+    Reading only `frames[0]` missed a target absent from the first file;
+    reading the union in order then let a column appearing only in a *later*
+    file win, because the fallback takes the last. A label is in every
+    partition of its kind and a stray note column is not, so presence
+    everywhere separates them without relying on position at all.
+    """
+    import pandas as pd
+
+    root = tmp_path / "quirk"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in (0, 1):
+        pd.DataFrame({"MD": [1.0, 2.0], "TARGET": [5.0, 6.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+    pd.DataFrame({"MD": [1.0, 2.0], "TARGET": [5.0, 6.0], "ExtraNote": [9.0, 9.0]}).to_csv(
+        root / "train" / "e2__main.csv", index=False
+    )
+    for i in range(3):
+        pd.DataFrame({"MD": [1.0, 2.0]}).to_csv(root / "test" / f"e{i}__main.csv", index=False)
+
+    assert _profiler().profile_directory(root, "demo").target_column == "TARGET"
