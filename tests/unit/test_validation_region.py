@@ -684,3 +684,56 @@ def test_an_allowlist_survives_an_unrelated_items_call():
     )
 
     assert check_leakage_discipline(_tree(source), _KFOLD) == []
+
+
+# --- PR #119 round 4 ---------------------------------------------------------
+
+_WRAPPER = (
+    "def partition_suffix_holdout_split(df):\n    return df.iloc[:5], df.iloc[5:]\n\n\n"
+    "def prepare_and_split(df, seed=42):\n"
+    "    df = df.sample(frac=1.0, random_state=seed)\n"
+    "    return partition_suffix_holdout_split(df)\n\n\n"
+    "def main():\n    return prepare_and_split(None)\n\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "guard"),
+    [
+        (
+            "an else clause runs on import, not as the entry point",
+            'if __name__ == "__main__":\n    main()\nelse:\n    prepare_and_split(None)\n',
+        ),
+        (
+            "a negated guard runs when the module is not the entry point",
+            'if __name__ != "__main__":\n    prepare_and_split(None)\n',
+        ),
+    ],
+)
+def test_only_the_guard_body_grants_the_delegation_exemption(label, guard):
+    """Reported on PR #119, the third and fourth relocations of one escape.
+
+    Walking the whole `If` node swept in its `orelse`, and matching `__name__`
+    against `"__main__"` without checking the operator accepted `!=`. Both
+    blocks run precisely when the module is *not* the entry point — so wrapping
+    a call in one suppressed a flag that bare module-level code would have
+    raised, which is worse than having no guard at all.
+    """
+    region = validation_region(_tree(_WRAPPER + guard), _ROGII)
+
+    assert "prepare_and_split" in region, label
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        'if __name__ == "__main__":\n    main()\n',
+        'if "__main__" == __name__:\n    main()\n',
+        'if __name__ is "__main__":\n    main()\n',
+    ],
+)
+def test_the_real_guard_is_recognised_however_it_is_written(guard):
+    """The carve-out must not cost the behaviour it guards: `main` calls
+    everything, so calling says nothing about it, whichever way the comparison
+    is spelled."""
+    assert "main" not in validation_region(_tree(_WRAPPER + guard), _ROGII)

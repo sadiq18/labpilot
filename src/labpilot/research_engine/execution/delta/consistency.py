@@ -1069,7 +1069,7 @@ def validation_region(tree: ast.Module, signals: ValidationSignals) -> set[str]:
 
 
 def _guarded_entry_points(tree: ast.Module) -> set[str]:
-    """Functions called from the `if __name__ == "__main__":` guard.
+    """Functions called from the body of `if __name__ == "__main__":`.
 
     Narrower than "called at module level", which was the first version and was
     too generous by exactly the amount that reopened the bug it shipped
@@ -1080,24 +1080,50 @@ def _guarded_entry_points(tree: ast.Module) -> set[str]:
     The guard is the one construct that means *this is how the module starts*.
     A script without one grants the exemption to nobody, which is the safe
     direction: a wrapper stays in the region rather than escaping it.
+
+    **The body, and only the body.** Walking the whole `If` node swept in its
+    `orelse` as well, and an `else:` clause runs when the module is *imported* —
+    the opposite of being the entry point. So
+
+        if __name__ == "__main__":
+            main()
+        else:
+            prepare_and_split(None)
+
+    handed the exemption back through the negative branch. Reported on PR #119,
+    the third relocation of the same escape.
     """
     called: set[str] = set()
     for statement in tree.body:
         if not isinstance(statement, ast.If) or not _is_main_guard(statement.test):
             continue
-        for inner in ast.walk(statement):
-            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name):
-                called.add(inner.func.id)
+        for guarded in statement.body:
+            for inner in ast.walk(guarded):
+                if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name):
+                    called.add(inner.func.id)
     return called
 
 
 def _is_main_guard(test: ast.expr) -> bool:
-    """`__name__ == "__main__"`, however the comparison is spelled."""
-    if not isinstance(test, ast.Compare):
+    """Exactly `__name__ == "__main__"`, however the two sides are ordered.
+
+    The operator is checked, which it was not: `__name__` and `"__main__"` were
+    matched as operands of any `Compare` at all, so `if __name__ != "__main__":`
+    read as *the* entry point guard. That block runs precisely when the module
+    is **not** the entry point, and wrapping a call in one therefore suppressed
+    a flag that bare module-level code would have raised — worse than having no
+    guard. Reported on PR #119.
+
+    `is` is accepted alongside `==` because CPython interns both operands and
+    the idiom appears in the wild; nothing else is.
+    """
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return False
+    if not isinstance(test.ops[0], ast.Eq | ast.Is):
         return False
     operands = [test.left, *test.comparators]
     names = {node.id for node in operands if isinstance(node, ast.Name)}
-    literals = {node.value for node in operands if isinstance(node, ast.Constant) and node.value}
+    literals = {node.value for node in operands if isinstance(node, ast.Constant)}
     return "__name__" in names and "__main__" in literals
 
 
