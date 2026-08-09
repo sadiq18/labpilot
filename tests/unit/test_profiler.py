@@ -681,3 +681,23 @@ def test_a_quirk_column_in_a_later_file_does_not_win_the_fallback(tmp_path):
         pd.DataFrame({"MD": [1.0, 2.0]}).to_csv(root / "test" / f"e{i}__main.csv", index=False)
 
     assert _profiler().profile_directory(root, "demo").target_column == "TARGET"
+
+
+def test_one_file_missing_the_target_does_not_lose_it(tmp_path):
+    """Reported on PR #117. Requiring the label in *every* sampled file meant a
+    single schema quirk dropped it and fell back to the order-dependent union —
+    with `max_files_sample` at 25, some file having a quirk is likely rather
+    than remote. Counting degrades; an intersection fails outright."""
+    import pandas as pd
+
+    root = tmp_path / "quirky"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in range(5):
+        cols = {"MD": [1.0, 2.0], f"Note{i}": [1.0, 2.0]}
+        if i != 4:
+            cols["TVT"] = [5.0, 6.0]
+        pd.DataFrame(cols).to_csv(root / "train" / f"e{i}__main.csv", index=False)
+        pd.DataFrame({"MD": [1.0, 2.0]}).to_csv(root / "test" / f"e{i}__main.csv", index=False)
+
+    assert _profiler().profile_directory(root, "demo").target_column == "TVT"

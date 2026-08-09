@@ -1,4 +1,5 @@
 import logging
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -425,14 +426,25 @@ class TabularProfiler:
             # not, so requiring presence everywhere separates them without
             # relying on order at all. The union is the fallback's fallback,
             # for a kind whose files genuinely share nothing.
-            shared = set(frames[0].columns)
+            # How *many* of the sampled files carry it, not whether all of
+            # them do. Requiring every file was the previous answer and one
+            # missing file collapsed it back to the order-dependent union it
+            # replaced — with `max_files_sample` at 25, some file having a
+            # schema quirk is likely rather than remote. Reported on PR #117.
+            #
+            # A label is in most partitions of its kind; a per-file note column
+            # is in one. Counting separates them and degrades gracefully, where
+            # an intersection fails outright on a single quirk.
             union: list[str] = []
+            seen_in = Counter[str]()
             for frame in frames:
-                shared &= set(frame.columns)
+                seen_in.update(set(frame.columns))
                 union.extend(c for c in frame.columns if c not in union)
-            primary_only = [c for c in union if c in shared and c not in test_columns] or [
-                c for c in union if c not in test_columns
-            ]
+            candidates = [c for c in union if c not in test_columns]
+            if candidates:
+                most = max(seen_in[c] for c in candidates)
+                candidates = [c for c in candidates if seen_in[c] == most]
+            primary_only = candidates
             target = (primary_only or train_only)[-1]
 
         profile = self.profile_file(sampled[0])

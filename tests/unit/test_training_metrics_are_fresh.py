@@ -331,3 +331,13 @@ def test_one_bar_still_collapses():
     out = failure_excerpt(bar + "\nKeyError: 'TVT'", "", limit=2000)
 
     assert out.count("Training:") == 1
+
+
+def test_unlabeled_bars_are_told_apart_by_their_total():
+    """Reported on PR #117: tqdm's default format has no label, so two
+    unrelated bars both produced an empty prefix and compared equal — the same
+    state loss, gated on "no distinguishing label" instead of adjacency."""
+    from labpilot.research_engine.execution.capabilities._helpers import _same_bar
+
+    assert not _same_bar("45%|####5 | 450/1000 [00:01]", "12%|#2 | 120/2000 [00:01]")
+    assert _same_bar("45%|####5 | 450/1000 [00:01]", "12%|#2 | 120/1000 [00:01]")

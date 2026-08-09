@@ -144,9 +144,15 @@ def present_names(tree: ast.Module) -> set[str]:
     both predictions pass as an ensemble. Load context does not separate those
     — `print(rolling)` is a load — but "is this a function here" does.
     """
+    # Top-level definitions only, matching the scope reachability works in.
+    # `ast.walk` found them at any depth and the match was a bare string
+    # compare, so a never-called helper nested inside a live function collided
+    # with an unrelated *parameter* of the same name and answered "present" for
+    # a feature nothing computed. Reported on PR #117. A nested helper is not a
+    # symbol a claim can name, so it has no business satisfying one.
     defined = {
         node.name
-        for node in ast.walk(tree)
+        for node in tree.body
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
     }
     callbacks = {name for name in referenced_names(tree) if name in defined}

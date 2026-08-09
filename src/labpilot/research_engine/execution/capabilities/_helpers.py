@@ -56,6 +56,9 @@ _EXCERPT_CHARS = 1500
 #: ``  File "…"`` lines look alike and every one of them matters.
 _PROGRESS_LINE = re.compile(r"\d+%\|| \d+\.?\d*(it|s)/(s|it)\]")
 
+#: tqdm's completed/total counter, `450/1000`.
+_BAR_TOTAL = re.compile(r"\b\d+/(\d+)\b")
+
 
 def _same_bar(line: str, previous: str) -> bool:
     """Are these two progress lines frames of the *same* bar?
@@ -64,11 +67,29 @@ def _same_bar(line: str, previous: str) -> bool:
     adjacent progress-shaped lines merges interleaved bars destructively —
     alternating `Training:` and `Validation:` frames collapsed to one
     `Validation:` line and threw away every frame of both. Reported on PR #117.
+
+    The label alone is not enough: tqdm's default format has none, so two
+    unrelated bars both produced an empty prefix and compared equal, losing the
+    same state through the no-label case. Also reported on PR #117. The `n/N`
+    total is the second key — a bar's total does not change between its own
+    frames, and two concurrent bars over different work rarely share one.
+
+    Two unlabeled bars over the same total are genuinely indistinguishable
+    here, and collapse. That is the residue; a wrong merge costs intermediate
+    frames, never the traceback, which matches no progress shape at all.
     """
     here, there = _PROGRESS_LINE.search(line), _PROGRESS_LINE.search(previous)
     if here is None or there is None:
         return False
-    return line[: here.start()] == previous[: there.start()]
+    if line[: here.start()] != previous[: there.start()]:
+        return False
+    return _bar_total(line) == _bar_total(previous)
+
+
+def _bar_total(line: str) -> str:
+    """The `N` of tqdm's `n/N`, or "" when the line does not carry one."""
+    match = _BAR_TOTAL.search(line)
+    return match.group(1) if match else ""
 
 
 def failure_excerpt(stderr: str, stdout: str, *, limit: int = _EXCERPT_CHARS) -> str:

@@ -319,3 +319,36 @@ def test_a_real_rolling_call_still_satisfies_it():
     )
 
     assert check_redundancy(parent, ["rolling"]).redundant is True
+
+
+def test_a_nested_helper_does_not_satisfy_a_claim():
+    """Reported on PR #117.
+
+    `defined` was collected with `ast.walk`, so a never-called helper nested
+    inside a live function was a candidate, and the match was a bare string
+    compare — an unrelated *parameter* of the same name made it "present", and
+    a hypothesis proposing a real rolling-window feature was retired for work
+    nothing computed anywhere.
+    """
+    src = (
+        "def build_dead_thing():\n"
+        "    def rolling(x):\n        return x + 1\n"
+        "    return 1\n\n\n"
+        "def scale_column(rolling, factor):\n    return rolling * factor\n\n\n"
+        "def main():\n    build_dead_thing()\n    scale_column(1, 2)\n\n\n"
+        'if __name__ == "__main__":\n    main()\n'
+    )
+
+    assert check_redundancy(src, ["rolling"]).redundant is False
+
+
+def test_a_top_level_callback_still_satisfies_one():
+    """The carve-out must not cost the callback case it was built for."""
+    src = (
+        "import pandas as pd\n\n\n"
+        "def helper(row):\n    return row['a']\n\n\n"
+        "def main():\n    pd.DataFrame().apply(helper, axis=1)\n\n\n"
+        'if __name__ == "__main__":\n    main()\n'
+    )
+
+    assert check_redundancy(src, ["helper"]).redundant is True
