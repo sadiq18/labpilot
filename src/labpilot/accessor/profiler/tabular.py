@@ -403,7 +403,19 @@ class TabularProfiler:
         sub_lower = {c.lower() for c in submission_columns}
         target = next((c for c in train_only if c.lower() in sub_lower), None)
         if target is None and train_only:
-            target = train_only[-1]
+            # The fallback reads the **primary kind's** order, not the union's.
+            # Widening `sample_df` to every kind changed what "last column"
+            # means: the union appends each other kind's novel columns after the
+            # primary's, so `train_only[-1]` became whichever secondary kind
+            # happened to contribute last. Reported on PR #117 and reproduced —
+            # a `main` kind carrying the real target `TVT` and an `aux` kind
+            # carrying an unrelated `AuxNote` inferred `AuxNote` as the label,
+            # silently, with no crash to catch it. A regression from the union
+            # fix itself, and invisible whenever a `sample_submission.csv`
+            # names the target, which is why the tests added with that fix
+            # missed it.
+            primary_only = [c for c in frames[0].columns if c not in test_columns]
+            target = (primary_only or train_only)[-1]
 
         profile = self.profile_file(sampled[0])
         profile.competition = competition

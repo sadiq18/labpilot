@@ -192,7 +192,7 @@ def test_training_is_still_not_a_code_validation_task():
 
 
 def test_the_error_names_where_the_output_actually_went(workspace):
-    """"It did not write metrics.json" is true and unhelpful when the script
+    """ "It did not write metrics.json" is true and unhelpful when the script
     wrote one enthusiastically into a directory it invented. rogii burned three
     retries on `./workspace/metrics.json` — each told what was missing, never
     where its output had gone, so each edited something else."""
@@ -213,3 +213,48 @@ def test_the_error_names_where_the_output_actually_went(workspace):
     assert result.passed is False
     assert "workspace/metrics.json" in (result.error or "")
     assert "do not create a directory" in (result.error or "")
+
+
+def test_an_empty_metrics_file_is_not_a_result(workspace):
+    """Reported on PR #117. Freshness answers *when*; this answers whether
+    there is a result at all. A run that exits 0 and writes `{}` passes every
+    timing check and reports success with nothing measured."""
+
+    class _EmptyRunner(_Runner):
+        def run(self, timeout=None):
+            (self.root / "metrics.json").write_text("{}", encoding="utf-8")
+            return _Result()
+
+    import labpilot.research_engine.execution.training.runner as runner_mod
+
+    runner_mod.TrainingRunner = _EmptyRunner
+
+    result = _run(workspace)
+
+    assert result.passed is False
+    assert "no metrics" in (result.error or "")
+
+
+def test_a_crash_keeps_the_exception_not_the_progress_bar(workspace):
+    """The smoke gate was switched to `failure_excerpt` and this path was not,
+    so a crash whose stderr opens with a tqdm bar handed the retry the bar."""
+
+    class _CrashRunner(_Runner):
+        def run(self, timeout=None):
+            class _Bad:
+                returncode = 1
+                stdout = ""
+                stderr = (
+                    "\r".join(f"Loading train: {i}%|" for i in range(400)) + "\nKeyError: 'TVT'\n"
+                )
+
+            return _Bad()
+
+    import labpilot.research_engine.execution.training.runner as runner_mod
+
+    runner_mod.TrainingRunner = _CrashRunner
+
+    result = _run(workspace)
+
+    assert result.passed is False
+    assert "KeyError: 'TVT'" in (result.error or "")

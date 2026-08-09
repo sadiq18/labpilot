@@ -6,7 +6,11 @@ import json
 import time
 from pathlib import Path
 
-from labpilot.research_engine.execution.capabilities._helpers import evidence, is_dry_run
+from labpilot.research_engine.execution.capabilities._helpers import (
+    evidence,
+    failure_excerpt,
+    is_dry_run,
+)
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
@@ -109,7 +113,9 @@ class TrainingCapability(BaseCapability):
             log_path = runner.save_run_log(result)
             artifacts = runner.collect_artifacts()
             duration = time.monotonic() - started
-            metrics_path = Path(artifacts["metrics"]) if artifacts.get("metrics") else root / "metrics.json"
+            metrics_path = (
+                Path(artifacts["metrics"]) if artifacts.get("metrics") else root / "metrics.json"
+            )
             metrics: dict = {}
             if metrics_path.is_file():
                 try:
@@ -120,7 +126,13 @@ class TrainingCapability(BaseCapability):
                     metrics = {}
 
             ok = result.returncode == 0
-            error = None if ok else (result.stderr or result.stdout)[:2000]
+            # The same tail-preferring, tqdm-collapsing excerpt the smoke gate
+            # uses. This was still a raw head slice, so a crash whose stderr
+            # opened with 2000 characters of `Loading train: 96%|` handed the
+            # retry a progress bar and discarded the `KeyError` underneath —
+            # for training crashes specifically, while the smoke path was
+            # fixed. Reported on PR #117.
+            error = None if ok else failure_excerpt(result.stderr, result.stdout, limit=2000)
             # Exit 0 alone is not enough — codegen sometimes emits a broken
             # ``__main__`` guard so the script no-ops without writing metrics.
             #
@@ -137,14 +149,24 @@ class TrainingCapability(BaseCapability):
             # the Engineer path never had the guard. Ask whether *this run*
             # wrote it. A second of slack because some filesystems round mtime.
             fresh = metrics_path.is_file() and metrics_path.stat().st_mtime >= wall_started - 1.0
+            # Freshness is about *when*; this is about *whether there is a
+            # result at all*. A run that exits 0 and writes `{}` passes every
+            # timing check and reports success with nothing measured — the same
+            # "reported succeeded, the number belongs to nothing real" class,
+            # reached through content instead of staleness. Reported on PR #117.
+            if ok and fresh and not metrics:
+                ok = False
+                error = (
+                    f"training exited 0 and wrote {metrics_path.name}, but it holds no "
+                    "metrics — an empty or unparseable object is not a result"
+                )
             if ok and not fresh:
                 ok = False
                 error = (
                     f"training exited 0 but {METRICS_NOT_WRITTEN} at "
                     f"{metrics_path.name} (workspace root)"
                     + (
-                        " — the file there predates this run, so it belongs to an "
-                        "earlier execution"
+                        " — the file there predates this run, so it belongs to an earlier execution"
                         if metrics_path.is_file()
                         else " (check ``if __name__ == '__main__':`` and that main() runs)"
                     )

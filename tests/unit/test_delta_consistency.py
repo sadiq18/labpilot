@@ -587,3 +587,19 @@ def test_a_function_nothing_mentions_at_all_is_still_dead():
 
     assert report.ok is False
     assert any("cannot execute" in v for v in report.violations)
+
+
+def test_the_claim_checks_see_a_callback_too():
+    """Reported on PR #117 as the headline fix being incomplete.
+
+    `check_reachability` was switched to `referenced_names` and the three claim
+    checks were not — so the *normal* path still failed, because
+    `DeltaBriefAgent` always supplies an `add` claim and a correctly wired
+    `df.apply` callback came back "never calls or imports it".
+    """
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _CALLBACK_PARENT.replace('return row["a"]', 'return row["a"] * 2')
+
+    assert check_delta_consistency(_CALLBACK_PARENT, child, add=["helper"]).ok is True
+    assert check_delta_consistency(_CALLBACK_PARENT, child, keep=["helper"]).ok is True

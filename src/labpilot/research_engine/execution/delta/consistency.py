@@ -300,14 +300,61 @@ def strip_unreachable(tree: ast.Module) -> ast.Module:
     experiment can carry code that has never run — and a question answered over
     the whole file would count it.
     """
-    dead = unreachable_functions(tree)
-    if not dead:
+    if not _has_entry_point(tree):
+        # A module that runs nothing of its own cannot establish that anything
+        # in it is dead — neither a function nor the import it uses. Same
+        # precondition as `unreachable_functions`, applied to both halves so a
+        # library's unused import is not pruned on a guess.
         return tree
-    kept = [
-        node
-        for node in tree.body
-        if not (isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in dead)
-    ]
+
+    live = tree
+    # To a fixpoint. One pass removes only the *leaves* of a dead chain: an
+    # unreachable wrapper still references the helper it calls, so the helper
+    # looks live until the wrapper is gone. Reported on PR #117 — a two-level
+    # chain kept `rolling` and `groupby` "present", which is the rogii false
+    # retirement one indirection deeper.
+    while True:
+        dead = unreachable_functions(live)
+        if not dead:
+            break
+        live = ast.Module(
+            body=[
+                node
+                for node in live.body
+                if not (
+                    isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in dead
+                )
+            ],
+            type_ignores=list(live.type_ignores),
+        )
+    return _without_unused_imports(live)
+
+
+def _without_unused_imports(tree: ast.Module) -> ast.Module:
+    """Drop imports nothing remaining references.
+
+    Stripping dead function *bodies* left their imports behind, and
+    `imported_modules` counts an import whether or not anything uses it — so
+    `import catboost as cb`, used only inside a function `main()` never calls,
+    still answered "the parent already has catboost". The import half of the
+    same dead-code question. Reported on PR #117.
+    """
+    used = referenced_names(tree)
+    kept: list[ast.stmt] = []
+    for node in tree.body:
+        if not isinstance(node, ast.Import | ast.ImportFrom):
+            kept.append(node)
+            continue
+        live_aliases = [
+            alias for alias in node.names if (alias.asname or alias.name.split(".")[0]) in used
+        ]
+        if not live_aliases:
+            continue
+        replacement = copy.copy(node)
+        replacement.names = live_aliases
+        kept.append(replacement)
+    if len(kept) == len(tree.body):
+        return tree
     return ast.Module(body=kept, type_ignores=list(tree.type_ignores))
 
 
@@ -392,9 +439,9 @@ def check_preservation(child: ast.Module, keep: list[str]) -> list[str]:
     CatBoost" satisfied by deleting the LightGBM path measures a different
     experiment than the one that was proposed.
     """
-    present = called_names(child) | imported_modules(child)
+    present = referenced_names(child) | imported_modules(child)
     return [
-        f"{name!r} should have been kept, but nothing in the result calls or imports it"
+        f"{name!r} should have been kept, but nothing in the result references it"
         for name in keep
         if name and name not in present
     ]
@@ -406,9 +453,15 @@ def check_addition(child: ast.Module, add: list[str]) -> list[str]:
     Catches a no-op delta that claims a technique — the card would credit a
     technique the code never used.
     """
-    present = called_names(child) | imported_modules(child)
+    # `referenced_names`, not `called_names`, for the reason `check_reachability`
+    # already uses it: a function handed to `df.apply` runs without ever being a
+    # `Call` target. Reported on PR #117 and left half-fixed — reachability was
+    # switched and these three were not, so the *normal* path still failed:
+    # `DeltaBriefAgent` always supplies an `add` claim, and a correctly wired
+    # callback came back "never calls or imports it".
+    present = referenced_names(child) | imported_modules(child)
     return [
-        f"{name!r} was supposed to be added, but the result never calls or imports it"
+        f"{name!r} was supposed to be added, but the result never references it"
         for name in add
         if name and name not in present
     ]

@@ -224,9 +224,20 @@ class AiderAgent:
         # words on the third stall were still about computing the feature it
         # had already computed — so it declined, correctly, every time.
         retrying = bool(str((getattr(ctx, "data", None) or {}).get("retry_reason") or "").strip())
-        instruction = (
-            _instruction(ctx) if retrying else (brief.instruction.strip() or _instruction(ctx))
-        )
+        # The brief's own reading rides along on a repair rather than being
+        # thrown away. `delta_brief_system.md` now teaches it to answer a
+        # failure, and it has the parent source that `_instruction` does not —
+        # but the error itself is stated by `_instruction`, first, so a brief
+        # that ignored the retry cannot leave the failure unmentioned. Reported
+        # on PR #117 as a paid call whose output was discarded.
+        if retrying:
+            instruction = _instruction(ctx)
+            if brief.instruction.strip():
+                instruction += (
+                    f"\n\nThe change under repair was described as:\n{brief.instruction.strip()}"
+                )
+        else:
+            instruction = brief.instruction.strip() or _instruction(ctx)
         with tempfile.TemporaryDirectory(prefix="labpilot-aider-") as scratch_str:
             scratch = Path(scratch_str)
             edit_targets = _copy_tree(parent, scratch)

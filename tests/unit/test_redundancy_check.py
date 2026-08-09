@@ -168,3 +168,69 @@ def test_a_library_parent_is_judged_whole():
     parent = "import lightgbm as lgb\n\n\ndef train(X):\n    return lgb.train(X)\n"
 
     assert check_redundancy(parent, ["lgb"]).redundant is True
+
+
+# --- the dead-code question, one level deeper and on the import side ---------
+
+_ENTRY = '\n\ndef main():\n    pass\n\n\nif __name__ == "__main__":\n    main()\n'
+
+
+def test_an_import_used_only_by_dead_code_implements_nothing():
+    """Reported on PR #117. Stripping dead function *bodies* left their imports
+    behind, and `imported_modules` counts an import whether or not anything
+    uses it — the same false retirement, through the import half."""
+    parent = "import catboost as cb\n\n\ndef unused():\n    return cb.train()\n" + _ENTRY
+
+    assert check_redundancy(parent, ["cb"]).redundant is False
+
+
+def test_an_import_the_live_code_uses_still_counts():
+    """The carve-out must not cost the behaviour it guards."""
+    parent = "import catboost as cb\n\n\ndef main():\n    return cb.train()\n" + (
+        '\n\nif __name__ == "__main__":\n    main()\n'
+    )
+
+    assert check_redundancy(parent, ["cb"]).redundant is True
+
+
+def test_a_two_level_dead_chain_implements_nothing():
+    """One strip pass removes only the leaves: an unreachable wrapper still
+    references the helper it calls, so the helper looks live until the wrapper
+    is gone. The rogii false retirement, one indirection deeper."""
+    parent = (
+        "import pandas as pd\n"
+        "\n"
+        "\n"
+        "def _roll(df):\n"
+        '    return df.groupby("p")["x"].transform(lambda s: s.rolling(5).mean())\n'
+        "\n"
+        "\n"
+        "def engineer(df):\n"
+        "    return _roll(df)\n" + _ENTRY
+    )
+
+    assert check_redundancy(parent, ["rolling", "groupby"]).redundant is False
+
+
+def test_a_live_chain_still_counts():
+    parent = (
+        "import pandas as pd\n"
+        "\n"
+        "\n"
+        "def _roll(df):\n"
+        '    return df.groupby("p")["x"].transform(lambda s: s.rolling(5).mean())\n'
+        "\n"
+        "\n"
+        "def engineer(df):\n"
+        "    return _roll(df)\n"
+        "\n"
+        "\n"
+        "def main():\n"
+        "    engineer(None)\n"
+        "\n"
+        "\n"
+        'if __name__ == "__main__":\n'
+        "    main()\n"
+    )
+
+    assert check_redundancy(parent, ["rolling", "groupby"]).redundant is True

@@ -588,3 +588,42 @@ def test_a_column_in_a_non_primary_kinds_test_files_is_not_train_only(tmp_path):
 
     assert "Geology" not in profile.train_only_columns
     assert profile.target_column == "TVT"
+
+
+def test_the_target_fallback_is_not_decided_by_union_ordering(tmp_path):
+    """Reported on PR #117 — a regression from that PR's own union fix.
+
+    Widening `sample_df` to every kind changed what "last column" means: the
+    union appends each other kind's novel columns after the primary's, so
+    `train_only[-1]` became whichever secondary kind contributed last. A `main`
+    kind carrying the real target and an `aux` kind carrying an unrelated
+    train-only column inferred the wrong label — silently, with no crash.
+
+    No `sample_submission.csv` here on purpose: with one, the submission-match
+    branch answers first and hides this entirely, which is why the tests added
+    with the union fix missed it.
+    """
+    import pandas as pd
+
+    root = tmp_path / "ordering"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in range(5):
+        pd.DataFrame({"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+        pd.DataFrame({"MD": [1.0, 2.0], "GR": [3.0, 4.0]}).to_csv(
+            root / "test" / f"e{i}__main.csv", index=False
+        )
+    for i in range(3):
+        pd.DataFrame({"GR": [3.0, 4.0], "AuxNote": [7.0, 8.0]}).to_csv(
+            root / "train" / f"a{i}__aux.csv", index=False
+        )
+        pd.DataFrame({"GR": [3.0, 4.0]}).to_csv(root / "test" / f"a{i}__aux.csv", index=False)
+
+    profile = _profiler().profile_directory(root, "demo")
+
+    assert profile.target_column == "TVT"
+    # The union is still what `train_only_columns` reports — both kinds' labels
+    # must be excluded from features, which is what that field is read for.
+    assert set(profile.train_only_columns) == {"TVT", "AuxNote"}

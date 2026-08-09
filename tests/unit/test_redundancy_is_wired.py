@@ -328,3 +328,26 @@ def test_a_retry_overrides_the_brief_instruction(tmp_path):
 
     assert seen, "aider should still be spawned"
     assert "KeyError" in seen[0]
+
+
+def test_a_repair_carries_the_brief_as_well_as_the_error(tmp_path):
+    """Reported on PR #117: the brief call is paid for and its instruction was
+    discarded on every retry. It rides along now — after the error, so a brief
+    that ignored the retry cannot leave the failure unmentioned."""
+    seen: list[str] = []
+
+    def _runner(cmd, cwd, timeout):
+        seen.append(" ".join(str(c) for c in cmd))
+        raise RuntimeError("stop here")
+
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text(_ENSEMBLE, encoding="utf-8")
+    agent = _agent(DeltaBrief(instruction="add the MD_x_GR feature"), runner=_runner)
+
+    with pytest.raises(Exception):
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE, retry_reason="KeyError: 'TVT'"), tmp_path)
+
+    sent = seen[0]
+    assert "KeyError" in sent
+    assert "MD_x_GR" in sent
+    assert sent.index("KeyError") < sent.index("MD_x_GR")
