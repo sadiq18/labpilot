@@ -1,4 +1,5 @@
 import logging
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,21 @@ class TabularProfiler:
 
     def profile_file(self, path: Path) -> DatasetProfile:
         df = pd.read_csv(path, nrows=self.config.max_rows_sample)
+        return DatasetProfile(
+            competition="",
+            files=[str(path)],
+            row_count=len(df),
+            column_count=len(df.columns),
+            columns=self.profile_columns(df),
+        )
+
+    def profile_columns(self, df: pd.DataFrame) -> list[ColumnProfile]:
+        """Per-column facts for a frame that is already in memory.
+
+        Split out from `profile_file` because a partitioned dataset's training
+        frame is a concatenation of files rather than any one of them, and the
+        profile has to describe the frame the pipeline will actually build.
+        """
         columns: list[ColumnProfile] = []
 
         for col in df.columns:
@@ -99,13 +115,7 @@ class TabularProfiler:
                 )
             )
 
-        return DatasetProfile(
-            competition="",
-            files=[str(path)],
-            row_count=len(df),
-            column_count=len(df.columns),
-            columns=columns,
-        )
+        return columns
 
     def profile_directory(
         self,
@@ -316,9 +326,7 @@ class TabularProfiler:
         if len(train_files) < _MIN_PARTITIONS:
             return None
 
-        sample_paths = [
-            p for p in by_role["other"] if submission_pattern.lower() in p.name.lower()
-        ]
+        sample_paths = [p for p in by_role["other"] if submission_pattern.lower() in p.name.lower()]
         sample_path = sample_paths[0] if sample_paths else None
 
         # Group files by "kind" suffix (horizontal_well / typewell / …). A kind
@@ -332,17 +340,59 @@ class TabularProfiler:
         limit = max(1, min(self.config.max_files_sample, len(kinds[primary_kind])))
         sampled = kinds[primary_kind][:limit]
         frames = [pd.read_csv(p, nrows=self.config.max_rows_sample) for p in sampled]
-        sample_df = pd.concat(frames, ignore_index=True)
 
-        mean_rows = sum(len(f) for f in frames) / len(frames)
-        row_count = int(mean_rows * len(kinds[primary_kind]))
+        # Every kind, not only the most common one. The generated `load_data`
+        # concatenates *all* the CSVs under `train/`, so the frame it trains on
+        # holds the union of the kinds' columns — and a profile that describes
+        # one kind is not a description of that frame.
+        #
+        # Measured on rogii 2026-08-09. Two kinds of equal size, so `max()` on
+        # the counts picked `horizontal_well` arbitrarily; `Geology` lives only
+        # in `typewell` and never reached `profile.json`. Codegen, told the
+        # dataset had thirteen columns and all of them numeric, wrote feature
+        # selection as "every column except this exclusion list" — which is
+        # correct given that profile and fatal given the data. Training died on
+        # `pandas dtypes must be int, float or bool. Fields with bad pandas
+        # dtypes: Geology: object`, twice, two days apart.
+        #
+        # Null counts rise here, because a column absent from one kind is NaN
+        # for those rows. That is not noise: it is the true shape of the
+        # concatenated frame, and it is what makes a column's sparsity visible
+        # to whoever decides whether to use it.
+        union_frames = list(frames)
+        # Rows are estimated per kind and summed, because `load_data`
+        # concatenates every CSV under `train/`. Scaling the primary kind's
+        # mean by the primary kind's file count undercounts the training set by
+        # whatever the other kinds contribute — the same mistake as profiling
+        # one kind's columns, one field over.
+        row_count = int(sum(len(f) for f in frames) / len(frames) * len(kinds[primary_kind]))
+        for kind, paths in kinds.items():
+            if kind == primary_kind:
+                continue
+            kind_limit = max(1, min(self.config.max_files_sample, len(paths)))
+            kind_frames = [
+                pd.read_csv(p, nrows=self.config.max_rows_sample) for p in paths[:kind_limit]
+            ]
+            union_frames.extend(kind_frames)
+            row_count += int(sum(len(f) for f in kind_frames) / len(kind_frames) * len(paths))
+        sample_df = pd.concat(union_frames, ignore_index=True)
 
+        # Test columns from **every** kind, for the same reason the sample frame
+        # spans every kind. Read from the primary kind alone, a column that
+        # exists in another kind's train *and* test looked train-only — and
+        # `train_only[-1]` is the target fallback, so `Geology` (a categorical
+        # feature present on both sides of its own kind) was inferred as the
+        # label while the real target `TVT` was passed over. Codegen then trains
+        # against the wrong column entirely.
         test_columns: set[str] = set()
-        test_kind_files = [
-            p for p in test_files if self._split_entity_kind(p.stem)[1] == primary_kind
-        ]
-        for path in test_kind_files[:limit]:
-            test_columns.update(pd.read_csv(path, nrows=0).columns)
+        test_by_kind: dict[str, list[Path]] = {}
+        for path in test_files:
+            test_by_kind.setdefault(self._split_entity_kind(path.stem)[1], []).append(path)
+        for kind, paths in test_by_kind.items():
+            kind_limit = max(1, min(self.config.max_files_sample, len(paths)))
+            for path in paths[:kind_limit]:
+                test_columns.update(pd.read_csv(path, nrows=0).columns)
+        test_kind_files = test_by_kind.get(primary_kind, [])
 
         submission_columns: list[str] = []
         if sample_path is not None:
@@ -350,15 +400,73 @@ class TabularProfiler:
 
         # Target inference: a column present in train but absent from test is a
         # label candidate; the one also named in the submission header wins.
+        ambiguous_target: list[str] = []
         train_only = [c for c in sample_df.columns if c not in test_columns]
         sub_lower = {c.lower() for c in submission_columns}
         target = next((c for c in train_only if c.lower() in sub_lower), None)
         if target is None and train_only:
-            target = train_only[-1]
+            # The fallback reads the **primary kind's** order, not the union's.
+            # Widening `sample_df` to every kind changed what "last column"
+            # means: the union appends each other kind's novel columns after the
+            # primary's, so `train_only[-1]` became whichever secondary kind
+            # happened to contribute last. Reported on PR #117 and reproduced —
+            # a `main` kind carrying the real target `TVT` and an `aux` kind
+            # carrying an unrelated `AuxNote` inferred `AuxNote` as the label,
+            # silently, with no crash to catch it. A regression from the union
+            # fix itself, and invisible whenever a `sample_submission.csv`
+            # names the target, which is why the tests added with that fix
+            # missed it.
+            # The primary kind, and within it the columns *every* sampled file
+            # carries. Reading only `frames[0]` missed a target absent from the
+            # first file; reading the union in order then let a quirk column
+            # appearing only in a later file win instead, because the fallback
+            # takes the last. Both reported on PR #117, one round apart, and
+            # both are the same mistake: position standing in for evidence.
+            #
+            # A label is in every partition of its kind. A stray note column is
+            # not, so requiring presence everywhere separates them without
+            # relying on order at all. The union is the fallback's fallback,
+            # for a kind whose files genuinely share nothing.
+            # How *many* of the sampled files carry it, not whether all of
+            # them do. Requiring every file was the previous answer and one
+            # missing file collapsed it back to the order-dependent union it
+            # replaced — with `max_files_sample` at 25, some file having a
+            # schema quirk is likely rather than remote. Reported on PR #117.
+            #
+            # A label is in most partitions of its kind; a per-file note column
+            # is in one. Counting separates them and degrades gracefully, where
+            # an intersection fails outright on a single quirk.
+            union: list[str] = []
+            seen_in = Counter[str]()
+            for frame in frames:
+                seen_in.update(set(frame.columns))
+                union.extend(c for c in frame.columns if c not in union)
+            candidates = [c for c in union if c not in test_columns]
+            if candidates:
+                most = max(seen_in[c] for c in candidates)
+                candidates = [c for c in candidates if seen_in[c] == most]
+            # A genuine tie is a thing we do not know, and picking the last one
+            # is position deciding again — the fragility four rounds on PR #117
+            # kept coming back to. Sorted so the answer at least does not
+            # depend on column order, and warned so it is visible rather than
+            # silently wrong.
+            if len(candidates) > 1:
+                ambiguous_target.append(
+                    "Target inference is ambiguous: "
+                    f"{sorted(candidates)} are equally supported by the training "
+                    "partitions and none is named in a sample submission. Set "
+                    "`target_column` in the competition config to decide it."
+                )
+                candidates = sorted(candidates)
+            primary_only = candidates
+            target = (primary_only or train_only)[-1]
 
         profile = self.profile_file(sampled[0])
         profile.competition = competition
-        profile.columns = [c for c in profile.columns if c.name in sample_df.columns]
+        # From the union frame, not from one file filtered down to it. The
+        # filter could only ever remove columns, so a column that exists in
+        # another kind had no way to appear.
+        profile.columns = self.profile_columns(sample_df)
         profile.files = [str(p.relative_to(data_dir)) for p in csv_files[:200]]
         profile.train_file = str(sampled[0].relative_to(data_dir))
         profile.test_file = (
@@ -386,6 +494,7 @@ class TabularProfiler:
             f"row_count estimated from {len(sampled)} sampled files",
             "rows are NOT iid across partitions — validation must group by partition",
         ]
+        profile.warnings.extend(ambiguous_target)
         if train_only:
             profile.warnings.append(f"train-only columns (unavailable at test): {train_only}")
         if profile.scored_is_partition_suffix:

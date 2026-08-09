@@ -291,3 +291,45 @@ def test_the_missing_claim_is_recorded_not_refused():
     meta = _observe_delta(_PARENT_LGB, _proposal(_ENSEMBLED))
     assert isinstance(meta, dict)
     assert "delta_consistent" not in meta
+
+
+# --- a retry must be handed the error, not the frame list --------------------
+
+
+def _excerpt(text):
+    """The codegen retry path's excerpt, shared with the smoke gate."""
+    from labpilot.research_engine.execution.capabilities._helpers import failure_excerpt
+    from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
+        _RETRY_EXCERPT,
+    )
+
+    return failure_excerpt(text, "", limit=_RETRY_EXCERPT)
+
+
+def test_a_long_traceback_keeps_the_exception_not_the_paths():
+    """Measured on rogii 2026-08-09: two retries produced no edit while
+    `retry_reason` began `Traceback (most recent call last):  File "/U…` and
+    `KeyError: 'TVT'` sat past the 2000-character cut. The editor was handed a
+    stack of file paths and asked to fix something."""
+    frames = "\n".join(
+        f'  File "/very/long/path/to/site-packages/mod{i}.py", line {i}' for i in range(400)
+    )
+    text = _excerpt("Traceback (most recent call last):\n" + frames + "\nKeyError: 'TVT'")
+
+    assert "KeyError: 'TVT'" in text
+    assert len(text) <= 2100
+
+
+def test_a_short_failure_is_passed_through_whole():
+    assert _excerpt("KeyError: 'TVT'") == "KeyError: 'TVT'"
+
+
+def test_a_progress_bar_cannot_fill_the_budget():
+    """What the local copy did not do, and the reason for sharing one helper:
+    tqdm redraws by emitting `\r`, and 1523 characters of
+    `Loading train: 96%|` once crowded out the diagnosis entirely."""
+    bar = "\r".join(f"Loading train: {i}%|" for i in range(100))
+    text = _excerpt(bar + "\nKeyError: 'TVT'")
+
+    assert "KeyError: 'TVT'" in text
+    assert text.count("Loading train") == 1

@@ -34,6 +34,7 @@ from labpilot.research_engine.intelligence.knowledge.models import (
 )
 from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore, entity_id
 from labpilot.research_engine.intelligence.models import ResearchArtifact
+from labpilot.research_engine.shared.labels import is_record_reference
 
 logger = logging.getLogger("labpilot.research_engine.intelligence.knowledge.hub")
 
@@ -109,6 +110,18 @@ class KnowledgeHub:
             return result
 
         clusters = self.merger.merge(candidates)
+        # `hyp:H-010` is a pointer to a hypothesis, not something anyone can
+        # test. `KnowledgeStore.merge_technique` refuses these — and its error
+        # tells the caller to filter first, which no caller did, so `research
+        # ingest` died on the first one it met.
+        dropped = [c for c in clusters if is_record_reference(c.canonical)]
+        clusters = [c for c in clusters if not is_record_reference(c.canonical)]
+        if dropped:
+            result.notes.append(
+                "knowledge hub: dropped "
+                f"{len(dropped)} record reference(s) mistaken for concepts "
+                f"({', '.join(sorted(c.canonical for c in dropped)[:5])})."
+            )
         for cluster in clusters:
             unit = self._persist_unit(cluster)
             result.units.append(unit)
@@ -123,9 +136,7 @@ class KnowledgeHub:
             f"{len(result.units)} unit(s) ({_fmt_counts(by_source)})."
         )
         if write_beliefs:
-            suggested = sum(
-                1 for b in result.beliefs if b.status is BeliefStatus.SUGGESTED
-            )
+            suggested = sum(1 for b in result.beliefs if b.status is BeliefStatus.SUGGESTED)
             testing = sum(1 for b in result.beliefs if b.status is BeliefStatus.TESTING)
             result.notes.append(
                 f"knowledge hub: beliefs suggested={suggested}, testing={testing} "
@@ -135,9 +146,7 @@ class KnowledgeHub:
             artifacts,
             signature=signature,
         )
-        result.notes.append(
-            f"knowledge hub: marked {marked} stored artifact(s) ingested."
-        )
+        result.notes.append(f"knowledge hub: marked {marked} stored artifact(s) ingested.")
         return result
 
     def _persist_unit(self, cluster: ConceptCluster) -> KnowledgeUnit:

@@ -21,6 +21,7 @@ from pathlib import Path
 from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.execution.capabilities._helpers import (
     evidence,
+    failure_excerpt,
     file_digest,
     is_dry_run,
 )
@@ -127,6 +128,12 @@ def _summarise_profile(profile: dict) -> dict:
         "note": "full list omitted; the generated code globs the data directory at runtime",
     }
     return trimmed
+
+
+#: How much of a failure to hand back to codegen. Larger than the smoke gate's
+#: own excerpt because the editor is being asked to *fix* the error, not just
+#: to report it.
+_RETRY_EXCERPT = 2000
 
 
 def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object]:
@@ -469,7 +476,15 @@ class CodeEngineeringCapability(BaseCapability):
                 # try again from the inputs that produced the broken file, and
                 # reproduces the same mistake — measured on rogii 2026-08-08,
                 # where a `Geology: object` column was handed to LightGBM.
-                "retry_reason": str(context.task.metadata.get("retry_reason") or "")[:2000],
+                # Shared with the smoke gate, which learned the same lesson
+                # first: keep the *tail*, and collapse tqdm's `\r` frames so a
+                # progress bar cannot fill the budget. Two implementations of
+                # one idiom is how the `\r` fix lands in only one of them.
+                "retry_reason": failure_excerpt(
+                    str(context.task.metadata.get("retry_reason") or ""),
+                    "",
+                    limit=_RETRY_EXCERPT,
+                ),
                 "parent_hypothesis_id": plan_meta.get("parent_hypothesis_id"),
                 "parent_metrics": plan_meta.get("parent_metrics") or {},
                 **technique_fields,

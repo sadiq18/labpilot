@@ -22,6 +22,20 @@ Doing it with a model instead would be slower, cost a call, and put a plausible
 answer where a certain one is available. The LLM critic belongs on the question
 mechanism *cannot* answer — is this promising? — not this one.
 
+### The verdict here is a suspicion, and the editor confirms it
+
+Nothing retires a hypothesis on this answer alone. `AiderAgent` runs aider even
+when this says "already implemented", and retires only if aider — shown the
+actual file — also declines to edit.
+
+That is deliberate, and it is the fix for what this check cost. Six review
+rounds on PR #117 found six ways for name matching to be wrong in *both*
+directions, because the question is semantic ("does the parent already do
+this?") and the evidence is syntactic. The analysis will always be approximate.
+What made the approximation expensive was the consequence: a name collision
+permanently retired an idea, so being wrong cost research. With confirmation,
+a false suspicion costs one aider call and a missed one costs nothing.
+
 ### Why `added` and not `kept` or `combined`
 
 `added` is the only list that means "this must not be there yet". `kept` names
@@ -41,8 +55,8 @@ import logging
 from dataclasses import dataclass, field
 
 from labpilot.research_engine.execution.delta.consistency import (
-    called_names,
-    imported_modules,
+    present_names,
+    strip_unreachable,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,7 +102,25 @@ def check_redundancy(parent_source: str, added: list[str]) -> RedundancyVerdict:
         logger.debug("parent does not parse; not judging redundancy: %s", exc)
         return RedundancyVerdict()
 
-    present = called_names(tree) | imported_modules(tree)
+    # Over the *live* parent. A failed experiment leaves its edit behind, so the
+    # next experiment's parent can contain code that has never run — and code
+    # that cannot execute does not implement anything.
+    #
+    # Measured on rogii 2026-08-09. The first delta wrote rolling-window
+    # features into `engineer_features`, which `main()` never calls; the smoke
+    # test failed for an unrelated reason and the change stayed in the
+    # workspace. On the next attempt at the same hypothesis the brief correctly
+    # claimed `['rolling', 'groupby']`, both appeared — inside the dead
+    # function — and the hypothesis was retired as already implemented. The
+    # feature it asked for had never once been computed.
+    live = strip_unreachable(tree)
+    # The fourth consumer, and the one left behind twice. `called_names` cannot
+    # see a function the parent only ever hands to `df.apply`, so a genuinely
+    # implemented hypothesis was judged *not* redundant — and the paid aider
+    # call that followed made no edit, raised `aider_no_edit` rather than
+    # `hypothesis_redundant`, and the hypothesis stayed `proposed` to be picked
+    # again. That is this module's own motivating bug. Reported on PR #117.
+    present = present_names(live)
     found = [name for name in names if name in present]
     if len(found) != len(names):
         return RedundancyVerdict(already_present=found)

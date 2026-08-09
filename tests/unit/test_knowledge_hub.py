@@ -77,16 +77,12 @@ def test_extractor_only_pulls_requested_entity_types() -> None:
         models=["EfficientNet"],
     )
     candidates = KnowledgeExtractor().extract([artifact])
-    assert [(c.entity_type, c.name) for c in candidates] == [
-        (EntityType.TECHNIQUE, "Mixup")
-    ]
+    assert [(c.entity_type, c.name) for c in candidates] == [(EntityType.TECHNIQUE, "Mixup")]
 
     both = KnowledgeExtractor().extract(
         [artifact], entity_types=(EntityType.TECHNIQUE, EntityType.ARCHITECTURE)
     )
-    assert (EntityType.ARCHITECTURE, "EfficientNet") in [
-        (c.entity_type, c.name) for c in both
-    ]
+    assert (EntityType.ARCHITECTURE, "EfficientNet") in [(c.entity_type, c.name) for c in both]
 
 
 # --- merger -----------------------------------------------------------------
@@ -316,11 +312,19 @@ def test_orchestrator_soft_fails_on_hub_error(tmp_path: Path, monkeypatch) -> No
     def boom(*_args, **_kwargs):
         raise RuntimeError("db locked")
 
-    monkeypatch.setattr(
-        "labpilot.research_engine.intelligence.orchestrator.KnowledgeStore", boom
-    )
+    monkeypatch.setattr("labpilot.research_engine.intelligence.orchestrator.KnowledgeStore", boom)
     reg = AnalyzerRegistry()
     reg.register(FakeAnalyzer("papers", [_paper("paper:1", ["Mixup"])]))
     report = AnalyzeOrchestrator(reg).analyze(_ctx(tmp_path))
     assert report.knowledge_units == []
     assert any("ingest failed" in note for note in report.notes)
+
+
+def test_a_record_reference_is_dropped_not_persisted():
+    """`hyp:H-010` points at a hypothesis; it is not a technique anyone can
+    test. `merge_technique` refuses these and its error says to filter first —
+    no caller did, so `research ingest` died on the first one it met."""
+    from labpilot.research_engine.shared.labels import is_record_reference
+
+    assert is_record_reference("hyp:H-010") is True
+    assert is_record_reference("rolling_features") is False

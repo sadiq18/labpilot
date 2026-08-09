@@ -274,6 +274,37 @@ class ResearchEngineer:
     #: of these fails, the code is the thing that is wrong.
     _CODE_VALIDATION_TASKS = frozenset({TaskType.RUN_SMOKE_TEST, TaskType.RUN_UNIT_TEST})
 
+    @staticmethod
+    def _training_produced_nothing(plan: ResearchPlan) -> str:
+        """A training run that exited 0 and wrote no metrics — a code defect.
+
+        `RUN_TRAINING` is deliberately not a code-validation task: training
+        fails for reasons code cannot fix, a missing dataset or an OOM, and
+        rebuilding then throws away a file that passed its gates. That rule is
+        right and stays.
+
+        This one case is different, because the script *reported success*. It
+        did not crash; it simply did not do its job. Measured on rogii
+        2026-08-09: training wrote to `./workspace/metrics.json`, a directory it
+        invented, exited 0, and nothing read the result. `code_is_suspect`
+        stayed false, so `retry_reason` stayed empty and three consecutive
+        retries rebuilt blind while the error sat one field away.
+
+        Keyed on the constant the training capability writes, so renaming the
+        message breaks the import rather than silently disabling this.
+        """
+        from labpilot.research_engine.execution.capabilities.training.capability import (
+            PRODUCED_NOTHING_MARKERS,
+        )
+
+        for task in plan.tasks:
+            if task.type is not TaskType.RUN_TRAINING or task.status != TaskStatus.FAILED:
+                continue
+            error = str(task.metadata.get("error") or "")
+            if any(marker in error for marker in PRODUCED_NOTHING_MARKERS):
+                return str(task.metadata.get("error") or "")
+        return ""
+
     def _record_hypothesis_attempt(self, plan: ResearchPlan, error: str) -> None:
         """Retire or re-queue the hypothesis behind a failed execution.
 
@@ -421,6 +452,7 @@ class ResearchEngineer:
                 for t in plan.tasks
             )
             or self._train_script_is_unrunnable()
+            or bool(self._training_produced_nothing(plan))
         )
         if code_is_suspect:
             spine = spine | {TaskType.WRITE_CODE}

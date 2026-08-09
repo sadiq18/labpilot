@@ -48,6 +48,13 @@ from labpilot.research_engine.execution.schemas.delta_brief import DeltaBrief
 
 logger = logging.getLogger(__name__)
 
+
+def _suspected_redundant(parent_source: str, added: list[str]) -> str | None:
+    """The redundancy reason when the names suggest one, else None."""
+    verdict = check_redundancy(parent_source, added)
+    return verdict.reason if verdict.redundant else None
+
+
 #: Copied into the scratch tree. Editable source only.
 #:
 #: `data/` is excluded deliberately: it is the bulk of a competition tree, and
@@ -213,11 +220,61 @@ class AiderAgent:
         # re-selecting a hypothesis asking for an ensemble `train.py` already
         # had. Raising *before* the subprocess also saves the call that was
         # only ever going to be declined.
-        verdict = check_redundancy(_parent_source(parent, ctx), brief.added)
-        if verdict.redundant:
-            raise AiderError(verdict.reason, kind="hypothesis_redundant")
 
-        instruction = brief.instruction.strip() or _instruction(ctx)
+        # A repair overrides the brief. The brief exists to turn a *hypothesis*
+        # into an instruction plus a claim, and a retry has neither to offer:
+        # the change is already made and the job is to make it run. Leaving the
+        # brief in charge kept re-asking for the technique — aider's own last
+        # words on the third stall were still about computing the feature it
+        # had already computed — so it declined, correctly, every time.
+        retrying = bool(str((getattr(ctx, "data", None) or {}).get("retry_reason") or "").strip())
+
+        # Redundancy is a question about a *hypothesis*, so it is not asked on
+        # a repair. The first attempt adds the feature and the run fails
+        # downstream; on retry the parent legitimately contains that code, so
+        # the same `added` claim reads as already implemented and the
+        # hypothesis is permanently retired instead of repaired. The check
+        # would be correct about the parent and wrong about the question.
+        #
+        # Not left to the brief's "claim nothing new" instruction either: that
+        # is a request to a model, and a model that ignores it retires the
+        # hypothesis. The skip is here, where it cannot be declined.
+        # Redundancy is a *suspicion*, not a verdict, and the editor confirms
+        # it. `check_redundancy` reads names out of an AST, which is an
+        # approximation of "does the parent already do this" — six review
+        # rounds on PR #117 found six ways for it to be wrong in both
+        # directions, and it will not be the last, because the question is
+        # semantic and the evidence is syntactic.
+        #
+        # What made that expensive was the *consequence*: a name collision
+        # permanently retired a hypothesis, so being wrong cost an idea. Now
+        # aider runs either way and its own refusal is what settles it — the
+        # model reading the actual code, which is better evidence than any name
+        # match. A false suspicion costs one call; a missed one costs nothing,
+        # since aider edits and the experiment proceeds.
+        #
+        # Not asked at all on a repair: the parent legitimately contains the
+        # earlier attempt's code, so "already implemented" is true and beside
+        # the point.
+        suspected = (
+            None
+            if retrying
+            else _suspected_redundant(_parent_source(parent, ctx), brief.added)
+        )
+        # The brief's own reading rides along on a repair rather than being
+        # thrown away. `delta_brief_system.md` now teaches it to answer a
+        # failure, and it has the parent source that `_instruction` does not —
+        # but the error itself is stated by `_instruction`, first, so a brief
+        # that ignored the retry cannot leave the failure unmentioned. Reported
+        # on PR #117 as a paid call whose output was discarded.
+        if retrying:
+            instruction = _instruction(ctx)
+            if brief.instruction.strip():
+                instruction += (
+                    f"\n\nThe change under repair was described as:\n{brief.instruction.strip()}"
+                )
+        else:
+            instruction = brief.instruction.strip() or _instruction(ctx)
         with tempfile.TemporaryDirectory(prefix="labpilot-aider-") as scratch_str:
             scratch = Path(scratch_str)
             edit_targets = _copy_tree(parent, scratch)
@@ -240,6 +297,16 @@ class AiderAgent:
                 # declines, and `aider_no_edit` without that explanation is a
                 # count nobody can act on. The tail, since the refusal comes
                 # after the banner.
+                if suspected is not None:
+                    # Both halves agree: the names say the change is already
+                    # there and the editor, shown the file, declined to make
+                    # one. That is what retires a hypothesis — never the name
+                    # match alone.
+                    raise AiderError(
+                        f"{suspected} aider, shown the file, made no edit either: "
+                        f"{transcript[-500:]}",
+                        kind="hypothesis_redundant",
+                    )
                 raise AiderError(
                     f"aider made no edit. Its last words: {transcript[-800:]}",
                     kind="aider_no_edit",
@@ -351,15 +418,46 @@ def _parent_source(parent: Path, ctx: StructuredContext) -> str:
 
 
 def _instruction(ctx: StructuredContext) -> str:
-    """What to ask aider for, drawn from the hypothesis the plan already holds."""
+    """What to ask aider for: the repair if there is one, else the hypothesis.
+
+    A retry used to re-send the hypothesis unchanged — `retry_reason` reached
+    the whole-file prompt and the delta brief, but never this one, so aider was
+    asked to add the same technique again with no mention of what had failed.
+
+    Measured on rogii 2026-08-09 across two separate stalls: aider declined
+    ("no edit"), then edited a module docstring, then declined again, while the
+    pipeline failed on the same `Geology: object` and later `KeyError: 'TVT'`.
+    Each of those is the right answer to the question it was asked. It was the
+    wrong question.
+
+    Repair leads, because a pipeline that does not run measures nothing. The
+    hypothesis stays as context so the fix preserves it rather than reverting
+    it — the failure being repaired is usually *in* the change.
+    """
     data = getattr(ctx, "data", None) or {}
+    hypothesis = "\n\n".join(
+        p
+        for p in (
+            str(data.get("plan_goal") or "").strip(),
+            str(data.get("prediction") or "").strip(),
+            str(data.get("reason") or "").strip(),
+        )
+        if p
+    )
+    retry_reason = str(data.get("retry_reason") or "").strip()
+    if not retry_reason:
+        return hypothesis or "Improve the training script for this competition."
+
     parts = [
-        str(data.get("plan_goal") or "").strip(),
-        str(data.get("prediction") or "").strip(),
-        str(data.get("reason") or "").strip(),
+        "The pipeline currently fails to run. Fix that, and change nothing "
+        "else — this is a repair, not a new experiment.",
+        f"The error:\n{retry_reason}",
     ]
-    body = "\n\n".join(p for p in parts if p)
-    return body or "Improve the training script for this competition."
+    if hypothesis:
+        parts.append(
+            f"Preserve the change already made for this hypothesis while you fix it:\n{hypothesis}"
+        )
+    return "\n\n".join(parts)
 
 
 def _copy_tree(parent: Path, scratch: Path) -> list[str]:

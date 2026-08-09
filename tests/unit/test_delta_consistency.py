@@ -263,3 +263,465 @@ def test_the_report_serialises_for_the_evidence_card():
 
 def test_an_empty_report_is_consistent_by_default():
     assert ConsistencyReport().ok is True
+
+
+# --- a change that cannot run is not a change --------------------------------
+
+_PARENT = """
+import pandas as pd
+
+
+def engineer_features(df):
+    return df
+
+
+def main():
+    df = pd.read_csv("x.csv")
+    cols = [c for c in df.columns]
+    return cols
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+#: The real shape of rogii 2026-08-09: thirty-four correct lines written into a
+#: function `main()` never calls.
+_DEAD = """
+import pandas as pd
+
+
+def engineer_features(df):
+    df = df.copy()
+    for col in ["MD", "GR"]:
+        df[f"{col}_roll_mean"] = df.groupby("partition_id")[col].transform(
+            lambda x: x.rolling(5, min_periods=1).mean()
+        )
+    return df
+
+
+def main():
+    df = pd.read_csv("x.csv")
+    cols = [c for c in df.columns]
+    return cols
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+_WIRED = _DEAD.replace(
+    '    df = pd.read_csv("x.csv")\n',
+    '    df = pd.read_csv("x.csv")\n    df = engineer_features(df)\n',
+)
+
+
+def test_a_delta_into_a_function_nothing_calls_is_a_violation():
+    """The first delta the adapter produced against a real pipeline. It parsed,
+    it applied, and it could not execute."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    report = check_delta_consistency(_PARENT, _DEAD)
+
+    assert report.ok is False
+    assert any("cannot execute" in v for v in report.violations)
+
+
+def test_the_same_delta_passes_once_it_is_wired_in():
+    """The carve-out must not cost the behaviour it guards: the identical
+    feature code, called from `main`, is a real change."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    report = check_delta_consistency(_PARENT, _WIRED)
+
+    assert report.ok is True, report.violations
+
+
+def test_a_better_claim_would_not_have_caught_it():
+    """Why this cannot live in the claim.
+
+    `check_addition` looks for the claimed symbols in the child. Name the real
+    contribution — `rolling`, `groupby` — and both are present in the dead
+    function, so every claim-based check passes on code that never runs. The
+    accident that caught it was a *bad* claim naming the container.
+    """
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_addition
+
+    assert check_addition(ast.parse(_DEAD), ["rolling", "groupby"]) == []
+
+
+def test_one_dead_helper_among_live_changes_is_not_a_violation():
+    """Conservative on purpose. A delta that edits two functions and leaves one
+    helper uncalled has still changed behaviour, and a violation there is a
+    re-ask spent on a correct experiment."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _WIRED.replace(
+        "def main():",
+        "def _unused_helper(a):\n    return a * 2\n\n\ndef main():",
+    )
+
+    report = check_delta_consistency(_PARENT, child)
+
+    assert report.ok is True, report.violations
+
+
+def test_a_delta_that_touches_nothing_is_not_accused():
+    """No touched functions means nothing to reach — an import-only or
+    constant-only change is not this failure."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_reachability
+
+    assert check_reachability(ast.parse(_PARENT), []) == []
+
+
+def test_a_library_module_is_never_accused():
+    """A module that runs nothing of its own cannot establish that a function
+    is unreachable — its callers are elsewhere. Without this precondition the
+    check condemned most of the fixtures in this file."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = "def train(X):\n    return X\n"
+    child = "def train(X):\n    return X * 2\n"
+
+    report = check_delta_consistency(parent, child)
+
+    assert report.ok is True, report.violations
+
+
+def test_a_module_level_call_counts_as_an_entry_point():
+    """Not every script uses the __main__ guard."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import _has_entry_point
+
+    assert _has_entry_point(ast.parse("def main():\n    pass\n\n\nmain()\n")) is True
+    assert _has_entry_point(ast.parse("def main():\n    pass\n")) is False
+
+
+# --- a change that cannot alter behaviour is not an experiment ---------------
+
+_EFFECT_PARENT = '''"""Keeps H-014 feature set and adds Decision Tree."""
+
+import pandas as pd
+
+
+def add_rolling_features(df):
+    return df.groupby("pid")["GR"].transform(lambda x: x.rolling(3).mean())
+
+
+def main():
+    df = pd.read_csv("x.csv")
+    return add_rolling_features(df)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def test_a_docstring_only_delta_is_a_violation():
+    """H-015's third and final attempt, measured on rogii 2026-08-09.
+
+    Handed the LightGBM dtype error as its retry reason, aider edited the
+    module docstring and nothing else. It consumed the hypothesis's last
+    attempt, and the hypothesis was retired as having failed three times when
+    it had really been tested twice.
+    """
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _EFFECT_PARENT.replace("adds Decision Tree", "adds rolling features")
+
+    report = check_delta_consistency(_EFFECT_PARENT, child, add=["rolling", "groupby"])
+
+    assert report.ok is False
+    assert any("no executable code" in v for v in report.violations)
+
+
+def test_the_checks_that_missed_it_still_miss_it():
+    """Why it needed its own check rather than a wider existing one.
+
+    Every other verdict is about *how* the code changed. Nothing touched, the
+    claimed symbols present from an earlier attempt, and an edit did happen —
+    so each of them passes on its own terms, correctly.
+    """
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import (
+        check_addition,
+        check_reachability,
+        touched_functions,
+    )
+
+    parent = ast.parse(_EFFECT_PARENT)
+    child = ast.parse(_EFFECT_PARENT.replace("adds Decision Tree", "adds rolling features"))
+
+    assert touched_functions(parent, child) == []
+    assert check_reachability(child, []) == []
+    assert check_addition(child, ["rolling", "groupby"]) == []
+
+
+def test_a_comment_only_delta_is_a_violation():
+    """Comments never reach the AST, so this is the same failure arriving in a
+    form the dump comparison cannot see at all."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _EFFECT_PARENT.replace(
+        "    df = pd.read_csv", "    # tuned for the new features\n    df = pd.read_csv"
+    )
+
+    report = check_delta_consistency(_EFFECT_PARENT, child, add=["rolling"])
+
+    assert report.ok is False
+
+
+def test_a_reformatted_delta_is_a_violation():
+    """Whitespace is not an experiment either."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _EFFECT_PARENT.replace("def main():\n", "def main():\n\n")
+
+    assert check_delta_consistency(_EFFECT_PARENT, child, add=["rolling"]).ok is False
+
+
+def test_a_one_character_behaviour_change_passes():
+    """The carve-out must be exact: the smallest real change is still a change,
+    and a check that fired on it would cost a re-ask on a correct experiment."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _EFFECT_PARENT.replace("rolling(3)", "rolling(5)")
+
+    report = check_delta_consistency(_EFFECT_PARENT, child, add=["rolling"])
+
+    assert report.ok is True, report.violations
+
+
+def test_a_docstring_change_alongside_a_real_change_passes():
+    """Deltas routinely update the docstring they are also implementing."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _EFFECT_PARENT.replace("adds Decision Tree", "adds rolling features").replace(
+        "rolling(3)", "rolling(5)"
+    )
+
+    assert check_delta_consistency(_EFFECT_PARENT, child, add=["rolling"]).ok is True
+
+
+def test_a_baseline_has_no_parent_to_be_identical_to():
+    """With no parent the question does not arise, and asking it would fail
+    every baseline."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    assert check_delta_consistency("", _EFFECT_PARENT, add=["rolling"]).ok is True
+
+
+# --- a callback runs without ever being a Call target ------------------------
+
+
+_CALLBACK_PARENT = """import pandas as pd
+
+
+def helper(row):
+    return row["a"]
+
+
+def main():
+    df = pd.read_csv("x.csv")
+    df["z"] = df.apply(helper, axis=1)
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+
+def test_a_delta_to_an_apply_callback_is_not_dead_code():
+    """Reported on PR #117 and reproduced.
+
+    `check_reachability` asked whether the function was the target of a `Call`
+    node. `df.apply(helper, axis=1)` passes it as a value, so a real
+    behaviour-changing edit to `helper` came back "nothing in the result calls
+    it" — and row-wise feature engineering is exactly the idiom this system's
+    own codegen writes, so the false violation would have corrupted the very
+    failure rate step 2 collects.
+    """
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _CALLBACK_PARENT.replace('return row["a"]', 'return row["a"] * 2')
+
+    report = check_delta_consistency(_CALLBACK_PARENT, child)
+
+    assert report.ok is True, report.violations
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        'df["z"] = df.apply(helper, axis=1)',
+        'df["z"] = df.groupby("p")["a"].transform(helper)',
+        "rows = sorted(df.index, key=helper)",
+        "dispatch = {'h': helper}",
+    ],
+)
+def test_every_way_of_handing_a_function_along_counts(call):
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = _CALLBACK_PARENT.replace('df["z"] = df.apply(helper, axis=1)', call)
+    child = parent.replace('return row["a"]', 'return row["a"] * 2')
+
+    assert check_delta_consistency(parent, child).ok is True
+
+
+def test_a_function_nothing_mentions_at_all_is_still_dead():
+    """The carve-out must not cost the behaviour it guards — the rogii case,
+    where `main()` never names `engineer_features` in any form."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = _CALLBACK_PARENT.replace('df["z"] = df.apply(helper, axis=1)', "pass")
+    child = parent.replace('return row["a"]', 'return row["a"] * 2')
+
+    report = check_delta_consistency(parent, child)
+
+    assert report.ok is False
+    assert any("cannot execute" in v for v in report.violations)
+
+
+def test_the_claim_checks_see_a_callback_too():
+    """Reported on PR #117 as the headline fix being incomplete.
+
+    `check_reachability` was switched to `referenced_names` and the three claim
+    checks were not — so the *normal* path still failed, because
+    `DeltaBriefAgent` always supplies an `add` claim and a correctly wired
+    `df.apply` callback came back "never calls or imports it".
+    """
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _CALLBACK_PARENT.replace('return row["a"]', 'return row["a"] * 2')
+
+    assert check_delta_consistency(_CALLBACK_PARENT, child, add=["helper"]).ok is True
+    assert check_delta_consistency(_CALLBACK_PARENT, child, keep=["helper"]).ok is True
+
+
+# --- reachability is walked, not guessed -------------------------------------
+
+_ENTRY_SUFFIX = '\n\nif __name__ == "__main__":\n    main()\n'
+
+
+def test_a_dead_function_nested_in_a_live_one_does_not_hang():
+    """Reported on PR #117, and the most severe of that round.
+
+    `defined` was collected with `ast.walk`, which finds functions at any
+    nesting depth, while the caller could only remove top-level statements — so
+    a dead nested helper was reported unreachable forever, the strip loop never
+    changed anything, and `strip_unreachable` spun. It runs synchronously
+    before every non-retry aider call, so this hung the delta pipeline.
+    """
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import strip_unreachable
+
+    src = (
+        "def outer():\n"
+        "    def _hidden():\n"
+        "        return 1\n"
+        "    return 2\n"
+        "\n\n"
+        "def main():\n"
+        "    outer()\n" + _ENTRY_SUFFIX
+    )
+
+    # The assertion is that this returns at all.
+    assert strip_unreachable(ast.parse(src)) is not None
+
+
+def test_a_mutually_recursive_dead_pair_is_unreachable():
+    """Mentions let each vouch for the other. Reachability is walked from the
+    entry point now, so a cycle nothing outside it enters stays dead."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import unreachable_functions
+
+    src = (
+        "def a():\n    return b()\n\n\ndef b():\n    return a()\n\n\ndef main():\n    pass\n"
+        + _ENTRY_SUFFIX
+    )
+
+    assert unreachable_functions(ast.parse(src)) == {"a", "b"}
+
+
+def test_a_self_recursive_dead_function_is_unreachable():
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import unreachable_functions
+
+    src = "def solo():\n    return solo()\n\n\ndef main():\n    pass\n" + _ENTRY_SUFFIX
+
+    assert unreachable_functions(ast.parse(src)) == {"solo"}
+
+
+def test_a_live_chain_of_any_depth_survives():
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import unreachable_functions
+
+    src = (
+        "def c():\n    return 3\n\n\ndef b():\n    return c()\n\n\n"
+        "def a():\n    return b()\n\n\ndef main():\n    return a()\n" + _ENTRY_SUFFIX
+    )
+
+    assert unreachable_functions(ast.parse(src)) == set()
+
+
+def test_an_aggregator_handed_to_apply_counts_as_combining():
+    """`preds.apply(np.mean, axis=1)` genuinely averages and never calls `mean`
+    directly — the same callback blind spot as the other checks."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import (
+        _AGGREGATORS,
+        present_names,
+    )
+
+    child = ast.parse("import numpy as np\n\n\ndef main(preds):\n    return preds.apply(np.mean)\n")
+
+    assert present_names(child) & _AGGREGATORS
+
+
+def test_a_loop_variable_does_not_pass_as_an_ensemble():
+    """Reported on PR #117: an unrelated `for mean in [...]` let a delta that
+    computes two predictions and discards both pass the aggregator check."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = "def main():\n    pass\n" + _ENTRY_SUFFIX
+    child = (
+        "def main(a, b):\n"
+        "    pa = a.predict()\n"
+        "    pb = b.predict()\n"
+        "    for mean in ['c1', 'c2']:\n"
+        "        print(mean)\n"
+        "    return pa\n" + _ENTRY_SUFFIX
+    )
+
+    report = check_delta_consistency(parent, child, combine=["a", "b"])
+
+    assert report.ok is False
+
+
+def test_a_decorator_on_a_reachable_function_is_reachable():
+    """Reported on PR #117: the BFS walked a function's body only, so a
+    decorator — which executes at import whether or not the function is ever
+    called — was invisible to it."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import unreachable_functions
+
+    src = (
+        "def memo(fn):\n    return fn\n\n\n"
+        "@memo\ndef helper():\n    return 1\n\n\n"
+        "def main():\n    return helper()\n" + _ENTRY_SUFFIX
+    )
+
+    assert unreachable_functions(ast.parse(src)) == set()

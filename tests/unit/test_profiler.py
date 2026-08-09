@@ -3,10 +3,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from labpilot.research_engine.execution.baseline.selector import BaselineSelector
-from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, MetricSpec, ProblemType
-from labpilot.config import ProfilerConfig
 from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
+from labpilot.config import ProfilerConfig
+from labpilot.research_engine.execution.baseline.selector import BaselineSelector
+from labpilot.research_engine.intelligence.competition.models import (
+    CompetitionSpec,
+    MetricSpec,
+    ProblemType,
+)
 
 
 @pytest.fixture
@@ -233,8 +237,8 @@ def partitioned_data_dir(tmp_path):
 
 
 def _profiler():
-    from labpilot.config import ProfilerConfig
     from labpilot.accessor.profiler.tabular import TabularProfiler
+    from labpilot.config import ProfilerConfig
 
     return TabularProfiler(ProfilerConfig())
 
@@ -263,8 +267,15 @@ def test_partitioned_warns_that_rows_are_not_iid(partitioned_data_dir):
 
 
 def test_partitioned_row_count_is_estimated_not_zero(partitioned_data_dir):
+    """Every kind counts, because `load_data` concatenates every CSV.
+
+    This asserted 60 — the primary kind alone, 6 files x 10 rows — while the
+    fixture also holds 6 `__ref` files of 4 rows. The frame the pipeline builds
+    has 84. Counting one kind's columns and another kind's rows was the same
+    asymmetry, one field apart.
+    """
     profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
-    assert profile.row_count == 60  # 6 partitions x 10 rows
+    assert profile.row_count == 84  # 6x10 main + 6x4 ref
     assert profile.row_count_estimated is True
     assert profile.column_count == 5
 
@@ -436,3 +447,282 @@ def test_real_partitioned_layout_still_detected(partitioned_data_dir):
     profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
     assert profile.partitioned is True
     assert profile.train_partition_count == 6
+
+
+# --- a partitioned profile must describe the frame the pipeline builds -------
+
+
+def _partitioned_dataset(root, *, kinds: dict[str, dict[str, list]], n: int = 4):
+    """`train/<entity>__<kind>.csv` for several entities, one schema per kind."""
+    import pandas as pd
+
+    train = root / "train"
+    test = root / "test"
+    train.mkdir(parents=True)
+    test.mkdir(parents=True)
+    for index in range(n):
+        for kind, data in kinds.items():
+            pd.DataFrame(data).to_csv(train / f"e{index}__{kind}.csv", index=False)
+            pd.DataFrame({k: v for k, v in data.items() if k != "TVT"}).to_csv(
+                test / f"e{index}__{kind}.csv", index=False
+            )
+    pd.DataFrame({"id": [0], "TVT": [0.0]}).to_csv(root / "sample_submission.csv", index=False)
+    return root
+
+
+def test_a_column_that_only_exists_in_a_second_kind_is_profiled(tmp_path):
+    """Measured on rogii 2026-08-09, twice, two days apart.
+
+    The dataset has two kinds of file per well. `max()` over the kind counts
+    picked `horizontal_well`, and the profile was built from one file of that
+    kind — so `Geology`, which lives only in `typewell`, never appeared. The
+    generated `load_data` concatenates *all* the CSVs, so the training frame
+    had it anyway, and codegen — told the data was thirteen columns and every
+    one numeric — wrote "use every column except this exclusion list".
+
+    LightGBM: `pandas dtypes must be int, float or bool. Fields with bad pandas
+    dtypes: Geology: object`.
+    """
+    from labpilot.accessor.profiler.tabular import TabularProfiler
+    from labpilot.config import ProfilerConfig
+
+    root = _partitioned_dataset(
+        tmp_path,
+        kinds={
+            "horizontal_well": {"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]},
+            "typewell": {"GR": [7.0, 8.0], "Geology": ["shale", "sand"], "TVT": [9.0, 1.0]},
+        },
+    )
+
+    profile = TabularProfiler(ProfilerConfig()).profile_directory(root, "demo")
+
+    names = {c.name for c in profile.columns}
+    assert "Geology" in names, f"only saw {sorted(names)}"
+
+
+def test_that_column_is_marked_non_numeric(tmp_path):
+    """Presence is not enough — codegen decides what to feed the model from
+    `is_numeric`, and a string column reported as numeric is the same crash."""
+    from labpilot.accessor.profiler.tabular import TabularProfiler
+    from labpilot.config import ProfilerConfig
+
+    root = _partitioned_dataset(
+        tmp_path,
+        kinds={
+            "horizontal_well": {"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]},
+            "typewell": {"GR": [7.0, 8.0], "Geology": ["shale", "sand"], "TVT": [9.0, 1.0]},
+        },
+    )
+
+    profile = TabularProfiler(ProfilerConfig()).profile_directory(root, "demo")
+    geology = next(c for c in profile.columns if c.name == "Geology")
+
+    assert geology.is_numeric is False
+
+
+def test_columns_from_the_primary_kind_survive(tmp_path):
+    """Widening the profile must not lose what it already reported."""
+    from labpilot.accessor.profiler.tabular import TabularProfiler
+    from labpilot.config import ProfilerConfig
+
+    root = _partitioned_dataset(
+        tmp_path,
+        kinds={
+            "horizontal_well": {"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]},
+            "typewell": {"GR": [7.0, 8.0], "Geology": ["shale", "sand"], "TVT": [9.0, 1.0]},
+        },
+    )
+
+    profile = TabularProfiler(ProfilerConfig()).profile_directory(root, "demo")
+    names = {c.name for c in profile.columns}
+
+    assert {"MD", "GR", "TVT"} <= names
+
+
+def test_a_single_kind_dataset_is_unchanged(tmp_path):
+    """No second kind, nothing to union — the common case must not shift."""
+    from labpilot.accessor.profiler.tabular import TabularProfiler
+    from labpilot.config import ProfilerConfig
+
+    root = _partitioned_dataset(
+        tmp_path,
+        kinds={"well": {"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]}},
+    )
+
+    profile = TabularProfiler(ProfilerConfig()).profile_directory(root, "demo")
+
+    assert {c.name for c in profile.columns} == {"MD", "GR", "TVT"}
+    assert all(c.is_numeric for c in profile.columns)
+
+
+def test_a_column_in_a_non_primary_kinds_test_files_is_not_train_only(tmp_path):
+    """Reported on PR #117 and reproduced.
+
+    The sample frame spans every kind, but `test_columns` was read from the
+    primary kind's test files alone — so a column present in *another* kind's
+    train **and** test looked train-only. `train_only[-1]` is the target
+    fallback, so a categorical feature could be inferred as the label while the
+    real target was passed over, and codegen would train against the wrong
+    column entirely.
+    """
+    import pandas as pd
+
+    root = tmp_path / "two-kinds"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in range(4):
+        pd.DataFrame({"MD": [1.0, 2.0], "TVT": [3.0, 4.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+        pd.DataFrame({"MD": [1.0, 2.0]}).to_csv(root / "test" / f"e{i}__main.csv", index=False)
+        # `Geology` lives only in this kind, on *both* sides — a feature, not a label.
+        pd.DataFrame({"GR": [5.0, 6.0], "Geology": ["shale", "sand"], "TVT": [7.0, 8.0]}).to_csv(
+            root / "train" / f"e{i}__ref.csv", index=False
+        )
+        pd.DataFrame({"GR": [5.0, 6.0], "Geology": ["shale", "sand"]}).to_csv(
+            root / "test" / f"e{i}__ref.csv", index=False
+        )
+    pd.DataFrame({"id": [0], "TVT": [0.0]}).to_csv(root / "sample_submission.csv", index=False)
+
+    profile = _profiler().profile_directory(root, "demo")
+
+    assert "Geology" not in profile.train_only_columns
+    assert profile.target_column == "TVT"
+
+
+def test_the_target_fallback_is_not_decided_by_union_ordering(tmp_path):
+    """Reported on PR #117 — a regression from that PR's own union fix.
+
+    Widening `sample_df` to every kind changed what "last column" means: the
+    union appends each other kind's novel columns after the primary's, so
+    `train_only[-1]` became whichever secondary kind contributed last. A `main`
+    kind carrying the real target and an `aux` kind carrying an unrelated
+    train-only column inferred the wrong label — silently, with no crash.
+
+    No `sample_submission.csv` here on purpose: with one, the submission-match
+    branch answers first and hides this entirely, which is why the tests added
+    with the union fix missed it.
+    """
+    import pandas as pd
+
+    root = tmp_path / "ordering"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in range(5):
+        pd.DataFrame({"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+        pd.DataFrame({"MD": [1.0, 2.0], "GR": [3.0, 4.0]}).to_csv(
+            root / "test" / f"e{i}__main.csv", index=False
+        )
+    for i in range(3):
+        pd.DataFrame({"GR": [3.0, 4.0], "AuxNote": [7.0, 8.0]}).to_csv(
+            root / "train" / f"a{i}__aux.csv", index=False
+        )
+        pd.DataFrame({"GR": [3.0, 4.0]}).to_csv(root / "test" / f"a{i}__aux.csv", index=False)
+
+    profile = _profiler().profile_directory(root, "demo")
+
+    assert profile.target_column == "TVT"
+    # The union is still what `train_only_columns` reports — both kinds' labels
+    # must be excluded from features, which is what that field is read for.
+    assert set(profile.train_only_columns) == {"TVT", "AuxNote"}
+
+
+def test_the_target_fallback_reads_every_primary_kind_file(tmp_path):
+    """Reported on PR #117: the cross-kind fix read `frames[0]` alone, so
+    schema drift *within* the primary kind reproduced the same bug one layer
+    down — a `QCFlag` column in the first file and the real target only in
+    later ones inferred `QCFlag` as the label."""
+    import pandas as pd
+
+    root = tmp_path / "drift"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    pd.DataFrame({"MD": [1.0, 2.0], "GR": [3.0, 4.0], "QCFlag": [1.0, 0.0]}).to_csv(
+        root / "train" / "e0__main.csv", index=False
+    )
+    for i in (1, 2, 3):
+        pd.DataFrame({"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+    for i in range(4):
+        pd.DataFrame({"MD": [1.0, 2.0], "GR": [3.0, 4.0]}).to_csv(
+            root / "test" / f"e{i}__main.csv", index=False
+        )
+
+    profile = _profiler().profile_directory(root, "demo")
+
+    assert profile.target_column == "TVT"
+
+
+def test_a_quirk_column_in_a_later_file_does_not_win_the_fallback(tmp_path):
+    """Reported on PR #117, the mirror image of the previous round's fix.
+
+    Reading only `frames[0]` missed a target absent from the first file;
+    reading the union in order then let a column appearing only in a *later*
+    file win, because the fallback takes the last. A label is in every
+    partition of its kind and a stray note column is not, so presence
+    everywhere separates them without relying on position at all.
+    """
+    import pandas as pd
+
+    root = tmp_path / "quirk"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in (0, 1):
+        pd.DataFrame({"MD": [1.0, 2.0], "TARGET": [5.0, 6.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+    pd.DataFrame({"MD": [1.0, 2.0], "TARGET": [5.0, 6.0], "ExtraNote": [9.0, 9.0]}).to_csv(
+        root / "train" / "e2__main.csv", index=False
+    )
+    for i in range(3):
+        pd.DataFrame({"MD": [1.0, 2.0]}).to_csv(root / "test" / f"e{i}__main.csv", index=False)
+
+    assert _profiler().profile_directory(root, "demo").target_column == "TARGET"
+
+
+def test_one_file_missing_the_target_does_not_lose_it(tmp_path):
+    """Reported on PR #117. Requiring the label in *every* sampled file meant a
+    single schema quirk dropped it and fell back to the order-dependent union —
+    with `max_files_sample` at 25, some file having a quirk is likely rather
+    than remote. Counting degrades; an intersection fails outright."""
+    import pandas as pd
+
+    root = tmp_path / "quirky"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in range(5):
+        cols = {"MD": [1.0, 2.0], f"Note{i}": [1.0, 2.0]}
+        if i != 4:
+            cols["TVT"] = [5.0, 6.0]
+        pd.DataFrame(cols).to_csv(root / "train" / f"e{i}__main.csv", index=False)
+        pd.DataFrame({"MD": [1.0, 2.0]}).to_csv(root / "test" / f"e{i}__main.csv", index=False)
+
+    assert _profiler().profile_directory(root, "demo").target_column == "TVT"
+
+
+def test_a_genuine_tie_does_not_let_column_order_decide(tmp_path):
+    """Reported on PR #117, the last of five rounds where position stood in for
+    evidence. When two columns are equally supported we do not know which is
+    the label — so the answer is order-independent and the ambiguity is
+    warned, rather than resolved by whichever happens to come last."""
+    import pandas as pd
+
+    def build(order):
+        root = tmp_path / ("-".join(order))
+        (root / "train").mkdir(parents=True)
+        (root / "test").mkdir()
+        for i in range(4):
+            pd.DataFrame({c: [1.0, 2.0] for c in order}).to_csv(
+                root / "train" / f"e{i}__main.csv", index=False
+            )
+            pd.DataFrame({"MD": [1.0, 2.0]}).to_csv(root / "test" / f"e{i}__main.csv", index=False)
+        return _profiler().profile_directory(root, "demo")
+
+    first = build(["MD", "QCFlag", "TVT"])
+    reversed_order = build(["MD", "TVT", "QCFlag"])
+
+    assert first.target_column == reversed_order.target_column
+    assert any("ambiguous" in w for w in first.warnings)

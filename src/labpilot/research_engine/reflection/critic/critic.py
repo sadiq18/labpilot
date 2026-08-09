@@ -87,8 +87,14 @@ class ExperimentCritic:
         )
         belief_effect, hyp_outcome = _map_outcomes(
             strength=strength,
-            cv_delta=_as_float(cv_delta),
-            verdict=str(comparison.get("verdict") or ""),
+            # `decision` and `outcome` are what the comparator actually writes;
+            # `verdict` was the only key read and is written by nothing.
+            verdict=str(
+                comparison.get("outcome")
+                or comparison.get("decision")
+                or comparison.get("verdict")
+                or ""
+            ),
         )
 
         draft = run_or_none(self._root_cause, context)
@@ -197,24 +203,46 @@ def _changes_from(evidence: dict[str, Any], comparison: dict[str, Any]) -> list[
     return changes
 
 
-def _map_outcomes(
-    *,
-    strength: str,
-    cv_delta: float | None,
-    verdict: str,
-) -> tuple[str, str]:
-    if strength == "rejected" or verdict == "regression":
+#: The comparator's own decision, which already knows the metric's direction.
+_MEASURED_OUTCOMES: dict[str, tuple[str, str]] = {
+    "rejected": ("contradicts", "rejected"),
+    "regression": ("contradicts", "rejected"),
+    "worth_keeping": ("supports", "confirmed"),
+    "accepted": ("supports", "confirmed"),
+    "kept": ("supports", "confirmed"),
+    "inconclusive": ("neutral", "inconclusive"),
+    "not_worth_keeping": ("neutral", "inconclusive"),
+}
+
+
+def _map_outcomes(*, strength: str, verdict: str) -> tuple[str, str]:
+    """The measured decision governs; heuristics only fill its absence.
+
+    Two things were wrong here, and together they confirmed a hypothesis whose
+    score got seven times worse. Measured on rogii 2026-08-09: E-234 raised
+    `cv_rmse` from 194 to 1382, `comparison.json` recorded
+    `decision: "rejected"`, and `H-096` was written `confirmed`.
+
+    First, the decision never arrived. This read `comparison["verdict"]`, a key
+    nothing writes — the comparator writes `decision` and `outcome` — so the one
+    verdict derived from measurement was invisible here.
+
+    Second, the fallback then read the sign of `cv_delta` as though larger were
+    always better. For an error metric it is the opposite, and `+1188` was taken
+    for an improvement. Nothing at this layer knows the direction, so it no
+    longer guesses — and `cv_delta` is not a parameter here any more, so nobody
+    can restore a sign-based branch without first deciding where the direction
+    comes from. Without a decision there is no verdict, only `inconclusive`.
+
+    A missing comparison is a reason to withhold judgement, not to invent one:
+    `inconclusive` costs a re-test, while `confirmed` on a regression poisons
+    every ranking that reads it afterwards.
+    """
+    measured = _MEASURED_OUTCOMES.get(verdict.strip().lower())
+    if measured is not None:
+        return measured
+    if strength == "rejected":
         return "contradicts", "rejected"
-    if strength == "strong" or verdict == "worth_keeping":
+    if strength == "strong":
         return "supports", "confirmed"
-    if strength == "weak" or verdict in {"inconclusive", "not_worth_keeping"}:
-        if cv_delta is not None and abs(cv_delta) < 0.002:
-            return "neutral", "inconclusive"
-        if cv_delta is not None and cv_delta < 0:
-            return "contradicts", "rejected"
-        return "neutral", "inconclusive"
-    if cv_delta is not None and cv_delta > 0.005:
-        return "supports", "partial"
-    if cv_delta is not None and cv_delta < -0.005:
-        return "contradicts", "rejected"
     return "neutral", "inconclusive"

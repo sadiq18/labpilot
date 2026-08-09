@@ -6,10 +6,19 @@ structure but not its function"*. These tests exist to keep that from being true
 of this one.
 
 The property: a hypothesis whose change the parent already implements is
-retired **before** aider is spawned, and is therefore never selected again.
+retired, and is therefore never selected again.
+
+**The name check is a suspicion; aider confirms it.** Six review rounds on
+PR #117 found six ways for AST name matching to be wrong in both directions,
+and there will be more, because the question is semantic and the evidence is
+syntactic. What made that expensive was the consequence — a collision retired
+an idea permanently. Now aider runs either way and its own refusal settles it,
+so a false suspicion costs one call and a missed one costs nothing.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
@@ -45,30 +54,76 @@ def _agent(brief: DeltaBrief, runner=None) -> AiderAgent:
         def run(self, ctx):
             return brief
 
-    def _explode(cmd, cwd, timeout):  # pragma: no cover - must not be reached
-        raise AssertionError("aider was spawned for a redundant hypothesis")
+    def _declines(cmd, cwd, timeout):
+        """aider, shown the file, makes no edit — the confirming half."""
 
-    return AiderAgent(_Gateway(), runner=runner or _explode, brief_agent=_Brief())
+        class _Result:
+            stdout = "The code already does this; no SEARCH/REPLACE blocks needed."
+            stderr = ""
+            returncode = 0
+
+        return _Result()
+
+    return AiderAgent(_Gateway(), runner=runner or _declines, brief_agent=_Brief())
 
 
-def test_a_redundant_hypothesis_is_refused_before_aider_runs(tmp_path):
-    """The runner asserts if called, so reaching it fails the test — the saving
-    is the point, not a side effect."""
+def _tree(tmp_path):
+    (tmp_path / "pipeline").mkdir(exist_ok=True)
+    (tmp_path / "pipeline" / "train.py").write_text(_ENSEMBLE, encoding="utf-8")
+    return tmp_path
+
+
+def test_a_redundant_hypothesis_is_retired_when_aider_agrees(tmp_path):
+    """Both halves: the names say it is already there, and the editor — shown
+    the file — declines to change anything."""
     agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb", "DecisionTreeRegressor"]))
 
     with pytest.raises(AiderError) as caught:
-        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), tmp_path)
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
 
     assert caught.value.kind == "hypothesis_redundant"
+
+
+def test_a_false_suspicion_costs_a_call_not_the_hypothesis(tmp_path):
+    """The point of confirming. When the names collide but the editor makes a
+    real edit, the hypothesis proceeds — where before it was retired outright."""
+    edited = _ENSEMBLE + "\n\ndef extra():\n    return 1\n"
+
+    def _edits(cmd, cwd, timeout):
+        (Path(cwd) / "pipeline" / "train.py").write_text(edited, encoding="utf-8")
+
+        class _Result:
+            stdout = "applied"
+            stderr = ""
+            returncode = 0
+
+        return _Result()
+
+    agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb"]), runner=_edits)
+
+    proposal = agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
+
+    assert proposal.files
 
 
 def test_the_refusal_names_the_symbol_that_proves_it(tmp_path):
     agent = _agent(DeltaBrief(added=["lgb"]))
 
     with pytest.raises(AiderError) as caught:
-        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), tmp_path)
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
 
     assert "'lgb'" in str(caught.value)
+
+
+def test_a_plain_no_edit_is_not_a_retirement(tmp_path):
+    """`aider_no_edit` without a suspicion stays `aider_no_edit`. aider declines
+    for reasons other than "already done", and only the two together retire."""
+    agent = _agent(DeltaBrief(added=["CatBoostRegressor"]))
+
+    with pytest.raises(AiderError) as caught:
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
+
+    assert caught.value.kind == "aider_no_edit"
 
 
 def test_redundancy_is_distinct_from_aider_failing(tmp_path):
@@ -79,7 +134,7 @@ def test_redundancy_is_distinct_from_aider_failing(tmp_path):
     agent = _agent(DeltaBrief(added=["lgb"]))
 
     with pytest.raises(AiderError) as caught:
-        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), tmp_path)
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
 
     assert caught.value.kind != "aider_no_edit"
 
@@ -266,5 +321,117 @@ def test_redundancy_reads_the_whole_parent_not_the_clipped_copy(tmp_path):
 
     with pytest.raises(AiderError) as caught:
         agent.propose(_Ctx(prior_train_py=big[:120_000]), tmp_path)
+
+    assert caught.value.kind == "hypothesis_redundant"
+
+
+# --- a retry asks for the repair, not the hypothesis again -------------------
+
+
+def test_the_instruction_leads_with_the_error_on_a_retry():
+    """Two stalls on rogii 2026-08-09 came from here: `retry_reason` reached
+    the whole-file prompt and the delta brief, but never aider's instruction,
+    so a retry re-sent the same hypothesis and the editor declined."""
+    from labpilot.research_engine.execution.delta.aider_agent import _instruction
+
+    text = _instruction(_Ctx(plan_goal="add rolling features", retry_reason="KeyError: 'TVT'"))
+
+    assert "KeyError: 'TVT'" in text
+    assert text.index("repair") < text.index("add rolling features")
+
+
+def test_the_hypothesis_is_still_carried_so_the_fix_preserves_it():
+    """The failure being repaired is usually *in* the change, so a repair with
+    no context can revert the experiment instead of fixing it."""
+    from labpilot.research_engine.execution.delta.aider_agent import _instruction
+
+    text = _instruction(_Ctx(plan_goal="add rolling features", retry_reason="KeyError: 'TVT'"))
+
+    assert "add rolling features" in text
+    assert "Preserve" in text
+
+
+def test_without_a_failure_it_is_the_hypothesis_alone():
+    """The common case must not gain repair language it has no reason to."""
+    from labpilot.research_engine.execution.delta.aider_agent import _instruction
+
+    text = _instruction(_Ctx(plan_goal="add rolling features", prediction="MSE drops"))
+
+    assert "repair" not in text
+    assert "add rolling features" in text
+
+
+def test_a_retry_overrides_the_brief_instruction(tmp_path):
+    """The brief turns a hypothesis into an instruction plus a claim. A retry
+    has neither to offer — the change is already made — so leaving the brief in
+    charge kept re-asking for the technique, and aider kept declining."""
+    seen: list[str] = []
+
+    def _runner(cmd, cwd, timeout):
+        seen.append(" ".join(str(c) for c in cmd))
+        raise RuntimeError("stop here")
+
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text("x = 1\n", encoding="utf-8")
+    agent = _agent(DeltaBrief(instruction="add the MD_x_GR feature"), runner=_runner)
+
+    with pytest.raises(Exception):
+        agent.propose(
+            _Ctx(prior_train_py="x = 1\n", retry_reason="KeyError: 'TVT'", plan_goal="add MD_x_GR"),
+            tmp_path,
+        )
+
+    assert seen, "aider should still be spawned"
+    assert "KeyError" in seen[0]
+
+
+def test_a_repair_carries_the_brief_as_well_as_the_error(tmp_path):
+    """Reported on PR #117: the brief call is paid for and its instruction was
+    discarded on every retry. It rides along now — after the error, so a brief
+    that ignored the retry cannot leave the failure unmentioned."""
+    seen: list[str] = []
+
+    def _runner(cmd, cwd, timeout):
+        seen.append(" ".join(str(c) for c in cmd))
+        raise RuntimeError("stop here")
+
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text(_ENSEMBLE, encoding="utf-8")
+    agent = _agent(DeltaBrief(instruction="add the MD_x_GR feature"), runner=_runner)
+
+    with pytest.raises(Exception):
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE, retry_reason="KeyError: 'TVT'"), tmp_path)
+
+    sent = seen[0]
+    assert "KeyError" in sent
+    assert "MD_x_GR" in sent
+    assert sent.index("KeyError") < sent.index("MD_x_GR")
+
+
+def test_a_repair_is_not_judged_redundant(tmp_path):
+    """Reported on PR #117: `check_redundancy` ran before `retrying` was even
+    computed, so a retry whose parent legitimately contained the earlier
+    attempt's code was retired instead of repaired."""
+    spawned: list[str] = []
+
+    def _runner(cmd, cwd, timeout):
+        spawned.append("spawned")
+        raise RuntimeError("stop here")
+
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text(_ENSEMBLE, encoding="utf-8")
+    agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb"]), runner=_runner)
+
+    with pytest.raises(Exception):
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE, retry_reason="KeyError: 'TVT'"), tmp_path)
+
+    assert spawned == ["spawned"], "a repair must reach aider, not be retired"
+
+
+def test_without_a_retry_reason_redundancy_still_retires(tmp_path):
+    agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb"]))
+
+    with pytest.raises(AiderError) as caught:
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
 
     assert caught.value.kind == "hypothesis_redundant"
