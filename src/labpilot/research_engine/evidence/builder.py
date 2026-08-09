@@ -93,9 +93,7 @@ def _float(metrics: dict[str, Any], *keys: str) -> float | None:
     return None
 
 
-def _stability(
-    parent_std: float | None, treatment_std: float | None
-) -> StabilityOutcome:
+def _stability(parent_std: float | None, treatment_std: float | None) -> StabilityOutcome:
     if parent_std is None or treatment_std is None:
         return StabilityOutcome.UNKNOWN
     delta = treatment_std - parent_std
@@ -263,9 +261,7 @@ def _reusable_for(competition: str, plan_meta: dict[str, Any]) -> list[str]:
     return out[:12]
 
 
-def _resolve_direction(
-    knowledge_dir: Path, competition: str, workspace_root: Path | None
-) -> bool:
+def _resolve_direction(knowledge_dir: Path, competition: str, workspace_root: Path | None) -> bool:
     """Metric direction for this competition, or raise saying how to fix it."""
     paths = ResearchPaths(Path(knowledge_dir), competition)
     resolved = resolve_maximize(
@@ -513,9 +509,7 @@ def write_comparison_files(workspace_root: Path, card: EvidenceCard) -> None:
         snapshot = {
             "_snapshot": {
                 "authoritative": False,
-                "source_of_record": (
-                    f"EvidenceCardStore — research/evidence/{card.id}.json"
-                ),
+                "source_of_record": (f"EvidenceCardStore — research/evidence/{card.id}.json"),
                 "generated_at": datetime.now(UTC).isoformat(),
                 "warning": (
                     "Written once when this card was built and never updated. "
@@ -550,7 +544,6 @@ def metrics_as_experiment(
         progress="done",
         description=execution_id,
         metrics=numeric,
-        runtime_seconds=runtime_seconds
-        or (float(metrics["train_time_s"]) if isinstance(metrics.get("train_time_s"), (int, float)) else None),
+        runtime_seconds=runtime_seconds or _float(metrics, "train_time_s"),
         created_at=datetime.now(UTC),
     )

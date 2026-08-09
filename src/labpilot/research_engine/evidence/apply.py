@@ -173,9 +173,7 @@ def _belief_status(confidence: float, evidence: ClaimEvidenceKind) -> str:
 
 
 def _slug(name: str) -> str:
-    return (
-        name.strip().lower().replace(" ", "-").replace("/", "-").replace("+", "-")[:64]
-    )
+    return name.strip().lower().replace(" ", "-").replace("/", "-").replace("+", "-")[:64]
 
 
 def _tech_from_claim(claim: str) -> str:
