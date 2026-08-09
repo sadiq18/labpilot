@@ -22,6 +22,20 @@ Doing it with a model instead would be slower, cost a call, and put a plausible
 answer where a certain one is available. The LLM critic belongs on the question
 mechanism *cannot* answer — is this promising? — not this one.
 
+### The verdict here is a suspicion, and the editor confirms it
+
+Nothing retires a hypothesis on this answer alone. `AiderAgent` runs aider even
+when this says "already implemented", and retires only if aider — shown the
+actual file — also declines to edit.
+
+That is deliberate, and it is the fix for what this check cost. Six review
+rounds on PR #117 found six ways for name matching to be wrong in *both*
+directions, because the question is semantic ("does the parent already do
+this?") and the evidence is syntactic. The analysis will always be approximate.
+What made the approximation expensive was the consequence: a name collision
+permanently retired an idea, so being wrong cost research. With confirmation,
+a false suspicion costs one aider call and a missed one costs nothing.
+
 ### Why `added` and not `kept` or `combined`
 
 `added` is the only list that means "this must not be there yet". `kept` names

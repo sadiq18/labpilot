@@ -9,7 +9,11 @@ the parent count as "this symbol is here?" — and each round moved a dial:
   satisfied a claim about rolling windows;
 * a defined function     → same flat set, same collision;
 * top-level only         → a callback defined *inside* the function that uses
-  it stopped counting, which is the idiom round one was about.
+  it stopped counting, which is the idiom round one was about;
+* scope resolution, v1    → comprehensions shared their enclosing scope, so a
+  loop variable named after a top-level function satisfied a claim about it,
+  and a decorator on a nested `def` was read twice — once in the enclosing
+  scope and once inside the function's own.
 
 There is no correct setting of that dial, because the question is about scope
 and a flat set of names cannot express one. `_referenced_definitions` resolves
@@ -99,6 +103,56 @@ _CASES = [
         "a name that appears nowhere",
         "def main():\n    return 1\n",
         "catboost",
+        False,
+    ),
+    (
+        "comprehension target shadows a top-level def",
+        "def rolling():\n    return 1\n\n\n"
+        "def main():\n    return [rolling for rolling in range(3)]\n",
+        "rolling",
+        False,
+    ),
+    (
+        "a comprehension can still reference the outer name",
+        "def rolling(x):\n    return x\n\n\n"
+        "def main():\n    return [rolling(i) for i in range(3)]\n",
+        "rolling",
+        True,
+    ),
+    (
+        "a decorator on a nested def resolves in the enclosing scope",
+        "def cache(fn):\n    return fn\n\n\n"
+        "def main():\n    @cache\n    def inner():\n        return 1\n    return inner()\n",
+        "cache",
+        True,
+    ),
+    (
+        "a decorator does not resolve against the decorated body's locals",
+        "def main():\n    def inner():\n        cache = 1\n        return cache\n"
+        "    return inner()\n",
+        "cache",
+        False,
+    ),
+    (
+        "a default value resolves in the enclosing scope",
+        "def window():\n    return 7\n\n\n"
+        "def main():\n    def inner(n=window):\n        return n\n    return inner()\n",
+        "window",
+        True,
+    ),
+    (
+        "a class base resolves in the enclosing scope",
+        "class Base:\n    pass\n\n\n"
+        "def main():\n    class Child(Base):\n        pass\n    return Child()\n",
+        "Base",
+        True,
+    ),
+    (
+        "a method body does not satisfy a claim about a top-level name",
+        "def blend():\n    return 1\n\n\n"
+        "class Model:\n    def fit(self):\n        blend = 2\n        return blend\n\n\n"
+        "def main():\n    return Model().fit()\n",
+        "blend",
         False,
     ),
 ]

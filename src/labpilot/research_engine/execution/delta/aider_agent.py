@@ -48,6 +48,13 @@ from labpilot.research_engine.execution.schemas.delta_brief import DeltaBrief
 
 logger = logging.getLogger(__name__)
 
+
+def _suspected_redundant(parent_source: str, added: list[str]) -> str | None:
+    """The redundancy reason when the names suggest one, else None."""
+    verdict = check_redundancy(parent_source, added)
+    return verdict.reason if verdict.redundant else None
+
+
 #: Copied into the scratch tree. Editable source only.
 #:
 #: `data/` is excluded deliberately: it is the bulk of a competition tree, and
@@ -232,10 +239,28 @@ class AiderAgent:
         # Not left to the brief's "claim nothing new" instruction either: that
         # is a request to a model, and a model that ignores it retires the
         # hypothesis. The skip is here, where it cannot be declined.
-        if not retrying:
-            verdict = check_redundancy(_parent_source(parent, ctx), brief.added)
-            if verdict.redundant:
-                raise AiderError(verdict.reason, kind="hypothesis_redundant")
+        # Redundancy is a *suspicion*, not a verdict, and the editor confirms
+        # it. `check_redundancy` reads names out of an AST, which is an
+        # approximation of "does the parent already do this" — six review
+        # rounds on PR #117 found six ways for it to be wrong in both
+        # directions, and it will not be the last, because the question is
+        # semantic and the evidence is syntactic.
+        #
+        # What made that expensive was the *consequence*: a name collision
+        # permanently retired a hypothesis, so being wrong cost an idea. Now
+        # aider runs either way and its own refusal is what settles it — the
+        # model reading the actual code, which is better evidence than any name
+        # match. A false suspicion costs one call; a missed one costs nothing,
+        # since aider edits and the experiment proceeds.
+        #
+        # Not asked at all on a repair: the parent legitimately contains the
+        # earlier attempt's code, so "already implemented" is true and beside
+        # the point.
+        suspected = (
+            None
+            if retrying
+            else _suspected_redundant(_parent_source(parent, ctx), brief.added)
+        )
         # The brief's own reading rides along on a repair rather than being
         # thrown away. `delta_brief_system.md` now teaches it to answer a
         # failure, and it has the parent source that `_instruction` does not —
@@ -272,6 +297,16 @@ class AiderAgent:
                 # declines, and `aider_no_edit` without that explanation is a
                 # count nobody can act on. The tail, since the refusal comes
                 # after the banner.
+                if suspected is not None:
+                    # Both halves agree: the names say the change is already
+                    # there and the editor, shown the file, declined to make
+                    # one. That is what retires a hypothesis — never the name
+                    # match alone.
+                    raise AiderError(
+                        f"{suspected} aider, shown the file, made no edit either: "
+                        f"{transcript[-500:]}",
+                        kind="hypothesis_redundant",
+                    )
                 raise AiderError(
                     f"aider made no edit. Its last words: {transcript[-800:]}",
                     kind="aider_no_edit",

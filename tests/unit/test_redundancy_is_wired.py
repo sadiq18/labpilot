@@ -6,10 +6,19 @@ structure but not its function"*. These tests exist to keep that from being true
 of this one.
 
 The property: a hypothesis whose change the parent already implements is
-retired **before** aider is spawned, and is therefore never selected again.
+retired, and is therefore never selected again.
+
+**The name check is a suspicion; aider confirms it.** Six review rounds on
+PR #117 found six ways for AST name matching to be wrong in both directions,
+and there will be more, because the question is semantic and the evidence is
+syntactic. What made that expensive was the consequence — a collision retired
+an idea permanently. Now aider runs either way and its own refusal settles it,
+so a false suspicion costs one call and a missed one costs nothing.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
@@ -45,30 +54,76 @@ def _agent(brief: DeltaBrief, runner=None) -> AiderAgent:
         def run(self, ctx):
             return brief
 
-    def _explode(cmd, cwd, timeout):  # pragma: no cover - must not be reached
-        raise AssertionError("aider was spawned for a redundant hypothesis")
+    def _declines(cmd, cwd, timeout):
+        """aider, shown the file, makes no edit — the confirming half."""
 
-    return AiderAgent(_Gateway(), runner=runner or _explode, brief_agent=_Brief())
+        class _Result:
+            stdout = "The code already does this; no SEARCH/REPLACE blocks needed."
+            stderr = ""
+            returncode = 0
+
+        return _Result()
+
+    return AiderAgent(_Gateway(), runner=runner or _declines, brief_agent=_Brief())
 
 
-def test_a_redundant_hypothesis_is_refused_before_aider_runs(tmp_path):
-    """The runner asserts if called, so reaching it fails the test — the saving
-    is the point, not a side effect."""
+def _tree(tmp_path):
+    (tmp_path / "pipeline").mkdir(exist_ok=True)
+    (tmp_path / "pipeline" / "train.py").write_text(_ENSEMBLE, encoding="utf-8")
+    return tmp_path
+
+
+def test_a_redundant_hypothesis_is_retired_when_aider_agrees(tmp_path):
+    """Both halves: the names say it is already there, and the editor — shown
+    the file — declines to change anything."""
     agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb", "DecisionTreeRegressor"]))
 
     with pytest.raises(AiderError) as caught:
-        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), tmp_path)
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
 
     assert caught.value.kind == "hypothesis_redundant"
+
+
+def test_a_false_suspicion_costs_a_call_not_the_hypothesis(tmp_path):
+    """The point of confirming. When the names collide but the editor makes a
+    real edit, the hypothesis proceeds — where before it was retired outright."""
+    edited = _ENSEMBLE + "\n\ndef extra():\n    return 1\n"
+
+    def _edits(cmd, cwd, timeout):
+        (Path(cwd) / "pipeline" / "train.py").write_text(edited, encoding="utf-8")
+
+        class _Result:
+            stdout = "applied"
+            stderr = ""
+            returncode = 0
+
+        return _Result()
+
+    agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb"]), runner=_edits)
+
+    proposal = agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
+
+    assert proposal.files
 
 
 def test_the_refusal_names_the_symbol_that_proves_it(tmp_path):
     agent = _agent(DeltaBrief(added=["lgb"]))
 
     with pytest.raises(AiderError) as caught:
-        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), tmp_path)
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
 
     assert "'lgb'" in str(caught.value)
+
+
+def test_a_plain_no_edit_is_not_a_retirement(tmp_path):
+    """`aider_no_edit` without a suspicion stays `aider_no_edit`. aider declines
+    for reasons other than "already done", and only the two together retire."""
+    agent = _agent(DeltaBrief(added=["CatBoostRegressor"]))
+
+    with pytest.raises(AiderError) as caught:
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
+
+    assert caught.value.kind == "aider_no_edit"
 
 
 def test_redundancy_is_distinct_from_aider_failing(tmp_path):
@@ -79,7 +134,7 @@ def test_redundancy_is_distinct_from_aider_failing(tmp_path):
     agent = _agent(DeltaBrief(added=["lgb"]))
 
     with pytest.raises(AiderError) as caught:
-        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), tmp_path)
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
 
     assert caught.value.kind != "aider_no_edit"
 
@@ -377,6 +432,6 @@ def test_without_a_retry_reason_redundancy_still_retires(tmp_path):
     agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb"]))
 
     with pytest.raises(AiderError) as caught:
-        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), tmp_path)
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
 
     assert caught.value.kind == "hypothesis_redundant"

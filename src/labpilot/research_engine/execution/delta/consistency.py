@@ -144,37 +144,130 @@ def _referenced_definitions(tree: ast.Module) -> set[str]:
     """
     found: set[str] = set()
 
-    def visit(node: ast.AST, defined_here: set[str], visible: frozenset[str]) -> None:
-        # Names a reference in this scope could resolve to: whatever encloses
-        # it, plus what this scope itself defines.
-        in_scope = visible | defined_here
+    def definitions_in(body: list[ast.stmt]) -> set[str]:
+        return {
+            node.name
+            for node in body
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+        }
+
+    def visit(node: ast.AST, visible: frozenset[str]) -> None:
+        """Walk one scope. `visible` already includes what this scope defines."""
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
-                if child.id in in_scope:
+            if isinstance(child, ast.Name):
+                if isinstance(child.ctx, ast.Load) and child.id in visible:
                     found.add(child.id)
                 continue
-            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-                # Decorators and defaults are evaluated in the *enclosing*
-                # scope, not the new one.
-                for extra in (*child.decorator_list, *getattr(child, "bases", [])):
-                    outer = ast.Module(body=[ast.Expr(value=extra)], type_ignores=[])
-                    visit(outer, set(), in_scope)
-                inner = {
-                    grand.name
-                    for grand in child.body
-                    if isinstance(grand, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
-                }
-                visit(child, inner, in_scope)
-                continue
-            visit(child, defined_here, visible)
 
-    top = {
-        node.name
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
-    }
-    visit(tree, top, frozenset())
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                # Decorators, base classes and default values are evaluated
+                # where the definition *sits*, not inside the scope it opens —
+                # so they are visited here and the new scope's own body is
+                # visited separately. Descending into `child` wholesale visited
+                # them a second time with the inner scope merged in, and never
+                # visited defaults in the right one at all. Reported on PR #117.
+                enclosing = [*child.decorator_list, *getattr(child, "bases", [])]
+                enclosing.extend(_default_values(child))
+                for expression in enclosing:
+                    visit(ast.Expression(body=expression), visible)
+                visit_scope(child.body, visible, node=child)
+                continue
+
+            if isinstance(child, ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp):
+                # A comprehension has its own scope in Python 3 — unlike a
+                # `for` loop, whose variable leaks — so its targets shadow
+                # anything of the same name outside it. Reported on PR #117: a
+                # never-called `def x()` was reported present because an
+                # unrelated `[x for x in range(3)]` bound the same name.
+                visit(child, visible - _comprehension_targets(child))
+                continue
+
+            visit(child, visible)
+
+    def visit_scope(body: list[ast.stmt], visible: frozenset[str], *, node=None) -> None:
+        # A binding shadows the enclosing scope for the *whole* scope, not from
+        # the assignment onwards: `blend = 2` anywhere in a function makes every
+        # `blend` in it local, and a top-level `def blend` is then unreachable
+        # from inside. That is one rule, and the comprehension case above is the
+        # same rule — which is why neither is a special case for a name the
+        # checks happen to care about.
+        shadowed = _local_bindings(body) | _parameter_names(node)
+        inner = (visible - shadowed) | definitions_in(body)
+        for statement in body:
+            visit(ast.Module(body=[statement], type_ignores=[]), inner)
+
+    visit_scope(tree.body, frozenset())
     return found
+
+
+def _comprehension_targets(node: ast.expr) -> set[str]:
+    """Names a comprehension binds in its own scope."""
+    return {
+        name.id
+        for generator in node.generators
+        for name in ast.walk(generator.target)
+        if isinstance(name, ast.Name)
+    }
+
+
+def _parameter_names(node: ast.AST | None) -> set[str]:
+    args = getattr(node, "args", None)
+    if not isinstance(args, ast.arguments):
+        return set()
+    every = (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg)
+    return {arg.arg for arg in every if arg is not None}
+
+
+def _local_bindings(body: list[ast.stmt]) -> set[str]:
+    """Names this scope binds, ignoring the scopes nested inside it.
+
+    Nested functions, classes and comprehensions open their own scopes, so what
+    they bind is theirs and not a shadow here. `global`/`nonlocal` do the
+    reverse — they declare that an assignment binds elsewhere, so the name is
+    not shadowed locally.
+    """
+    bound: set[str] = set()
+    declared_elsewhere: set[str] = set()
+
+    def collect(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(
+                child,
+                ast.FunctionDef
+                | ast.AsyncFunctionDef
+                | ast.ClassDef
+                | ast.ListComp
+                | ast.SetComp
+                | ast.DictComp
+                | ast.GeneratorExp,
+            ):
+                continue
+            if isinstance(child, ast.Global | ast.Nonlocal):
+                declared_elsewhere.update(child.names)
+                continue
+            if isinstance(child, ast.Import | ast.ImportFrom):
+                bound.update(
+                    alias.asname or alias.name.split(".")[0] for alias in child.names
+                )
+                continue
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                bound.add(child.id)
+            elif isinstance(child, ast.alias | ast.excepthandler) and getattr(child, "name", None):
+                if isinstance(child, ast.excepthandler):
+                    bound.add(child.name)
+            collect(child)
+
+    for statement in body:
+        collect(ast.Module(body=[statement], type_ignores=[]))
+    return bound - declared_elsewhere
+
+
+def _default_values(node: ast.AST) -> list[ast.expr]:
+    """A function's default argument expressions, if it has any."""
+    args = getattr(node, "args", None)
+    if not isinstance(args, ast.arguments):
+        return []
+    return [d for d in (*args.defaults, *args.kw_defaults) if d is not None]
 
 
 def present_names(tree: ast.Module) -> set[str]:
