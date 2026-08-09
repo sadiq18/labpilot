@@ -26,14 +26,17 @@ declare no input columns, so the check is not expressible at this level. It was
 enforced one level down, in the Jinja pack: `tabular_regression_partitioned`
 skipped ``column in set(EXCLUDE_FEATURES)`` when deriving features, which is
 what kept ``TVT``/``ANCC`` out on rogii. That pack is deleted, so the only
-thing standing between a hypothesis and a leakage column is a bullet in
+thing standing between a hypothesis and a leakage column was a bullet in
 ``code_engineer_system.md`` — an instruction to a model, with no check behind
-it. Reported on PR #118, and left open rather than papered over: the honest
-replacement is a runtime assertion over the columns the generated code
-actually trains on, which is M19 §5's unbuilt fifth check
-(``docs/research-os/autonomy-roadmap/14-experiments-as-deltas.md``). Until it
-exists this docstring says so, because the previous version described the
-deleted mechanism as though it were still there.
+it. Reported on PR #118.
+
+**Closed on PR #119.** ``consistency.check_leakage_discipline`` reads the same
+``exclude_features`` this module cannot act on and asks it of the *code*: a
+file that selects an excluded column outright, or that derives features from
+the frame while excluding nothing, is flagged on the evidence card. Detection
+rather than prohibition, per §8 — but no longer nothing. F7 still is not
+expressible *here*, for the reason above, and this docstring says where it
+lives instead.
 
 An earlier version of this file intersected exclude_features with *recipe
 names*, which could never fire on a real column list — a guard that looked

@@ -175,7 +175,7 @@ def test_a_file_that_never_mentions_the_exclusions_is_flagged():
     flags = check_leakage_discipline(_tree(leaky), _ROGII)
 
     assert flags
-    assert "leaderboard" in flags[0]
+    assert "exclude_features" in flags[0]
 
 
 def test_naming_the_columns_satisfies_the_check():
@@ -268,17 +268,285 @@ def test_a_missing_or_malformed_plan_yields_empty_signals(choice):
     assert ValidationSignals.from_baseline_choice(choice) == ValidationSignals()
 
 
-def test_the_real_rogii_workspace_flags_nothing_it_should_not():
-    """The calibration this check was tuned against, kept as a test so a change
-    to the matching rule has to face the file it was measured on."""
-    workspace = Path("/Users/sadik/workspace/rogii-wellbore-geology-prediction")
-    choice = workspace / "baseline_choice.json"
-    train = workspace / "pipeline" / "train.py"
-    if not (choice.is_file() and train.is_file()):
-        pytest.skip("rogii workspace not present")
+def test_the_shape_this_was_calibrated_on():
+    """The file the matching rule was measured against, kept as a fixture so a
+    change to that rule has to face it.
 
-    signals = ValidationSignals.from_baseline_choice(json.loads(choice.read_text()))
-    tree = _tree(train.read_text())
+    A hardcoded `/Users/sadik/workspace/…` path did this first, which meant it
+    ran on one machine and silently skipped on CI and on every other checkout —
+    a calibration nobody else could break. Reported on PR #119. The fixture is
+    rogii's real structure: seven top-level functions, the split named after the
+    scheme, a `main` that delegates to it and records the scheme's name in its
+    metrics, and feature code that names the excluded columns to drop them.
+
+    Stored as `.py.txt` so the repo's own linters do not try to hold generated
+    competition code to the standards of hand-written source. It is read, not
+    imported.
+    """
+    signals = ValidationSignals.from_baseline_choice(
+        json.loads((Path(__file__).parent / "fixtures" / "rogii_baseline_choice.json").read_text())
+    )
+    tree = _tree((Path(__file__).parent / "fixtures" / "rogii_train.py.txt").read_text())
 
     assert validation_region(tree, signals) == {"partition_suffix_holdout_split"}
     assert check_leakage_discipline(tree, signals) == []
+
+
+# --- PR #119 round 2 ---------------------------------------------------------
+
+_KFOLD = ValidationSignals(scheme="kfold", exclude_features=("Geology", "ANCC", "BUDA"))
+
+
+@pytest.mark.parametrize(
+    ("label", "source"),
+    [
+        ("a fold sanity check", "def sanity_check_folds(df):\n    return len(df)\n"),
+        ("an n_kfolds parameter", "def report(n_kfolds):\n    return n_kfolds\n"),
+        (
+            "a benchmark_folds local",
+            "def report(df):\n    benchmark_folds = 3\n    return benchmark_folds\n",
+        ),
+    ],
+)
+def test_the_scheme_matches_whole_words_not_substrings(label, source):
+    """Reported on PR #119, against the *default* scheme rather than a contrived
+    one: `kfold` is a substring of `sanity_check_folds` — "che**ck fold**s" — so
+    a diagnostic that counts pre-existing folds joined the validation region."""
+    assert validation_region(_tree(source), _KFOLD) == set(), label
+
+
+def test_a_camel_case_splitter_still_matches():
+    """The carve-out must not cost the behaviour it guards: `group_kfold` in a
+    config is `GroupKFold` in code."""
+    source = "def split(df):\n    return GroupKFold(n_splits=5).split(df)\n"
+
+    assert validation_region(_tree(source), ValidationSignals(scheme="group_kfold")) == {"split"}
+
+
+def test_a_wrapper_with_logic_of_its_own_is_in_the_region():
+    """Reported on PR #119: exempting *every* caller from the region — not just
+    the entry point — hid a wrapper that reseeds and reshuffles before
+    delegating, which changes exactly which rows land in the holdout."""
+    source = (
+        "def partition_suffix_holdout_split(df):\n    return df.iloc[:5], df.iloc[5:]\n\n\n"
+        "def prepare_and_split(df, seed=42):\n"
+        "    df = df.sample(frac=1.0, random_state=seed)\n"
+        "    return partition_suffix_holdout_split(df)\n\n\n"
+        "def main():\n    return prepare_and_split(None)\n"
+        '\n\nif __name__ == "__main__":\n    main()\n'
+    )
+
+    region = validation_region(_tree(source), _ROGII)
+
+    assert region == {"partition_suffix_holdout_split", "prepare_and_split"}
+    assert "main" not in region
+
+
+# -- the leakage check must read direction, not presence ----------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "source"),
+    [
+        ("an excluded column selected outright", 'def b(df):\n    return df[["Geology", "GR"]]\n'),
+        (
+            "one excluded, another re-added",
+            "def b(df):\n"
+            '    cols = [c for c in df.columns if c != "Geology"]\n'
+            '    return df[cols + ["ANCC"]]\n',
+        ),
+        (
+            "only one of three excluded",
+            'def b(df):\n    return df[[c for c in df.columns if c != "Geology"]]\n',
+        ),
+        (
+            "select_dtypes takes everything",
+            'def b(df):\n    return df.select_dtypes(include="number")\n',
+        ),
+        (
+            "keys() is columns by another name",
+            "def b(df):\n    return df[[c for c in df.keys()]]\n",
+        ),
+    ],
+)
+def test_leaking_shapes_are_flagged(label, source):
+    """Reported on PR #119, five ways. The check asked whether the file
+    *mentioned* an excluded column, which read explicit inclusion as evidence of
+    exclusion — the exact leak class it exists to catch, scored as clean."""
+    assert check_leakage_discipline(_tree(source), _KFOLD), label
+
+
+@pytest.mark.parametrize(
+    ("label", "source"),
+    [
+        (
+            "names every excluded column",
+            "def b(df):\n"
+            '    ex = {"Geology", "ANCC", "BUDA"}\n'
+            "    return df[[c for c in df.columns if c not in ex]]\n",
+        ),
+        (
+            "reads the key from config",
+            "def b(df, choice):\n"
+            '    ex = set(choice["validation"]["exclude_features"])\n'
+            "    return df[[c for c in df.columns if c not in ex]]\n",
+        ),
+        ("an explicit allowlist", 'def b(df):\n    return df[["GR", "MD"]]\n'),
+    ],
+)
+def test_correct_shapes_are_not_flagged(label, source):
+    assert check_leakage_discipline(_tree(source), _KFOLD) == [], label
+
+
+def test_writing_a_column_is_not_selecting_it_as_a_feature():
+    """`df["Geology"] = …` creates a column; it does not choose one as a
+    feature, and Store context is how the difference is read."""
+    source = (
+        "def b(df):\n"
+        '    df["Geology"] = 0\n'
+        '    ex = {"Geology", "ANCC", "BUDA"}\n'
+        "    return df[[c for c in df.columns if c not in ex]]\n"
+    )
+
+    assert check_leakage_discipline(_tree(source), _KFOLD) == []
+
+
+# -- tolerating anything ------------------------------------------------------
+
+
+@pytest.mark.parametrize("choice", [["a"], "x", 5, 0.5, True])
+def test_a_non_dict_baseline_choice_does_not_raise(choice):
+    """Reported on PR #119: `(choice or {}).get(...)` assumed a dict for
+    anything truthy, so a top-level list raised `AttributeError` past a caller
+    catching `(ValueError, TypeError)` and took the whole write with it."""
+    assert ValidationSignals.from_baseline_choice(choice) == ValidationSignals()
+
+
+@pytest.mark.parametrize("scheme", [True, 5, 0.5, ["kfold"], {"a": 1}])
+def test_a_non_string_scheme_yields_no_region(scheme):
+    """`str(True)` is `"True"`, which matched `is_true_positive_rate`. A
+    malformed value should flag nothing, not match by luck."""
+    signals = ValidationSignals.from_baseline_choice({"validation": {"scheme": scheme}})
+
+    assert signals.scheme == ""
+
+
+def test_a_non_utf8_baseline_choice_does_not_break_the_write(tmp_path):
+    """`UnicodeDecodeError` is a `ValueError`, not an `OSError`, so guarding the
+    read with `except OSError` let it escape. Reported on PR #119."""
+    from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
+        _validation_signals,
+    )
+
+    (tmp_path / "baseline_choice.json").write_bytes(b"\xff\xfe not utf-8 at all")
+
+    assert _validation_signals(tmp_path) == ValidationSignals()
+
+
+def test_a_malformed_baseline_choice_does_not_break_the_write(tmp_path):
+    from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
+        _validation_signals,
+    )
+
+    (tmp_path / "baseline_choice.json").write_text("[1, 2, 3]", encoding="utf-8")
+
+    assert _validation_signals(tmp_path) == ValidationSignals()
+
+
+# -- the flags have to reach a reader -----------------------------------------
+
+
+def test_flags_travel_from_task_evidence_onto_the_evidence_card(tmp_path):
+    """Reported on PR #119, and it made every flag in the system decorative.
+
+    `check_confinement` has written `delta_flags` into the write-code task's own
+    `TaskEvidence` since PR #112, and `build_evidence_card` builds from
+    `metrics.json` and plan metadata — so nothing, human or system, ever read
+    one. A delta that silently moved the validation split was flagged in a file
+    no part of the pipeline opens, and then confirmed off the gain that move
+    produced. The whole argument for flagging rather than refusing is that a
+    reader can discount the result; no reader was being shown anything.
+    """
+    from labpilot.research_engine.evidence.builder import delta_flags_for
+    from labpilot.research_engine.execution.evidence import evidence_dir
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+
+    paths = ResearchPaths(tmp_path, "demo").ensure()
+    directory = evidence_dir(paths, "E-001")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "T-write.json").write_text(
+        json.dumps({"metadata": {"delta_flags": ["the delta changed the split"]}}),
+        encoding="utf-8",
+    )
+
+    assert delta_flags_for(tmp_path, "demo", "E-001") == ["the delta changed the split"]
+
+
+def test_an_execution_with_no_flags_reports_none(tmp_path):
+    from labpilot.research_engine.evidence.builder import delta_flags_for
+
+    assert delta_flags_for(tmp_path, "demo", "E-nothing") == []
+
+
+def test_an_unreadable_evidence_file_does_not_cost_the_card(tmp_path):
+    """One corrupt file must not take the other flags — or the card — with it."""
+    from labpilot.research_engine.evidence.builder import delta_flags_for
+    from labpilot.research_engine.execution.evidence import evidence_dir
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+
+    paths = ResearchPaths(tmp_path, "demo").ensure()
+    directory = evidence_dir(paths, "E-002")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "T-bad.json").write_text("{not json", encoding="utf-8")
+    (directory / "T-good.json").write_text(
+        json.dumps({"metadata": {"delta_flags": ["kept"]}}), encoding="utf-8"
+    )
+
+    assert delta_flags_for(tmp_path, "demo", "E-002") == ["kept"]
+
+
+def test_the_card_carries_the_flags_and_says_so_in_its_reason():
+    """Stored *and* surfaced: metadata is not where a verdict is read, and a
+    confirmed hypothesis is where a validation-region flag matters most."""
+    import inspect
+
+    from labpilot.research_engine.evidence import builder
+
+    source = inspect.getsource(builder.build_evidence_card)
+
+    assert "delta_flags_for(" in source
+    assert 'metadata={"delta_flags": flags}' in source
+
+
+def test_a_baseline_is_not_a_delta_landing_in_the_region():
+    """Raised on PR #119 as the region check being inert on a first-ever write.
+
+    It is inert there on purpose: writing the validation split is what a
+    baseline *is*, and flagging every baseline for defining one would flag every
+    baseline. The question this check asks — did a change land somewhere it did
+    not claim to go — has no meaning without a parent.
+    """
+    baseline = (
+        "def partition_suffix_holdout_split(df):\n    return df.iloc[:5], df.iloc[5:]\n\n\n"
+        "def main():\n    return partition_suffix_holdout_split(None)\n"
+        '\n\nif __name__ == "__main__":\n    main()\n'
+    )
+
+    report = check_delta_consistency("", baseline, validation=_ROGII)
+
+    assert not [flag for flag in report.flags if "validation plan" in flag]
+
+
+def test_leakage_is_still_checked_on_a_first_ever_write():
+    """What *does* need saying about a baseline: whether it trains on columns
+    the test set will not carry. That needs no parent, so it runs on every
+    write."""
+    leaky = (
+        'def build(df):\n    return df[["Geology", "GR"]]\n\n\n'
+        "def main():\n    return build(None)\n"
+        '\n\nif __name__ == "__main__":\n    main()\n'
+    )
+
+    report = check_delta_consistency("", leaky, validation=_ROGII)
+
+    assert any("Geology" in flag for flag in report.flags)

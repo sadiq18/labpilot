@@ -34,6 +34,7 @@ from __future__ import annotations
 import ast
 import copy
 import logging
+import re
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -98,21 +99,71 @@ class ValidationSignals:
         right answer, because a competition whose validation plan was never
         derived has no declared region for a delta to land in.
         """
-        plan = (choice or {}).get("validation")
+        if not isinstance(choice, dict):
+            # `(choice or {}).get(...)` assumed a dict for anything truthy, so a
+            # `baseline_choice.json` holding a top-level list — or a string, or a
+            # number — raised `AttributeError` past a caller catching
+            # `(ValueError, TypeError)` and took the whole write with it.
+            # Reported on PR #119, against a docstring promising to tolerate
+            # anything.
+            return cls()
+        plan = choice.get("validation")
         if not isinstance(plan, dict):
             return cls()
+        scheme = plan.get("scheme")
         excluded = plan.get("exclude_features")
         return cls(
-            scheme=str(plan.get("scheme") or ""),
+            # A `str()` coercion turned `true` into `"True"` and `5` into `"5"`,
+            # each of which then matched real function names by coincidence —
+            # `is_true_positive_rate` for the first. A malformed value should
+            # yield an empty region, which flags nothing, not a lucky substring.
+            # Reported on PR #119.
+            scheme=scheme if isinstance(scheme, str) else "",
             exclude_features=tuple(
-                str(column) for column in (excluded if isinstance(excluded, list) else [])
+                column
+                for column in (excluded if isinstance(excluded, list) else [])
+                if isinstance(column, str) and column
             ),
         )
 
 
-def _folded(name: str) -> str:
-    """`GroupKFold` and `group_kfold` are the same word for matching purposes."""
-    return name.replace("_", "").replace("-", "").lower()
+def _word_parts(name: str) -> list[str]:
+    """`GroupKFold` and `group_kfold` both split to `["group", "k", "fold"]`.
+
+    Underscores and camel-case humps are the same boundary written two ways —
+    a scheme is spelled one way in a config and another in code, and that
+    difference is spelling, not meaning.
+    """
+    return [part.lower() for part in re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z]*|[a-z]+|\d+", name)]
+
+
+def _matches_scheme(name: str, scheme_parts: list[str]) -> bool:
+    """Does `name` contain the scheme as a run of whole words?
+
+    Not a substring test, which was the first version and was wrong on the
+    default scheme. `kfold` is a substring of `sanity_check_folds` — "che**ck
+    fold**s" — so a diagnostic that counts pre-existing folds joined the
+    validation region, and so did anything with an `n_kfolds` parameter or a
+    `benchmark_folds` local. Reported on PR #119.
+
+    Word runs instead: `partition_suffix_holdout_split` contains the run
+    `partition|suffix|holdout`; `sanity_check_folds` contains no run equal to
+    `kfold`, and `n_kfolds` splits to `n|kfolds`, whose only run is `kfolds`.
+    `GroupKFold` splits to `group|k|fold` and matches `kfold` on `k|fold`.
+    """
+    if not scheme_parts:
+        return False
+    parts = _word_parts(name)
+    joined = "".join(scheme_parts)
+    for start in range(len(parts)):
+        run = ""
+        for part in parts[start:]:
+            run += part
+            if run == joined:
+                return True
+            if len(run) > len(joined):
+                break
+    return False
 
 
 @dataclass
@@ -906,14 +957,22 @@ def check_confinement(touched: list[str], limit: int = _WIDE_DELTA_FUNCTIONS) ->
 
 
 def _identifiers_used(node: ast.AST) -> set[str]:
-    """Identifiers in a subtree — no string constants.
+    """Identifiers in a subtree — no string constants, no nested definition names.
 
-    A scheme is a *procedure*, so it appears in code as a name. Counting
-    strings put rogii's `main` in the validation region on the strength of
-    `{"validation_scheme": "partition_suffix_holdout"}` in its metrics dict —
-    reporting which scheme ran, not running one. `_names_used` keeps strings
-    because the leakage check needs them: an excluded column is referenced as
-    `df["ANCC"]` far more often than as an identifier.
+    Deliberately not `referenced_names`, which is Load-context only. That
+    policy exists because being *bound* is not being *used*, and it is right
+    for "did the delta's claim happen". This asks a different question — what
+    does this function name at all — and a scheme assigned to a local
+    (`partition_suffix_holdout = 0.7`) is exactly the inlining the region check
+    looks for. Two questions, two collectors, and this comment so the next
+    change to either has a reason to read the other. Reported on PR #119.
+
+    A nested definition puts its *parent* in the region, and that is deliberate
+    rather than overlooked: `def compute_metrics(): def kfold_helper(): …`
+    contains validation-shaped code, and the parent is the only unit a delta
+    can be said to have landed in — `touched_functions` names top-level
+    functions. Raised on PR #119 as contamination; it is the same rule that
+    puts a wrapper in the region, and exempting it would reopen that.
     """
     found: set[str] = set()
     for inner in ast.walk(node):
@@ -926,25 +985,19 @@ def _identifiers_used(node: ast.AST) -> set[str]:
     return found
 
 
-def _names_used(node: ast.AST) -> set[str]:
-    """Every identifier and string constant in a subtree.
+def _string_constants(node: ast.AST) -> set[str]:
+    """String literals in a subtree.
 
-    Strings matter as much as identifiers here: a grouping column appears as
-    `df.groupby("file_stem_entity")` far more often than as a variable.
+    Split out rather than folded into `_identifiers_used` because only the
+    leakage check wants them: an excluded column is referenced as `df["ANCC"]`
+    far more often than as an identifier, while a scheme named in a string is
+    *reporting* which scheme ran, not running one.
     """
-    found: set[str] = set()
-    for inner in ast.walk(node):
-        if isinstance(inner, ast.Name):
-            found.add(inner.id)
-        elif isinstance(inner, ast.Attribute):
-            found.add(inner.attr)
-        elif isinstance(inner, ast.arg):
-            found.add(inner.arg)
-        elif isinstance(inner, ast.Constant) and isinstance(inner.value, str):
-            found.add(inner.value)
-        elif isinstance(inner, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            found.add(inner.name)
-    return found
+    return {
+        inner.value
+        for inner in ast.walk(node)
+        if isinstance(inner, ast.Constant) and isinstance(inner.value, str)
+    }
 
 
 def validation_region(tree: ast.Module, signals: ValidationSignals) -> set[str]:
@@ -965,13 +1018,16 @@ def validation_region(tree: ast.Module, signals: ValidationSignals) -> set[str]:
     which *function* a delta landed in, and `touched_functions` answers in the
     same vocabulary.
 
-    **Calling the splitter is not being the splitter.** `main` calls
-    `partition_suffix_holdout_split`, which put it in the region on the first
-    measurement — and `main` calls everything, so nearly every delta would have
-    carried a validation flag and the flag would have stopped meaning anything.
-    A function reaches the region by *implementing* the scheme: carrying it in
-    its own name, or naming it through something other than a call to a
-    function that already does.
+    **The entry point calls the splitter, and calls everything else too.**
+    `main` landed in the region on the first measurement for no better reason
+    than that, and nearly every delta would then have carried a validation flag
+    — a flag on everything is a flag nobody reads. So the module's entry point
+    is exempt from reaching the region by delegation alone.
+
+    Only the entry point. The first version exempted *every* caller, which hid
+    a wrapper doing consequential work of its own: `prepare_and_split` reseeds
+    and reshuffles before delegating, which changes exactly which rows land in
+    the holdout. Reported on PR #119.
 
     Identifiers only — see `_identifiers_used`. Naming the scheme in a string
     is reporting, not running: rogii's `main` writes
@@ -985,20 +1041,40 @@ def validation_region(tree: ast.Module, signals: ValidationSignals) -> set[str]:
     open edge. Confinement covers part of it — such a delta is usually wide —
     and the rest waits for a signal better than naming.
     """
-    scheme = _folded(signals.scheme)
-    if not scheme:
+    scheme_parts = _word_parts(signals.scheme)
+    if not scheme_parts:
         return set()
     functions = [
         node for node in tree.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     ]
-    region = {node.name for node in functions if scheme in _folded(node.name)}
+    region = {node.name for node in functions if _matches_scheme(node.name, scheme_parts)}
+    delegators = _module_level_calls(tree)
     for node in functions:
         if node.name in region:
             continue
-        beyond_delegation = _identifiers_used(node) - region
-        if any(scheme in _folded(name) for name in beyond_delegation):
+        beyond = _identifiers_used(node)
+        if node.name in delegators:
+            # The entry point calls everything, so a call into the region says
+            # nothing about it. Nothing else gets that exemption: a wrapper that
+            # reseeds or reorders before delegating changes which rows land in
+            # the holdout, and excluding every caller hid it. Reported on
+            # PR #119.
+            beyond = beyond - region
+        if any(_matches_scheme(name, scheme_parts) for name in beyond):
             region.add(node.name)
     return region
+
+
+def _module_level_calls(tree: ast.Module) -> set[str]:
+    """Top-level functions called from module level — the entry points."""
+    called: set[str] = set()
+    for statement in tree.body:
+        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        for inner in ast.walk(statement):
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name):
+                called.add(inner.func.id)
+    return called
 
 
 def check_validation_region(
@@ -1026,6 +1102,15 @@ def check_validation_region(
     *introduces* validation logic where there was none is caught by the
     child's, and that is the shape that would otherwise be invisible — nothing
     to preserve, nothing claimed, and a new split nobody asked for.
+
+    **Silent on a first-ever write, deliberately.** With no parent there are no
+    touched functions, so this returns nothing — and it should: writing the
+    validation split is what a baseline *is*, and flagging every baseline for
+    defining one would flag every baseline. Raised on PR #119 as the check being
+    inert on the case it exists for; it is the opposite case. A baseline is not
+    a delta, and the thing that *does* need saying about a first write —
+    whether it trains on columns the test set will not carry — is
+    `check_leakage_discipline`, which needs no parent and runs on every write.
     """
     if not touched or not signals.scheme:
         return []
@@ -1063,28 +1148,105 @@ def check_leakage_discipline(child: ast.Module, signals: ValidationSignals) -> l
     That is an implication, not a heuristic — exclusion by name requires the
     name, or the key that holds the names.
 
-    Two ways not to be flagged, both correct:
+    Two questions, in order.
 
-    * the file names the columns, or reads `exclude_features` from the config —
-      the discipline is present, and whether it is *right* is beyond static
-      reach;
-    * the file never touches `.columns` at all, so its features come from an
-      explicit list and the excluded columns are absent by construction.
+    **Is an excluded column selected?** `df[["Geology", "GR"]]` keeps it, and
+    that is a fact, not an inference. Flagged whatever else the file says.
+
+    **Otherwise, is anything excluding them?** A file that derives features from
+    the frame's own columns and never mentions every excluded column, nor
+    `exclude_features`, cannot be applying the rule. Not flagged when it names
+    them, reads the key from config, or selects features by explicit allowlist —
+    the last because features chosen by name never touch the frame's columns, so
+    the excluded ones are absent by construction.
+
+    What stays beyond reach, and is not claimed: a file that mentions an
+    excluded column in a log line while leaking it elsewhere, or one that
+    assigns `exclude_features` and never applies it. Mentioning is weak
+    evidence of excluding; it is the strongest available once direction has
+    been ruled on, and both remaining shapes are visible to a reader the flag
+    brings in.
     """
     if not signals.exclude_features:
         return []
-    used = _names_used(child)
-    if "columns" not in used:
+    excluded = set(signals.exclude_features)
+
+    # Direction first, because it is the only half that is unambiguous. A name
+    # inside a column selection is a column being *kept*: `df[["Geology",
+    # "GR"]]` says so outright. The first version asked only whether the file
+    # mentioned the name at all, which read explicit inclusion as evidence of
+    # exclusion — the exact leak class, scored as clean. Reported on PR #119.
+    selected = _selected_columns(child) & excluded
+    if selected:
+        listed = ", ".join(repr(column) for column in sorted(selected))
+        return [
+            f"the code selects {listed} as a feature, and the validation plan "
+            "excludes those columns because the test set does not carry them — a "
+            "model trained on them scores well in validation and cannot score on "
+            "the leaderboard"
+        ]
+
+    if not _derives_from_frame(child):
         return []
-    if used & set(signals.exclude_features) or "exclude_features" in used:
+    accounted = _identifiers_used(child) | _string_constants(child)
+    if "exclude_features" in accounted:
         return []
-    listed = ", ".join(repr(column) for column in sorted(signals.exclude_features)[:4])
+    # *Every* excluded column, not any of them. An intersection test passed a
+    # file that dropped one of three and kept the other two. Reported on
+    # PR #119.
+    unmentioned = sorted(excluded - accounted)
+    if not unmentioned:
+        return []
+    listed = ", ".join(repr(column) for column in unmentioned[:4])
     return [
-        f"the code derives features from the frame's columns and never mentions "
-        f"{listed}… or `exclude_features`, so nothing in it excludes the columns "
-        "the test set does not carry — a model trained on them scores well in "
-        "validation and cannot score on the leaderboard"
+        f"the code derives its features from the frame and never mentions {listed}"
+        f"{'…' if len(unmentioned) > 4 else ''} or `exclude_features`, so nothing "
+        "in it excludes the columns the test set does not carry"
     ]
+
+
+#: Attributes that hand back the frame's own column set. A file reaching for one
+#: of these is deriving features from whatever the data happens to hold, which
+#: is the shape leakage exclusion exists for. `columns` alone was the first
+#: version and missed `select_dtypes`, `keys` and `dtypes` — all equally common
+#: and none of them an explicit allowlist. Reported on PR #119.
+_FRAME_COLUMN_SOURCES = frozenset({"columns", "keys", "select_dtypes", "dtypes", "items"})
+
+
+def _derives_from_frame(tree: ast.Module) -> bool:
+    """Does this file build its feature set out of the frame's own columns?
+
+    Not detected: implicit iteration, `[c for c in df if …]`, which needs to
+    know `df` is a DataFrame and this does not. Stated rather than guessed at —
+    a comprehension over a bare name is far too common to treat as a signal.
+    """
+    return bool(
+        {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr in _FRAME_COLUMN_SOURCES
+        }
+    )
+
+
+def _selected_columns(tree: ast.Module) -> set[str]:
+    """Column names a subscript reads out of a frame: `df["a"]`, `df[["a", "b"]]`.
+
+    Load context only. `df["Geology"] = …` writes a column rather than choosing
+    one as a feature, and `df.drop(columns=[...])` is a keyword argument, not a
+    subscript — so neither is read as inclusion.
+    """
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Subscript) or not isinstance(node.ctx, ast.Load):
+            continue
+        targets = node.slice.elts if isinstance(node.slice, ast.List | ast.Tuple) else [node.slice]
+        found.update(
+            element.value
+            for element in targets
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        )
+    return found
 
 
 def check_delta_consistency(

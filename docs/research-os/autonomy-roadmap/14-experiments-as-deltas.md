@@ -139,12 +139,48 @@ and each one narrowed the signal:
 Six flags in seven functions is a flag nobody reads, which is the failure M20
 exists for — so the narrowing mattered as much as the check.
 
+Review found three more, and they are the more instructive half:
+
+* **Substring matching, on the default scheme.** `kfold` is a substring of
+  `sanity_check_folds` — "che**ck fold**s" — so a diagnostic that counts
+  pre-existing folds joined the region, as did anything carrying an `n_kfolds`
+  parameter. Matching is on whole-word runs now: `partition|suffix|holdout`
+  matches, `check|folds` does not, and `GroupKFold` still finds `k|fold`.
+* **Every caller was exempt, not just the entry point.** The rule was written
+  for `main`, which calls everything and so says nothing by calling. It also
+  excused `prepare_and_split`, which reseeds and reshuffles before delegating —
+  and that changes exactly which rows land in the holdout. Only the module's
+  entry point is exempt now.
+* **The flags reached no reader at all.** `delta_flags` went into the
+  write-code task's own `TaskEvidence`, and `build_evidence_card` builds from
+  `metrics.json` and plan metadata. Nothing opened that file. This was true of
+  `check_confinement` since PR #112, so *every* flag this system has ever
+  raised was decorative — and the argument for flagging rather than refusing is
+  that a reader can discount the result. `delta_flags_for` now carries them onto
+  the card and into `decision_reason`.
+
+The last one is worth the milestone's attention rather than this section's. A
+check that fires correctly into a file nobody reads passes every test that
+exists and protects nothing, which is the shape `00-diagnosis.md` opens with —
+*"every milestone shipped its structure but not its function"* — arriving in the
+milestone written to end it.
+
 **F7 ships with it**, because step 4 turned that gap from missing detection into
-missing enforcement. `check_leakage_discipline` asks a question that needs no
-guessing: a file that derives features from the frame's columns and never
-mentions the excluded columns or `exclude_features` cannot be excluding them.
-That is an implication, not a heuristic. A file naming the columns, reading the
-key from config, or selecting features by explicit allowlist is not flagged.
+missing enforcement. `check_leakage_discipline` asks two questions in order,
+and the first is the one that survived review.
+
+**Is an excluded column selected?** `df[["Geology", "GR"]]` keeps it, and that
+is a fact rather than an inference. The first version asked only whether the
+file *mentioned* the column — which reads explicit inclusion as evidence of
+exclusion, scoring the exact leak class as clean. Five shapes got through,
+including one that dropped one of three excluded columns and kept the rest.
+
+**Otherwise, is anything excluding them?** A file that derives features from the
+frame and never mentions *every* excluded column, nor `exclude_features`, cannot
+be applying the rule. Not flagged when it names them, reads the key from config,
+or selects by explicit allowlist. The frame test covers `columns`, `keys`,
+`select_dtypes` and `dtypes`; implicit iteration (`[c for c in df]`) is not
+detected and is stated as such rather than guessed at.
 
 Both are **flags**, not refusals — §8's own wording is *"the mitigation is
 detection, not prohibition"*, and every check in this file that refused on names

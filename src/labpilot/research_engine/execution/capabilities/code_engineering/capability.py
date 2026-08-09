@@ -152,11 +152,13 @@ def _validation_signals(root: Path) -> ValidationSignals:
 
     try:
         raw = (root / "baseline_choice.json").read_text(encoding="utf-8")
-    except OSError:
-        return ValidationSignals()
-    try:
         return ValidationSignals.from_baseline_choice(json.loads(raw))
-    except (ValueError, TypeError) as exc:
+    except (OSError, ValueError, TypeError) as exc:
+        # `ValueError` covers `UnicodeDecodeError` as well as bad JSON — the
+        # first version guarded the read with `except OSError` alone, and a
+        # non-UTF-8 file is a `ValueError` subclass, so it escaped and failed
+        # the whole write. Reported on PR #119. An unreadable baseline choice
+        # yields empty signals, which flag nothing.
         logger.debug("baseline_choice.json unreadable, no validation signals: %s", exc)
         return ValidationSignals()
 

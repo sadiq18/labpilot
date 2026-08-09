@@ -19,6 +19,7 @@ from labpilot.research_engine.evidence.models import (
     StabilityOutcome,
 )
 from labpilot.research_engine.evidence.store import EvidenceCardStore
+from labpilot.research_engine.execution.evidence import evidence_dir
 from labpilot.research_engine.intelligence.competition.direction import resolve_maximize
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
@@ -284,6 +285,40 @@ def _resolve_direction(
     return resolved
 
 
+def delta_flags_for(knowledge_dir: Path, competition: str, execution_id: str) -> list[str]:
+    """Every `delta_flags` entry recorded by the tasks of one execution.
+
+    The write-code capability has always written these — the wide-delta flag
+    since PR #112, the validation-region and leakage flags since PR #119 — into
+    its own `TaskEvidence.metadata`, and **nothing read them**. `EvidenceCard`
+    is built from `metrics.json` and plan metadata, so a delta that silently
+    moved the validation split was flagged in a file no part of the system opens
+    and then confirmed off the gain that move produced. Reported on PR #119.
+
+    That made the flags decorative, which is worse than absent: the design
+    argument for flagging rather than refusing is *"a reader can discount the
+    result"*, and no reader was ever shown one.
+
+    Read by scanning the execution's evidence directory rather than by task id,
+    because the id belongs to the plan and this layer has the execution.
+    """
+    directory = evidence_dir(ResearchPaths(knowledge_dir, competition), execution_id)
+    if not directory.is_dir():
+        return []
+    flags: list[str] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # One unreadable evidence file must not cost the card its other
+            # flags, and must not cost the card at all.
+            continue
+        recorded = (payload.get("metadata") or {}).get("delta_flags")
+        if isinstance(recorded, list):
+            flags.extend(str(flag) for flag in recorded if str(flag).strip())
+    return flags
+
+
 def build_evidence_card(
     *,
     knowledge_dir: Path,
@@ -411,6 +446,14 @@ def build_evidence_card(
     if cv_gain is not None and expected_cv is not None:
         impact_error = cv_gain - expected_cv
 
+    # The flags the write-code checks raised, carried onto the card that
+    # actually gets read. Appended to `decision_reason` as well as stored,
+    # because a confirmed hypothesis is where a validation-region flag matters
+    # most and metadata is not where a verdict is read.
+    flags = delta_flags_for(knowledge_dir, competition, treatment_execution_id)
+    if flags:
+        reason = f"{reason} · {len(flags)} delta flag(s): {flags[0]}" if reason else flags[0]
+
     card = EvidenceCard(
         competition=competition,
         hypothesis_id=hypothesis_id,
@@ -442,6 +485,7 @@ def build_evidence_card(
         impact_error=impact_error,
         maximize=maximize,
         noise_epsilon=_NOISE,
+        metadata={"delta_flags": flags} if flags else {},
     )
 
     if persist:
