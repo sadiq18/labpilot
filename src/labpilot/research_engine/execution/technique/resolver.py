@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from labpilot.research_engine.execution.technique.models import TechniqueSpec
-from labpilot.research_engine.execution.technique.registry import gated_recipes, get_technique
+from labpilot.research_engine.execution.technique.registry import get_technique
 from labpilot.research_engine.shared.labels import is_record_reference
 
 _NUMERIC_DTYPES = ("int", "float", "double", "decimal")
@@ -210,25 +210,16 @@ def resolve_technique(
             reason=f"{spec.name} requires {', '.join(sorted(unmet))}, absent from this dataset",
         )
 
-    # A recipe the chosen template cannot act on must not be reported as
-    # applied. `lag_features` on `tabular_regression_partitioned` resolves
-    # cleanly, is passed to the renderer, and the template — which has zero
-    # gates — ignores it. Recording that as `applied` would put "the technique
-    # ran and did nothing" into research memory, which is the false negative
-    # this milestone exists to prevent, one level up.
-    template = _template_name(choice)
-    if spec.feature_recipes and template:
-        missing = sorted(set(spec.feature_recipes) - gated_recipes(template))
-        if missing:
-            return TechniqueResolution(
-                requested=requested,
-                canonical=spec.name,
-                status="not_applicable",
-                reason=(
-                    f"template {template!r} has no gate for {missing}; "
-                    "the recipe path cannot execute this technique yet"
-                ),
-            )
+    # The template-gate check stood here. A recipe the chosen template could
+    # not act on had to be reported `not_applicable`, because the renderer
+    # accepted it silently and changed nothing — `lag_features` on
+    # `tabular_regression_partitioned`, which gated nothing at all.
+    #
+    # M19 §2 deleted the templates, so there is no render path left to be
+    # un-actionable, and the gate would now answer `not_applicable` for every
+    # recipe-backed technique. Codegen implements the technique from the
+    # hypothesis description instead, which is what `prompt_technique_fields`
+    # has always carried.
 
     return TechniqueResolution(
         requested=requested,

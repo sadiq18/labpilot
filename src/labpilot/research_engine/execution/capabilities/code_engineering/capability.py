@@ -4,12 +4,15 @@ Primary path: :class:`CodeEngineerAgent` → typed :class:`CodeProposal` →
 deterministic apply under allow-list.
 
 Baseline selection records ``baseline_choice.json`` (problem type, metric, and
-the validation plan derived from the dataset profile). The LLM is the primary
-author; when it yields nothing, the registered Jinja baseline template is
-rendered as a fallback because it is real, tested code that honours that
-validation plan. The tiny emergency stub is used only when no template matches,
-and a non-dry run refuses to continue on it rather than emitting fake metrics
-and an invalid submission.
+the validation plan derived from the dataset profile), which the codegen prompt
+reads whatever writes the code.
+
+There is no template fallback. M19 §2 deleted the Jinja pack in the change that
+made ``delta`` the default: a rendered baseline is not the experiment the
+hypothesis asked for, and it was recorded as a successful step — twelve
+distinct hypotheses once scored MSE 194.80 identically. Codegen producing
+nothing now reaches the emergency stub, and a non-dry run refuses to continue
+on it rather than emitting fake metrics and an invalid submission.
 """
 
 from __future__ import annotations
@@ -510,33 +513,36 @@ class CodeEngineeringCapability(BaseCapability):
             origin = "llm" if self._agent.last_used_llm else "last_resort"
 
         if not proposal.files:
-            # Prefer the deterministic baseline template over the emergency
-            # stub. The stub writes fake metrics and a wrong-header submission
-            # while reporting success, so a failed LLM silently produced a
-            # garbage leaderboard entry. A rendered template is real, tested
-            # code that honours the derived validation plan.
-            rendered = self._render_template_fallback(root, choice, resolution)
-            if rendered is not None:
-                proposal = rendered
-                origin = "template"
-            else:
-                proposal = CodeProposal(
-                    summary="last-resort scaffold",
-                    rationale="LLM produced no files and no template matched",
-                    files=[
-                        CodeFileSpec(
-                            path="pipeline/train.py",
-                            content=_LAST_RESORT_TRAIN,
-                            action="write",
-                        ),
-                        CodeFileSpec(
-                            path="pipeline/infer.py",
-                            content=_LAST_RESORT_INFER,
-                            action="write",
-                        ),
-                    ],
-                )
-                origin = "last_resort"
+            # The Jinja baseline pack used to sit here, and M19 §2 removed it
+            # with the change that made delta the default — a removal and the
+            # precondition that makes it safe, shipping together.
+            #
+            # It was never a neutral floor. A rendered template is *a* baseline,
+            # not the experiment the hypothesis asked for, and it was recorded
+            # as a successful step: twelve distinct hypotheses once scored MSE
+            # 194.80 identically because each got the same rendered file. The
+            # run looked healthy and tested nothing.
+            #
+            # Now codegen producing nothing reaches the stub, and a non-dry run
+            # refuses to continue on it. A step that produced no experiment
+            # fails, which is the only honest answer.
+            proposal = CodeProposal(
+                summary="last-resort scaffold",
+                rationale="codegen produced no files",
+                files=[
+                    CodeFileSpec(
+                        path="pipeline/train.py",
+                        content=_LAST_RESORT_TRAIN,
+                        action="write",
+                    ),
+                    CodeFileSpec(
+                        path="pipeline/infer.py",
+                        content=_LAST_RESORT_INFER,
+                        action="write",
+                    ),
+                ],
+            )
+            origin = "last_resort"
 
         # A dry run only checks wiring, so the stub is fine there. A real run
         # must not continue on it: the stub writes fake metrics and a
@@ -547,12 +553,14 @@ class CodeEngineeringCapability(BaseCapability):
                 context,
                 capability=self.name,
                 passed=False,
-                summary="no usable training code (LLM produced none, no template matched)",
+                summary="no usable training code — codegen produced none",
                 checks=["write_code"],
                 error=(
-                    "Code generation produced no files and no baseline template "
-                    "matched this problem type. Check `research doctor` (LLM "
-                    "provider) or add a template for this problem type."
+                    "Code generation produced no files. There is no template "
+                    "fallback any more — M19 §2 removed it, because a rendered "
+                    "baseline is not the experiment the hypothesis asked for and "
+                    "was recorded as a successful step. Check `research doctor` "
+                    "for the LLM provider."
                 ),
                 metadata={"origin": origin, "problem_type": problem_type},
             )
@@ -675,68 +683,6 @@ class CodeEngineeringCapability(BaseCapability):
             "evidence": [e.model_dump(mode="json") for e in hyp.evidence],
         }
 
-    def _render_template_fallback(
-        self,
-        root: Path,
-        choice: object | None,
-        resolution: TechniqueResolution | None = None,
-    ) -> CodeProposal | None:
-        """Render the registered baseline template as a CodeProposal, or None.
-
-        Used when LLM codegen yields nothing. The template already encodes the
-        validation plan derived from the dataset profile, so this fallback is a
-        real baseline rather than a placeholder.
-
-        ``resolution`` carries the technique the plan is testing. Without it
-        this path renders the *same* baseline for every hypothesis, which is
-        what made twelve distinct hypotheses score identically: the run looked
-        healthy and tested nothing.
-        """
-        resolution = resolution or TechniqueResolution()
-        if choice is None:
-            return None
-        try:
-            from labpilot.config import load_config
-            from labpilot.research_engine.execution.baseline.registry import get_template
-            from labpilot.research_engine.execution.capabilities.code_engineering.offline_codegen.renderer import (  # noqa: E501
-                CodeRenderer,
-            )
-
-            template = get_template(choice.problem_type, template_name=choice.template_name)
-            if template is None:
-                return None
-            config = load_config()
-            # The renderer has always accepted these; every one of them was
-            # dropped here, so the fallback rendered the same baseline whatever
-            # the hypothesis asked for — 12 hypotheses, MSE 194.80 identically.
-            CodeRenderer(config.training).render(
-                template,
-                choice,
-                root,
-                feature_recipes=resolution.feature_recipes or None,
-                model_params=resolution.model_params or None,
-            )
-        except Exception as exc:  # noqa: BLE001 — fall through to the stub
-            logger.warning("Template fallback render failed: %s", exc)
-            return None
-
-        produced = [p for p in (root / "pipeline").glob("*") if p.is_file()]
-        if not produced:
-            return None
-        # Files are already on disk; describe them so the apply step records
-        # digests and the run stays auditable.
-        return CodeProposal(
-            summary=f"rendered baseline template {template.name}",
-            rationale="LLM produced no files; used the deterministic template",
-            files=[
-                CodeFileSpec(
-                    path=f"pipeline/{p.name}",
-                    content=p.read_text(encoding="utf-8"),
-                    action="write",
-                )
-                for p in produced
-            ],
-        )
 
     def _inventory(self, root: Path) -> list[str]:
         items: list[str] = []

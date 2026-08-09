@@ -6,6 +6,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from helpers.fake_codegen import FakeCodegenLLM
+
 from labpilot.research_engine.agents import (
     AgentTask,
     build_default_specialist_registry,
@@ -122,7 +124,11 @@ def test_implementation_greenfield_writes_train_and_infer(tmp_path: Path) -> Non
         ),
         encoding="utf-8",
     )
-    registry = build_default_specialist_registry()
+    # A model is required now. The Jinja pack used to supply the code when
+    # there was none, and M19 §2 deleted it: with no model there is no
+    # pipeline, which is the deletion's whole point and not this test's
+    # subject — it is about greenfield writing train.py *and* infer.py.
+    registry = build_default_specialist_registry(llm_client=FakeCodegenLLM())
     agent = registry.require("implementation").agent
     refs = execute_agent_sync(
         agent,

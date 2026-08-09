@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from helpers.fake_codegen import FakeCodegenLLM
+
 from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
     CodeEngineeringCapability,
@@ -328,7 +330,7 @@ def test_write_code_overrides_existing_train_py(tmp_path: Path) -> None:
         workspace_root=ws,
         competition=competition,
     )
-    evidence = CodeEngineeringCapability(llm_client=None).execute(ctx)
+    evidence = CodeEngineeringCapability(llm_client=FakeCodegenLLM()).execute(ctx)
     assert evidence.passed
     assert evidence.metadata.get("overrode_existing") is True
     backups = list((ws / "artifacts" / "code_backups").glob("train_E-100.py"))

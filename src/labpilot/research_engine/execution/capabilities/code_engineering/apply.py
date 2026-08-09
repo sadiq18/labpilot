@@ -105,6 +105,37 @@ def _check_dependency_block(rel: str, content: str) -> None:
         )
 
 
+_LABPILOT_IMPORT = re.compile(r"^\s*(?:from|import)\s+labpilot\b", re.MULTILINE)
+
+
+def _check_standalone_script(rel: str, content: str) -> None:
+    """A script that declares its own dependencies cannot import labpilot.
+
+    `uv run --script` builds an ephemeral environment from the PEP 723 block,
+    and labpilot is not in it — so the two together are a `ModuleNotFoundError`
+    at run time, one campaign step spent to learn it.
+
+    This invariant used to be enforced over the Jinja template pack, where it
+    was caught in review on PR #102: PEP 723 blocks had been added to two
+    templates that both did `from labpilot.research_engine.execution.metrics
+    import compute_metric`. M19 §2 deleted the pack, and the rule moved here —
+    to the gate every proposal passes through — because it was never really
+    about templates. Generated code is where it applies now.
+    """
+    if not _PEP723_OPEN.search(content):
+        return
+    match = _LABPILOT_IMPORT.search(content)
+    if match is None:
+        return
+    raise ApplyError(
+        f"{rel} declares PEP 723 dependencies and also imports labpilot "
+        f"({match.group(0).strip()!r}). `uv run --script` runs it in an "
+        "ephemeral environment where labpilot is absent, so the script cannot "
+        "start. Declare dependencies and stand alone, or use labpilot's "
+        "environment — never both."
+    )
+
+
 def _check_not_truncated(rel: str, content: str) -> None:
     """`ast.parse` cannot see a file that was cut off inside its comments.
 
@@ -181,6 +212,7 @@ def apply_proposal(
             # Syntax is necessary and not sufficient — both checks below pass
             # `ast.parse` and still cannot run.
             _check_dependency_block(rel, content)
+            _check_standalone_script(rel, content)
             _check_not_truncated(rel, content)
             content, dropped = strip_stdlib_dependencies(content)
             if dropped:

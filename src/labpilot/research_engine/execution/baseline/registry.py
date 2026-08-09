@@ -1,27 +1,29 @@
 from dataclasses import dataclass
-from pathlib import Path
 
 
 @dataclass(frozen=True)
 class BaselineTemplate:
     name: str
     problem_type: str
-    template_dir: Path
     description: str
     model_family: str = "lightgbm"
 
 
-def get_templates_root() -> Path:
-    return (
-        Path(__file__).resolve().parents[1]
-        / "capabilities"
-        / "code_engineering"
-        / "templates"
-    )
 
 
 def list_templates() -> list[BaselineTemplate]:
-    root = get_templates_root()
+    """What a baseline looks like per problem type.
+
+    Declared, not discovered. This used to scan
+    ``code_engineering/templates/`` and keep only the entries whose directory
+    existed, so the Jinja pack *was* the registry — and deleting the pack in
+    M19 §2 emptied it, taking baseline selection with it.
+
+    The catalogue was never really about rendering. It answers "for this
+    problem type, what model family and validation plan should an experiment
+    start from", which `baseline_choice.json` carries into the codegen prompt
+    whatever writes the code.
+    """
     templates: list[BaselineTemplate] = []
 
     # (problem_type, dirname, description, model_family). A problem type may
@@ -63,17 +65,14 @@ def list_templates() -> list[BaselineTemplate]:
     ]
 
     for problem_type, dirname, desc, family in registry:
-        template_dir = root / dirname
-        if template_dir.exists():
-            templates.append(
-                BaselineTemplate(
-                    name=dirname,
-                    problem_type=problem_type,
-                    template_dir=template_dir,
-                    description=desc,
-                    model_family=family,
-                )
+        templates.append(
+            BaselineTemplate(
+                name=dirname,
+                problem_type=problem_type,
+                description=desc,
+                model_family=family,
             )
+        )
 
     return templates
 
