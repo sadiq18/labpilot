@@ -1,7 +1,7 @@
 # M19 — An experiment is a change to its parent
 
-**Status:** steps 0, 1a, 1b, 1c and §6 provenance shipped — **step 2 unblocked,
-first delta measured 2026-08-09** ·
+**Status:** steps 0, 1a, 1b, 1c and §6 provenance shipped — **step 2 in progress:
+first delta experiment completed end to end, 2026-08-09** ·
 **Design:**
 [design/14-experiments-as-deltas.md](design/14-experiments-as-deltas.md) ·
 **Supersedes:** the Jinja template pack ·
@@ -276,29 +276,100 @@ existed. Training never ran and the plan is `abandoned`, which is the honest
 record: the gate refused a pipeline that does not work rather than reporting a
 completed experiment.
 
+### A complete experiment, and the eleven fixes it took
+
+The delta above never reached a result. Getting one took a day of running the
+real path and fixing what each run exposed — none of it found by review, and
+each fix only visible once the previous one stopped hiding it.
+
+**The pipeline could not run.**
+
+| defect | what it did |
+|---|---|
+| the partitioned profiler read one file of one *kind* | `Geology` lived only in the other kind, so `profile.json` reported thirteen columns and all of them numeric. Codegen wrote "every column except this exclusion list" — correct given that profile, fatal given the data |
+| `research ingest` raised on `hyp:H-010` | a record reference merged as a technique; the store's own error said to filter first, and no caller did |
+| the codegen prompt never named the output paths | the script invented `/workspace/`, then `./workspace/` when told "relative paths only" — which *is* relative. Training succeeded and wrote its result where nothing reads it |
+
+**The retry loop could not converge.** Four separate reasons, each masking the
+next: `retry_reason` never reached aider's instruction; the brief overrode it
+with the hypothesis anyway; the reason itself was the *head* of a traceback —
+file paths, with the exception past the cut; and a training failure left
+`code_is_suspect` false, so every retry rebuilt blind. Three consecutive runs
+produced a nil delta while the error sat one field away.
+
+**Verdicts were wrong in four ways.** Three of them are one rule — *a change
+that cannot alter behaviour is not an experiment* — arriving through doors that
+are invisible to each other:
+
+* **unreachable new code**: aider wrote thirty-four correct lines of rolling
+  features into a function `main()` never calls (`check_reachability`);
+* **an unreachable parent**: a failed run leaves its edit behind, so the next
+  attempt at the same hypothesis found `rolling` and `groupby` already present —
+  inside that dead function — and retired it as already implemented
+  (`check_redundancy` now judges live code only);
+* **identical code**: handed the dtype error, a retry edited the module
+  docstring. `touched_functions` compares function bodies, so it reported
+  nothing touched; the claimed symbols were present from an earlier attempt; and
+  `aider_no_edit` never fired because there *was* an edit (`check_effect`).
+
+The fourth is the one that would have poisoned the measurement. `cv_rmse` went
+**194 → 1382**, `comparison.json` recorded `decision: "rejected"`, and the
+hypothesis was written **confirmed**. `_map_outcomes` read
+`comparison["verdict"]` — a key nothing writes — so the measured verdict never
+arrived, then fell through to reading `cv_delta`'s sign as though larger were
+always better. Without a decision it now returns `inconclusive`: nothing at that
+layer knows the metric's direction, and `confirmed` on a regression poisons
+every ranking that reads it afterwards.
+
+And `research run` reported **succeeded** against a `metrics.json` written the
+previous evening — the stale-metrics hole `run_experiment` closed with
+`_metrics_written_since`, still open on the Engineer path, which is the path a
+plan actually takes.
+
+**The completed run.** Execution E-234: aider added `MD_x_GR`, the consistency
+checks passed, training produced real metrics over 1.36M rows, and the
+comparator correctly rejected the result. First delta experiment to reach a
+verdict.
+
 ### What this means for step 2
 
 | exit criterion | state |
 |---|---|
-| 1 — child produces a delta, baseline produces a whole file | **delta half met**; baseline half already held |
-| 2 — workspace untouched when a proposal is rejected | not exercised: nothing was rejected |
-| 3 — validation logic survives a feature-adding delta byte-identical | not exercised: `run_training` never ran |
-| 4 — failure rate recorded in `agent_invocations` | **met** — `origin=aider`, and the brief recorded separately |
+| 1 — child produces a delta, baseline produces a whole file | **met** |
+| 2 — workspace untouched when a proposal is rejected | **not met**: a failed run leaves its edit behind, which is how the redundancy false positive above happened |
+| 3 — validation logic survives a feature-adding delta byte-identical | **met** on E-234 |
+| 4 — failure rate recorded in `agent_invocations` | **met** — `origin=aider`, brief recorded separately, kinds distinguish redundancy from adapter failure |
 | 5 — templates deleted in the same change that flips the default | not started |
 
-One delta is not a rate. The next measurements need hypotheses whose change is
-*wireable* — H-015 asked for features and got a function nobody calls, which is
-as much a statement about the hypothesis as about the adapter. Two candidates
-for what to fix first, in order of what the evidence supports:
+One experiment is not a rate. What step 2 still needs is N runs with
+`codegen.strategy: delta` and the outcome counts read off `agent_invocations`.
+The pool is ready for it — 40 viable hypotheses after `ingest` + `hypothesize
+new`, concrete ones like `typewell_gr_mean` and `tortuosity_50` rather than the
+`3D garment modeling` that used to fill it.
 
-1. **`DeltaBriefAgent`'s `added` names the container, not the contribution.**
-   It claimed `engineer_features` — the function being edited — where the
-   symbols introduced were `rolling`, `groupby`, `_roll_mean`. A claim about
-   the enclosing function is unfalsifiable in the direction that matters.
-2. **Nothing asks aider to wire what it writes.** The instruction carries the
-   hypothesis; it does not say the change must execute. `check_addition` finds
-   this after the fact, which is the right place to *detect* it and the wrong
-   place to *prevent* it.
+Two things to know before reading those numbers:
+
+* **The parent is currently weaker than it was.** Forcing a from-scratch rebuild
+  to clear the dtype defect discarded H-014's accumulated feature work — twenty
+  features became six. Every delta measured against it is measured against a
+  crippled baseline. Restore the parent or let the loop rebuild the features
+  before treating any comparison as a finding.
+* **`partition_suffix_holdout` is not an inverted split.** Training on 27% and
+  validating on 73% looks wrong and is correct: `holdout_fraction` is the
+  measured `scored_fraction`, and the scheme reproduces the predict-forward gap
+  the test set actually has.
+
+### A note on how these were found
+
+Three times a fix that looked obvious was caught by the existing suite:
+counting `def` as satisfying "added" would have blinded the check that catches a
+dead delta; requiring reachability of every module would have condemned any
+library; making `RUN_TRAINING` a code-validation task outright contradicts a
+rule that exists so an OOM does not discard working code. All three would have
+shipped green under their own new tests. The habit that keeps paying is
+reverting the fix and confirming the new test goes red — and the habit that
+keeps costing is inferring intent from a number instead of reading where it
+comes from.
 
 ## Exit criteria
 
