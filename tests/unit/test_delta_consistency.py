@@ -638,8 +638,11 @@ def test_a_dead_function_nested_in_a_live_one_does_not_hang():
 
 
 def test_a_mutually_recursive_dead_pair_is_unreachable():
-    """Mentions let each vouch for the other. Reachability is walked from the
-    entry point now, so a cycle nothing outside it enters stays dead."""
+    """Reported on PR #118: `referenced_names(ignoring=name)` excluded one
+    function's own body, so a *pair* calling each other vouched for one another
+    and neither was ever flagged. Reachability is walked from the entry point
+    now, so a cycle nothing outside it enters stays dead however many hops it
+    spans."""
     import ast
 
     from labpilot.research_engine.execution.delta.consistency import unreachable_functions
@@ -663,6 +666,8 @@ def test_a_self_recursive_dead_function_is_unreachable():
 
 
 def test_a_live_chain_of_any_depth_survives():
+    """The carve-out must not cost the behaviour it guards: reachability
+    follows calls, so a helper three hops from `main` is live."""
     import ast
 
     from labpilot.research_engine.execution.delta.consistency import unreachable_functions
@@ -725,3 +730,180 @@ def test_a_decorator_on_a_reachable_function_is_reachable():
     )
 
     assert unreachable_functions(ast.parse(src)) == set()
+
+
+def test_claim_free_violations_are_tracked_not_matched():
+    """Reported on PR #118: the consumer recovered them by matching the
+    checks' sentences, so a copy edit would have switched it off silently."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = (
+        '"""Old."""\n\n\ndef main():\n    return 1\n\n\nif __name__ == "__main__":\n    main()\n'
+    )
+    child = parent.replace('"""Old."""', '"""New."""')
+
+    report = check_delta_consistency(parent, child)
+
+    assert report.claim_free_violations
+    assert report.claim_free_violations == report.violations
+
+
+def test_a_claim_violation_is_not_marked_claim_free():
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = (
+        "import lightgbm as lgb\n\n\n"
+        "def main():\n    return lgb.train()\n\n\n"
+        "if __name__ == '__main__':\n    main()\n"
+    )
+    child = parent
+
+    report = check_delta_consistency(parent, child, add=["catboost"])
+
+    assert report.violations
+    assert not [v for v in report.claim_free_violations if "catboost" in v]
+
+
+# --- one reachability primitive (PR #118, round 3) ---------------------------
+
+
+def test_check_reachability_sees_a_mutually_recursive_dead_pair():
+    """Reported on PR #118. `unreachable_functions` was fixed for this case and
+    `check_reachability` — the one actually wired into the delta checks — was
+    not, because it carried its own weaker mechanism. It now asks the walk."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_reachability
+
+    src = (
+        "def A():\n    return B()\n\n\ndef B():\n    return A()\n\n\n"
+        "def main():\n    pass\n" + _ENTRY_SUFFIX
+    )
+
+    assert check_reachability(ast.parse(src), ["A", "B"])
+
+
+def test_check_reachability_sees_a_self_recursive_dead_function():
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_reachability
+
+    src = "def solo():\n    return solo()\n\n\ndef main():\n    pass\n" + _ENTRY_SUFFIX
+
+    assert check_reachability(ast.parse(src), ["solo"])
+
+
+def test_a_library_module_is_not_an_entry_point():
+    """Reported on PR #118: `_has_entry_point` walked *into* function bodies, so
+    one helper calling another read as module-level execution. Every two-function
+    library then failed the reachability check with both functions condemned."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import (
+        _has_entry_point,
+        check_reachability,
+    )
+
+    src = "def _blend(a, b):\n    return (a + b) / 2\n\n\ndef train(X):\n    return _blend(X, X)\n"
+
+    assert _has_entry_point(ast.parse(src)) is False
+    assert check_reachability(ast.parse(src), ["_blend", "train"]) == []
+
+
+def test_a_guarded_call_is_still_an_entry_point():
+    """The carve-out must not cost the behaviour it guards."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import _has_entry_point
+
+    src = "def main():\n    return 1\n" + _ENTRY_SUFFIX
+
+    assert _has_entry_point(ast.parse(src)) is True
+
+
+def test_an_unparseable_result_is_a_claim_free_violation():
+    """Reported on PR #118: the early return appended straight to `violations`,
+    so `_observe_delta` — which reads `claim_free_violations` when nothing was
+    claimed — reported nothing wrong about a result that does not parse."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    report = check_delta_consistency("def main():\n    return 1\n", "def broken(:\n")
+
+    assert report.ok is False
+    assert report.claim_free_violations == report.violations
+
+
+# --- PR #118 round 4 ---------------------------------------------------------
+
+
+def test_a_removed_function_does_not_silence_the_reachability_check():
+    """Reported on PR #118. `unreachable_functions` can only name functions the
+    child still defines, so a removed one put a name in `touched` that no
+    dead-set could contain — and "every touched function is dead" became
+    unsatisfiable. A delta adding dead code alongside an unrelated removal then
+    passed silently."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_reachability
+
+    child = "def dead_new():\n    return 1\n\n\ndef main():\n    pass\n" + _ENTRY_SUFFIX
+
+    assert check_reachability(ast.parse(child), ["helper_old", "dead_new"])
+
+
+def test_a_removal_alone_is_not_a_reachability_violation():
+    """The carve-out must not invent one: a delta that only removes a function
+    has nothing left to judge, and absence is `check_preservation`'s question."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_reachability
+
+    child = "def main():\n    pass\n" + _ENTRY_SUFFIX
+
+    assert check_reachability(ast.parse(child), ["helper_old"]) == []
+
+
+def test_a_class_body_runs_at_import():
+    """Reported on PR #118: `runs_at_import` skipped `ClassDef` alongside `def`,
+    but a class body executes the moment the `class` statement does. A generated
+    `class Config: seed = set_seed(42)` disabled dead-code detection for the
+    whole file."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import _has_entry_point
+
+    src = "def set_seed(n):\n    return n\n\n\nclass Config:\n    seed = set_seed(42)\n"
+
+    assert _has_entry_point(ast.parse(src)) is True
+
+
+def test_a_method_is_not_a_module_level_definition():
+    """Reported on PR #118: `defined` was collected at any depth, so a method
+    named `fit` made a module-level `fit()` look locally defined — and
+    sklearn-shaped code names methods `fit`, `predict` and `train` as a matter
+    of course."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import _has_entry_point
+
+    src = "def fit():\n    return 1\n\n\nclass M:\n    def fit(self):\n        return 2\n"
+
+    assert _has_entry_point(ast.parse(src)) is False
+
+
+def test_a_match_block_is_control_flow_like_any_other():
+    """Reported on PR #118: the hand-written list of compound statements omitted
+    `ast.Match`, so a module-level `match` fell through to the unguarded walk
+    and reopened the false "runs at import" this rewrite closed elsewhere."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import _has_entry_point
+
+    inside_a_function = (
+        "def go():\n    return 1\n\n\n"
+        "def other(x):\n    match x:\n        case 2:\n            go()\n"
+    )
+    at_module_level = "def go():\n    return 1\n\n\nx = 2\nmatch x:\n    case 2:\n        go()\n"
+
+    assert _has_entry_point(ast.parse(inside_a_function)) is False
+    assert _has_entry_point(ast.parse(at_module_level)) is True

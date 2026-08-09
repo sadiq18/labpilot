@@ -211,147 +211,61 @@ def test_a_ref_pointing_at_nothing_is_not_a_result(tmp_path):
 
 
 # --- the invariant that PR #102 review caught the hard way -------------------
+#
+# It used to be checked over the Jinja template pack. M19 §2 deleted the pack,
+# and the rule moved to `apply`, the gate every proposal passes through — it
+# was never about templates, and generated code is where it applies now.
 
 
-def _template_scripts():
-    from pathlib import Path
-
-    root = (
-        Path(__file__).resolve().parents[2]
-        / "src/labpilot/research_engine/execution/capabilities/code_engineering/templates"
+def _apply(tmp_path, content):
+    from labpilot.research_engine.execution.capabilities.code_engineering.apply import (
+        apply_proposal,
     )
-    return sorted(root.rglob("train.py.j2"))
+    from labpilot.research_engine.execution.schemas.code_proposal import (
+        CodeFileSpec,
+        CodeProposal,
+    )
 
-
-def test_templates_exist():
-    assert _template_scripts(), "no templates found — this guard would pass vacuously"
-
-
-@pytest.mark.parametrize("path", _template_scripts(), ids=lambda p: p.parent.name)
-def test_a_declaring_template_must_not_import_labpilot(path):
-    """`uv run --script` cannot see labpilot, so the two cannot coexist.
-
-    Caught in review: PEP 723 blocks were added to `tabular_regression` and
-    `tabular_classification`, both of which do
-    `from labpilot.research_engine.execution.metrics import compute_metric`.
-    With uv on PATH — the common case — those templates would have run in an
-    ephemeral env and died with ModuleNotFoundError. The templates *changed* by
-    that PR were the ones it would have broken.
-
-    A template either declares its dependencies and stands alone, or uses
-    labpilot's environment. Never both.
-    """
-    body = path.read_text(encoding="utf-8")
-    if "# /// script" not in body:
-        pytest.skip(f"{path.parent.name} does not declare dependencies")
-    assert "labpilot" not in body, (
-        f"{path.parent.name} declares PEP 723 dependencies but imports labpilot, "
-        "which the ephemeral environment cannot see"
+    return apply_proposal(
+        tmp_path,
+        CodeProposal(files=[CodeFileSpec(path="pipeline/train.py", content=content)]),
     )
 
 
-@pytest.mark.parametrize("path", _template_scripts(), ids=lambda p: p.parent.name)
-def test_a_declaring_template_declares_every_third_party_import(path):
-    """`joblib` was undeclared and worked only as a sklearn transitive — the
-    kind of accident that breaks when a resolver picks a different tree."""
-    import re
-
-    body = path.read_text(encoding="utf-8")
-    if "# /// script" not in body:
-        pytest.skip(f"{path.parent.name} does not declare dependencies")
-
-    declared = " ".join(declared_dependencies(body))
-    stdlib_ok = {
-        "json",
-        "os",
-        "sys",
-        "pathlib",
-        "typing",
-        "dataclasses",
-        "math",
-        "itertools",
-        "collections",
-        "warnings",
-        "time",
-        "re",
-        "logging",
-    }
-    alias = {"sklearn": "scikit-learn", "yaml": "pyyaml"}
-    imported = {m or n for m, n in re.findall(r"^import (\w+)|^from (\w+)", body, re.M)}
-    for mod in sorted(imported - stdlib_ok):
-        assert alias.get(mod, mod) in declared, (
-            f"{path.parent.name} imports {mod!r} without declaring it"
-        )
+_DECLARING = (
+    "# /// script\n"
+    '# dependencies = ["lightgbm>=4.0"]\n'
+    "# ///\n"
+    "{body}\n"
+    "def main():\n"
+    "    return 1\n"
+    "\n\n"
+    'if __name__ == "__main__":\n'
+    "    main()\n"
+)
 
 
-def test_the_runner_uses_the_ephemeral_command_and_scrubbed_env(tmp_path, monkeypatch):
-    """Locks the integration this change exists to ship.
-
-    The unit tests cover `training_command` and `child_environment` in
-    isolation; nothing asserted `TrainingRunner.run` actually calls them.
-    """
-    import subprocess
-
-    from labpilot.research_engine.execution.training.runner import TrainingRunner
-
-    pipeline = tmp_path / "pipeline"
-    pipeline.mkdir()
-    (pipeline / "train.py").write_text(PEP723, encoding="utf-8")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-must-not-reach-generated-code")
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/uv")
-
-    seen = {}
-
-    def _fake_run(cmd, **kw):
-        seen["cmd"] = cmd
-        seen["env"] = kw.get("env")
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    TrainingRunner(tmp_path).run(timeout=5)
-
-    assert seen["cmd"][:3] == ["uv", "run", "--script"]
-    assert seen["env"] is not None, "the child must not inherit the parent environment"
-    assert "OPENROUTER_API_KEY" not in seen["env"]
-
-
-def test_a_mismatched_quote_is_not_a_dependency():
-    """`["']...["']` accepted `"catboost>=1.2'` — a closing quote that does not
-    match its opening one. That is not valid TOML, so `uv` rejects the whole
-    block at install time, turning one typo into a failed run rather than one
-    skipped dependency. The backreference makes a malformed entry simply not a
-    dependency, leaving the rest of the block usable.
-    """
-    from labpilot.research_engine.execution.training.environment import (
-        declared_dependencies,
+def test_a_declaring_script_must_not_import_labpilot(tmp_path):
+    """`uv run --script` cannot see labpilot, so the two cannot coexist."""
+    from labpilot.research_engine.execution.capabilities.code_engineering.apply import (
+        ApplyError,
     )
 
-    script = (
-        '# /// script\n# dependencies = [\n#   "catboost>=1.2\',\n#   "lightgbm",\n# ]\n# ///\n'
-    )
-    assert declared_dependencies(script) == ["lightgbm"]
+    body = "from labpilot.research_engine.execution.metrics import compute_metric"
+
+    with pytest.raises(ApplyError, match="ephemeral environment"):
+        _apply(tmp_path, _DECLARING.format(body=body))
 
 
-def test_both_quote_styles_still_parse():
-    """PEP 723 metadata is TOML, single quotes are valid, and models emit them."""
-    from labpilot.research_engine.execution.training.environment import (
-        declared_dependencies,
-    )
-
-    script = (
-        "# /// script\n# dependencies = [\n#   \"catboost>=1.2\",\n#   'lightgbm',\n# ]\n# ///\n"
-    )
-    assert declared_dependencies(script) == ["catboost>=1.2", "lightgbm"]
-
-
-def test_a_block_with_no_closing_fence_still_parses():
-    """`text.find` returns -1 when the closing marker is absent; line 104
-    already substitutes `len(text)`. Pinned because a review reported this as
-    unhandled."""
-    from labpilot.research_engine.execution.training.environment import (
-        declared_dependencies,
+def test_a_plain_import_of_labpilot_is_fine_without_a_dependency_block(tmp_path):
+    """Without PEP 723 the script runs in labpilot's own environment."""
+    content = (
+        "import labpilot\n\n\ndef main():\n    return 1\n"
+        '\n\nif __name__ == "__main__":\n    main()\n'
     )
 
-    assert declared_dependencies('# /// script\n# dependencies = [\n#   "catboost",\n') == [
-        "catboost"
-    ]
+    assert _apply(tmp_path, content)
+
+
+def test_a_declaring_script_that_stands_alone_is_fine(tmp_path):
+    assert _apply(tmp_path, _DECLARING.format(body="import lightgbm as lgb"))

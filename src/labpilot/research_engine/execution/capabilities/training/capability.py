@@ -188,7 +188,13 @@ class TrainingCapability(BaseCapability):
                 summary="training completed" if ok else "training failed",
                 checks=["train_runner", "metrics_json"],
                 paths=[str(p) for p in artifacts.values()] + [str(log_path)],
-                metrics=metrics,
+                # Nothing this run wrote, nothing it reports. A stale
+                # `metrics.json` was still loaded and returned beside
+                # `passed=False`, so any reader that trusted `evidence.metrics`
+                # without checking `passed` first saw a plausible number
+                # belonging to an earlier execution — the same file, and the
+                # same confusion, the freshness guard above exists to end.
+                metrics=metrics if fresh else {},
                 error=error,
                 metadata={"returncode": result.returncode, "duration_s": duration},
             )

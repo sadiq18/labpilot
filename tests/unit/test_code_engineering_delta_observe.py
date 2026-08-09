@@ -333,3 +333,40 @@ def test_a_progress_bar_cannot_fill_the_budget():
 
     assert "KeyError: 'TVT'" in text
     assert text.count("Loading train") == 1
+
+
+# --- a claim-free check still speaks when nothing was claimed ----------------
+
+
+def test_a_no_op_delta_is_reported_even_with_an_empty_claim():
+    """Reported on PR #118.
+
+    Withholding the verdict when nothing is claimed is right for the
+    claim-based checks — `consistent: true` would be a pass nobody earned. But
+    `check_effect` and `check_reachability` need no claim, and dropping their
+    violations hid the "the delta did nothing" detection exactly when the
+    author declared nothing: the card recorded `delta_unchecked: True` and no
+    reason at all.
+    """
+    parent = (
+        '"""Old."""\n\n\ndef main():\n    return 1\n\n\nif __name__ == "__main__":\n    main()\n'
+    )
+    child = parent.replace('"""Old."""', '"""New."""')
+
+    meta = _observe_delta(parent, _proposal(child))
+
+    assert meta["delta_unchecked"] is True
+    assert any("changed no executable code" in v for v in meta["delta_violations"])
+
+
+def test_a_claim_based_verdict_is_still_withheld():
+    """The carve-out is narrow: an unclaimed delta earns no `consistent: true`."""
+    parent = (
+        '"""Old."""\n\n\ndef main():\n    return 1\n\n\nif __name__ == "__main__":\n    main()\n'
+    )
+    child = parent.replace("return 1", "return 2")
+
+    meta = _observe_delta(parent, _proposal(child))
+
+    assert "delta_consistent" not in meta
+    assert not meta.get("delta_violations")

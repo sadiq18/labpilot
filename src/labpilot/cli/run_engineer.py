@@ -24,6 +24,10 @@ from labpilot.research_engine.execution import (
     ResearchEngineer,
     default_capability_registry,
 )
+from labpilot.research_engine.execution.codegen_strategy import (
+    resolve_codegen_strategy,
+    workspace_config_path,
+)
 
 console = Console()
 
@@ -37,6 +41,20 @@ def _engineer_constraints(
     llm_client=None,
 ) -> dict:
     constraints = {
+        # `research resume` runs the same capability as `research plan run`, so
+        # it reads the same setting through the same helper. It did not, and
+        # the capability's own fallback still said `whole_file`, so resume took
+        # the whole-file path however the workspace was configured. Reported on
+        # PR #118.
+        # Without a `labpilot.yaml` there is no workspace to read a
+        # per-competition config from, so the config the CLI already loaded is
+        # the answer — passing `""` there fell back to the packaged default and
+        # ignored the setting the user had in hand. Reported on PR #118.
+        "codegen_strategy": (
+            resolve_codegen_strategy(workspace_config_path(workspace))
+            if workspace is not None
+            else str(config.codegen.strategy)
+        ),
         "dry_run": dry_run,
         "allow_upload": submit,
         "smoke_syntax_only": dry_run,

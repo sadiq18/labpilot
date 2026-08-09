@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.accessor.kaggle.exporter import _adapt_train_script, export_kernel
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 
 
 def test_kernel_exporter_writes_metadata(tmp_path: Path):
@@ -44,7 +44,33 @@ def test_kernel_exporter_writes_metadata(tmp_path: Path):
 
 
 def test_kernel_exporter_injects_kaggle_bootstrap_for_image_template(tmp_path: Path):
-    source = (Path(__file__).resolve().parents[2] / "src/labpilot/research_engine/execution/capabilities/code_engineering/templates/image_classification/train.py.j2").read_text()
+    # Was read from the image_classification Jinja template, which M19 §2
+    # deleted. The exporter never depended on the pack — it rewrites whatever
+    # train.py it is handed — so the sample lives here, carrying only the
+    # shapes `_adapt_train_script` keys on.
+    source = (
+        "from pathlib import Path\n"
+        "\n"
+        'DATA_DIR = Path("/local/data/raw")\n'
+        'OUTPUT_DIR = Path("/local/run")\n'
+        "\n"
+        "\n"
+        "def load_data():\n"
+        "    return DATA_DIR\n"
+        "\n"
+        "\n"
+        "def resolve_image_path(value: str) -> Path | None:\n"
+        "    candidate = DATA_DIR / value\n"
+        "    return candidate if candidate.exists() else None\n"
+        "\n"
+        "\n"
+        "def main() -> None:\n"
+        "    print(resolve_image_path('a.jpg'))\n"
+        "\n"
+        "\n"
+        'if __name__ == "__main__":\n'
+        "    main()\n"
+    )
     adapted = _adapt_train_script(
         source,
         "/kaggle/input/competitions/aerial-cactus-identification",

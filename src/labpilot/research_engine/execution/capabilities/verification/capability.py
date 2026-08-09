@@ -104,7 +104,7 @@ class VerificationCapability(BaseCapability):
             )
 
         # Always syntax-check.
-        from labpilot.research_engine.execution.capabilities.code_engineering.offline_codegen.renderer import (
+        from labpilot.research_engine.execution.capabilities.code_engineering.syntax import (
             validate_python_syntax,
         )
 

@@ -68,6 +68,18 @@ Hard rules:
   rogii failed three times in a row here — ``KeyError: 'TVT'``, then
   ``KeyError: "['TVT'] not in index"`` — from a `get_feature_columns(df,
   target_col=...)` helper called on train *and* test.
+- **Drop `baseline_choice.validation.exclude_features` from the features, always.**
+  Those columns exist in train and not in test — the label's neighbours, leakage
+  columns, anything the scored rows will not carry. A model trained on them
+  scores well in validation and cannot be served, and on a predict-forward
+  dataset a rolling or lag statistic built from one leaks future values into
+  training rows while being NaN exactly where it is scored. The gain looks real
+  and does not transfer.
+
+  This list is derived from the data, not guessed: it is every train-only column
+  bar the target. It is also the one exception to the dtype rule below — select
+  numerically, *then* subtract this list. The Jinja templates enforced it until
+  M19 §2 deleted them, and nothing else does.
 - Select model features **by dtype, not by exclusion list**. An exclusion list
   only holds until a column you did not anticipate appears — and on a
   partitioned dataset the concatenated frame is the union of every file's

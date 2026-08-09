@@ -409,29 +409,76 @@ def test_a_repair_carries_the_brief_as_well_as_the_error(tmp_path):
 
 
 def test_a_repair_is_not_judged_redundant(tmp_path):
-    """Reported on PR #117: `check_redundancy` ran before `retrying` was even
-    computed, so a retry whose parent legitimately contained the earlier
-    attempt's code was retired instead of repaired."""
+    """Reported on PR #118.
+
+    The first attempt adds the feature; the run fails downstream for an
+    unrelated reason — a dtype error, an unwritten `metrics.json`. On retry the
+    parent legitimately contains that code, so the same `added` claim reads as
+    already implemented and the hypothesis is *permanently retired* instead of
+    repaired. The check is correct about the parent and wrong about the
+    question: redundancy asks about a hypothesis, and a repair is not one.
+    """
     spawned: list[str] = []
 
     def _runner(cmd, cwd, timeout):
         spawned.append("spawned")
-        raise RuntimeError("stop here")
+        raise RuntimeError("stop here — reaching the runner is what we assert")
 
     (tmp_path / "pipeline").mkdir()
     (tmp_path / "pipeline" / "train.py").write_text(_ENSEMBLE, encoding="utf-8")
     agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb"]), runner=_runner)
 
     with pytest.raises(Exception):
-        agent.propose(_Ctx(prior_train_py=_ENSEMBLE, retry_reason="KeyError: 'TVT'"), tmp_path)
+        agent.propose(
+            _Ctx(prior_train_py=_ENSEMBLE, retry_reason="KeyError: 'TVT'"),
+            tmp_path,
+        )
 
     assert spawned == ["spawned"], "a repair must reach aider, not be retired"
 
 
 def test_without_a_retry_reason_redundancy_still_retires(tmp_path):
+    """The carve-out must not cost the behaviour it guards — four campaigns
+    re-selected a hypothesis `train.py` already implemented."""
     agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb"]))
 
     with pytest.raises(AiderError) as caught:
         agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
 
     assert caught.value.kind == "hypothesis_redundant"
+
+
+def test_a_successful_run_records_its_latency(tmp_path):
+    """Reported on PR #118: `record_invocation` reads latency off `served`,
+    which the gateway supplies for a direct LLM call and nothing supplies for a
+    subprocess — so `DeltaRate.median_latency_ms` was permanently `None` while
+    appearing live on `research conduct status`."""
+    from labpilot.accessor.common import provenance
+
+    recorded: list[object] = []
+
+    class _Sink:
+        def record(self, invocation):
+            recorded.append(invocation)
+
+    edited = _ENSEMBLE + "\n\ndef extra():\n    return 1\n"
+
+    def _edits(cmd, cwd, timeout):
+        (Path(cwd) / "pipeline" / "train.py").write_text(edited, encoding="utf-8")
+
+        class _Result:
+            stdout = "applied"
+            stderr = ""
+            returncode = 0
+
+        return _Result()
+
+    agent = _agent(DeltaBrief(instruction="add a helper", added=["extra"]), runner=_edits)
+    token = provenance._sink.set(_Sink())
+    try:
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), _tree(tmp_path))
+    finally:
+        provenance._sink.reset(token)
+
+    assert recorded
+    assert isinstance(recorded[-1].latency_ms, int)

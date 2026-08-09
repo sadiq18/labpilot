@@ -3,7 +3,6 @@
 from labpilot.research_engine.execution.baseline.registry import (
     BaselineTemplate,
     get_template,
-    get_templates_root,
     list_templates,
 )
 from labpilot.research_engine.execution.baseline.selector import (
@@ -16,6 +15,5 @@ __all__ = [
     "BaselineSelector",
     "BaselineTemplate",
     "get_template",
-    "get_templates_root",
     "list_templates",
 ]

@@ -96,7 +96,7 @@ def _ctx(
     )
 
 
-def test_code_engineering_writes_without_llm(tmp_path: Path) -> None:
+def test_code_engineering_without_an_llm_produces_nothing_and_says_so(tmp_path: Path) -> None:
     knowledge = tmp_path / "knowledge"
     ctx = _ctx(knowledge, task_type=TaskType.WRITE_CODE)
     # Minimal tabular profile so selector has real schema signals.
@@ -150,13 +150,14 @@ def test_code_engineering_writes_without_llm(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     ev = CodeEngineeringCapability().execute(ctx)
-    assert ev.passed
-    assert (ctx.workspace_root / "pipeline" / "train.py").is_file()
-    # Offline (no LLM): fall back to the deterministic baseline template. The
-    # emergency stub writes fake metrics and a wrong-header submission while
-    # reporting success, so it is a last resort only when no template matches.
-    assert ev.metadata.get("origin") == "template"
-    assert "digests" in ev.metadata
+
+    # No LLM, and since M19 §2 no template pack either — so there is no code,
+    # and the step says so. It used to render a generic baseline and pass,
+    # which is how twelve distinct hypotheses scored MSE 194.80 identically:
+    # each got the same file, and the run looked healthy.
+    assert ev.passed is False
+    assert ev.metadata.get("origin") == "last_resort"
+    assert "produced no files" in (ev.error or "")
 
 
 def test_code_engineering_applies_llm_proposal(tmp_path: Path) -> None:

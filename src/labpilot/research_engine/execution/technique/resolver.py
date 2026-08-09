@@ -19,16 +19,27 @@ Four outcomes, and the distinctions between them are the point:
 ``rejected``        provably not a technique — a record reference like
                     ``hyp:H-010``. The only outcome that asserts "this is junk".
 
-**On F7 (leakage).** This module does *not* implement the design's F7 rule.
-F7 rejects a recipe whose **input columns** intersect
-``validation.exclude_features``; recipes here declare no input columns, so the
-check is not expressible yet. Exclusion is enforced one level down, in the
-templates: `tabular_regression_partitioned` skips
-``column in set(EXCLUDE_FEATURES)`` when deriving features, which is what keeps
-``TVT``/``ANCC`` out on rogii. Any new gate must follow that pattern. An earlier
-version of this file intersected exclude_features with *recipe names*, which
-could never fire on a real column list — a guard that looked protective and was
-not, exactly the class of defect this milestone keeps finding.
+**On F7 (leakage).** This module does *not* implement the design's F7 rule,
+and — since M19 §2 — **nothing else does either**. F7 rejects a recipe whose
+**input columns** intersect ``validation.exclude_features``; recipes here
+declare no input columns, so the check is not expressible at this level. It was
+enforced one level down, in the Jinja pack: `tabular_regression_partitioned`
+skipped ``column in set(EXCLUDE_FEATURES)`` when deriving features, which is
+what kept ``TVT``/``ANCC`` out on rogii. That pack is deleted, so the only
+thing standing between a hypothesis and a leakage column is a bullet in
+``code_engineer_system.md`` — an instruction to a model, with no check behind
+it. Reported on PR #118, and left open rather than papered over: the honest
+replacement is a runtime assertion over the columns the generated code
+actually trains on, which is M19 §5's unbuilt fifth check
+(``docs/research-os/autonomy-roadmap/14-experiments-as-deltas.md``). Until it
+exists this docstring says so, because the previous version described the
+deleted mechanism as though it were still there.
+
+An earlier version of this file intersected exclude_features with *recipe
+names*, which could never fire on a real column list — a guard that looked
+protective and was not, exactly the class of defect this milestone keeps
+finding, and the reason the gap above is stated rather than filled with
+another one.
 """
 
 from __future__ import annotations
@@ -37,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from labpilot.research_engine.execution.technique.models import TechniqueSpec
-from labpilot.research_engine.execution.technique.registry import gated_recipes, get_technique
+from labpilot.research_engine.execution.technique.registry import get_technique
 from labpilot.research_engine.shared.labels import is_record_reference
 
 _NUMERIC_DTYPES = ("int", "float", "double", "decimal")
@@ -109,8 +120,6 @@ def _precondition_met(req: str, profile: dict[str, Any], choice: Any) -> bool:
     return False
 
 
-def _template_name(choice: Any) -> str:
-    return str(getattr(choice, "template_name", "") or "")
 
 
 def requested_technique(plan_meta: dict[str, Any], hyp_fields: dict[str, Any]) -> str:
@@ -210,26 +219,28 @@ def resolve_technique(
             reason=f"{spec.name} requires {', '.join(sorted(unmet))}, absent from this dataset",
         )
 
-    # A recipe the chosen template cannot act on must not be reported as
-    # applied. `lag_features` on `tabular_regression_partitioned` resolves
-    # cleanly, is passed to the renderer, and the template — which has zero
-    # gates — ignores it. Recording that as `applied` would put "the technique
-    # ran and did nothing" into research memory, which is the false negative
-    # this milestone exists to prevent, one level up.
-    template = _template_name(choice)
-    if spec.feature_recipes and template:
-        missing = sorted(set(spec.feature_recipes) - gated_recipes(template))
-        if missing:
-            return TechniqueResolution(
-                requested=requested,
-                canonical=spec.name,
-                status="not_applicable",
-                reason=(
-                    f"template {template!r} has no gate for {missing}; "
-                    "the recipe path cannot execute this technique yet"
-                ),
-            )
+    # The template-gate check stood here. A recipe the chosen template could
+    # not act on had to be reported `not_applicable`, because the renderer
+    # accepted it silently and changed nothing — `lag_features` on
+    # `tabular_regression_partitioned`, which gated nothing at all.
+    #
+    # M19 §2 deleted the templates, so there is no render path left to be
+    # un-actionable, and the gate would now answer `not_applicable` for every
+    # recipe-backed technique. Codegen implements the technique from the
+    # hypothesis description instead, which is what `prompt_technique_fields`
+    # has always carried.
 
+    # `applied` is a verdict about *preconditions*, not about the code that
+    # follows. It is stamped before codegen runs, from the dataset profile
+    # alone, and nothing downstream compares `feature_recipes` against what the
+    # delta actually computed — `check_delta_consistency` reads the model's own
+    # `kept`/`added`/`combined` claims, which are about identifiers, not
+    # recipes. Reported on PR #118. The gate that used to close this
+    # (`gated_recipes`) tested the template's capability, not the emitted code,
+    # so it never closed it either. Named here rather than renamed: the label
+    # is stored on evidence cards and in `baseline_choice.json`, and a rename
+    # without a migration would make old records unreadable while leaving the
+    # verification gap exactly where it is.
     return TechniqueResolution(
         requested=requested,
         canonical=spec.name,

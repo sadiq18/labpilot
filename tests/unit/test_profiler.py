@@ -394,7 +394,11 @@ def test_partitioned_template_is_registered():
 
     template = get_template("tabular_regression", template_name="tabular_regression_partitioned")
     assert template is not None
-    assert (template.template_dir / "train.py.j2").is_file()
+    # No `.j2` to check any more: M19 §2 deleted the pack, and the registry is
+    # a declared catalogue of what a baseline looks like per problem type —
+    # model family and validation plan, which codegen reads whatever writes
+    # the code.
+    assert template.model_family == "lightgbm"
     # default for the problem type must stay the plain template
     assert get_template("tabular_regression").name == "tabular_regression"
 

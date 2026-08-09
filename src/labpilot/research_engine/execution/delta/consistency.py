@@ -55,6 +55,18 @@ class ConsistencyReport:
     #: Recorded on the evidence card, never a reason to refuse.
     flags: list[str] = field(default_factory=list)
     touched_functions: list[str] = field(default_factory=list)
+    #: The subset of `violations` produced by checks that need no claim from
+    #: the author — "did the code change" and "can it run". Tracked as a field
+    #: rather than recovered by matching the sentences, because the consumer
+    #: that keeps them when nothing was claimed was doing exactly that, and a
+    #: copy edit to either message would have silently switched it off.
+    claim_free_violations: list[str] = field(default_factory=list)
+
+    def record(self, violations: list[str], *, needs_claim: bool = True) -> None:
+        """Add violations, remembering which needed no claim."""
+        self.violations.extend(violations)
+        if not needs_claim:
+            self.claim_free_violations.extend(violations)
 
     def as_metadata(self) -> dict[str, object]:
         return {
@@ -246,9 +258,7 @@ def _local_bindings(body: list[ast.stmt]) -> set[str]:
                 declared_elsewhere.update(child.names)
                 continue
             if isinstance(child, ast.Import | ast.ImportFrom):
-                bound.update(
-                    alias.asname or alias.name.split(".")[0] for alias in child.names
-                )
+                bound.update(alias.asname or alias.name.split(".")[0] for alias in child.names)
                 continue
             if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
                 bound.add(child.id)
@@ -441,13 +451,21 @@ def referenced_names(tree: ast.Module) -> set[str]:
     A `Name` node covers direct calls too, since `helper()` puts one in
     `Call.func`. Being mentioned without running is a far cheaper mistake here
     than a false violation, which costs a re-ask on a correct experiment.
+
+    Self- and mutual recursion used to be handled here, by dropping one
+    function's own body from the scan. That answered "does anything *other than
+    this* mention it", which is still not reachability — a dead pair calling
+    each other passed. Both cases now belong to `unreachable_functions`, which
+    walks the call graph from the entry point and gets them for free. Reported
+    on PR #118.
     """
+    scope: ast.AST = tree
     found = {
         node.id
-        for node in ast.walk(tree)
+        for node in ast.walk(scope)
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
     }
-    found |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    found |= {node.attr for node in ast.walk(scope) if isinstance(node, ast.Attribute)}
     return found
 
 
@@ -467,6 +485,10 @@ def unreachable_functions(tree: ast.Module) -> set[str]:
     function into what *it* references. A cycle nothing outside it enters is
     never seeded and stays dead at any depth, and only top-level definitions are
     ever named, so the caller can always act on the answer.
+
+    Reported again on PR #118 from the other side: excluding one function's
+    own body let a mutually recursive pair vouch for each other, which the
+    walk answers without a special case.
 
     Nested functions are deliberately out of scope: they live and die with the
     function enclosing them, which this already judges.
@@ -586,23 +608,52 @@ def _without_unused_imports(tree: ast.Module) -> ast.Module:
 def _has_entry_point(tree: ast.Module) -> bool:
     """Does this module run something of its own when executed?
 
-    True when a locally-defined function is called from module level — directly
-    or inside the `if __name__ == "__main__":` guard, which is how every
-    generated `pipeline/train.py` ends.
+    True when a **top-level** function is called from **module level** —
+    directly or inside the `if __name__ == "__main__":` guard, which is how
+    every generated `pipeline/train.py` ends.
 
     Without this, `check_reachability` would condemn any module that defines
     functions for someone else to call, which is most of them.
+
+    Both halves of that sentence have been wrong in turn, so both are now
+    stated precisely.
+
+    *Module level* used to be approximated by walking each top-level statement,
+    `ast.walk` and all — which descends into a function body, so one helper
+    calling another looked like an entry point. `runs_at_import` walks only what
+    actually executes when the module is imported. A class body **does**: it
+    runs the moment the `class` statement does, so `class Config: seed =
+    set_seed(42)` is an entry point and skipping it alongside `def` was wrong.
+    Its methods are `def`s and are skipped like any other. Reported on PR #118.
+
+    *Top-level* used to be "defined anywhere", also via `ast.walk`, so a method
+    named `fit` made a module-level `fit()` look locally defined — and
+    sklearn-shaped code names methods `fit`, `predict` and `train` as a matter
+    of course. Only a top-level `def` can satisfy a module-level call; anything
+    else would be a `NameError` if the code ran. Reported on PR #118.
     """
     defined = {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
     if not defined:
         return False
-    for node in tree.body:
-        statements = node.body if isinstance(node, ast.If) else [node]
-        for statement in statements:
+
+    def runs_at_import(body: list[ast.stmt]) -> bool:
+        for statement in body:
+            if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+                # Defining is not running. The body executes only if something
+                # calls it, which is the question being asked.
+                continue
+            if isinstance(statement, ast.ClassDef):
+                # A class body is not deferred — it executes immediately.
+                if runs_at_import(statement.body):
+                    return True
+                continue
+            nested = _control_flow_bodies(statement)
+            if nested is not None:
+                if runs_at_import(nested):
+                    return True
+                continue
             for inner in ast.walk(statement):
                 if (
                     isinstance(inner, ast.Call)
@@ -610,7 +661,31 @@ def _has_entry_point(tree: ast.Module) -> bool:
                     and inner.func.id in defined
                 ):
                     return True
-    return False
+        return False
+
+    return runs_at_import(tree.body)
+
+
+def _control_flow_bodies(statement: ast.stmt) -> list[ast.stmt] | None:
+    """The statements a compound statement guards, or None if it is not one.
+
+    Enumerated from `ast`'s own node set rather than listed by hand: the hand
+    list omitted `ast.Match`, so a module-level `match` fell through to the
+    unguarded `ast.walk` below and reopened the false "runs at import" this
+    rewrite closed for every other construct. Reported on PR #118. Anything
+    carrying a statement body is compound, whatever it is called.
+    """
+    if isinstance(statement, ast.Match):
+        return [inner for case in statement.cases for inner in case.body]
+    fields = ("body", "orelse", "finalbody")
+    if not any(isinstance(getattr(statement, name, None), list) for name in fields):
+        return None
+    nested: list[ast.stmt] = []
+    for name in fields:
+        nested.extend(getattr(statement, name, []) or [])
+    for handler in getattr(statement, "handlers", []) or []:
+        nested.extend(handler.body)
+    return nested
 
 
 def check_reachability(child: ast.Module, touched: list[str]) -> list[str]:
@@ -633,22 +708,47 @@ def check_reachability(child: ast.Module, touched: list[str]) -> list[str]:
     one question that separates "the experiment ran" from "the experiment
     produced a number".
 
-    Conservative in three ways, because a violation costs a re-ask and a
-    re-ask spent on a correct experiment is a step a campaign does not get back:
+    **The dead set comes from `unreachable_functions`, not from a second
+    mechanism.** This asked "is the name mentioned anywhere else" for a while,
+    which is a weaker question with its own bugs — a self-call vouched for its
+    own function, then a mutually recursive pair vouched for each other, each
+    fixed here one at a time while the sibling walk in this same file already
+    answered all of them. Reported on PR #118: `A` calls `B`, `B` calls `A`,
+    `main()` calls neither, and this returned no violation. Two primitives for
+    one question means every bug gets found twice, so there is now one.
+
+    The walk is also the *stronger* answer, and deliberately so. An earlier
+    version of this docstring called entry-point reachability too aggressive
+    because it "would also condemn a function called only by another dead one"
+    — but such a function genuinely cannot run, so that is a true positive, not
+    a false one.
+
+    Conservative in two ways, because a violation costs a re-ask and a re-ask
+    spent on a correct experiment is a step a campaign does not get back:
 
     * it asks only of files that **run themselves** — a module with no entry
       point is a library, where an uncalled function is called by someone else
       and "unreachable" is not a fact this file can establish;
-    * **every** touched function must be uncalled, so a delta that edits three
-      functions and leaves one helper dead still passes;
-    * it asks whether the name is called *anywhere*, not whether it is reachable
-      from the entry point, which would also condemn a function called only by
-      another dead one. Fewer true positives, no false ones.
+    * **every** touched function the child still defines must be dead, so a
+      delta that edits three functions and leaves one helper dead still passes.
     """
     if not touched or not _has_entry_point(child):
         return []
-    dead = [name for name in touched if name not in referenced_names(child)]
-    if len(dead) != len(touched):
+    # Only functions the child still defines can be judged. A delta that
+    # *removes* a function puts a name in `touched` that can never appear in
+    # any dead-set, and "every touched function is dead" was then unsatisfiable
+    # — so a delta adding dead code alongside an unrelated removal passed
+    # silently. Reported on PR #118. A removal is not dead code; it is the
+    # absence of code, which `check_preservation` owns.
+    present = {
+        node.name for node in child.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    judged = [name for name in touched if name in present]
+    if not judged:
+        return []
+    unreachable = unreachable_functions(child)
+    dead = [name for name in judged if name in unreachable]
+    if len(dead) != len(judged):
         return []
     listed = ", ".join(repr(name) for name in sorted(dead))
     return [
@@ -752,8 +852,13 @@ def check_delta_consistency(
     report = ConsistencyReport()
     child_tree = _parse(child_source, "the proposed result")
     if child_tree is None:
+        # Through `record`, like every other violation. Appending straight to
+        # the list skipped `claim_free_violations`, so `_observe_delta` — which
+        # reads that list when nothing was claimed — saw an empty one and
+        # reported nothing wrong about a result that does not parse. Reported
+        # on PR #118. Nothing claimed this, so it is claim-free by definition.
         report.ok = False
-        report.violations.append("the result does not parse as Python")
+        report.record(["the result does not parse as Python"], needs_claim=False)
         return report
 
     parent_tree = _parse(parent_source, "the parent") if parent_source else None
@@ -763,14 +868,14 @@ def check_delta_consistency(
         # First, because every other verdict is about *how* the code changed
         # and this asks whether it changed at all. A docstring-only delta
         # otherwise passes each of them on its own terms.
-        report.violations.extend(check_effect(parent_tree, child_tree))
+        report.record(check_effect(parent_tree, child_tree), needs_claim=False)
         # Independent of the claim, and that is the point — see
         # `check_reachability`. A better claim would have hidden the defect
         # this catches, so it cannot be derived from one.
-        report.violations.extend(check_reachability(child_tree, report.touched_functions))
+        report.record(check_reachability(child_tree, report.touched_functions), needs_claim=False)
 
-    report.violations.extend(check_preservation(child_tree, keep or []))
-    report.violations.extend(check_addition(child_tree, add or []))
-    report.violations.extend(check_combination(child_tree, combine or []))
+    report.record(check_preservation(child_tree, keep or []))
+    report.record(check_addition(child_tree, add or []))
+    report.record(check_combination(child_tree, combine or []))
     report.ok = not report.violations
     return report

@@ -6,6 +6,8 @@ import ast
 import json
 from pathlib import Path
 
+from helpers.fake_codegen import FakeCodegenLLM
+
 from labpilot.research_engine.agents import (
     AgentTask,
     SpecialistDescriptor,
@@ -114,7 +116,7 @@ def test_coding_tool_v1_read_smoke(tmp_path: Path) -> None:
     (ws.root / "src").mkdir(parents=True)
     (ws.root / "src" / "hello.py").write_text("x = 1\n", encoding="utf-8")
 
-    tool = V1CodeEngineeringCodingTool(llm_client=None)
+    tool = V1CodeEngineeringCodingTool(llm_client=FakeCodegenLLM())
     bundle = _empty_bundle("demo")
     refs = execute_agent_sync(
         _CodingAgent(tool),
@@ -152,7 +154,7 @@ def test_coding_tool_v1_write_smoke(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    tool = V1CodeEngineeringCodingTool(llm_client=None)
+    tool = V1CodeEngineeringCodingTool(llm_client=FakeCodegenLLM())
     bundle = ContextBundle(
         request=ContextRequest(competition="demo", goal="baseline"),
         items=[],

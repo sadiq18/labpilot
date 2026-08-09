@@ -20,19 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 def _codegen_strategy(workspace: Workspace) -> str:
-    """`codegen.strategy` from the workspace config, or the safe default.
+    """`codegen.strategy` for this workspace — see `codegen_strategy`."""
+    from labpilot.research_engine.execution.codegen_strategy import (
+        resolve_codegen_strategy,
+        workspace_config_path,
+    )
 
-    Never raises: an unreadable or absent config means `whole_file`, which is
-    the path that has always worked. A campaign should not fail to produce code
-    because a config file has a typo in an unrelated section.
-    """
-    try:
-        from labpilot.config import load_config
-
-        return str(load_config(workspace.root / "configs" / "default.yaml").codegen.strategy)
-    except Exception as exc:  # noqa: BLE001 — config trouble must not stop a run
-        logger.debug("codegen strategy unreadable, using whole_file: %s", exc)
-        return "whole_file"
+    return resolve_codegen_strategy(workspace_config_path(workspace))
 
 
 def run_plan(

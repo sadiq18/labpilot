@@ -153,15 +153,34 @@ class CodegenConfig(BaseModel):
     """How training code is produced.
 
     ``whole_file`` regenerates the script; ``delta`` edits the parent through
-    aider. Default is ``whole_file`` because M19 §10 requires both paths to
-    coexist while the failure rate is measured — flipping the default is step 3,
-    and it needs a number rather than a preference.
+    aider.
 
-    ``delta`` degrades to ``whole_file`` rather than failing when there is no
-    parent to edit or no gateway to route through.
+    Default is ``delta`` as of M19 §3, which required a number rather than a
+    preference before flipping. Measured on rogii 2026-08-09 after the codegen
+    and retry fixes landed, via
+    :func:`labpilot.research_engine.telemetry.delta_rate.delta_rate`:
+
+    ==================================  =====  ======  ======  =====
+    window                              n      usable  failed  rate
+    ==================================  =====  ======  ======  =====
+    all fixes in                        8      8       0       0%
+    from the first retry fix onward     18     17      1       5.6%
+    ==================================  =====  ======  ======  =====
+
+    The single failure was ``aider_no_edit``. Redundancy declines are excused
+    from the rate — the parent already implementing a change says nothing about
+    whether the adapter can edit code — but stay visible in ``by_kind``.
+
+    The step 1c format comparison stands: ``diff`` at +18/-7 against ``whole``
+    at +23/-7, for 19% fewer tokens.
+
+    ``delta`` still degrades to ``whole_file`` rather than failing when there
+    is no parent to edit or no gateway to route through, so a baseline is
+    unaffected: it has nothing to diff against and takes the whole-file path by
+    construction.
     """
 
-    strategy: Literal["whole_file", "delta"] = "whole_file"
+    strategy: Literal["whole_file", "delta"] = "delta"
 
 
 class AppConfig(BaseModel):
