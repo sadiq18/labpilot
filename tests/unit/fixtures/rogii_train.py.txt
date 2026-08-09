@@ -1,0 +1,316 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "lightgbm>=4.0",
+#   "pandas>=2.0",
+#   "numpy>=1.24",
+#   "scikit-learn>=1.3",
+#   "pyyaml>=6.0"
+# ]
+# ///
+"""
+Tabular regression baseline for Rogii Wellbore Geology Prediction.
+Keeps H-014 feature set and validates MD_x_GR interaction.
+"""
+import os
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+from sklearn.metrics import mean_squared_error
+import yaml
+import glob
+from typing import List, Tuple
+
+
+def load_partitioned_data(data_dir: str = "data/raw") -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Load and concatenate all train and test CSV files."""
+    train_paths = sorted(glob.glob(os.path.join(data_dir, "train", "*__horizontal_well.csv")))
+    test_paths = sorted(glob.glob(os.path.join(data_dir, "test", "*__horizontal_well.csv")))
+    
+    if not train_paths:
+        raise FileNotFoundError("No train CSV files found in " + data_dir)
+    
+    df_list = []
+    for path in train_paths:
+        df = pd.read_csv(path)
+        df['file_stem_entity'] = os.path.splitext(os.path.basename(path))[0].replace('__horizontal_well', '')
+        df_list.append(df)
+    
+    train_df = pd.concat(df_list, ignore_index=True)
+    
+    test_list = []
+    for path in test_paths:
+        df = pd.read_csv(path)
+        df['file_stem_entity'] = os.path.splitext(os.path.basename(path))[0].replace('__horizontal_well', '')
+        test_list.append(df)
+    
+    test_df = pd.concat(test_list, ignore_index=True) if test_list else pd.DataFrame()
+    
+    return train_df, test_df
+
+
+def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Engineer features exactly as in H-014, including MD_x_GR interaction."""
+    # Exclude train-only columns that are not in test
+    exclude_cols = ['ANCC', 'ASTNU', 'ASTNL', 'EGFDU', 'EGFDL', 'BUDA', 'Geology']
+    feature_df = df.drop(columns=exclude_cols, errors='ignore').copy()
+    
+    # Ensure required columns exist
+    required_cols = ['MD', 'GR']
+    for col in required_cols:
+        if col not in feature_df.columns:
+            raise ValueError(f"Required column {col} not found in data")
+    
+    # Compute MD_x_GR interaction
+    feature_df['MD_x_GR'] = feature_df['MD'] * feature_df['GR']
+    feature_df['MD_round'] = np.round(feature_df['MD'])
+    
+    # Compute GR rolling mean per file_stem_entity with window 5
+    if 'GR' in feature_df.columns and 'file_stem_entity' in feature_df.columns:
+        gr_roll = feature_df.groupby('file_stem_entity')['GR'].rolling(window=5, min_periods=5).mean()
+        gr_roll = gr_roll.reset_index(level=0, drop=True)
+        feature_df['GR__roll_mean_5'] = gr_roll
+
+        # Compute GR rolling standard deviation per file_stem_entity with window 5
+        gr_roll_std = feature_df.groupby('file_stem_entity')['GR'].rolling(window=5, min_periods=5).std()
+        gr_roll_std = gr_roll_std.reset_index(level=0, drop=True)
+        feature_df['GR__rollstd_5'] = gr_roll_std
+    else:
+        feature_df['GR__roll_mean_5'] = 0.0
+        feature_df['GR__rollstd_5'] = 0.0
+    
+    # Add relative position encoding
+    feature_df = add_relative_position_encoding(feature_df)
+        
+    # Compute GR_x_anchor as the product of GR and anchor_target
+    if 'anchor_target' in feature_df.columns:
+        feature_df['GR_x_anchor'] = feature_df['GR'] * feature_df['anchor_target']
+    else:
+        feature_df['GR_x_anchor'] = 0.0
+    
+    # Compute GR_x_rel_position as the product of GR and rel_pos_sin_0
+    if 'GR' in feature_df.columns and 'rel_pos_sin_0' in feature_df.columns:
+        feature_df['GR_x_rel_position'] = feature_df['GR'] * feature_df['rel_pos_sin_0']
+    else:
+        feature_df['GR_x_rel_position'] = 0.0
+    
+    # Compute tortuosity and GR_x_tortuosity
+    if {'X','Y','Z'}.issubset(feature_df.columns) and 'file_stem_entity' in feature_df.columns:
+        # Sort by MD within each group to ensure consecutive rows are along the well
+        feature_df = feature_df.sort_values(['file_stem_entity', 'MD'])
+        # Compute differences
+        diff_x = feature_df['X'].diff()
+        diff_y = feature_df['Y'].diff()
+        diff_z = feature_df['Z'].diff()
+        squared_distance = diff_x**2 + diff_y**2 + diff_z**2
+        # Fill NaN (first row of each group) with 0
+        squared_distance = squared_distance.fillna(0)
+        # Cumulative sum within each group
+        feature_df['tortuosity'] = squared_distance.groupby(feature_df['file_stem_entity']).cumsum()
+        # Compute inclination
+        horizontal_displacement = np.sqrt(diff_x**2 + diff_y**2)
+        inclination = np.arctan2(horizontal_displacement, diff_z)
+        # Fill NaN (first row of each group) with 0
+        inclination = inclination.fillna(0)
+        feature_df['inclination'] = inclination
+    else:
+        feature_df['tortuosity'] = 0.0
+        feature_df['inclination'] = 0.0
+
+    if 'GR' in feature_df.columns:
+        feature_df['GR_x_tortuosity'] = feature_df['GR'] * feature_df['tortuosity']
+    else:
+        feature_df['GR_x_tortuosity'] = 0.0
+
+    # Compute horizontal_offset
+    if {'X','Y'}.issubset(feature_df.columns):
+        feature_df['horizontal_offset'] = (feature_df['X'] - feature_df['Y']).abs()
+    else:
+        feature_df['horizontal_offset'] = 0.0
+
+    # Fill missing values with 0 for safety
+    feature_df = feature_df.fillna(0)
+        
+    return feature_df
+
+
+def get_feature_columns(df: pd.DataFrame, target_col: str = 'TVT', id_col: str = 'id') -> List[str]:
+    """Get feature columns by selecting numeric types, excluding target and ID."""
+    # Remove the Geology column if present, as it is non-numeric and causes issues
+    df = df.drop(columns=['Geology'], errors='ignore')
+    # Select only numeric columns
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    # Remove target and ID columns if present
+    feature_cols = [c for c in numeric_cols if c not in [target_col, id_col]]
+    return feature_cols
+
+
+def partition_suffix_holdout_split(
+    df: pd.DataFrame,
+    holdout_fraction: float = 0.7320379581387751,
+    group_key: str = 'file_stem_entity'
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Split data by holding out suffix of each partition (for scored rows simulation)."""
+    if group_key not in df.columns:
+        raise ValueError(f"Group key {group_key} not found in dataframe")
+    
+    train_parts = []
+    val_parts = []
+    
+    for entity, group in df.groupby(group_key):
+        group = group.sort_values('MD')  # Sort by MD to simulate depth
+        n_holdout = max(1, int(len(group) * holdout_fraction))
+        train_parts.append(group.iloc[:-n_holdout])
+        val_parts.append(group.iloc[-n_holdout:])
+    
+    train_df = pd.concat(train_parts, ignore_index=True) if train_parts else pd.DataFrame()
+    val_df = pd.concat(val_parts, ignore_index=True) if val_parts else pd.DataFrame()
+    
+    return train_df, val_df
+
+
+def add_relative_position_encoding(df: pd.DataFrame, num_bands: int = 8) -> pd.DataFrame:
+    """Add sinusoidal relative position encoding based on MD within each well (file_stem_entity)."""
+    df = df.copy()
+    
+    if 'MD' not in df.columns or 'file_stem_entity' not in df.columns:
+        return df
+    
+    grouped = df.groupby('file_stem_entity')
+    encoded_groups = []
+    
+    for name, group in grouped:
+        md_vals = group['MD'].values
+        min_md = md_vals.min()
+        max_md = md_vals.max()
+        if max_md == min_md:
+            rel_pos = np.zeros_like(md_vals, dtype=float)
+        else:
+            rel_pos = (md_vals - min_md) / (max_md - min_md)
+        
+        pos_encoding = np.zeros((len(group), 2 * num_bands))
+        for i in range(num_bands):
+            angle = rel_pos * (2 ** i * np.pi)
+            pos_encoding[:, 2*i] = np.sin(angle)
+            pos_encoding[:, 2*i+1] = np.cos(angle)
+        
+        encoding_cols = [f'rel_pos_sin_{i}' for i in range(num_bands)] + [f'rel_pos_cos_{i}' for i in range(num_bands)]
+        encoding_df = pd.DataFrame(pos_encoding, columns=encoding_cols, index=group.index)
+        
+        group_encoded = pd.concat([group, encoding_df], axis=1)
+        encoded_groups.append(group_encoded)
+    
+    if encoded_groups:
+        df_encoded = pd.concat(encoded_groups)
+    else:
+        df_encoded = df
+    
+    return df_encoded
+
+
+def train_model(X_train, y_train, X_val, y_val, feature_names):
+    """Train LightGBM regression model."""
+    train_data = lgb.Dataset(X_train, label=y_train, feature_name=feature_names)
+    val_data = lgb.Dataset(X_val, label=y_val, reference=train_data, feature_name=feature_names)
+    
+    params = {
+        'objective': 'regression',
+        'metric': 'rmse',
+        'boosting_type': 'gbdt',
+        'num_leaves': 31,
+        'learning_rate': 0.05,
+        'feature_fraction': 0.9,
+        'bagging_fraction': 0.8,
+        'bagging_freq': 5,
+        'verbose': -1,
+        'seed': 42
+    }
+    
+    model = lgb.train(
+        params,
+        train_data,
+        num_boost_round=1000,
+        valid_sets=[val_data],
+        callbacks=[lgb.early_stopping(50), lgb.log_evaluation(0)]
+    )
+    return model
+
+
+def main():
+    """Main training pipeline."""
+    print("Loading data...")
+    train_df, test_df = load_partitioned_data()
+    
+    print("Engineering features...")
+    train_df = engineer_features(train_df)
+    if not test_df.empty:
+        if 'id' not in test_df.columns:
+            test_df['id'] = range(len(test_df))
+        test_df = engineer_features(test_df)
+
+    # NEW: Get feature columns and ensure they are in test set (if test set exists)
+    target_col = 'TVT_input'
+    id_col = 'id'
+    feature_cols = get_feature_columns(train_df, target_col, id_col)
+    if not test_df.empty:
+        # Keep only features that are also in the test set
+        feature_cols = [c for c in feature_cols if c in test_df.columns]
+
+    print("Splitting data using partition suffix holdout...")
+    train_split, val_split = partition_suffix_holdout_split(train_df)
+    # NEW: Drop the 'Geology' and 'geology' columns if present to avoid LightGBM dtype error
+    train_split = train_split.drop(columns=['Geology', 'geology'], errors='ignore')
+    val_split = val_split.drop(columns=['Geology', 'geology'], errors='ignore')
+    
+    print(f"Number of features: {len(feature_cols)}")
+    
+    # Prepare training data
+    X_train = train_split[feature_cols]
+    y_train = train_split[target_col]
+    X_val = val_split[feature_cols]
+    y_val = val_split[target_col]
+    
+    print("Training LightGBM model...")
+    model = train_model(X_train, y_train, X_val, y_val, feature_cols)
+    
+    # Predict on validation
+    val_pred = model.predict(X_val, num_iteration=model.best_iteration)
+    val_rmse = np.sqrt(mean_squared_error(y_val, val_pred))
+    
+    print(f"Validation RMSE: {val_rmse:.6f}")
+        
+    
+    # Predict on test
+    if not test_df.empty:
+        X_test = test_df[feature_cols]
+        test_pred = model.predict(X_test, num_iteration=model.best_iteration)
+            
+        # Prepare submission
+        submission = pd.DataFrame({
+            'id': test_df[id_col],
+            'tvt': test_pred
+        })
+        submission.to_csv('./submission.csv', index=False)
+        print("Submission saved to ./submission.csv")
+    
+    # Save metrics
+    metrics = {
+        'cv_rmse': float(val_rmse),
+        'rmse': float(val_rmse),
+        'mse': float(mean_squared_error(y_val, val_pred)),
+        'validation_scheme': 'partition_suffix_holdout',
+        'holdout_fraction': 0.7320379581387751,
+        'n_train_rows': len(train_split),
+        'n_val_rows': len(val_split),
+        'n_features': len(feature_cols),
+        'features': feature_cols
+    }
+    
+    import json
+    with open('./metrics.json', 'w') as f:
+        json.dump(metrics, f, indent=2)
+    print("Metrics saved to ./metrics.json")
+
+
+if __name__ == "__main__":
+    main()

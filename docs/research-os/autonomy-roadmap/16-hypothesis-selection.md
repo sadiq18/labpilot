@@ -1,6 +1,6 @@
 # M21 — A hypothesis earns its turn
 
-**Status:** in progress · **Blocks:** [M19](14-experiments-as-deltas.md) step 2 ·
+**Status:** shipped 2026-08-09 (PR #116) · **Unblocked:** [M19](14-experiments-as-deltas.md) step 2 ·
 **Completes:** M16's known gap (*"a backlog is not a good backlog"*)
 
 ---

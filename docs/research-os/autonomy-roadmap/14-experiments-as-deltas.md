@@ -81,7 +81,7 @@ provenance.
 | 0 | fitroute OpenAI-compatible proxy | **shipped** (PR #110) |
 | 1a | `CodeAgent` seam + hypothesis-consistency checks | **shipped** (PR #111) |
 | 1b | wire the checks into the whole-file path, observe-only | **shipped** (PR #112) — four of §5's five checks |
-| — | **validation-region flagging**, §5's fifth check | **not built** — see below |
+| — | **validation-region flagging**, §5's fifth check | **shipped 2026-08-09** — with F7 leakage discipline alongside it; see below |
 | — | per-execution code provenance (§6) | **shipped** (PR #113) — `runs/<execution_id>/` |
 | 1c | `AiderAgent` + copy/diff/propose + **campaign circuit breaker** | **shipped** (PR #115) — default off |
 | 2 | opt-in via config; measure the failure rate | **shipped** — 18 attempts, 1 failure (5.6%); see below |
@@ -111,23 +111,94 @@ Self-reported, so a consistently lying model is not caught — but carelessness
 is the failure that happens, and the gap between what the author says it did
 and what the file does is exactly what makes attribution false.
 
-**The fifth check was never built, and it is the one this milestone rests on.**
-§5 lists preservation, addition, combination, confinement and **validation
-region**; `consistency.py` implements the first four. Nothing detects a delta
-landing in `partition_suffix_holdout`, `_driver_columns` or the holdout
-construction — which is the mitigation §8 names for the only risk it calls *the
-one that would hurt*, and the property that justifies deltas at all.
+**The fifth check shipped 2026-08-09**, last of §5's five and the one this
+milestone rests on. `consistency.py` now implements all five: preservation,
+addition, combination, confinement and **validation region**.
 
-It does not depend on aider. Like confinement it needs no claim from the author,
-so the argument that put 1b before 1c applies to it unchanged: whole-file
-regeneration can silently drop the leakage discipline today, and a leaky score
-looks *better*, not worse.
+What unblocked it was noticing the region did not need defining. The design
+question was how to name it without a curated list of function names — the
+curated-set-answering-an-open-world-question pattern this plan had rejected
+four times, most recently as the technique→symbol map that killed 1b's original
+derivation. But `derive_validation_plan` already reads the dataset profile and
+writes the scheme and the excluded columns into `baseline_choice.json`. The
+workspace declares the *scheme*; the parent supplies the *code*; the region is
+the intersection. Nothing is maintained by hand, and a workspace that derived no
+plan has an empty region — which is the honest answer rather than a silent pass.
 
-What stopped it is a design question, not effort. Defining the region as a list
-of function names is the curated-set-answering-an-open-world-question pattern
-this plan has already rejected four times — most recently as the technique→symbol
-map that killed 1b's original derivation. The region has to be derived from the
-parent or declared by the workspace, and that decision is unmade.
+Three findings came out of calibrating it on rogii's real 7-function `train.py`,
+and each one narrowed the signal:
+
+| signal | region | verdict |
+|---|---|---|
+| `exclude_features` | 3 of 7 | wrong — a function naming an excluded column is usually the one excluding it |
+| `+ group_key` | 5 of 7 | wrong — `file_stem_entity` groups rolling features as readily as folds. A column is used everywhere; a *scheme* is a procedure, and only validation runs one |
+| scheme, delegation counted | 2 of 7 | still wrong — `main` calls the splitter, and `main` calls everything |
+| scheme, strings counted | 2 of 7 | still wrong — `main` writes `{"validation_scheme": …}` into its metrics. Reporting is not running |
+| **scheme, identifiers, implementers only** | **1 of 7** | the split function, and nothing else |
+
+Six flags in seven functions is a flag nobody reads, which is the failure M20
+exists for — so the narrowing mattered as much as the check.
+
+Review found three more, and they are the more instructive half:
+
+* **Substring matching, on the default scheme.** `kfold` is a substring of
+  `sanity_check_folds` — "che**ck fold**s" — so a diagnostic that counts
+  pre-existing folds joined the region, as did anything carrying an `n_kfolds`
+  parameter. Matching is on whole-word runs now: `partition|suffix|holdout`
+  matches, `check|folds` does not, and `GroupKFold` still finds `k|fold`.
+* **Every caller was exempt, not just the entry point.** The rule was written
+  for `main`, which calls everything and so says nothing by calling. It also
+  excused `prepare_and_split`, which reseeds and reshuffles before delegating —
+  and that changes exactly which rows land in the holdout. Only the module's
+  entry point is exempt now.
+* **The flags reached no reader at all.** `delta_flags` went into the
+  write-code task's own `TaskEvidence`, and `build_evidence_card` builds from
+  `metrics.json` and plan metadata. Nothing opened that file. This was true of
+  `check_confinement` since PR #112, so *every* flag this system has ever
+  raised was decorative — and the argument for flagging rather than refusing is
+  that a reader can discount the result. `delta_flags_for` now carries them onto
+  the card and into `decision_reason`.
+
+The last one is worth the milestone's attention rather than this section's. A
+check that fires correctly into a file nobody reads passes every test that
+exists and protects nothing, which is the shape `00-diagnosis.md` opens with —
+*"every milestone shipped its structure but not its function"* — arriving in the
+milestone written to end it.
+
+And the first fix for it was half a fix, which is the same lesson again. The
+flags were appended to `decision_reason` when the card was built, and three
+writers recompute that field afterwards — `submit_learn` when leaderboard
+results land, `repair` twice — each overwriting the sentence. The qualification
+vanished exactly when a hypothesis reached the leaderboard, the confirmed case
+it was added for. `metadata["delta_flags"]` survives all three, so
+`EvidenceCard.decision_summary` derives the text from there and no future writer
+can lose it by rewriting a sentence.
+
+**F7 ships with it**, because step 4 turned that gap from missing detection into
+missing enforcement. `check_leakage_discipline` asks two questions in order,
+and the first is the one that survived review.
+
+**Is an excluded column selected?** `df[["Geology", "GR"]]` keeps it, and that
+is a fact rather than an inference. The first version asked only whether the
+file *mentioned* the column — which reads explicit inclusion as evidence of
+exclusion, scoring the exact leak class as clean. Five shapes got through,
+including one that dropped one of three excluded columns and kept the rest.
+
+**Otherwise, is anything excluding them?** A file that derives features from the
+frame and never mentions *every* excluded column, nor `exclude_features`, cannot
+be applying the rule. Not flagged when it names them, reads the key from config,
+or selects by explicit allowlist. The frame test covers `columns`, `keys`,
+`select_dtypes` and `dtypes`; implicit iteration (`[c for c in df]`) is not
+detected and is stated as such rather than guessed at.
+
+Both are **flags**, not refusals — §8's own wording is *"the mitigation is
+detection, not prohibition"*, and every check in this file that refused on names
+inferred from code has had to be walked back.
+
+The limit worth stating: a delta that inlines a *different* split under names
+resembling nothing in the plan is not caught. This finds code performing the
+declared scheme. Confinement covers part of the rest, since such a delta is
+usually wide, and the remainder waits for a signal better than naming.
 
 **Also outstanding before step 2 means anything:** the checks have still only
 seen samples the author wrote — the same setup that produced both 1a bugs. Nine
@@ -425,11 +496,35 @@ did not name:
   `not_applicable` for every recipe-backed technique; codegen implements them
   from the hypothesis description instead. This is the header's *"subsumes the
   technique registry"* arriving in practice.
-* **Two rules moved rather than died.** Syntax validation is asked of every
-  proposal whoever wrote it. And *a PEP 723 script must not import labpilot* —
+* **Three rules moved rather than died.** Syntax validation is asked of every
+  proposal whoever wrote it. *A PEP 723 script must not import labpilot* —
   caught in PR #102's review over two templates that did exactly that — now runs
-  in `apply`, the gate every proposal passes through. It was never really about
-  templates.
+  in `apply`, the gate every proposal passes through. And *a PEP 723 block must
+  declare every third-party import the script makes*, which PR #102 also fixed
+  and which the pack held as a static check over `.j2` source
+  (`test_a_declaring_template_declares_every_third_party_import`): it went out
+  with the pack and came back in `apply` during PR #118's review. None of the
+  three was ever really about templates.
+
+  That last one is worth the line it costs. It was restored only because a
+  reviewer went looking for what the deletion had taken, three rounds after the
+  deletion shipped. The rule is *more* load-bearing now, not less: every
+  `train.py` is model-written, and an undeclared dependency is a
+  `ModuleNotFoundError` one campaign step later.
+
+* **One rule died outright and was rebuilt: F7 leakage exclusion.** The pack was
+  the only thing enforcing it. `tabular_regression_partitioned` skipped
+  `column in set(EXCLUDE_FEATURES)` when deriving features, which is what kept
+  `TVT`/`ANCC` out on rogii. Nothing enforces it now — `resolver.py` cannot,
+  because recipes declare no input columns, and the only thing left between a
+  hypothesis and a leakage column is a bullet in `code_engineer_system.md`: an
+  instruction to a model, with no check behind it. Reported on PR #118, and the
+  docstring that claimed the deleted mechanism was still live has been
+  corrected to say so.
+
+  This was never a separate gap. It is **§5's fifth check** arriving from the
+  other direction, and both shipped together on 2026-08-09 as
+  `check_validation_region` and `check_leakage_discipline` — see above.
 
 ### Prerequisites cleared on the way
 
@@ -443,7 +538,11 @@ did not name:
 
 ## Exit criteria
 
-All five met, 2026-08-09.
+All five met, 2026-08-09 — and §5 is now whole, which the criteria never
+required. The fifth consistency check shipped the same day, after step 4 turned
+it from a missing flag into a missing guard. Worth keeping the distinction on
+record: the exit criteria were met while the milestone's own §5 was not, and
+nothing in the criteria would have caught that.
 
 1. **Met.** A child experiment produces a delta; a baseline still produces a
    whole file — `delta` degrades to `whole_file` when there is no parent, which
@@ -478,3 +577,13 @@ it reviewable, not impossible. The mitigation is detection, not prohibition — 
 validation region and record it on the evidence card. A
 hypothesis *about* validation is legitimate; one that changes validation while
 claiming to test a feature is a false result.
+
+**Built 2026-08-09.** `check_validation_region` flags a delta that lands in the
+region the workspace's own validation plan defines, and `check_leakage_discipline`
+flags a file that derives features from the frame's columns while excluding
+nothing. Both record on the evidence card and refuse nothing.
+
+The design question that stopped this for three milestones — what defines the
+region, given that a curated list of function names is the pattern this plan
+has rejected four times — dissolved rather than being answered: the workspace
+had already declared the scheme, and the parent already contained the code.

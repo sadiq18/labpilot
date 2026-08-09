@@ -38,7 +38,9 @@ class ExperimentProvider:
         out: list[ContextItem] = []
         for card in cards:
             decision = getattr(card.decision, "value", str(card.decision))
-            reason = getattr(card, "decision_reason", "") or ""
+            # The summary, not the raw field: a card whose delta touched the
+            # validation region has to say so wherever its verdict is read.
+            reason = getattr(card, "decision_summary", "") or ""
             text = f"{card.id}: {decision} — {reason}".strip(" —")
             out.append(
                 ContextItem(

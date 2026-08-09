@@ -19,6 +19,7 @@ from labpilot.research_engine.evidence.models import (
     StabilityOutcome,
 )
 from labpilot.research_engine.evidence.store import EvidenceCardStore
+from labpilot.research_engine.execution.evidence import evidence_dir
 from labpilot.research_engine.intelligence.competition.direction import resolve_maximize
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
@@ -92,9 +93,7 @@ def _float(metrics: dict[str, Any], *keys: str) -> float | None:
     return None
 
 
-def _stability(
-    parent_std: float | None, treatment_std: float | None
-) -> StabilityOutcome:
+def _stability(parent_std: float | None, treatment_std: float | None) -> StabilityOutcome:
     if parent_std is None or treatment_std is None:
         return StabilityOutcome.UNKNOWN
     delta = treatment_std - parent_std
@@ -262,9 +261,7 @@ def _reusable_for(competition: str, plan_meta: dict[str, Any]) -> list[str]:
     return out[:12]
 
 
-def _resolve_direction(
-    knowledge_dir: Path, competition: str, workspace_root: Path | None
-) -> bool:
+def _resolve_direction(knowledge_dir: Path, competition: str, workspace_root: Path | None) -> bool:
     """Metric direction for this competition, or raise saying how to fix it."""
     paths = ResearchPaths(Path(knowledge_dir), competition)
     resolved = resolve_maximize(
@@ -282,6 +279,40 @@ def _resolve_direction(
             "explicitly only when the caller genuinely knows better."
         )
     return resolved
+
+
+def delta_flags_for(knowledge_dir: Path, competition: str, execution_id: str) -> list[str]:
+    """Every `delta_flags` entry recorded by the tasks of one execution.
+
+    The write-code capability has always written these — the wide-delta flag
+    since PR #112, the validation-region and leakage flags since PR #119 — into
+    its own `TaskEvidence.metadata`, and **nothing read them**. `EvidenceCard`
+    is built from `metrics.json` and plan metadata, so a delta that silently
+    moved the validation split was flagged in a file no part of the system opens
+    and then confirmed off the gain that move produced. Reported on PR #119.
+
+    That made the flags decorative, which is worse than absent: the design
+    argument for flagging rather than refusing is *"a reader can discount the
+    result"*, and no reader was ever shown one.
+
+    Read by scanning the execution's evidence directory rather than by task id,
+    because the id belongs to the plan and this layer has the execution.
+    """
+    directory = evidence_dir(ResearchPaths(knowledge_dir, competition), execution_id)
+    if not directory.is_dir():
+        return []
+    flags: list[str] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # One unreadable evidence file must not cost the card its other
+            # flags, and must not cost the card at all.
+            continue
+        recorded = (payload.get("metadata") or {}).get("delta_flags")
+        if isinstance(recorded, list):
+            flags.extend(str(flag) for flag in recorded if str(flag).strip())
+    return flags
 
 
 def build_evidence_card(
@@ -411,6 +442,13 @@ def build_evidence_card(
     if cv_gain is not None and expected_cv is not None:
         impact_error = cv_gain - expected_cv
 
+    # The flags the write-code checks raised, carried onto the card that
+    # actually gets read. Stored, not spliced into `decision_reason`: three
+    # writers recompute that field after the card is built, and each would drop
+    # the qualification. `EvidenceCard.decision_summary` derives it from here
+    # instead, so no writer can lose it. Reported on PR #119.
+    flags = delta_flags_for(knowledge_dir, competition, treatment_execution_id)
+
     card = EvidenceCard(
         competition=competition,
         hypothesis_id=hypothesis_id,
@@ -442,6 +480,7 @@ def build_evidence_card(
         impact_error=impact_error,
         maximize=maximize,
         noise_epsilon=_NOISE,
+        metadata={"delta_flags": flags} if flags else {},
     )
 
     if persist:
@@ -470,9 +509,7 @@ def write_comparison_files(workspace_root: Path, card: EvidenceCard) -> None:
         snapshot = {
             "_snapshot": {
                 "authoritative": False,
-                "source_of_record": (
-                    f"EvidenceCardStore — research/evidence/{card.id}.json"
-                ),
+                "source_of_record": (f"EvidenceCardStore — research/evidence/{card.id}.json"),
                 "generated_at": datetime.now(UTC).isoformat(),
                 "warning": (
                     "Written once when this card was built and never updated. "
@@ -507,7 +544,6 @@ def metrics_as_experiment(
         progress="done",
         description=execution_id,
         metrics=numeric,
-        runtime_seconds=runtime_seconds
-        or (float(metrics["train_time_s"]) if isinstance(metrics.get("train_time_s"), (int, float)) else None),
+        runtime_seconds=runtime_seconds or _float(metrics, "train_time_s"),
         created_at=datetime.now(UTC),
     )

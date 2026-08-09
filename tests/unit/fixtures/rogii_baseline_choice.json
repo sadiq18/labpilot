@@ -1,0 +1,18 @@
+{
+  "validation": {
+    "scheme": "partition_suffix_holdout",
+    "group_key": "file_stem_entity",
+    "n_splits": 5,
+    "holdout_fraction": 0.7320379581387751,
+    "exclude_features": [
+      "ANCC",
+      "ASTNU",
+      "ASTNL",
+      "EGFDU",
+      "EGFDL",
+      "BUDA",
+      "Geology"
+    ],
+    "rationale": "scored rows form a contiguous suffix of each test partition, so validation holds out each training partition's tail to reproduce the same predict-forward gap"
+  }
+}

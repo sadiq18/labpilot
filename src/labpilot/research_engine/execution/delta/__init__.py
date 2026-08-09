@@ -3,6 +3,7 @@
 from labpilot.research_engine.execution.delta.code_agent import CodeAgent, WholeFileAgent
 from labpilot.research_engine.execution.delta.consistency import (
     ConsistencyReport,
+    ValidationSignals,
     check_delta_consistency,
 )
 from labpilot.research_engine.execution.delta.provenance import (
@@ -17,6 +18,7 @@ __all__ = [
     "CodeAgent",
     "ConsistencyReport",
     "WholeFileAgent",
+    "ValidationSignals",
     "check_delta_consistency",
     "execution_source",
     "record_execution_source",
