@@ -217,7 +217,16 @@ class AiderAgent:
         if verdict.redundant:
             raise AiderError(verdict.reason, kind="hypothesis_redundant")
 
-        instruction = brief.instruction.strip() or _instruction(ctx)
+        # A repair overrides the brief. The brief exists to turn a *hypothesis*
+        # into an instruction plus a claim, and a retry has neither to offer:
+        # the change is already made and the job is to make it run. Leaving the
+        # brief in charge kept re-asking for the technique — aider's own last
+        # words on the third stall were still about computing the feature it
+        # had already computed — so it declined, correctly, every time.
+        retrying = bool(str((getattr(ctx, "data", None) or {}).get("retry_reason") or "").strip())
+        instruction = (
+            _instruction(ctx) if retrying else (brief.instruction.strip() or _instruction(ctx))
+        )
         with tempfile.TemporaryDirectory(prefix="labpilot-aider-") as scratch_str:
             scratch = Path(scratch_str)
             edit_targets = _copy_tree(parent, scratch)
@@ -388,8 +397,7 @@ def _instruction(ctx: StructuredContext) -> str:
     ]
     if hypothesis:
         parts.append(
-            "Preserve the change already made for this hypothesis while you "
-            f"fix it:\n{hypothesis}"
+            f"Preserve the change already made for this hypothesis while you fix it:\n{hypothesis}"
         )
     return "\n\n".join(parts)
 

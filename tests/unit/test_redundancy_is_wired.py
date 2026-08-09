@@ -279,9 +279,7 @@ def test_the_instruction_leads_with_the_error_on_a_retry():
     so a retry re-sent the same hypothesis and the editor declined."""
     from labpilot.research_engine.execution.delta.aider_agent import _instruction
 
-    text = _instruction(
-        _Ctx(plan_goal="add rolling features", retry_reason="KeyError: 'TVT'")
-    )
+    text = _instruction(_Ctx(plan_goal="add rolling features", retry_reason="KeyError: 'TVT'"))
 
     assert "KeyError: 'TVT'" in text
     assert text.index("repair") < text.index("add rolling features")
@@ -292,9 +290,7 @@ def test_the_hypothesis_is_still_carried_so_the_fix_preserves_it():
     no context can revert the experiment instead of fixing it."""
     from labpilot.research_engine.execution.delta.aider_agent import _instruction
 
-    text = _instruction(
-        _Ctx(plan_goal="add rolling features", retry_reason="KeyError: 'TVT'")
-    )
+    text = _instruction(_Ctx(plan_goal="add rolling features", retry_reason="KeyError: 'TVT'"))
 
     assert "add rolling features" in text
     assert "Preserve" in text
@@ -308,3 +304,27 @@ def test_without_a_failure_it_is_the_hypothesis_alone():
 
     assert "repair" not in text
     assert "add rolling features" in text
+
+
+def test_a_retry_overrides_the_brief_instruction(tmp_path):
+    """The brief turns a hypothesis into an instruction plus a claim. A retry
+    has neither to offer — the change is already made — so leaving the brief in
+    charge kept re-asking for the technique, and aider kept declining."""
+    seen: list[str] = []
+
+    def _runner(cmd, cwd, timeout):
+        seen.append(" ".join(str(c) for c in cmd))
+        raise RuntimeError("stop here")
+
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text("x = 1\n", encoding="utf-8")
+    agent = _agent(DeltaBrief(instruction="add the MD_x_GR feature"), runner=_runner)
+
+    with pytest.raises(Exception):
+        agent.propose(
+            _Ctx(prior_train_py="x = 1\n", retry_reason="KeyError: 'TVT'", plan_goal="add MD_x_GR"),
+            tmp_path,
+        )
+
+    assert seen, "aider should still be spawned"
+    assert "KeyError" in seen[0]
