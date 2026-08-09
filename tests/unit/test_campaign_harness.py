@@ -128,25 +128,37 @@ def test_a_raising_tool_never_reports_completed(camp):
     assert "completed" not in trace.task_statuses("run_experiment")
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Found by this harness, 2026-08-09. `Scheduler.dispatch` marks a "
-        "raising task `retry` while retries remain; `update_task_status` turns "
-        "`retry` into `pending`. Nothing in src/ ever re-dispatches a pending "
-        "task — `dispatch_next`/`next_ready` have no callers, and the campaign "
-        "loop dispatches the task it just enqueued. So every failed task is "
-        "parked as `pending` for good, and the observe bundle shows the policy "
-        "a growing list of errored tasks that read as queued work."
-    ),
-    strict=True,
-)
 def test_a_raising_tool_is_recorded_as_failed(camp):
+    """Found by this harness, 2026-08-09, and fixed. `dispatch` marked a raising
+    task `retry`; the store turns `retry` into `pending`; nothing re-dispatches
+    a pending task. So the row said "waiting to run" forever while the metric,
+    the breaker and the decision record all said it failed."""
     camp.register("run_experiment", [fails("no metrics")])
     camp.seed_plan(status=PlanStatus.READY)
 
     trace = camp.run(policy=["run_experiment", None], max_steps=2)
 
-    assert "failed" in trace.task_statuses("run_experiment")
+    assert trace.task_statuses("run_experiment") == ["failed"]
+
+
+def test_the_policy_is_told_the_task_failed(camp):
+    """Why the row matters: `task_summary` goes into the observe bundle every
+    step, so a wrong status is not private bookkeeping — it is what the campaign
+    reads about its own history. Errored tasks stuck at `pending` read as work
+    still queued."""
+    import json
+
+    camp.register("run_experiment", [fails("no metrics")])
+    camp.register("query_memory", [ok()])
+    camp.seed_plan(status=PlanStatus.READY)
+    policy = ScriptedPolicy(["run_experiment", "query_memory", None])
+
+    camp.run(policy=policy, max_steps=3)
+
+    summary = json.loads(policy.prompts[1])["observe"]["task_summary"]
+    experiment = next(t for t in summary if t["tool"] == "run_experiment")
+    assert experiment["status"] == "failed"
+    assert "no metrics" in (experiment["error"] or "")
 
 
 def test_a_reported_failure_without_an_exception_still_counts(camp):
