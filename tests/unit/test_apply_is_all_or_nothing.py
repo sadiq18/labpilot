@@ -255,3 +255,145 @@ def test_a_write_failure_puts_the_earlier_files_back(tmp_path):
 
     assert (tmp_path / "pipeline" / "train.py").read_text(encoding="utf-8") == "original\n"
     assert not (tmp_path / "pipeline" / "infer.py").exists()
+
+
+# --- PR #118 round 4 ---------------------------------------------------------
+
+
+def test_the_rollback_names_the_file_that_failed(tmp_path):
+    """Reported on PR #118: the cleanup loop reused the write loop's variable,
+    so after rollback it held the last *restored* file and the error blamed a
+    file that had written fine."""
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text("original\n", encoding="utf-8")
+    real_write = Path.write_text
+
+    def _fail_on_infer(self, data, *args, **kwargs):
+        if self.name == "infer.py":
+            raise OSError("disk full")
+        return real_write(self, data, *args, **kwargs)
+
+    with mock.patch.object(Path, "write_text", _fail_on_infer):
+        with pytest.raises(ApplyError, match="infer.py"):
+            apply_proposal(
+                tmp_path,
+                _proposal(
+                    ("pipeline/train.py", "def main():\n    return 2\n" + _GUARD),
+                    ("pipeline/infer.py", "def main():\n    return 1\n" + _GUARD),
+                ),
+            )
+
+
+def test_the_rollback_removes_directories_it_created(tmp_path):
+    """ "Nothing was applied" is not true of a tree left holding new empty
+    directories. Reported on PR #118."""
+    real_write = Path.write_text
+
+    def _fail_on_infer(self, data, *args, **kwargs):
+        if self.name == "infer.py":
+            raise OSError("disk full")
+        return real_write(self, data, *args, **kwargs)
+
+    with mock.patch.object(Path, "write_text", _fail_on_infer):
+        with pytest.raises(ApplyError):
+            apply_proposal(
+                tmp_path,
+                _proposal(
+                    ("pipeline/train.py", "def main():\n    return 2\n" + _GUARD),
+                    ("pipeline/infer.py", "def main():\n    return 1\n" + _GUARD),
+                ),
+            )
+
+    assert not (tmp_path / "pipeline").exists()
+
+
+def test_an_unreadable_existing_file_is_an_apply_error(tmp_path):
+    """The snapshot used to run before the guard, so a `PermissionError` came
+    out raw from a module whose every other rejection is an `ApplyError`.
+    Reported on PR #118."""
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text("original\n", encoding="utf-8")
+
+    def _cannot_read(self, *args, **kwargs):
+        raise OSError("permission denied")
+
+    with mock.patch.object(Path, "read_bytes", _cannot_read):
+        with pytest.raises(ApplyError, match="Nothing was applied"):
+            apply_proposal(
+                tmp_path,
+                _proposal(("pipeline/train.py", "def main():\n    return 2\n" + _GUARD)),
+            )
+
+    assert (tmp_path / "pipeline" / "train.py").read_text(encoding="utf-8") == "original\n"
+
+
+def test_a_dependency_line_may_be_indented(tmp_path):
+    """Reported on PR #118: the comment prefix was matched at position zero, so
+    one space before the `#` made the block unparseable and a script that
+    declared its imports correctly was rejected for not declaring them."""
+    content = (
+        "# /// script\n"
+        ' # dependencies = ["lightgbm>=4.0"]\n'
+        "# ///\n"
+        "import lightgbm as lgb\n"
+        "\n\n"
+        "def main():\n"
+        "    return lgb\n" + _GUARD
+    )
+
+    assert apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))
+
+
+def test_a_separator_difference_is_not_a_missing_dependency(tmp_path):
+    """PEP 503 normalisation: `scikit_learn` declared against a `sklearn`
+    import is the same distribution. Reported on PR #118."""
+    content = (
+        "# /// script\n"
+        '# dependencies = ["scikit_learn"]\n'
+        "# ///\n"
+        "import sklearn\n"
+        "\n\n"
+        "def main():\n"
+        "    return sklearn\n" + _GUARD
+    )
+
+    assert apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))
+
+
+def test_a_deferred_import_must_still_be_declared(tmp_path):
+    """`def main(): import xgboost` fails exactly like a top-level one, so
+    scanning `tree.body` alone missed it. Reported on PR #118."""
+    content = (
+        "# /// script\n"
+        '# dependencies = ["lightgbm"]\n'
+        "# ///\n"
+        "import lightgbm as lgb\n"
+        "\n\n"
+        "def main():\n"
+        "    import xgboost\n"
+        "    return lgb, xgboost\n" + _GUARD
+    )
+
+    with pytest.raises(ApplyError, match="xgboost"):
+        apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))
+
+
+def test_an_optional_import_under_try_is_not_required(tmp_path):
+    """That is how an optional dependency is written, and the code handles its
+    absence itself."""
+    content = (
+        "# /// script\n"
+        '# dependencies = ["lightgbm"]\n'
+        "# ///\n"
+        "import lightgbm as lgb\n"
+        "\n"
+        "try:\n"
+        "    import wandb\n"
+        "except ImportError:\n"
+        "    wandb = None\n"
+        "\n\n"
+        "def main():\n"
+        "    return lgb, wandb\n" + _GUARD
+    )
+
+    assert apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))

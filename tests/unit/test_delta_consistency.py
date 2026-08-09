@@ -831,3 +831,79 @@ def test_an_unparseable_result_is_a_claim_free_violation():
 
     assert report.ok is False
     assert report.claim_free_violations == report.violations
+
+
+# --- PR #118 round 4 ---------------------------------------------------------
+
+
+def test_a_removed_function_does_not_silence_the_reachability_check():
+    """Reported on PR #118. `unreachable_functions` can only name functions the
+    child still defines, so a removed one put a name in `touched` that no
+    dead-set could contain — and "every touched function is dead" became
+    unsatisfiable. A delta adding dead code alongside an unrelated removal then
+    passed silently."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_reachability
+
+    child = "def dead_new():\n    return 1\n\n\ndef main():\n    pass\n" + _ENTRY_SUFFIX
+
+    assert check_reachability(ast.parse(child), ["helper_old", "dead_new"])
+
+
+def test_a_removal_alone_is_not_a_reachability_violation():
+    """The carve-out must not invent one: a delta that only removes a function
+    has nothing left to judge, and absence is `check_preservation`'s question."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_reachability
+
+    child = "def main():\n    pass\n" + _ENTRY_SUFFIX
+
+    assert check_reachability(ast.parse(child), ["helper_old"]) == []
+
+
+def test_a_class_body_runs_at_import():
+    """Reported on PR #118: `runs_at_import` skipped `ClassDef` alongside `def`,
+    but a class body executes the moment the `class` statement does. A generated
+    `class Config: seed = set_seed(42)` disabled dead-code detection for the
+    whole file."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import _has_entry_point
+
+    src = "def set_seed(n):\n    return n\n\n\nclass Config:\n    seed = set_seed(42)\n"
+
+    assert _has_entry_point(ast.parse(src)) is True
+
+
+def test_a_method_is_not_a_module_level_definition():
+    """Reported on PR #118: `defined` was collected at any depth, so a method
+    named `fit` made a module-level `fit()` look locally defined — and
+    sklearn-shaped code names methods `fit`, `predict` and `train` as a matter
+    of course."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import _has_entry_point
+
+    src = "def fit():\n    return 1\n\n\nclass M:\n    def fit(self):\n        return 2\n"
+
+    assert _has_entry_point(ast.parse(src)) is False
+
+
+def test_a_match_block_is_control_flow_like_any_other():
+    """Reported on PR #118: the hand-written list of compound statements omitted
+    `ast.Match`, so a module-level `match` fell through to the unguarded walk
+    and reopened the false "runs at import" this rewrite closed elsewhere."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import _has_entry_point
+
+    inside_a_function = (
+        "def go():\n    return 1\n\n\n"
+        "def other(x):\n    match x:\n        case 2:\n            go()\n"
+    )
+    at_module_level = "def go():\n    return 1\n\n\nx = 2\nmatch x:\n    case 2:\n        go()\n"
+
+    assert _has_entry_point(ast.parse(inside_a_function)) is False
+    assert _has_entry_point(ast.parse(at_module_level)) is True

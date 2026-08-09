@@ -121,6 +121,32 @@ def _check_dependency_block(rel: str, content: str) -> None:
         )
 
 
+def _uncomment(line: str) -> str:
+    """`  # dependencies = [...]` -> `dependencies = [...]`.
+
+    Leading whitespace before the `#` is legal and a model writes it. The first
+    version matched a literal `"# "` at position zero and fell through to
+    `lstrip("#")` otherwise, which left the space in front of the marker and
+    made the whole block unparseable — so a script that declared its imports
+    correctly was rejected for not declaring them, the opposite of what this
+    check exists to catch. Reported on PR #118.
+    """
+    stripped = line.lstrip()
+    if not stripped.startswith("#"):
+        return stripped
+    return stripped[1:].removeprefix(" ")
+
+
+def _normalise_distribution(name: str) -> str:
+    """PEP 503 normalisation: `scikit_learn`, `Scikit.Learn` -> `scikit-learn`.
+
+    Comparing lowercased names alone rejected `scikit_learn` declared against a
+    `sklearn` import — a correct script refused over a separator. Reported on
+    PR #118. PEP 503 is the packaging standard for this, so it is not a guess.
+    """
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
 def _declared_dependencies(content: str) -> set[str] | None:
     """Distribution names in the PEP 723 block, or None when there is none.
 
@@ -141,10 +167,7 @@ def _declared_dependencies(content: str) -> set[str] | None:
     )
     if closing is None:
         return None
-    body = "\n".join(
-        line[2:] if line.startswith("# ") else line.lstrip("#")
-        for line in lines[opening + 1 : closing]
-    )
+    body = "\n".join(_uncomment(line) for line in lines[opening + 1 : closing])
     try:
         declared = tomllib.loads(body).get("dependencies") or []
     except tomllib.TOMLDecodeError:
@@ -153,7 +176,26 @@ def _declared_dependencies(content: str) -> set[str] | None:
         return None
     if not isinstance(declared, list):
         return None
-    return {_distribution_name(str(spec)).lower() for spec in declared}
+    return {_normalise_distribution(_distribution_name(str(spec))) for spec in declared}
+
+
+def _imported_modules(tree: ast.Module) -> set[str]:
+    """Top-level module names imported anywhere, except under `try:`."""
+    guarded: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try):
+            for statement in node.body:
+                for inner in ast.walk(statement):
+                    guarded.add(id(inner))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if id(node) in guarded:
+            continue
+        if isinstance(node, ast.Import):
+            found.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            found.add(node.module.split(".")[0])
+    return found
 
 
 def _check_dependencies_are_complete(rel: str, content: str, tree: ast.Module) -> None:
@@ -167,28 +209,28 @@ def _check_dependencies_are_complete(rel: str, content: str, tree: ast.Module) -
     and every `train.py` is now model-written, which is where the mistake is
     *more* likely, not less. Reported on PR #118.
 
-    Only top-level imports count, and only when a block exists at all: a script
-    with no block is not run by `uv run --script`, and an import inside a
-    `try:` is usually the optional-dependency idiom. `IMPORT_ALIASES` covers
-    the handful of modules whose import name differs from their distribution
-    name; anything else is compared directly, which is right far more often
-    than not and errs toward silence when it is not.
+    Asked only when a block exists at all — a script without one is not run by
+    `uv run --script`. Imports at *any* depth count: scanning `tree.body` alone
+    missed the deferred-import idiom (`def main(): import xgboost`), which is
+    an undeclared dependency exactly like a top-level one and fails the same
+    way. Reported on PR #118. Imports under `try:` are excluded, because that
+    is how optional dependencies are written and their absence is handled by
+    the code itself.
+
+    `IMPORT_ALIASES` covers the handful of modules whose import name differs
+    from their distribution name; anything else is compared after PEP 503
+    normalisation, which is right far more often than not and errs toward
+    silence when it is not.
     """
     declared = _declared_dependencies(content)
     if declared is None:
         return
-    imported: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            imported.add(node.module.split(".")[0])
     missing = sorted(
         module
-        for module in imported
+        for module in _imported_modules(tree)
         if module not in sys.stdlib_module_names
         and module != "labpilot"
-        and IMPORT_ALIASES.get(module, module).lower() not in declared
+        and _normalise_distribution(IMPORT_ALIASES.get(module, module)) not in declared
     )
     if missing:
         raise ApplyError(
@@ -291,6 +333,47 @@ def _normalise(path: str) -> str:
     return norm
 
 
+def _missing_parents(target: Path) -> list[Path]:
+    """Directories that would have to be created for `target`, deepest first."""
+    missing: list[Path] = []
+    parent = target.parent
+    while not parent.exists() and parent != parent.parent:
+        missing.append(parent)
+        parent = parent.parent
+    return missing
+
+
+def _roll_back(
+    written: list[Path],
+    previous: dict[Path, bytes | None],
+    created_dirs: list[Path],
+) -> None:
+    """Put the tree back, best effort, without ever raising.
+
+    Every restore is isolated: the condition that broke the write — a full
+    disk, a revoked permission — is usually still true, so a second `OSError`
+    is likely, and letting it out used to abandon every file after it and
+    replace the real diagnosis with the rollback's own. Directories this apply
+    created are removed too, since "nothing was applied" is not true of a tree
+    left holding new empty ones. Reported on PR #118.
+    """
+    for target in written:
+        original = previous.get(target)
+        try:
+            if original is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.write_bytes(original)
+        except OSError as exc:  # noqa: PERF203 - each file is restored or reported
+            logger.warning("could not roll back %s: %s", target, exc)
+    for directory in sorted(set(created_dirs), key=lambda p: len(p.parts), reverse=True):
+        try:
+            directory.rmdir()
+        except OSError:
+            # Not empty, or gone already. Either way there is nothing to undo.
+            pass
+
+
 def _is_allowed(rel: str) -> bool:
     norm = _normalise(rel)
     if not norm or norm.startswith("/") or ".." in Path(norm).parts:
@@ -367,21 +450,24 @@ def apply_proposal(
     # proposal" state this function exists to prevent — the docstring above
     # claimed the property and the code held it only for one of the two ways to
     # lose it. Reported on PR #118. So the prior bytes are kept and put back.
-    previous: dict[Path, bytes | None] = {
-        target: (target.read_bytes() if target.is_file() else None) for target, _ in staged
-    }
     written: list[Path] = []
+    created_dirs: list[Path] = []
+    previous: dict[Path, bytes | None] = {}
+    failed: Path | None = None
     try:
+        # Snapshotting is inside the guard, not before it. An unreadable
+        # pre-existing file used to raise a bare `PermissionError` out of a
+        # module whose every other rejection is an `ApplyError`. Reported on
+        # PR #118.
+        for target, _ in staged:
+            previous[target] = target.read_bytes() if target.is_file() else None
         for target, content in staged:
+            failed = target
+            created_dirs.extend(_missing_parents(target))
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
             written.append(target)
     except OSError as exc:
-        for target in written:
-            original = previous[target]
-            if original is None:
-                target.unlink(missing_ok=True)
-            else:
-                target.write_bytes(original)
-        raise ApplyError(f"could not write {target}: {exc}. Nothing was applied.") from exc
+        _roll_back(written, previous, created_dirs)
+        raise ApplyError(f"could not write {failed}: {exc}. Nothing was applied.") from exc
     return written

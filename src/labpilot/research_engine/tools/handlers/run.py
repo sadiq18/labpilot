@@ -20,23 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 def _codegen_strategy(workspace: Workspace) -> str:
-    """`codegen.strategy` from the workspace config, or the default.
+    """`codegen.strategy` for this workspace — see `codegen_strategy`."""
+    from labpilot.research_engine.execution.codegen_strategy import (
+        resolve_codegen_strategy,
+        workspace_config_path,
+    )
 
-    Never raises: a campaign should not fail to produce code because a config
-    file has a typo in an unrelated section. The fallback follows
-    `CodegenConfig`'s own default rather than pinning `whole_file` separately —
-    two places naming a default is how they drift, and M19 §3 moved it.
-    """
-    from labpilot.config import CodegenConfig
-
-    default = str(CodegenConfig().strategy)
-    try:
-        from labpilot.config import load_config
-
-        return str(load_config(workspace.root / "configs" / "default.yaml").codegen.strategy)
-    except Exception as exc:  # noqa: BLE001 — config trouble must not stop a run
-        logger.debug("codegen strategy unreadable, using %s: %s", default, exc)
-        return default
+    return resolve_codegen_strategy(workspace_config_path(workspace))
 
 
 def run_plan(

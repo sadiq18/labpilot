@@ -608,43 +608,49 @@ def _without_unused_imports(tree: ast.Module) -> ast.Module:
 def _has_entry_point(tree: ast.Module) -> bool:
     """Does this module run something of its own when executed?
 
-    True when a locally-defined function is called from **module level** —
+    True when a **top-level** function is called from **module level** —
     directly or inside the `if __name__ == "__main__":` guard, which is how
     every generated `pipeline/train.py` ends.
 
     Without this, `check_reachability` would condemn any module that defines
     functions for someone else to call, which is most of them.
 
-    "Module level" is the whole point and used to be approximated by walking
-    each top-level statement, `ast.walk` and all — which descends *into* a
-    function body, so one helper calling another looked like an entry point.
-    Any two-function library passed the precondition, and with reachability
-    walked from the entry point that seeds nothing, so both functions came back
-    unreachable. Reported on PR #118 by way of the check it broke: a helper
-    defined and used, in a file with no `__main__` guard at all.
+    Both halves of that sentence have been wrong in turn, so both are now
+    stated precisely.
+
+    *Module level* used to be approximated by walking each top-level statement,
+    `ast.walk` and all — which descends into a function body, so one helper
+    calling another looked like an entry point. `runs_at_import` walks only what
+    actually executes when the module is imported. A class body **does**: it
+    runs the moment the `class` statement does, so `class Config: seed =
+    set_seed(42)` is an entry point and skipping it alongside `def` was wrong.
+    Its methods are `def`s and are skipped like any other. Reported on PR #118.
+
+    *Top-level* used to be "defined anywhere", also via `ast.walk`, so a method
+    named `fit` made a module-level `fit()` look locally defined — and
+    sklearn-shaped code names methods `fit`, `predict` and `train` as a matter
+    of course. Only a top-level `def` can satisfy a module-level call; anything
+    else would be a `NameError` if the code ran. Reported on PR #118.
     """
     defined = {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
     if not defined:
         return False
 
     def runs_at_import(body: list[ast.stmt]) -> bool:
         for statement in body:
-            if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-                # Defining is not running. Its body executes only if something
+            if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+                # Defining is not running. The body executes only if something
                 # calls it, which is the question being asked.
                 continue
-            if isinstance(statement, ast.If | ast.Try | ast.With | ast.For | ast.While):
-                nested = [
-                    *statement.body,
-                    *getattr(statement, "orelse", []),
-                    *getattr(statement, "finalbody", []),
-                ]
-                for handler in getattr(statement, "handlers", []):
-                    nested.extend(handler.body)
+            if isinstance(statement, ast.ClassDef):
+                # A class body is not deferred — it executes immediately.
+                if runs_at_import(statement.body):
+                    return True
+                continue
+            nested = _control_flow_bodies(statement)
+            if nested is not None:
                 if runs_at_import(nested):
                     return True
                 continue
@@ -658,6 +664,28 @@ def _has_entry_point(tree: ast.Module) -> bool:
         return False
 
     return runs_at_import(tree.body)
+
+
+def _control_flow_bodies(statement: ast.stmt) -> list[ast.stmt] | None:
+    """The statements a compound statement guards, or None if it is not one.
+
+    Enumerated from `ast`'s own node set rather than listed by hand: the hand
+    list omitted `ast.Match`, so a module-level `match` fell through to the
+    unguarded `ast.walk` below and reopened the false "runs at import" this
+    rewrite closed for every other construct. Reported on PR #118. Anything
+    carrying a statement body is compound, whatever it is called.
+    """
+    if isinstance(statement, ast.Match):
+        return [inner for case in statement.cases for inner in case.body]
+    fields = ("body", "orelse", "finalbody")
+    if not any(isinstance(getattr(statement, name, None), list) for name in fields):
+        return None
+    nested: list[ast.stmt] = []
+    for name in fields:
+        nested.extend(getattr(statement, name, []) or [])
+    for handler in getattr(statement, "handlers", []) or []:
+        nested.extend(handler.body)
+    return nested
 
 
 def check_reachability(child: ast.Module, touched: list[str]) -> list[str]:
@@ -701,14 +729,26 @@ def check_reachability(child: ast.Module, touched: list[str]) -> list[str]:
     * it asks only of files that **run themselves** — a module with no entry
       point is a library, where an uncalled function is called by someone else
       and "unreachable" is not a fact this file can establish;
-    * **every** touched function must be dead, so a delta that edits three
-      functions and leaves one helper dead still passes.
+    * **every** touched function the child still defines must be dead, so a
+      delta that edits three functions and leaves one helper dead still passes.
     """
     if not touched or not _has_entry_point(child):
         return []
+    # Only functions the child still defines can be judged. A delta that
+    # *removes* a function puts a name in `touched` that can never appear in
+    # any dead-set, and "every touched function is dead" was then unsatisfiable
+    # — so a delta adding dead code alongside an unrelated removal passed
+    # silently. Reported on PR #118. A removal is not dead code; it is the
+    # absence of code, which `check_preservation` owns.
+    present = {
+        node.name for node in child.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    judged = [name for name in touched if name in present]
+    if not judged:
+        return []
     unreachable = unreachable_functions(child)
-    dead = [name for name in touched if name in unreachable]
-    if len(dead) != len(touched):
+    dead = [name for name in judged if name in unreachable]
+    if len(dead) != len(judged):
         return []
     listed = ", ".join(repr(name) for name in sorted(dead))
     return [

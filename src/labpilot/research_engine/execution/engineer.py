@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from labpilot.research_engine.execution.codegen_strategy import resolve_codegen_strategy
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.evidence import read_evidence, write_evidence
 from labpilot.research_engine.execution.recovery import RecoveryAction, decide_recovery
@@ -195,6 +196,12 @@ class ResearchEngineer:
                 metadata_patch={"capability": capability.name, "attempt": attempt},
             )
             prior = read_evidence(self.paths, execution_id, task.id)
+            # The funnel every CLI path goes through, so the default is named
+            # here once rather than left to each caller to remember. A caller
+            # that read the workspace config still wins — this only fills the
+            # gap that three separate constructors fell into on PR #118.
+            constraints = dict(self.constraints)
+            constraints.setdefault("codegen_strategy", resolve_codegen_strategy(None))
             context = TaskContext(
                 plan=plan,
                 task=task,
@@ -205,7 +212,7 @@ class ResearchEngineer:
                 prior_evidence=prior,
                 runtime_target=execution.runtime_target,
                 attempt=attempt,
-                constraints=dict(self.constraints),
+                constraints=constraints,
             )
             capability.prepare(context)
             evidence = capability.execute(context)

@@ -24,15 +24,12 @@ from labpilot.research_engine.execution import (
     ResearchEngineer,
     default_capability_registry,
 )
+from labpilot.research_engine.execution.codegen_strategy import (
+    resolve_codegen_strategy,
+    workspace_config_path,
+)
 
 console = Console()
-
-
-def _codegen_strategy(workspace) -> str:
-    """`codegen.strategy` for this workspace — the same reader `run_plan` uses."""
-    from labpilot.research_engine.tools.handlers.run import _codegen_strategy as read
-
-    return read(workspace)
 
 
 def _engineer_constraints(
@@ -49,7 +46,15 @@ def _engineer_constraints(
         # the capability's own fallback still said `whole_file`, so resume took
         # the whole-file path however the workspace was configured. Reported on
         # PR #118.
-        "codegen_strategy": _codegen_strategy(workspace) if workspace is not None else "",
+        # Without a `labpilot.yaml` there is no workspace to read a
+        # per-competition config from, so the config the CLI already loaded is
+        # the answer — passing `""` there fell back to the packaged default and
+        # ignored the setting the user had in hand. Reported on PR #118.
+        "codegen_strategy": (
+            resolve_codegen_strategy(workspace_config_path(workspace))
+            if workspace is not None
+            else str(config.codegen.strategy)
+        ),
         "dry_run": dry_run,
         "allow_upload": submit,
         "smoke_syntax_only": dry_run,

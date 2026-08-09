@@ -13,6 +13,10 @@ from labpilot.research_engine.context.models import ContextBundle
 from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
     CodeEngineeringCapability,
 )
+from labpilot.research_engine.execution.codegen_strategy import (
+    resolve_codegen_strategy,
+    workspace_config_path,
+)
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import ResearchExecution
 from labpilot.research_engine.intelligence.paths import ResearchPaths
@@ -85,7 +89,14 @@ def build_v1_task_context(
         created_at=now,
         updated_at=now,
     )
-    constraints: dict[str, Any] = {}
+    # The Conductor's specialist path builds its own `TaskContext`, so it owes
+    # the same constraint the other two constructors supply. It did not, and
+    # every run through this path took the packaged default however the
+    # workspace was configured. Reported on PR #118 — the third call site to
+    # have this bug, which is why the reader now lives in one module.
+    constraints: dict[str, Any] = {
+        "codegen_strategy": resolve_codegen_strategy(workspace_config_path(workspace)),
+    }
     if context.summary():
         constraints["context_summary"] = context.summary(max_chars=2000)
     constraints.update(dict(agent_task.metadata.get("constraints") or {}))

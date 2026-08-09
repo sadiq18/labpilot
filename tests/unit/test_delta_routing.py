@@ -176,16 +176,38 @@ def test_an_empty_proposal_is_not_accepted(tmp_path, monkeypatch):
     )
 
 
-def test_resume_sets_the_strategy_constraint():
-    """Reported on PR #118. `research resume` built its constraints without
-    `codegen_strategy`, and the capability's fallback still said `whole_file`,
-    so resume regenerated whole files however the workspace was configured. The
-    two commands now read the setting through one helper."""
-    import inspect
+def test_every_task_context_sets_the_codegen_strategy():
+    """The same bug three times on PR #118 — the capability's stale fallback,
+    then `research resume`, then the Conductor's specialist path — because each
+    `TaskContext` constructor owes this constraint and nothing said so.
 
-    from labpilot.cli import run_engineer
+    Enumerated from the source rather than listed here: a fourth constructor
+    fails this test instead of quietly regenerating whole files for a week.
+    """
+    import re
+    from pathlib import Path
 
-    source = inspect.getsource(run_engineer._engineer_constraints)
+    src = Path("src/labpilot")
+    builders = [
+        path for path in src.rglob("*.py") if re.search(r"\bTaskContext\(", path.read_text())
+    ]
 
-    assert "codegen_strategy" in source
-    assert "_codegen_strategy(" in source
+    assert builders, "no TaskContext construction found — has it been renamed?"
+    missing = [str(p) for p in builders if "codegen_strategy" not in p.read_text()]
+    assert not missing, f"TaskContext built without codegen_strategy in: {missing}"
+
+
+def test_the_legacy_layout_reads_the_config_it_was_given():
+    """Without a `labpilot.yaml` there is no workspace to read a
+    per-competition config from, and passing `""` fell back to the packaged
+    default instead of the config the CLI had already loaded. Reported on
+    PR #118."""
+    from labpilot.cli.run_engineer import _engineer_constraints
+    from labpilot.config import AppConfig
+
+    config = AppConfig()
+    config.codegen.strategy = "whole_file"
+
+    constraints = _engineer_constraints(config=config, workspace=None, dry_run=False, submit=False)
+
+    assert constraints["codegen_strategy"] == "whole_file"
