@@ -102,3 +102,69 @@ def test_an_imported_but_uncalled_symbol_still_counts():
 
 def test_whitespace_in_a_claim_does_not_defeat_the_match():
     assert check_redundancy(_LGB_ONLY, ["  lgb  "]).redundant is True
+
+
+# --- dead code implements nothing --------------------------------------------
+
+_DEAD_PARENT = """
+import pandas as pd
+
+
+def engineer_features(df):
+    for col in ["MD", "GR"]:
+        df[f"{col}_roll"] = df.groupby("pid")[col].transform(
+            lambda x: x.rolling(5).mean()
+        )
+    return df
+
+
+def main():
+    df = pd.read_csv("x.csv")
+    return df
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+
+def test_a_symbol_that_only_appears_in_dead_code_is_not_implemented():
+    """Measured on rogii 2026-08-09, on the second attempt at H-015.
+
+    The first attempt wrote rolling-window features into `engineer_features`,
+    which `main()` never calls; the smoke test failed for an unrelated reason
+    and the edit stayed in the workspace. On the retry the brief correctly
+    claimed `['rolling', 'groupby']`, both appeared — inside the dead function —
+    and the hypothesis was retired as already implemented. The feature it asked
+    for had never once been computed.
+    """
+    from labpilot.research_engine.execution.delta.redundancy import check_redundancy
+
+    verdict = check_redundancy(_DEAD_PARENT, ["rolling", "groupby"])
+
+    assert verdict.redundant is False
+
+
+def test_the_same_symbols_in_live_code_are_implemented():
+    """The carve-out must not cost the behaviour it guards: a parent that really
+    does compute rolling features still retires the hypothesis."""
+    from labpilot.research_engine.execution.delta.redundancy import check_redundancy
+
+    live = _DEAD_PARENT.replace(
+        '    df = pd.read_csv("x.csv")\n',
+        '    df = pd.read_csv("x.csv")\n    df = engineer_features(df)\n',
+    )
+
+    verdict = check_redundancy(live, ["rolling", "groupby"])
+
+    assert verdict.redundant is True
+
+
+def test_a_library_parent_is_judged_whole():
+    """With no entry point, "nothing calls it here" says only that the caller is
+    elsewhere — so nothing is treated as dead."""
+    from labpilot.research_engine.execution.delta.redundancy import check_redundancy
+
+    parent = "import lightgbm as lgb\n\n\ndef train(X):\n    return lgb.train(X)\n"
+
+    assert check_redundancy(parent, ["lgb"]).redundant is True

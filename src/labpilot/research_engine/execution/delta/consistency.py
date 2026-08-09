@@ -185,6 +185,41 @@ def touched_functions(parent: ast.Module, child: ast.Module) -> list[str]:
     return sorted(changed | (before.keys() ^ after.keys()))
 
 
+def unreachable_functions(tree: ast.Module) -> set[str]:
+    """Locally-defined functions that nothing in this module calls.
+
+    Empty for a module with no entry point, where "nothing calls it here" says
+    only that the caller lives elsewhere.
+    """
+    if not _has_entry_point(tree):
+        return set()
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    return defined - called_names(tree)
+
+
+def strip_unreachable(tree: ast.Module) -> ast.Module:
+    """The module with its dead top-level functions removed.
+
+    For asking what the code *does*, as opposed to what it contains. A failed
+    experiment leaves its edit in the workspace, so the parent of the next
+    experiment can carry code that has never run — and a question answered over
+    the whole file would count it.
+    """
+    dead = unreachable_functions(tree)
+    if not dead:
+        return tree
+    kept = [
+        node
+        for node in tree.body
+        if not (isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in dead)
+    ]
+    return ast.Module(body=kept, type_ignores=list(tree.type_ignores))
+
+
 def _has_entry_point(tree: ast.Module) -> bool:
     """Does this module run something of its own when executed?
 

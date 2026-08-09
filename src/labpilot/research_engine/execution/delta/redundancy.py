@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from labpilot.research_engine.execution.delta.consistency import (
     called_names,
     imported_modules,
+    strip_unreachable,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,19 @@ def check_redundancy(parent_source: str, added: list[str]) -> RedundancyVerdict:
         logger.debug("parent does not parse; not judging redundancy: %s", exc)
         return RedundancyVerdict()
 
-    present = called_names(tree) | imported_modules(tree)
+    # Over the *live* parent. A failed experiment leaves its edit behind, so the
+    # next experiment's parent can contain code that has never run — and code
+    # that cannot execute does not implement anything.
+    #
+    # Measured on rogii 2026-08-09. The first delta wrote rolling-window
+    # features into `engineer_features`, which `main()` never calls; the smoke
+    # test failed for an unrelated reason and the change stayed in the
+    # workspace. On the next attempt at the same hypothesis the brief correctly
+    # claimed `['rolling', 'groupby']`, both appeared — inside the dead
+    # function — and the hypothesis was retired as already implemented. The
+    # feature it asked for had never once been computed.
+    live = strip_unreachable(tree)
+    present = called_names(live) | imported_modules(live)
     found = [name for name in names if name in present]
     if len(found) != len(names):
         return RedundancyVerdict(already_present=found)
