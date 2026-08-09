@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -69,20 +69,32 @@ def _list_cards(promoter: ClaimPromoter) -> list[Any]:
 
 
 def _parse_timestamp(value: str | datetime | None) -> datetime | None:
-    """Parse ISO timestamps from SQLite / pydantic, including ``Z`` suffixes."""
+    """Parse ISO timestamps from SQLite / pydantic, including ``Z`` suffixes.
+
+    Always returns an aware datetime, treating a naive one as UTC — the same
+    normalisation `hours_since_last_artifact` already applies.
+
+    Without it, comparing two timestamps from different stores raises
+    ``TypeError: can't compare offset-naive and offset-aware datetimes``:
+    campaign stamps come back aware, while `Hypothesis.created_at` is naive.
+    That is invisible to the technique path, which only ever compares stamps
+    from one source, and fatal to any caller mixing two — which is exactly what
+    hypothesis staleness does.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
     text = str(value).strip()
     if not text:
         return None
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _signed_measured_effect(

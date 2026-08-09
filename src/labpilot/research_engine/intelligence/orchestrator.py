@@ -48,6 +48,24 @@ _FETCH_KERNEL_VOTE_LIMIT = int(os.environ.get("LABPILOT_FETCH_KERNELS", "15"))
 _FETCH_KERNEL_SCORE_LIMIT = int(os.environ.get("LABPILOT_FETCH_KERNELS", "15"))
 _FETCH_DISCUSSION_LIMIT = int(os.environ.get("LABPILOT_FETCH_DISCUSSIONS", "15"))
 
+#: Which Kaggle calls a fetch makes. `all` is what `research analyze` has
+#: always done. `best_score` is the campaign's cheap sweep: the kernels that
+#: actually scored, and nothing else — the top of the leaderboard is where the
+#: techniques worth copying are, and vote-sorted kernels are largely tutorials
+#: that overlap it. Each call costs a Kaggle round trip per item plus a hub
+#: ingest, so dropping two of three is most of the wall clock.
+KAGGLE_FETCH_PLANS: dict[str, tuple[tuple[set[str], dict[str, Any]], ...]] = {
+    "all": (
+        ({"kernels"}, {"kernel_sort": "voteCount", "limit": _FETCH_KERNEL_VOTE_LIMIT}),
+        ({"kernels"}, {"kernel_sort": "scoreDescending", "limit": _FETCH_KERNEL_SCORE_LIMIT}),
+        ({"discussions"}, {"limit": _FETCH_DISCUSSION_LIMIT}),
+    ),
+    "best_score": (
+        ({"kernels"}, {"kernel_sort": "scoreDescending", "limit": _FETCH_KERNEL_SCORE_LIMIT}),
+    ),
+}
+DEFAULT_KAGGLE_FETCH_PLAN = "all"
+
 
 class AnalyzeOrchestrator:
     def __init__(
@@ -59,6 +77,7 @@ class AnalyzeOrchestrator:
         hypothesize: bool = True,
         brief: bool = True,
         fetch_kaggle: bool = False,
+        kaggle_fetch_plan: str = DEFAULT_KAGGLE_FETCH_PLAN,
         kaggle_fetch_service: KaggleFetchService | None = None,
         on_progress: Callable[[str], None] | None = None,
     ) -> None:
@@ -68,6 +87,12 @@ class AnalyzeOrchestrator:
         self._hypothesize = hypothesize
         self._brief = brief
         self._fetch_kaggle = fetch_kaggle
+        if kaggle_fetch_plan not in KAGGLE_FETCH_PLANS:
+            raise ValueError(
+                f"unknown kaggle_fetch_plan {kaggle_fetch_plan!r}; "
+                f"expected one of {sorted(KAGGLE_FETCH_PLANS)}"
+            )
+        self._kaggle_fetch_plan = kaggle_fetch_plan
         self._kaggle_fetch_service = kaggle_fetch_service
         self._on_progress = on_progress
 
@@ -130,9 +155,7 @@ class AnalyzeOrchestrator:
         self._refresh_summary(report)
         return report
 
-    def apply_side_effects(
-        self, report: AnalysisReport, context: AnalyzeContext
-    ) -> AnalysisReport:
+    def apply_side_effects(self, report: AnalysisReport, context: AnalyzeContext) -> AnalysisReport:
         """Run fetch / ingest / hypothesize / brief after an external verify gate."""
         for label, step in (
             ("kaggle fetch", self._fetch_kaggle_run),
@@ -165,17 +188,8 @@ class AnalyzeOrchestrator:
         if not self._fetch_kaggle:
             return
         try:
-            service = self._kaggle_fetch_service or KaggleFetchService(
-                llm_client=self._llm_client
-            )
-            calls: list[tuple[set[str], dict[str, Any]]] = [
-                ({"kernels"}, {"kernel_sort": "voteCount", "limit": _FETCH_KERNEL_VOTE_LIMIT}),
-                (
-                    {"kernels"},
-                    {"kernel_sort": "scoreDescending", "limit": _FETCH_KERNEL_SCORE_LIMIT},
-                ),
-                ({"discussions"}, {"limit": _FETCH_DISCUSSION_LIMIT}),
-            ]
+            service = self._kaggle_fetch_service or KaggleFetchService(llm_client=self._llm_client)
+            calls = KAGGLE_FETCH_PLANS[self._kaggle_fetch_plan]
             fetched_ids: list[str] = []
             for sources, kwargs in calls:
                 result = service.fetch(
@@ -220,9 +234,7 @@ class AnalyzeOrchestrator:
             with KnowledgeStore(context.knowledge_dir, context.competition) as store:
                 for artifact in report.artifacts:
                     store.upsert_artifact(artifact)
-                to_ingest = (
-                    store.list_artifacts() if self._fetch_kaggle else list(report.artifacts)
-                )
+                to_ingest = store.list_artifacts() if self._fetch_kaggle else list(report.artifacts)
                 if not to_ingest:
                     report.notes.append("[knowledge-hub] nothing to ingest.")
                     return
@@ -300,15 +312,11 @@ class AnalyzeOrchestrator:
             report.notes.append("[research-brief] skipped by request.")
             return
         if not self._ingest_knowledge or not self._hypothesize:
-            report.notes.append(
-                "[research-brief] skipped (requires ingest + hypothesize)."
-            )
+            report.notes.append("[research-brief] skipped (requires ingest + hypothesize).")
             return
         try:
             with KnowledgeStore(context.knowledge_dir, context.competition) as store:
-                brief = build_research_brief(
-                    report, store, llm_client=self._llm_client
-                )
+                brief = build_research_brief(report, store, llm_client=self._llm_client)
             report.research_brief = brief.model_dump(mode="json")
             report.notes.append(f"[research-brief] generated_by={brief.generated_by}")
         except Exception as exc:  # soft-fail

@@ -23,11 +23,13 @@ from labpilot.research_engine.planner.schemas.models import (
     TaskVerification,
 )
 from labpilot.research_engine.planner.schemas.task_types import (
+    RUNNABLE_PLAN_STATUSES,
     PlanStatus,
     RuntimeTarget,
     TaskStatus,
     TaskType,
 )
+from labpilot.research_engine.shared.experiments.models import HypothesisStatus
 
 _PLAN_ID_PREFIX = "P"
 
@@ -206,9 +208,7 @@ class PlanStore:
     # -- read --------------------------------------------------------------
 
     def get_plan(self, plan_id: str) -> ResearchPlan | None:
-        row = self._conn.execute(
-            "SELECT * FROM research_plans WHERE id = ?", (plan_id,)
-        ).fetchone()
+        row = self._conn.execute("SELECT * FROM research_plans WHERE id = ?", (plan_id,)).fetchone()
         if row is None:
             return None
         tasks = self._load_tasks(plan_id)
@@ -235,6 +235,72 @@ class PlanStore:
         ).fetchall()
         return [self._row_to_plan(row, self._load_tasks(row["id"])) for row in rows]
 
+    def selectable_plan_ids(self) -> list[str]:
+        """Ids of plans worth dispatching, ascending. One query, no hydration.
+
+        Excludes plans whose hypothesis is `rejected`: retiring an idea has to
+        retire the work queued against it, or the campaign keeps selecting the
+        plan that carries it — measured on rogii 2026-08-09, `H-051` was
+        correctly rejected and the very next step chose `P-021` again.
+
+        Answered by a join rather than by reading hypotheses and filtering in
+        Python. The previous version cost a file read per rejected hypothesis
+        plus `list_plans()`, which hydrates every plan *and* its tasks *and*
+        each task's dependencies — N+2 queries and a full object graph, to
+        answer a question about ids. This runs on every policy step.
+
+        Safe against the mirror because `HypothesisStore._save` writes the file
+        and the `hypotheses` row together, on every mutation path, so a status
+        the files know is a status this join sees.
+
+        A plan with no hypothesis — a baseline — is always selectable, and an
+        unmirrored hypothesis (`h.status IS NULL`) fails *open*: not knowing
+        must never silently disable every plan in the workspace.
+        """
+        statuses = sorted(str(s) for s in RUNNABLE_PLAN_STATUSES)
+        placeholders = ",".join("?" for _ in statuses)
+        rows = self._conn.execute(
+            f"""
+            SELECT p.id
+            FROM research_plans p
+            LEFT JOIN hypotheses h ON h.id = p.hypothesis_id
+            WHERE p.status IN ({placeholders})
+              AND (
+                    p.hypothesis_id IS NULL
+                 OR p.hypothesis_id = ''
+                 OR h.status IS NULL
+                 OR h.status != ?
+              )
+            ORDER BY p.id
+            """,  # noqa: S608 - placeholders are generated from a frozen constant
+            (*statuses, str(HypothesisStatus.REJECTED)),
+        ).fetchall()
+        return [str(row["id"]) for row in rows]
+
+    def hypothesis_selection_times(self) -> list[tuple[str, str]]:
+        """`(created_at, hypothesis_id)` for every plan that carries one.
+
+        A plan against a hypothesis is a *selection*: the moment that idea was
+        preferred over every other open one. Ordered oldest first.
+
+        The id travels with the timestamp because a hypothesis must not be aged
+        by its own selections — see `viability._is_stale`. Returning bare stamps
+        made that distinction impossible to draw at the call site.
+
+        One query, no hydration. The previous caller used `list_plans()`, which
+        loads every plan *and* its tasks *and* each task's dependency edges, to
+        answer a question about two columns — and it runs twice per policy step.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT created_at, hypothesis_id
+            FROM research_plans
+            WHERE hypothesis_id IS NOT NULL AND hypothesis_id != ''
+            ORDER BY created_at
+            """
+        ).fetchall()
+        return [(str(row["created_at"]), str(row["hypothesis_id"])) for row in rows]
+
     # -- helpers -----------------------------------------------------------
 
     def _load_tasks(self, plan_id: str) -> list[ResearchTask]:
@@ -260,12 +326,8 @@ class PlanStore:
                     dependencies=[dep["depends_on"] for dep in dep_rows],
                     status=TaskStatus(row["status"]),
                     order=row["order_index"],
-                    verification=TaskVerification.model_validate(
-                        loads(row["verification"], {})
-                    ),
-                    retry_policy=RetryPolicy.model_validate(
-                        loads(row["retry_policy"], {})
-                    ),
+                    verification=TaskVerification.model_validate(loads(row["verification"], {})),
+                    retry_policy=RetryPolicy.model_validate(loads(row["retry_policy"], {})),
                     estimated_cost=row["estimated_cost"],
                     estimated_time=row["estimated_time"],
                     metadata=loads(row["metadata"], {}),

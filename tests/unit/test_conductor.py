@@ -133,9 +133,7 @@ def test_scheduler_dispatches_tool(tmp_path: Path) -> None:
 
 def test_policy_allowlist_and_offline_order() -> None:
     allow = {"analyze_competition", "search_papers", "query_memory"}
-    bad = validate_next_action(
-        NextAction(tool="invent_agent", rationale="nope"), allow
-    )
+    bad = validate_next_action(NextAction(tool="invent_agent", rationale="nope"), allow)
     assert bad.stop and bad.tool is None
     observe = {"completed_tools": [], "operator_feedback": []}
     action = offline_next_action(observe, allow)
@@ -166,10 +164,7 @@ def test_llm_fallback_allow_deny_retry() -> None:
             self.n += 1
             if self.n < 2:
                 raise RuntimeError("transient")
-            return (
-                '{"tool": "analyze_competition", "args": {}, '
-                '"rationale": "ok", "stop": false}'
-            )
+            return '{"tool": "analyze_competition", "args": {}, "rationale": "ok", "stop": false}'
 
     allowed = llm_next_action(
         observe,
@@ -304,15 +299,11 @@ def test_build_observe_bundle_includes_context_online(tmp_path: Path) -> None:
     ws = _ws(tmp_path, "ctxobs")
     reports = ws.research_paths.reports_dir
     reports.mkdir(parents=True, exist_ok=True)
-    (reports / "note.md").write_text(
-        "mixup helps minority classes on audio", encoding="utf-8"
-    )
+    (reports / "note.md").write_text("mixup helps minority classes on audio", encoding="utf-8")
     store = ConductorStore(ws.knowledge_dir, ws.competition)
     try:
         session = store.create_session("use mixup for imbalance")
-        observe = build_observe_bundle(
-            store, ws, session.id, include_context=True
-        )
+        observe = build_observe_bundle(store, ws, session.id, include_context=True)
         assert "context_summary" in observe
         assert isinstance(observe["context_refs"], list)
         blob = (observe.get("context_summary") or "") + str(observe.get("context_refs"))
@@ -321,9 +312,7 @@ def test_build_observe_bundle_includes_context_online(tmp_path: Path) -> None:
         store.close()
 
 
-def test_build_observe_bundle_skips_context_when_disabled(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_build_observe_bundle_skips_context_when_disabled(tmp_path: Path, monkeypatch) -> None:
     import labpilot.research_engine.context as ctx_mod
     from labpilot.research_engine.conductor import policy as policy_mod
 
@@ -339,9 +328,7 @@ def test_build_observe_bundle_skips_context_when_disabled(
     store = ConductorStore(ws.knowledge_dir, ws.competition)
     try:
         session = store.create_session("goal")
-        observe = policy_mod.build_observe_bundle(
-            store, ws, session.id, include_context=False
-        )
+        observe = policy_mod.build_observe_bundle(store, ws, session.id, include_context=False)
         assert "context_summary" not in observe
         assert "context_refs" not in observe
         assert calls == []
@@ -349,9 +336,7 @@ def test_build_observe_bundle_skips_context_when_disabled(
         store.close()
 
 
-def test_decide_next_prefer_offline_does_not_require_context(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_decide_next_prefer_offline_does_not_require_context(tmp_path: Path, monkeypatch) -> None:
     import labpilot.research_engine.context as ctx_mod
     from labpilot.research_engine.conductor.policy import decide_next
 
@@ -378,9 +363,7 @@ def test_decide_next_prefer_offline_does_not_require_context(
         store.close()
 
 
-def test_observe_survives_build_context_failure(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_observe_survives_build_context_failure(tmp_path: Path, monkeypatch) -> None:
     import labpilot.research_engine.context as ctx_mod
     from labpilot.research_engine.conductor.policy import build_observe_bundle
 
@@ -393,9 +376,7 @@ def test_observe_survives_build_context_failure(
     store = ConductorStore(ws.knowledge_dir, ws.competition)
     try:
         session = store.create_session("still decide")
-        observe = build_observe_bundle(
-            store, ws, session.id, include_context=True
-        )
+        observe = build_observe_bundle(store, ws, session.id, include_context=True)
         assert observe["goal"] == "still decide"
         assert observe["context_summary"] == ""
         assert observe["context_refs"] == []
@@ -432,9 +413,7 @@ def test_llm_policy_prompt_sees_ranked_evidence() -> None:
             }
         ],
     }
-    action = _invoke_llm_next_action(
-        observe, {"analyze_competition", "search_papers"}, FakeLLM()
-    )
+    action = _invoke_llm_next_action(observe, {"analyze_competition", "search_papers"}, FakeLLM())
     assert action.tool == "analyze_competition"
     assert "context_refs" in captured["user"]
     assert "0.91" in captured["user"]
@@ -548,14 +527,44 @@ def test_generate_plan_keeps_baseline_when_no_hypothesis_available():
 
 
 def test_conductor_analyze_gathers_kaggle_domain_knowledge():
-    """No kernels/discussions => no concepts => no hypotheses => no iteration."""
+    """No kernels => no concepts => no hypotheses => no iteration."""
     from labpilot.research_engine.conductor.actions import _default_args
 
     args = _default_args("analyze_competition")
     assert args["fetch_kaggle"] is True
-    # No analyzer is excluded: papers and repositories feed techniques and
-    # beliefs just as kernels do.
-    assert "exclude" not in args
+
+
+def test_a_campaign_buys_the_cheap_slice_of_the_evidence():
+    """A campaign runs this every few steps, so it takes the highest-yield
+    source and skips the rest.
+
+    The paper analyzer searches 40 and LLM-extracts 15; on rogii 2026-08-09 it
+    held a single step for over sixteen minutes without finishing. Kernels
+    sorted by score are the evidence that actually ran against this dataset.
+    """
+    from labpilot.research_engine.conductor.actions import _default_args
+
+    args = _default_args("analyze_competition")
+    assert args["kaggle_fetch_plan"] == "best_score"
+    assert args["exclude"] == ["papers"]
+
+
+def test_the_campaign_and_the_template_ask_for_the_same_thing():
+    """Two call sites, one budget — they drifted apart once already."""
+    from labpilot.research_engine.conductor.actions import (
+        _TEMPLATES,
+        _default_args,
+    )
+
+    template_args = [
+        step.args
+        for _keywords, steps in _TEMPLATES
+        for step in steps
+        if step.tool == "analyze_competition"
+    ]
+    assert template_args
+    for args in template_args:
+        assert args == _default_args("analyze_competition")
 
 
 # --- precondition-aware tool selection ---------------------------------------
@@ -582,8 +591,16 @@ def _available(monkeypatch, *, has_plan, has_execution):
     monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: None)
     monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: False)
     catalog = {
-        "analyze_competition", "search_papers", "query_memory", "generate_plan",
-        "implement", "run_plan", "run_experiment", "reflect", "submit", "submit_learn",
+        "analyze_competition",
+        "search_papers",
+        "query_memory",
+        "generate_plan",
+        "implement",
+        "run_plan",
+        "run_experiment",
+        "reflect",
+        "submit",
+        "submit_learn",
     }
     return available_tools(_FakeWorkspace(), catalog)
 
@@ -663,18 +680,29 @@ def _available_with_backlog(monkeypatch, backlog, *, has_plan=True, has_executio
     monkeypatch.setattr(
         loop_mod, "_latest_execution_id", lambda ws: "E-001" if has_execution else None
     )
-    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: backlog)
-    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 99.0)
+    monkeypatch.setattr(policy_mod, "viable_hypothesis_count", lambda kd, c: backlog)
+    # Fresh, so the *pool* decides. Staleness is exercised separately —
+    # pinning it at 99h here would make every case gather and prove nothing.
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 2.0)
     monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: False)
     catalog = {
-        "analyze_competition", "search_papers", "query_memory", "generate_plan",
-        "implement", "run_plan", "run_experiment", "reflect", "submit",
+        "analyze_competition",
+        "search_papers",
+        "query_memory",
+        "generate_plan",
+        "implement",
+        "run_plan",
+        "run_experiment",
+        "reflect",
+        "submit",
     }
     return policy_mod.available_tools(_FakeWorkspace(), catalog)
 
 
-def test_full_backlog_blocks_re_gathering_evidence(monkeypatch):
-    """Re-analysing with work already queued makes no progress and costs minutes."""
+def test_a_full_pool_with_fresh_evidence_blocks_re_gathering(monkeypatch):
+    """Re-analysing with viable work queued and a recent sweep costs minutes and
+    adds nothing. Note *viable* and *fresh* — a full pool alone no longer
+    blocks, because that was the ratchet."""
     tools = _available_with_backlog(monkeypatch, backlog=10)
     assert "analyze_competition" not in tools
     assert "search_papers" not in tools
@@ -682,10 +710,17 @@ def test_full_backlog_blocks_re_gathering_evidence(monkeypatch):
     assert {"generate_plan", "run_plan", "reflect"} <= tools
 
 
-def test_empty_backlog_reopens_evidence_gathering(monkeypatch):
+def test_an_empty_pool_reopens_evidence_gathering(monkeypatch):
     tools = _available_with_backlog(monkeypatch, backlog=0)
     assert "analyze_competition" in tools
-    assert "search_papers" in tools
+
+
+def test_search_papers_is_never_offered_to_a_campaign(monkeypatch):
+    """It is forced `offline=True` on every conductor path and the policy only
+    picks tool names, so it can write `count: 0` and nothing else. An empty
+    pool is exactly when a wasted step hurts most."""
+    assert "search_papers" not in _available_with_backlog(monkeypatch, backlog=0)
+    assert "search_papers" not in _available_with_backlog(monkeypatch, backlog=10)
 
 
 def test_backlog_below_target_still_gathers(monkeypatch):
@@ -694,41 +729,66 @@ def test_backlog_below_target_still_gathers(monkeypatch):
     assert "analyze_competition" in tools
 
 
-def test_evidence_cooldown_blocks_immediate_resweep(monkeypatch):
-    """Re-sweeping minutes later re-ingests the same sources under new ids."""
+def test_a_re_sweep_inside_the_floor_is_refused(monkeypatch):
+    """Making the clauses independent introduced a failure the AND version
+    could not have: a pool that stays thin would sweep every step. The floor is
+    a rate limit under both clauses, not a third gate."""
     import labpilot.research_engine.conductor.policy as policy_mod
 
-    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 0)
-    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 0.5)
+    monkeypatch.setattr(policy_mod, "viable_hypothesis_count", lambda kd, c: 0)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 0.1)
     ok, reason = policy_mod.should_gather_evidence(_FakeWorkspace())
     assert ok is False
-    assert "cooldown" in reason
+    assert "minutes ago" in reason
 
 
-def test_stale_evidence_with_thin_backlog_reopens_gathering(monkeypatch):
+def test_a_thin_pool_reopens_gathering(monkeypatch):
+    """Fewer viable ideas than the target is reason enough, however fresh the
+    evidence — the pool being empty is the bottleneck."""
     import labpilot.research_engine.conductor.policy as policy_mod
 
-    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 1)
-    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 48.0)
-    ok, _ = policy_mod.should_gather_evidence(_FakeWorkspace())
+    monkeypatch.setattr(policy_mod, "viable_hypothesis_count", lambda kd, c: 1)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 2.0)
+    ok, reason = policy_mod.should_gather_evidence(_FakeWorkspace())
     assert ok is True
+    assert "viable" in reason
 
 
-def test_backlog_wins_over_freshness(monkeypatch):
-    """A full queue blocks gathering however old the evidence is."""
+def test_stale_evidence_reopens_gathering_however_full_the_queue(monkeypatch):
+    """The ratchet, inverted deliberately.
+
+    This test previously asserted the opposite — *"a full queue blocks
+    gathering however old the evidence is"* — and that assertion is the defect.
+    On rogii 2026-08-09 it kept 46 stale hypotheses holding `analyze_competition`
+    and `search_papers` out of the allowlist permanently, so the only thing that
+    could refresh the pool was disabled by the pool.
+
+    A queue of stale ideas is the strongest reason to find better ones.
+    """
     import labpilot.research_engine.conductor.policy as policy_mod
 
-    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 9)
+    monkeypatch.setattr(policy_mod, "viable_hypothesis_count", lambda kd, c: 50)
     monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 999.0)
     ok, reason = policy_mod.should_gather_evidence(_FakeWorkspace())
+    assert ok is True
+    assert "old" in reason
+
+
+def test_a_full_fresh_pool_does_not_gather(monkeypatch):
+    """The carve-out must not cost the brake: both clauses unmet means testing
+    is the better use of the step."""
+    import labpilot.research_engine.conductor.policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "viable_hypothesis_count", lambda kd, c: 9)
+    monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 2.0)
+    ok, _ = policy_mod.should_gather_evidence(_FakeWorkspace())
     assert ok is False
-    assert "untested hypotheses" in reason
 
 
 def test_never_gathered_always_allows_gathering(monkeypatch):
     import labpilot.research_engine.conductor.policy as policy_mod
 
-    monkeypatch.setattr(policy_mod, "untested_hypothesis_count", lambda ws: 0)
+    monkeypatch.setattr(policy_mod, "viable_hypothesis_count", lambda kd, c: 9)
     monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: None)
     ok, reason = policy_mod.should_gather_evidence(_FakeWorkspace())
     assert ok is True
@@ -746,80 +806,94 @@ def test_unrun_plan_blocks_queuing_another(monkeypatch):
     monkeypatch.setattr(policy_mod, "hours_since_last_artifact", lambda ws: 1.0)
     monkeypatch.setattr(policy_mod, "has_unrun_plan", lambda ws: True)
 
-    tools = policy_mod.available_tools(
-        _FakeWorkspace(), {"generate_plan", "run_plan", "reflect"}
-    )
+    tools = policy_mod.available_tools(_FakeWorkspace(), {"generate_plan", "run_plan", "reflect"})
     assert "generate_plan" not in tools
     assert "run_plan" in tools
 
 
-def test_latest_plan_prefers_a_runnable_one(monkeypatch, tmp_path):
-    """Targeting the newest id hit finished plans: 'status=done; need ready'."""
+def test_latest_plan_prefers_a_runnable_one(tmp_path):
+    """Against a real store, because the runnable filter now lives in SQL.
+
+    A faked plan source would exercise none of it — the join is where "runnable"
+    and "not testing a retired idea" are actually decided.
+    """
+    from datetime import UTC, datetime
+
     import labpilot.research_engine.conductor.loop as loop_mod
+    from labpilot.research_engine.planner.schemas.models import ResearchPlan
+    from labpilot.research_engine.planner.schemas.task_types import PlanStatus
+    from labpilot.research_engine.planner.store import PlanStore
 
-    class _Plan:
-        def __init__(self, pid, status):
-            self.id = pid
-            self.status = status
-            self.metadata = {}
-
-    class _Artifacts:
-        def __init__(self, *a, **k):
-            pass
-
-        def list(self):
-            return [
-                _Plan("P-001", "done"),
-                _Plan("P-002", "ready"),
-                _Plan("P-008", "done"),
-            ]
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(
-        "labpilot.research_engine.artifacts.plan.PlanArtifacts", _Artifacts
-    )
+    store = PlanStore(tmp_path / "knowledge", "demo")
+    try:
+        for pid, status in (
+            ("P-001", PlanStatus.DONE),
+            ("P-002", PlanStatus.READY),
+            ("P-008", PlanStatus.DONE),
+        ):
+            now = datetime.now(UTC)
+            store.upsert_plan(
+                ResearchPlan(
+                    id=pid,
+                    competition="demo",
+                    hypothesis_id="",
+                    goal="g",
+                    status=status,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+    finally:
+        store.close()
 
     class _WS:
-        knowledge_dir = tmp_path
+        knowledge_dir = tmp_path / "knowledge"
         competition = "demo"
 
     assert loop_mod._latest_plan_id(_WS()) == "P-002"
 
 
-def test_latest_plan_is_none_when_none_runnable(monkeypatch, tmp_path):
+def test_latest_plan_is_none_when_none_runnable(tmp_path):
     """No runnable plan means no answer — not "the newest done one".
 
     This test previously asserted the fallback. It was encoding the bug: the
     Engineer refuses a done plan with "need ready or in_progress", so returning
     one made the Conductor offer `run_plan` and lose a step every time. `None`
     lets it offer `generate_plan` instead.
+
+    Against a real store, because the double this test used to install was of
+    `PlanArtifacts` — which `_latest_plan_id` stopped calling when it moved to
+    `PlanStore.selectable_plan_ids()`. It passed on an empty fresh SQLite file
+    rather than on plans filtered by status, so a regression in the filter would
+    have shipped green.
     """
+    from datetime import UTC, datetime
+
     import labpilot.research_engine.conductor.loop as loop_mod
+    from labpilot.research_engine.planner.schemas.models import ResearchPlan
+    from labpilot.research_engine.planner.schemas.task_types import PlanStatus
+    from labpilot.research_engine.planner.store import PlanStore
 
-    class _Plan:
-        def __init__(self, pid):
-            self.id = pid
-            self.status = "done"
-            self.metadata = {}
-
-    class _Artifacts:
-        def __init__(self, *a, **k):
-            pass
-
-        def list(self):
-            return [_Plan("P-001"), _Plan("P-008")]
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(
-        "labpilot.research_engine.artifacts.plan.PlanArtifacts", _Artifacts
-    )
+    store = PlanStore(tmp_path / "knowledge", "demo")
+    try:
+        for pid in ("P-001", "P-008"):
+            now = datetime.now(UTC)
+            store.upsert_plan(
+                ResearchPlan(
+                    id=pid,
+                    competition="demo",
+                    hypothesis_id="",
+                    goal="g",
+                    status=PlanStatus.DONE,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+    finally:
+        store.close()
 
     class _WS:
-        knowledge_dir = tmp_path
+        knowledge_dir = tmp_path / "knowledge"
         competition = "demo"
 
     assert loop_mod._latest_plan_id(_WS()) is None
@@ -856,9 +930,7 @@ def test_non_dry_experiment_without_metrics_is_a_failure(monkeypatch):
         def candidates(self, capability):
             return [_Cand()]
 
-    monkeypatch.setattr(
-        specialists, "build_default_specialist_registry", lambda **k: _Reg()
-    )
+    monkeypatch.setattr(specialists, "build_default_specialist_registry", lambda **k: _Reg())
 
     with pytest.raises(specialists.ExperimentProducedNoMetricsError):
         specialists.run_experiment(object(), plan_id="P-009", dry_run=False)
@@ -949,9 +1021,11 @@ def test_the_degraded_handler_precedes_the_generic_one():
 
     from labpilot.research_engine.conductor import loop as loop_mod
 
-    source = inspect.getsource(loop_mod.run_until_stop.__wrapped__) if hasattr(
-        loop_mod.run_until_stop, "__wrapped__"
-    ) else inspect.getsource(loop_mod._run_until_stop_inner)
+    source = (
+        inspect.getsource(loop_mod.run_until_stop.__wrapped__)
+        if hasattr(loop_mod.run_until_stop, "__wrapped__")
+        else inspect.getsource(loop_mod._run_until_stop_inner)
+    )
     degraded = source.index("except LLMDegradedError")
     generic = source.index("except Exception as exc:", degraded)
     assert degraded < generic, "LLMDegradedError must be caught before Exception"
@@ -1007,10 +1081,18 @@ def test_an_exhausted_catalog_cycles_instead_of_stopping():
     not a one-pass checklist."""
     from labpilot.research_engine.conductor.policy import offline_next_action
 
-    done = ["analyze_competition", "search_papers", "query_memory",
-            "generate_plan", "run_plan", "reflect", "submit"]
-    action = offline_next_action({"completed_tools": done},
-                                 {"generate_plan", "run_plan", "reflect"})
+    done = [
+        "analyze_competition",
+        "search_papers",
+        "query_memory",
+        "generate_plan",
+        "run_plan",
+        "reflect",
+        "submit",
+    ]
+    action = offline_next_action(
+        {"completed_tools": done}, {"generate_plan", "run_plan", "reflect"}
+    )
     assert action.stop is False
     assert action.tool in {"generate_plan", "run_plan", "reflect"}
 
@@ -1047,8 +1129,15 @@ def test_cycling_is_least_recently_used_not_fixed_order():
     from labpilot.research_engine.conductor.policy import offline_next_action
 
     full = {"generate_plan", "run_plan", "reflect"}
-    done = ["analyze_competition", "search_papers", "query_memory",
-            "generate_plan", "run_plan", "reflect", "submit"]
+    done = [
+        "analyze_competition",
+        "search_papers",
+        "query_memory",
+        "generate_plan",
+        "run_plan",
+        "reflect",
+        "submit",
+    ]
 
     seen = []
     for _ in range(3):

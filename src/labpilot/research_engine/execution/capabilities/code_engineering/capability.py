@@ -205,6 +205,20 @@ def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object
     return out
 
 
+class RedundantHypothesisError(RuntimeError):
+    """The parent already implements what this hypothesis proposed.
+
+    Raised rather than returned, and deliberately *not* caught by the
+    whole-file fallback: every other reason the delta path declines is a codegen
+    problem, where falling back is right because the experiment is still worth
+    running. This one says the experiment is not worth running at all.
+
+    A failed step is the honest outcome. The campaign records it, the breaker
+    counts it, and the hypothesis is already retired, so the next step chooses
+    something else — which is what the detection was for.
+    """
+
+
 class CodeEngineeringCapability(BaseCapability):
     name = "code_engineering"
 
@@ -228,6 +242,42 @@ class CodeEngineeringCapability(BaseCapability):
         if context.task.type == TaskType.WRITE_CODE:
             return self._write(context)
         return self._modify_config(context)
+
+    def _retire_redundant_hypothesis(self, context: TaskContext, reason: str) -> bool:
+        """Retire a hypothesis whose change the parent already implements.
+
+        Detected here rather than after the experiment because the evidence is
+        already in hand — the claim and the parent — and because a failed
+        execution cannot distinguish this from an adapter that broke. Retiring
+        it is the whole point: `_next_hypothesis_id` lists only `proposed`, so
+        rejection is what removes it from selection.
+
+        Returns whether the retirement actually landed. The broad catch stays —
+        a store problem must not take down the step — but swallowing it silently
+        left the hypothesis `proposed` while the caller behaved as though it had
+        been retired, so the campaign re-selected the same finished work. The
+        caller now says so in the error it raises, which is the difference
+        between a bad step and an invisible loop.
+        """
+        hypothesis_id = getattr(context.plan, "hypothesis_id", None)
+        if not hypothesis_id:
+            return False
+        try:
+            from labpilot.research_engine.reflection.hypotheses import HypothesisEvaluator
+
+            # `redundant=True` alone: `classify_hypothesis_failure` short-circuits
+            # on it before `failure_kind` is ever read, so passing the kind too
+            # implied a second input that does nothing.
+            HypothesisEvaluator(context.paths.base_dir, context.competition).record_failed_attempt(
+                hypothesis_id,
+                failure_reason=reason,
+                redundant=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — bookkeeping must not kill the step
+            logger.warning("could not retire redundant hypothesis %s: %s", hypothesis_id, exc)
+            return False
+        logger.info("Retired %s: %s", hypothesis_id, reason)
+        return True
 
     def _propose_delta(
         self,
@@ -269,6 +319,32 @@ class CodeEngineeringCapability(BaseCapability):
         except AiderError as exc:
             # Already recorded to `agent_invocations` with its kind by the
             # agent itself; this only decides what happens next.
+            if exc.kind == "hypothesis_redundant":
+                # Not a codegen failure, and so not a fallback. The campaign
+                # chose work already done: retiring the hypothesis stops it
+                # being chosen again — four campaigns re-selected P-021 because
+                # nothing did this — and raising stops *this* step from doing
+                # it anyway.
+                #
+                # Falling through to whole-file was the gap: the hypothesis was
+                # marked already-implemented and then the LLM rewrote train.py
+                # from scratch and the runner trained it, spending the full
+                # experiment the retirement existed to avoid. Worse, a
+                # successful run reaches `HypothesisEvaluator.evaluate`, which
+                # writes the critic's verdict with no settled-status guard — so
+                # a hypothesis just retired as redundant could come back
+                # `confirmed`, carrying evidence from a run that tested
+                # something else entirely.
+                retired = self._retire_redundant_hypothesis(context, str(exc))
+                raise RedundantHypothesisError(
+                    f"{exc}"
+                    + (
+                        ""
+                        if retired
+                        else " (and the hypothesis could not be retired, so it "
+                        "may be selected again — see the warning above)"
+                    )
+                ) from exc
             logger.warning("aider proposal failed (%s); falling back: %s", exc.kind, exc)
             return None, ""
         except Exception:  # noqa: BLE001 — a codegen path must not kill the step

@@ -69,10 +69,25 @@ class Scheduler:
             args = self._with_llm_client(task.tool_name, dict(task.args))
             result = self.registry.invoke(task.tool_name, self.workspace, **args)
         except Exception as exc:
-            if task.retry_count < task.max_retries:
-                self.store.update_task_status(task.id, "retry", error=str(exc))
-            else:
-                self.store.update_task_status(task.id, "failed", error=str(exc))
+            # `failed`, not `retry`. Marking `retry` was a promise nobody kept:
+            # `update_task_status` turns `retry` into `pending`, and nothing
+            # re-dispatches a pending task — `dispatch_next` and `next_ready`
+            # have no callers, and the campaign loop dispatches the task it just
+            # enqueued. So a task that blew up was parked as `pending` for good
+            # while every other layer recorded the failure correctly: the
+            # `tasks_failed` metric, the breaker's execution counters, and the
+            # decision record all agreed it failed, and only the task row said
+            # it was still waiting to run.
+            #
+            # That row is not private bookkeeping. The observe bundle sends
+            # `task_summary` to the policy every step, so a campaign's failures
+            # accumulated there reading as queued work.
+            #
+            # Retrying is not the missing piece. The campaign's retry *is* the
+            # next policy step, which re-decides with the error in context —
+            # better than a blind re-run, and a blind re-run of `run_experiment`
+            # means training the model again to watch it fail the same way.
+            self.store.update_task_status(task.id, "failed", error=str(exc))
             raise
         refs = [r.model_dump() for r in result.refs]
         self.store.update_task_status(task.id, "completed", artifact_refs=refs)

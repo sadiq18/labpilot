@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -25,7 +25,25 @@ BASELINE_HYPOTHESIS_ID = "H-BASELINE"
 
 
 def _now() -> datetime:
-    return datetime.now()
+    """UTC, and aware — every other store in the system already is.
+
+    This returned naive *local* time, which is not the same thing as UTC and was
+    read as though it were. `PlanStore` stamps in UTC, and `_parse_timestamp`
+    labels a naive datetime UTC, so on a UTC+5:30 machine a hypothesis created
+    at 05:58 local was compared as 05:58 UTC — five and a half hours after the
+    plan selections it was meant to be aged against.
+
+    `campaigns_since` counts selections strictly after creation, so it returned
+    0 for every hypothesis and nothing could ever go stale: the viability filter
+    was a no-op anywhere east of Greenwich, and prematurely aggressive anywhere
+    west of it. Found by a staleness test that seeded two selections and still
+    counted three viable hypotheses.
+
+    Stamps already written stay naive and are still read as UTC. There is no
+    offset recorded to recover, and re-interpreting them would be a guess; new
+    rows are simply correct from here.
+    """
+    return datetime.now(UTC)
 
 
 class HypothesisStore:
@@ -75,13 +93,9 @@ class HypothesisStore:
             competition=self.competition,
             observation=observation,
             reason=(
-                "Need a reproducible reference experiment before testing "
-                "improvement hypotheses."
+                "Need a reproducible reference experiment before testing improvement hypotheses."
             ),
-            prediction=(
-                "Baseline template produces valid CV metrics and a "
-                "submission artifact."
-            ),
+            prediction=("Baseline template produces valid CV metrics and a submission artifact."),
             confidence=0.5,
             expected_impact=0.0,
             tags=["baseline"],
@@ -120,9 +134,7 @@ class HypothesisStore:
         resolved_created_by = _coerce_created_by(created_by, source)
         resolved_generator = _coerce_generator(generator, source)
         resolved_origin = _coerce_origin(origin, source)
-        resolved_origins = [
-            HypothesisOrigin(str(item)) for item in origins if str(item).strip()
-        ]
+        resolved_origins = [HypothesisOrigin(str(item)) for item in origins if str(item).strip()]
         if not resolved_origins and resolved_origin is not None:
             resolved_origins = [resolved_origin]
         evidence_refs = [
@@ -357,22 +369,14 @@ class HypothesisStore:
                     "tags": list(hypothesis.tags),
                     "source": hypothesis.source,
                     "created_by": (
-                        str(hypothesis.created_by)
-                        if hypothesis.created_by is not None
-                        else None
+                        str(hypothesis.created_by) if hypothesis.created_by is not None else None
                     ),
                     "generator": (
-                        str(hypothesis.generator)
-                        if hypothesis.generator is not None
-                        else None
+                        str(hypothesis.generator) if hypothesis.generator is not None else None
                     ),
-                    "origin": (
-                        str(hypothesis.origin) if hypothesis.origin is not None else None
-                    ),
+                    "origin": (str(hypothesis.origin) if hypothesis.origin is not None else None),
                     "origins": [str(item) for item in hypothesis.origins],
-                    "evidence": [
-                        item.model_dump(mode="json") for item in hypothesis.evidence
-                    ],
+                    "evidence": [item.model_dump(mode="json") for item in hypothesis.evidence],
                     "evidence_for": list(hypothesis.evidence_for),
                     "evidence_against": list(hypothesis.evidence_against),
                     "actual_outcome": hypothesis.actual_outcome,
@@ -439,8 +443,4 @@ def _coerce_origin(
 
 def linked_experiments(hypothesis_id: str, graph: ExperimentGraph) -> list[Experiment]:
     """Return every experiment in `graph` whose manifest linked this hypothesis."""
-    return [
-        exp
-        for exp in graph.nodes.values()
-        if exp.hypothesis_id == hypothesis_id
-    ]
+    return [exp for exp in graph.nodes.values() if exp.hypothesis_id == hypothesis_id]

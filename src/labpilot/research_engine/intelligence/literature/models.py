@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from labpilot.research_engine.intelligence.feature_recipes import FeatureRecipe
 
@@ -78,3 +78,23 @@ class PaperKnowledge(BaseModel):
     code_urls: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
     grounded_in: Literal["abstract", "pdf_excerpt", "metadata"] = "abstract"
+
+    @field_validator("grounded_in", mode="before")
+    @classmethod
+    def _blank_means_omitted(cls, value: Any) -> Any:
+        """An empty string is the model declining to answer, not a new value.
+
+        Measured on rogii 2026-08-09: `PaperAnalyzerAgent` returned
+        `"grounded_in": ""`, failed validation three times, and the paper's
+        knowledge was dropped entirely — one blank enum against thirteen
+        populated fields. Omitting the key was always accepted; writing it
+        empty is the same statement, so it gets the same answer.
+
+        Only blank coerces. An unrecognized *value* — "full_text", say — is a
+        genuine disagreement about provenance, and silently recording it as
+        "abstract" would misstate what the extraction was grounded in. That
+        still fails, loudly.
+        """
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "abstract"
+        return value

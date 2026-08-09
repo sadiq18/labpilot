@@ -134,6 +134,12 @@ class ResearchEngineer:
         except EngineerError as exc:
             self._exec_store.update_status(execution_id, "failed", error=str(exc))
             self._plan_store.update_plan_status(execution.plan_id, PlanStatus.ABANDONED)
+            # Tell the hypothesis what happened. Without this it stays `testing`
+            # forever — a failed execution writes no evidence card, and a card
+            # is the only thing that ever moved it out. Measured on rogii
+            # 2026-08-09: one stuck there, three historically, and a redundant
+            # one re-selected on every step of four campaigns.
+            self._record_hypothesis_attempt(plan, str(exc))
             result = self._exec_store.get_execution(execution_id)
             assert result is not None
             return result
@@ -267,6 +273,53 @@ class ResearchEngineer:
     #: Tasks whose whole purpose is to prove the generated code runs. When one
     #: of these fails, the code is the thing that is wrong.
     _CODE_VALIDATION_TASKS = frozenset({TaskType.RUN_SMOKE_TEST, TaskType.RUN_UNIT_TEST})
+
+    def _record_hypothesis_attempt(self, plan: ResearchPlan, error: str) -> None:
+        """Retire or re-queue the hypothesis behind a failed execution.
+
+        Redundancy is decided here rather than left to the failure text, because
+        "aider made no edit" and "the parent already does this" are opposite
+        findings that otherwise look identical — one says the adapter failed,
+        the other says the campaign chose work already done. Reading them as the
+        same thing is what let four campaigns re-select P-021.
+
+        Attempts are counted from the executions that exist, not from a stored
+        counter: a counter is a derived value that drifts from its source the
+        first time something writes one and not the other.
+        """
+        hypothesis_id = getattr(plan, "hypothesis_id", None)
+        if not hypothesis_id:
+            return
+        try:
+            from labpilot.accessor.common.provenance import classify_failure
+            from labpilot.research_engine.reflection.hypotheses import HypothesisEvaluator
+
+            HypothesisEvaluator(self.knowledge_dir, self.competition).record_failed_attempt(
+                hypothesis_id,
+                failure_reason=error,
+                failure_kind=classify_failure(error),
+                attempts=self._failed_attempts_for(hypothesis_id),
+                # Redundancy is decided upstream, by `AiderAgent`, which holds
+                # both the claim and the parent. Deciding it again from the
+                # failure text here would be two answers to one question, and
+                # the text is the wrong input: "aider made no edit" cannot tell
+                # a redundant hypothesis from an adapter that failed.
+            )
+        except Exception as exc:  # noqa: BLE001 — bookkeeping must not mask the failure
+            logger.warning("could not record attempt on %s: %s", hypothesis_id, exc)
+
+    def _failed_attempts_for(self, hypothesis_id: str) -> int:
+        """How many executions for this hypothesis have already failed."""
+        try:
+            plans = self._plan_store.list_plans(hypothesis_id=hypothesis_id)
+            failed = sum(
+                len(self._exec_store.list_executions(plan_id=p.id, status="failed")) for p in plans
+            )
+        except Exception:  # noqa: BLE001 — an unreadable store means "first attempt"
+            return 1
+        # At least 1: this is called *from* a failure, so the current one counts
+        # even if the store has not recorded it yet.
+        return max(1, failed)
 
     def _train_script_is_unrunnable(self) -> bool:
         """True when the script we are about to re-run cannot possibly work.
