@@ -17,6 +17,36 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 METRICS_NOT_WRITTEN = "did not write metrics.json"
 
 
+def _misplaced_note(root: Path, since: float) -> str:
+    """Name a `metrics.json` this run wrote *somewhere else*.
+
+    "It did not write metrics.json" is true and unhelpful when the script wrote
+    one enthusiastically into a directory it invented. Measured on rogii
+    2026-08-09: `./workspace/metrics.json`, created by the script's own
+    `makedirs`, three retries in a row — each one told what was missing and
+    never where its output had gone, so each edited something else.
+
+    Cheap: one shallow glob, only on the failure path.
+    """
+    try:
+        found = [
+            path
+            for path in root.rglob("metrics.json")
+            if path.parent != root
+            and ".venv" not in path.parts
+            and path.stat().st_mtime >= since - 1.0
+        ]
+    except OSError:  # pragma: no cover - a listing failure must not mask the real error
+        return ""
+    if not found:
+        return ""
+    listed = ", ".join(str(p.relative_to(root)) for p in sorted(found)[:3])
+    return (
+        f". This run did write one at {listed} — move the output to the workspace "
+        "root and do not create a directory for it"
+    )
+
+
 class TrainingCapability(BaseCapability):
     name = "training"
 
@@ -110,13 +140,15 @@ class TrainingCapability(BaseCapability):
             if ok and not fresh:
                 ok = False
                 error = (
-                    f"training exited 0 but {METRICS_NOT_WRITTEN} "
+                    f"training exited 0 but {METRICS_NOT_WRITTEN} at "
+                    f"{metrics_path.name} (workspace root)"
                     + (
-                        "— the file on disk predates this run, so it belongs to an "
+                        " — the file there predates this run, so it belongs to an "
                         "earlier execution"
                         if metrics_path.is_file()
-                        else "(check ``if __name__ == '__main__':`` and that main() runs)"
+                        else " (check ``if __name__ == '__main__':`` and that main() runs)"
                     )
+                    + _misplaced_note(root, wall_started)
                 )
             return evidence(
                 context,

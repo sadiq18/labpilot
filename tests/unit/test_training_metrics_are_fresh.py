@@ -189,3 +189,27 @@ def test_training_is_still_not_a_code_validation_task():
     from labpilot.research_engine.planner.schemas.task_types import TaskType
 
     assert TaskType.RUN_TRAINING not in ResearchEngineer._CODE_VALIDATION_TASKS
+
+
+def test_the_error_names_where_the_output_actually_went(workspace):
+    """"It did not write metrics.json" is true and unhelpful when the script
+    wrote one enthusiastically into a directory it invented. rogii burned three
+    retries on `./workspace/metrics.json` — each told what was missing, never
+    where its output had gone, so each edited something else."""
+
+    class _MisplacedRunner(_Runner):
+        def run(self, timeout=None):
+            out = self.root / "workspace"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "metrics.json").write_text(json.dumps({"cv_rmse": 1.0}), encoding="utf-8")
+            return _Result()
+
+    import labpilot.research_engine.execution.training.runner as runner_mod
+
+    runner_mod.TrainingRunner = _MisplacedRunner
+
+    result = _run(workspace)
+
+    assert result.passed is False
+    assert "workspace/metrics.json" in (result.error or "")
+    assert "do not create a directory" in (result.error or "")
