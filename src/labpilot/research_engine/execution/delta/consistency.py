@@ -44,6 +44,77 @@ logger = logging.getLogger(__name__)
 _WIDE_DELTA_FUNCTIONS = 5
 
 
+@dataclass(frozen=True)
+class ValidationSignals:
+    """What the workspace declared about how this competition is validated.
+
+    §5's fifth check needs to know where the validation region *is*, and the
+    design question that stopped it for three milestones was how to say so
+    without a curated list of function names — the
+    curated-set-answering-an-open-world-question pattern this plan has rejected
+    four times, most recently as the technique→symbol map that killed 1b's
+    original derivation.
+
+    Nothing needs curating, because the workspace has already declared it.
+    `derive_validation_plan` reads the dataset profile and writes a
+    `ValidationPlan` into `baseline_choice.json`: the scheme it chose and the
+    columns validation must never see. Those are facts about *this* dataset,
+    derived from its own shape, and already load-bearing — the codegen prompt is
+    built from the same values.
+
+    So the region is declared by the workspace **and** derived from the parent:
+    the workspace names the scheme, and `validation_region` finds which of the
+    parent's functions run it. Neither half is a list anyone maintains.
+
+    **Only the scheme marks the region, and that was measured, not assumed.**
+    On rogii's real 7-function `train.py`:
+
+    | signal | region |
+    |---|---|
+    | scheme | `main`, `partition_suffix_holdout_split` |
+    | + `group_key` | 5 of 7 functions |
+    | `exclude_features` | 3 of 7, all of them *correct* feature code |
+
+    The last row is the giveaway: a function mentioning an excluded column is
+    usually the function excluding it. And `group_key` is a *column* — rogii
+    groups by `file_stem_entity` for rolling features as readily as for the
+    split. A scheme is a *procedure*, and only validation runs one. Six flags
+    out of seven functions is a flag nobody reads, which is the failure M20
+    exists for, so the wider signals are carried for the leakage check and not
+    used to mark the region.
+
+    `n_splits` and `holdout_fraction` are not signals at all. They are numbers:
+    `0.5` and `5` appear in code that has nothing to do with validation.
+    """
+
+    scheme: str = ""
+    exclude_features: tuple[str, ...] = ()
+
+    @classmethod
+    def from_baseline_choice(cls, choice: dict | None) -> ValidationSignals:
+        """Read `baseline_choice.json`'s `validation` block, tolerating anything.
+
+        A workspace without one yields empty signals, which flag nothing — the
+        right answer, because a competition whose validation plan was never
+        derived has no declared region for a delta to land in.
+        """
+        plan = (choice or {}).get("validation")
+        if not isinstance(plan, dict):
+            return cls()
+        excluded = plan.get("exclude_features")
+        return cls(
+            scheme=str(plan.get("scheme") or ""),
+            exclude_features=tuple(
+                str(column) for column in (excluded if isinstance(excluded, list) else [])
+            ),
+        )
+
+
+def _folded(name: str) -> str:
+    """`GroupKFold` and `group_kfold` are the same word for matching purposes."""
+    return name.replace("_", "").replace("-", "").lower()
+
+
 @dataclass
 class ConsistencyReport:
     """What the delta did, measured against what the hypothesis claimed."""
@@ -834,6 +905,188 @@ def check_confinement(touched: list[str], limit: int = _WIDE_DELTA_FUNCTIONS) ->
     ]
 
 
+def _identifiers_used(node: ast.AST) -> set[str]:
+    """Identifiers in a subtree — no string constants.
+
+    A scheme is a *procedure*, so it appears in code as a name. Counting
+    strings put rogii's `main` in the validation region on the strength of
+    `{"validation_scheme": "partition_suffix_holdout"}` in its metrics dict —
+    reporting which scheme ran, not running one. `_names_used` keeps strings
+    because the leakage check needs them: an excluded column is referenced as
+    `df["ANCC"]` far more often than as an identifier.
+    """
+    found: set[str] = set()
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Name):
+            found.add(inner.id)
+        elif isinstance(inner, ast.Attribute):
+            found.add(inner.attr)
+        elif isinstance(inner, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            found.add(inner.name)
+    return found
+
+
+def _names_used(node: ast.AST) -> set[str]:
+    """Every identifier and string constant in a subtree.
+
+    Strings matter as much as identifiers here: a grouping column appears as
+    `df.groupby("file_stem_entity")` far more often than as a variable.
+    """
+    found: set[str] = set()
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Name):
+            found.add(inner.id)
+        elif isinstance(inner, ast.Attribute):
+            found.add(inner.attr)
+        elif isinstance(inner, ast.arg):
+            found.add(inner.arg)
+        elif isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+            found.add(inner.value)
+        elif isinstance(inner, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            found.add(inner.name)
+    return found
+
+
+def validation_region(tree: ast.Module, signals: ValidationSignals) -> set[str]:
+    """Top-level functions that run the validation scheme the workspace declared.
+
+    Derived, not listed: `signals.scheme` names the procedure and this finds
+    who performs it — the function named after it (`partition_suffix_holdout_split`)
+    and any function that calls or mentions it (`main`). A workspace that
+    declared no scheme has an empty region, which is the honest answer: there
+    is no validation plan for a delta to disturb.
+
+    Matched on a folded name, so `group_kfold` finds `GroupKFold` — the scheme
+    is written one way in a config and another in code, and that difference is
+    spelling, not meaning. Substring rather than equality because the split
+    function is named *after* the scheme, not *as* it.
+
+    Module-level statements are deliberately out of scope. The question is
+    which *function* a delta landed in, and `touched_functions` answers in the
+    same vocabulary.
+
+    **Calling the splitter is not being the splitter.** `main` calls
+    `partition_suffix_holdout_split`, which put it in the region on the first
+    measurement — and `main` calls everything, so nearly every delta would have
+    carried a validation flag and the flag would have stopped meaning anything.
+    A function reaches the region by *implementing* the scheme: carrying it in
+    its own name, or naming it through something other than a call to a
+    function that already does.
+
+    Identifiers only — see `_identifiers_used`. Naming the scheme in a string
+    is reporting, not running: rogii's `main` writes
+    `{"validation_scheme": "partition_suffix_holdout"}` into its metrics, and
+    counting that kept the orchestrator in the region after the delegation rule
+    had already taken it out.
+
+    The limit worth stating: a delta that *inlines* a split under names that
+    resemble nothing in the plan is not caught. This finds code that performs
+    the declared scheme, and code that quietly performs a different one is the
+    open edge. Confinement covers part of it — such a delta is usually wide —
+    and the rest waits for a signal better than naming.
+    """
+    scheme = _folded(signals.scheme)
+    if not scheme:
+        return set()
+    functions = [
+        node for node in tree.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    ]
+    region = {node.name for node in functions if scheme in _folded(node.name)}
+    for node in functions:
+        if node.name in region:
+            continue
+        beyond_delegation = _identifiers_used(node) - region
+        if any(scheme in _folded(name) for name in beyond_delegation):
+            region.add(node.name)
+    return region
+
+
+def check_validation_region(
+    parent: ast.Module | None,
+    child: ast.Module,
+    touched: list[str],
+    signals: ValidationSignals,
+) -> list[str]:
+    """§5's fifth check — a delta landing in the validation region is *flagged*.
+
+    §8 names this the only risk it calls *the one that would hurt*: a delta may
+    change validation logic, and a leaky score looks **better**, not worse, so
+    neither the metric nor the leaderboard says anything is wrong. A hypothesis
+    *about* validation is legitimate; one that changes validation while
+    claiming to test a feature is a false result wearing a real number.
+
+    Flagged and never refused, which is §8's own wording — *"the mitigation is
+    detection, not prohibition"*. The region is inferred from names, and every
+    check in this file that refused on inferred names has had to be walked back
+    (see `redundancy.py`). A flag on the evidence card costs a reader a second
+    look; a refusal costs a legitimate experiment.
+
+    Asked of the parent **and** the child. A delta that edits the existing
+    holdout construction is caught by the parent's region; a delta that
+    *introduces* validation logic where there was none is caught by the
+    child's, and that is the shape that would otherwise be invisible — nothing
+    to preserve, nothing claimed, and a new split nobody asked for.
+    """
+    if not touched or not signals.scheme:
+        return []
+    region = validation_region(child, signals)
+    if parent is not None:
+        region |= validation_region(parent, signals)
+    landed = sorted(name for name in touched if name in region)
+    if not landed:
+        return []
+    listed = ", ".join(repr(name) for name in landed)
+    return [
+        f"the delta changed {listed}, which the workspace's validation plan "
+        f"({signals.scheme or 'unnamed scheme'}) runs through — a change to how "
+        "the score is computed is not the experiment the hypothesis claimed, and "
+        "a leaky split scores better rather than worse"
+    ]
+
+
+def check_leakage_discipline(child: ast.Module, signals: ValidationSignals) -> list[str]:
+    """The excluded columns must be excluded by something in the file.
+
+    F7: columns in `validation.exclude_features` must never reach the feature
+    set. They are the columns the test set does not carry — `Geology`, `ANCC`
+    and five others on rogii — so a model that trains on them scores well in
+    validation and cannot score at all on the leaderboard.
+
+    This was enforced structurally until M19 §2: the Jinja pack skipped
+    `column in set(EXCLUDE_FEATURES)` when deriving features. Deleting the pack
+    left one bullet in `code_engineer_system.md` and no check at all — an
+    instruction to a model, which is the thing this milestone keeps learning
+    not to rely on.
+
+    What is checkable without guessing: a file that derives its features from
+    the frame's columns and never mentions the exclusion cannot be applying it.
+    That is an implication, not a heuristic — exclusion by name requires the
+    name, or the key that holds the names.
+
+    Two ways not to be flagged, both correct:
+
+    * the file names the columns, or reads `exclude_features` from the config —
+      the discipline is present, and whether it is *right* is beyond static
+      reach;
+    * the file never touches `.columns` at all, so its features come from an
+      explicit list and the excluded columns are absent by construction.
+    """
+    if not signals.exclude_features:
+        return []
+    used = _names_used(child)
+    if "columns" not in used:
+        return []
+    if used & set(signals.exclude_features) or "exclude_features" in used:
+        return []
+    listed = ", ".join(repr(column) for column in sorted(signals.exclude_features)[:4])
+    return [
+        f"the code derives features from the frame's columns and never mentions "
+        f"{listed}… or `exclude_features`, so nothing in it excludes the columns "
+        "the test set does not carry — a model trained on them scores well in "
+        "validation and cannot score on the leaderboard"
+    ]
+
+
 def check_delta_consistency(
     parent_source: str,
     child_source: str,
@@ -841,6 +1094,7 @@ def check_delta_consistency(
     keep: list[str] | None = None,
     add: list[str] | None = None,
     combine: list[str] | None = None,
+    validation: ValidationSignals | None = None,
 ) -> ConsistencyReport:
     """Compare what the delta did against what the hypothesis claimed.
 
@@ -873,6 +1127,16 @@ def check_delta_consistency(
         # `check_reachability`. A better claim would have hidden the defect
         # this catches, so it cannot be derived from one.
         report.record(check_reachability(child_tree, report.touched_functions), needs_claim=False)
+
+    # §5's fifth check, and F7 alongside it. Both are flags: they land on the
+    # evidence card so a reader can discount the result, and neither refuses,
+    # because both infer a region from names and refusing on inferred names is
+    # what this file has had to walk back every time it tried.
+    signals = validation or ValidationSignals()
+    report.flags.extend(
+        check_validation_region(parent_tree, child_tree, report.touched_functions, signals)
+    )
+    report.flags.extend(check_leakage_discipline(child_tree, signals))
 
     report.record(check_preservation(child_tree, keep or []))
     report.record(check_addition(child_tree, add or []))

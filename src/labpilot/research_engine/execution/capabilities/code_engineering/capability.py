@@ -36,6 +36,7 @@ from labpilot.research_engine.execution.capabilities.code_engineering.apply impo
 )
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.delta import (
+    ValidationSignals,
     check_delta_consistency,
     record_execution_source,
     snapshot_dir,
@@ -139,7 +140,32 @@ def _summarise_profile(profile: dict) -> dict:
 _RETRY_EXCERPT = 2000
 
 
-def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object]:
+def _validation_signals(root: Path) -> ValidationSignals:
+    """What `baseline_choice.json` declared about validation, or nothing.
+
+    Read here because this is where the workspace is: `check_delta_consistency`
+    takes two sources and a claim, and giving it a path would make a pure
+    function read the disk. A workspace without a baseline choice yields empty
+    signals, and empty signals flag nothing.
+    """
+    import json
+
+    try:
+        raw = (root / "baseline_choice.json").read_text(encoding="utf-8")
+    except OSError:
+        return ValidationSignals()
+    try:
+        return ValidationSignals.from_baseline_choice(json.loads(raw))
+    except (ValueError, TypeError) as exc:
+        logger.debug("baseline_choice.json unreadable, no validation signals: %s", exc)
+        return ValidationSignals()
+
+
+def _observe_delta(
+    prior_train: str,
+    proposal: CodeProposal,
+    signals: ValidationSignals | None = None,
+) -> dict[str, object]:
     """Check the change against the claim its own author made. Gates nothing.
 
     The claim comes from `proposal.kept` / `added` / `combined` — code
@@ -177,6 +203,7 @@ def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object
         keep=list(proposal.kept),
         add=list(proposal.added),
         combine=list(proposal.combined),
+        validation=signals,
     )
     meta = report.as_metadata()
     claimed = bool(proposal.kept or proposal.added or proposal.combined)
@@ -601,7 +628,7 @@ class CodeEngineeringCapability(BaseCapability):
 
         digests = {str(p): file_digest(p) for p in written}
         paths = [str(p) for p in written]
-        delta = _observe_delta(prior_train, proposal)
+        delta = _observe_delta(prior_train, proposal, _validation_signals(root))
         # M19 §6: record what *this* execution ran, keyed by this execution, so
         # a child can address its parent's code instead of inferring it from
         # write order. Snapshotted after apply, so it records what landed.
