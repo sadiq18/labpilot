@@ -213,9 +213,6 @@ class AiderAgent:
         # re-selecting a hypothesis asking for an ensemble `train.py` already
         # had. Raising *before* the subprocess also saves the call that was
         # only ever going to be declined.
-        verdict = check_redundancy(_parent_source(parent, ctx), brief.added)
-        if verdict.redundant:
-            raise AiderError(verdict.reason, kind="hypothesis_redundant")
 
         # A repair overrides the brief. The brief exists to turn a *hypothesis*
         # into an instruction plus a claim, and a retry has neither to offer:
@@ -224,6 +221,21 @@ class AiderAgent:
         # words on the third stall were still about computing the feature it
         # had already computed — so it declined, correctly, every time.
         retrying = bool(str((getattr(ctx, "data", None) or {}).get("retry_reason") or "").strip())
+
+        # Redundancy is a question about a *hypothesis*, so it is not asked on
+        # a repair. The first attempt adds the feature and the run fails
+        # downstream; on retry the parent legitimately contains that code, so
+        # the same `added` claim reads as already implemented and the
+        # hypothesis is permanently retired instead of repaired. The check
+        # would be correct about the parent and wrong about the question.
+        #
+        # Not left to the brief's "claim nothing new" instruction either: that
+        # is a request to a model, and a model that ignores it retires the
+        # hypothesis. The skip is here, where it cannot be declined.
+        if not retrying:
+            verdict = check_redundancy(_parent_source(parent, ctx), brief.added)
+            if verdict.redundant:
+                raise AiderError(verdict.reason, kind="hypothesis_redundant")
         # The brief's own reading rides along on a repair rather than being
         # thrown away. `delta_brief_system.md` now teaches it to answer a
         # failure, and it has the parent source that `_instruction` does not —

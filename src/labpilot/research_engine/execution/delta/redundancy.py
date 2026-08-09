@@ -41,8 +41,7 @@ import logging
 from dataclasses import dataclass, field
 
 from labpilot.research_engine.execution.delta.consistency import (
-    called_names,
-    imported_modules,
+    present_names,
     strip_unreachable,
 )
 
@@ -101,7 +100,13 @@ def check_redundancy(parent_source: str, added: list[str]) -> RedundancyVerdict:
     # function — and the hypothesis was retired as already implemented. The
     # feature it asked for had never once been computed.
     live = strip_unreachable(tree)
-    present = called_names(live) | imported_modules(live)
+    # The fourth consumer, and the one left behind twice. `called_names` cannot
+    # see a function the parent only ever hands to `df.apply`, so a genuinely
+    # implemented hypothesis was judged *not* redundant — and the paid aider
+    # call that followed made no edit, raised `aider_no_edit` rather than
+    # `hypothesis_redundant`, and the hypothesis stayed `proposed` to be picked
+    # again. That is this module's own motivating bug. Reported on PR #117.
+    present = present_names(live)
     found = [name for name in names if name in present]
     if len(found) != len(names):
         return RedundancyVerdict(already_present=found)

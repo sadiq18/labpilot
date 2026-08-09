@@ -351,3 +351,32 @@ def test_a_repair_carries_the_brief_as_well_as_the_error(tmp_path):
     assert "KeyError" in sent
     assert "MD_x_GR" in sent
     assert sent.index("KeyError") < sent.index("MD_x_GR")
+
+
+def test_a_repair_is_not_judged_redundant(tmp_path):
+    """Reported on PR #117: `check_redundancy` ran before `retrying` was even
+    computed, so a retry whose parent legitimately contained the earlier
+    attempt's code was retired instead of repaired."""
+    spawned: list[str] = []
+
+    def _runner(cmd, cwd, timeout):
+        spawned.append("spawned")
+        raise RuntimeError("stop here")
+
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text(_ENSEMBLE, encoding="utf-8")
+    agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb"]), runner=_runner)
+
+    with pytest.raises(Exception):
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE, retry_reason="KeyError: 'TVT'"), tmp_path)
+
+    assert spawned == ["spawned"], "a repair must reach aider, not be retired"
+
+
+def test_without_a_retry_reason_redundancy_still_retires(tmp_path):
+    agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb"]))
+
+    with pytest.raises(AiderError) as caught:
+        agent.propose(_Ctx(prior_train_py=_ENSEMBLE), tmp_path)
+
+    assert caught.value.kind == "hypothesis_redundant"

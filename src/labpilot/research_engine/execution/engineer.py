@@ -294,13 +294,14 @@ class ResearchEngineer:
         message breaks the import rather than silently disabling this.
         """
         from labpilot.research_engine.execution.capabilities.training.capability import (
-            METRICS_NOT_WRITTEN,
+            PRODUCED_NOTHING_MARKERS,
         )
 
         for task in plan.tasks:
             if task.type is not TaskType.RUN_TRAINING or task.status != TaskStatus.FAILED:
                 continue
-            if METRICS_NOT_WRITTEN in str(task.metadata.get("error") or ""):
+            error = str(task.metadata.get("error") or "")
+            if any(marker in error for marker in PRODUCED_NOTHING_MARKERS):
                 return str(task.metadata.get("error") or "")
         return ""
 

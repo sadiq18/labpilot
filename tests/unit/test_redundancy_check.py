@@ -234,3 +234,53 @@ def test_a_live_chain_still_counts():
     )
 
     assert check_redundancy(parent, ["rolling", "groupby"]).redundant is True
+
+
+def test_a_callback_only_helper_is_already_implemented():
+    """Reported on PR #117: `check_redundancy` was the fourth consumer left on
+    `called_names`, so a helper the parent only ever hands to `df.apply` read
+    as *not* implemented — and the paid aider call that followed made no edit,
+    raised `aider_no_edit` rather than `hypothesis_redundant`, and left the
+    hypothesis to be picked again."""
+    parent = (
+        "import pandas as pd\n\n\n"
+        "def helper(row):\n    return row['a']\n\n\n"
+        "def main():\n    df = pd.read_csv('x')\n    df.apply(helper, axis=1)\n\n\n"
+        'if __name__ == "__main__":\n    main()\n'
+    )
+
+    assert check_redundancy(parent, ["helper"]).redundant is True
+
+
+def test_one_unused_alias_does_not_keep_its_neighbour_alive():
+    """`import pandas as pd, numpy as np` with only `pd` used trims to one
+    alias but still yields one statement, so a count check called it unchanged
+    and threw the trimmed version away."""
+    parent = (
+        "import pandas as pd, numpy as np\n\n\n"
+        "def dead():\n    return np.mean\n\n\n"
+        "def main():\n    return pd\n\n\n"
+        'if __name__ == "__main__":\n    main()\n'
+    )
+
+    assert check_redundancy(parent, ["numpy"]).redundant is False
+
+
+def test_an_unrelated_attribute_does_not_keep_a_dead_import_alive():
+    """`used` folded in every `Attribute.attr`, so an unrelated `df.time` made
+    `import time` look alive after its only real user was stripped."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import (
+        imported_modules,
+        strip_unreachable,
+    )
+
+    parent = (
+        "import time\n\n\n"
+        "def dead():\n    return time.time()\n\n\n"
+        "def main(df):\n    return df.time\n\n\n"
+        'if __name__ == "__main__":\n    main(None)\n'
+    )
+
+    assert imported_modules(strip_unreachable(ast.parse(parent))) == set()

@@ -603,3 +603,88 @@ def test_the_claim_checks_see_a_callback_too():
 
     assert check_delta_consistency(_CALLBACK_PARENT, child, add=["helper"]).ok is True
     assert check_delta_consistency(_CALLBACK_PARENT, child, keep=["helper"]).ok is True
+
+
+# --- reachability is walked, not guessed -------------------------------------
+
+_ENTRY_SUFFIX = '\n\nif __name__ == "__main__":\n    main()\n'
+
+
+def test_a_dead_function_nested_in_a_live_one_does_not_hang():
+    """Reported on PR #117, and the most severe of that round.
+
+    `defined` was collected with `ast.walk`, which finds functions at any
+    nesting depth, while the caller could only remove top-level statements — so
+    a dead nested helper was reported unreachable forever, the strip loop never
+    changed anything, and `strip_unreachable` spun. It runs synchronously
+    before every non-retry aider call, so this hung the delta pipeline.
+    """
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import strip_unreachable
+
+    src = (
+        "def outer():\n"
+        "    def _hidden():\n"
+        "        return 1\n"
+        "    return 2\n"
+        "\n\n"
+        "def main():\n"
+        "    outer()\n" + _ENTRY_SUFFIX
+    )
+
+    # The assertion is that this returns at all.
+    assert strip_unreachable(ast.parse(src)) is not None
+
+
+def test_a_mutually_recursive_dead_pair_is_unreachable():
+    """Mentions let each vouch for the other. Reachability is walked from the
+    entry point now, so a cycle nothing outside it enters stays dead."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import unreachable_functions
+
+    src = (
+        "def a():\n    return b()\n\n\ndef b():\n    return a()\n\n\ndef main():\n    pass\n"
+        + _ENTRY_SUFFIX
+    )
+
+    assert unreachable_functions(ast.parse(src)) == {"a", "b"}
+
+
+def test_a_self_recursive_dead_function_is_unreachable():
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import unreachable_functions
+
+    src = "def solo():\n    return solo()\n\n\ndef main():\n    pass\n" + _ENTRY_SUFFIX
+
+    assert unreachable_functions(ast.parse(src)) == {"solo"}
+
+
+def test_a_live_chain_of_any_depth_survives():
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import unreachable_functions
+
+    src = (
+        "def c():\n    return 3\n\n\ndef b():\n    return c()\n\n\n"
+        "def a():\n    return b()\n\n\ndef main():\n    return a()\n" + _ENTRY_SUFFIX
+    )
+
+    assert unreachable_functions(ast.parse(src)) == set()
+
+
+def test_an_aggregator_handed_to_apply_counts_as_combining():
+    """`preds.apply(np.mean, axis=1)` genuinely averages and never calls `mean`
+    directly — the same callback blind spot as the other checks."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import (
+        _AGGREGATORS,
+        present_names,
+    )
+
+    child = ast.parse("import numpy as np\n\n\ndef main(preds):\n    return preds.apply(np.mean)\n")
+
+    assert present_names(child) & _AGGREGATORS

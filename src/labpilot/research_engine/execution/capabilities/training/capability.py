@@ -16,9 +16,18 @@ from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
-#: Marker for "exited 0 and produced no result". Imported by the Engineer to
-#: tell that apart from a training run that genuinely crashed.
+#: Markers for "exited 0 and produced no result". Imported by the Engineer to
+#: tell those apart from a training run that genuinely crashed.
+#:
+#: Two of them, because there are two ways to finish with nothing: never
+#: writing the file, and writing one that holds no metrics. The second was
+#: added without a marker, so `_training_produced_nothing` — which matches on
+#: these — returned "" for it, `code_is_suspect` stayed False, and the retry
+#: reran the identical script to write the identical empty file. Reported on
+#: PR #117.
 METRICS_NOT_WRITTEN = "did not write metrics.json"
+METRICS_EMPTY = "holds no metrics"
+PRODUCED_NOTHING_MARKERS: tuple[str, ...] = (METRICS_NOT_WRITTEN, METRICS_EMPTY)
 
 
 def _misplaced_note(root: Path, since: float) -> str:
@@ -157,8 +166,8 @@ class TrainingCapability(BaseCapability):
             if ok and fresh and not metrics:
                 ok = False
                 error = (
-                    f"training exited 0 and wrote {metrics_path.name}, but it holds no "
-                    "metrics — an empty or unparseable object is not a result"
+                    f"training exited 0 and wrote {metrics_path.name}, but it "
+                    f"{METRICS_EMPTY} — an empty or unparseable object is not a result"
                 )
             if ok and not fresh:
                 ok = False

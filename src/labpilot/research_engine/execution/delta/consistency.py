@@ -125,6 +125,30 @@ def imported_modules(tree: ast.Module) -> set[str]:
     return found
 
 
+def present_names(tree: ast.Module) -> set[str]:
+    """Every symbol this module has available: referenced, or imported.
+
+    One definition, because keeping several in step failed twice in a row on
+    PR #117 — `check_reachability` was switched to `referenced_names` while
+    `check_addition`, `check_preservation` and `check_combination` stayed on
+    `called_names`, and when those three were switched, `check_redundancy` and
+    the aggregator scan were still left behind. Each round the fix was correct
+    and incomplete. A consumer that calls this cannot be the one forgotten.
+    """
+    return referenced_names(tree) | imported_modules(tree)
+
+
+def bound_names(tree: ast.Module) -> set[str]:
+    """Names bound as values, ignoring attribute access.
+
+    `referenced_names` folds in every `Attribute.attr`, which is right for "is
+    this symbol used at all" and wrong for "is this *import* used": an unrelated
+    `df.time` made `import time` look alive, so a dead helper's import survived
+    pruning. Reported on PR #117.
+    """
+    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+
+
 #: Named aggregations. Necessary but nowhere near sufficient — see below.
 _AGGREGATORS = frozenset(
     {"mean", "average", "nanmean", "median", "sum", "vstack", "stack", "concatenate"}
@@ -263,33 +287,57 @@ def referenced_names(tree: ast.Module) -> set[str]:
 
 
 def unreachable_functions(tree: ast.Module) -> set[str]:
-    """Locally-defined functions this module never *mentions* again.
+    """Top-level functions nothing running can reach.
 
-    Mentions, not calls. A function handed to something else runs perfectly
-    well without ever being the target of a `Call` node — `df.apply(helper,
-    axis=1)`, `.transform(helper)`, `sorted(key=helper)`, a decorator, a
-    dispatch dict. Reported on PR #117 and reproduced: a real behaviour-changing
-    delta to a `df.apply` callback came back
-    `the delta only changed 'helper', which nothing in the result calls`, and
-    row-wise feature engineering is precisely the idiom this system's own
-    codegen writes.
+    Reachability *walked from the entry point*, not "is the name mentioned".
+    Mentions were the first answer and each case they missed was reported on
+    PR #117: a self-call vouched for its own function, a mutually recursive
+    pair vouched for each other, and `defined` collected functions at *any*
+    nesting depth while the caller could only remove top-level ones — so a dead
+    helper nested inside a live function made `strip_unreachable`'s fixpoint
+    loop spin forever. That is a hard hang on the path that runs before every
+    non-retry aider call.
 
-    So the question is whether the name appears anywhere as a value. A `Name`
-    node covers both — `helper()` puts one in `Call.func` too — and being
-    referenced without running is a far cheaper mistake here than a false
-    violation, which costs a re-ask on a correct experiment.
+    So: seed with what module-level code references, then follow each reachable
+    function into what *it* references. A cycle nothing outside it enters is
+    never seeded and stays dead at any depth, and only top-level definitions are
+    ever named, so the caller can always act on the answer.
 
-    Empty for a module with no entry point, where "nothing mentions it here"
+    Nested functions are deliberately out of scope: they live and die with the
+    function enclosing them, which this already judges.
+
+    Empty for a module with no entry point, where "nothing reaches it here"
     says only that the caller lives elsewhere.
     """
     if not _has_entry_point(tree):
         return set()
     defined = {
-        node.name
-        for node in ast.walk(tree)
+        node.name: node
+        for node in tree.body
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
-    return defined - referenced_names(tree)
+    if not defined:
+        return set()
+
+    seeds = ast.Module(
+        body=[
+            node
+            for node in tree.body
+            if not (
+                isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name in defined
+            )
+        ],
+        type_ignores=[],
+    )
+    reachable = {name for name in defined if name in referenced_names(seeds)}
+    frontier = list(reachable)
+    while frontier:
+        node = defined[frontier.pop()]
+        for name in referenced_names(ast.Module(body=list(node.body), type_ignores=[])):
+            if name in defined and name not in reachable:
+                reachable.add(name)
+                frontier.append(name)
+    return set(defined) - reachable
 
 
 def strip_unreachable(tree: ast.Module) -> ast.Module:
@@ -339,8 +387,9 @@ def _without_unused_imports(tree: ast.Module) -> ast.Module:
     still answered "the parent already has catboost". The import half of the
     same dead-code question. Reported on PR #117.
     """
-    used = referenced_names(tree)
+    used = bound_names(tree)
     kept: list[ast.stmt] = []
+    changed = False
     for node in tree.body:
         if not isinstance(node, ast.Import | ast.ImportFrom):
             kept.append(node)
@@ -349,11 +398,19 @@ def _without_unused_imports(tree: ast.Module) -> ast.Module:
             alias for alias in node.names if (alias.asname or alias.name.split(".")[0]) in used
         ]
         if not live_aliases:
+            changed = True
             continue
+        if len(live_aliases) != len(node.names):
+            changed = True
         replacement = copy.copy(node)
         replacement.names = live_aliases
         kept.append(replacement)
-    if len(kept) == len(tree.body):
+    # Compared by content, not by statement count. `import pandas as pd, numpy
+    # as np` with only `pd` used trims to one alias but still yields one
+    # statement, so a count check called it unchanged and threw the trimmed
+    # version away — `numpy` survived and a hypothesis adding it was judged
+    # already implemented. Reported on PR #117.
+    if not changed:
         return tree
     return ast.Module(body=kept, type_ignores=list(tree.type_ignores))
 
@@ -439,7 +496,7 @@ def check_preservation(child: ast.Module, keep: list[str]) -> list[str]:
     CatBoost" satisfied by deleting the LightGBM path measures a different
     experiment than the one that was proposed.
     """
-    present = referenced_names(child) | imported_modules(child)
+    present = present_names(child)
     return [
         f"{name!r} should have been kept, but nothing in the result references it"
         for name in keep
@@ -459,7 +516,7 @@ def check_addition(child: ast.Module, add: list[str]) -> list[str]:
     # switched and these three were not, so the *normal* path still failed:
     # `DeltaBriefAgent` always supplies an `add` claim, and a correctly wired
     # callback came back "never calls or imports it".
-    present = referenced_names(child) | imported_modules(child)
+    present = present_names(child)
     return [
         f"{name!r} was supposed to be added, but the result never references it"
         for name in add
@@ -479,7 +536,11 @@ def check_combination(child: ast.Module, combine: list[str]) -> list[str]:
     if len(combine) < 2:
         return []
     problems = check_addition(child, combine)
-    if not (called_names(child) & _AGGREGATORS or _has_arithmetic_blend(child)):
+    # `present_names`, not `called_names`: `preds.apply(np.mean, axis=1)`
+    # genuinely averages and never calls `mean` directly, so the aggregator
+    # scan had the same callback blind spot the other checks did. Reported on
+    # PR #117.
+    if not (present_names(child) & _AGGREGATORS or _has_arithmetic_blend(child)):
         problems.append(
             f"claimed to combine {combine}, but the result contains no aggregation "
             "(no mean/stack call and no arithmetic blend) — the components are "

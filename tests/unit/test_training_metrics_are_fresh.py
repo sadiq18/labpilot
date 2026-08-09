@@ -258,3 +258,48 @@ def test_a_crash_keeps_the_exception_not_the_progress_bar(workspace):
 
     assert result.passed is False
     assert "KeyError: 'TVT'" in (result.error or "")
+
+
+def test_empty_metrics_also_marks_the_code_suspect():
+    """Reported on PR #117. There are two ways to finish with nothing — never
+    writing the file, and writing one that holds no metrics — and only the
+    first carried a marker, so `_training_produced_nothing` returned "" for the
+    second. `code_is_suspect` stayed False and the retry reran the identical
+    script to write the identical empty file."""
+    from labpilot.research_engine.execution.capabilities.training.capability import (
+        METRICS_EMPTY,
+        METRICS_NOT_WRITTEN,
+    )
+    from labpilot.research_engine.execution.engineer import ResearchEngineer
+    from labpilot.research_engine.planner.schemas.task_types import TaskStatus, TaskType
+
+    class _Task:
+        def __init__(self, error):
+            self.type = TaskType.RUN_TRAINING
+            self.status = TaskStatus.FAILED
+            self.metadata = {"error": error}
+
+    class _Plan:
+        def __init__(self, error):
+            self.tasks = [_Task(error)]
+
+    for marker in (METRICS_NOT_WRITTEN, METRICS_EMPTY):
+        assert ResearchEngineer._training_produced_nothing(_Plan(f"training exited 0 but {marker}"))
+    assert not ResearchEngineer._training_produced_nothing(_Plan("CUDA out of memory"))
+
+
+def test_a_progress_bar_cannot_crowd_out_the_traceback():
+    """Reported on PR #117: `text=True` rewrites `\\r` to `\\n` before the helper
+    sees it, so the documented collapse was a no-op at its own call site and a
+    200-frame bar still filled the budget."""
+    from labpilot.research_engine.execution.capabilities._helpers import failure_excerpt
+
+    bar = "\n".join(f"Loading train: {i}%|#####" for i in range(300))
+    traceback = "Traceback (most recent call last):\n  File \"a.py\", line 1\nKeyError: 'TVT'"
+
+    out = failure_excerpt(bar + "\n" + traceback, "", limit=2000)
+
+    assert out.count("Loading train") == 1
+    assert "KeyError: 'TVT'" in out
+    # A traceback's own consecutive lines look alike too, and every one matters.
+    assert 'File "a.py"' in out

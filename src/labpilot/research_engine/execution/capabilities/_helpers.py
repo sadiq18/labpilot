@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 from labpilot.research_engine.execution.context import TaskContext
@@ -50,6 +51,12 @@ def allow_upload(context: TaskContext) -> bool:
 _EXCERPT_CHARS = 1500
 
 
+#: tqdm's own shape: a percentage immediately before the bar, or a rate suffix.
+#: Deliberately not "consecutive lines that look alike" — a traceback's
+#: ``  File "…"`` lines look alike and every one of them matters.
+_PROGRESS_LINE = re.compile(r"\d+%\|| \d+\.?\d*(it|s)/(s|it)\]")
+
+
 def failure_excerpt(stderr: str, stdout: str, *, limit: int = _EXCERPT_CHARS) -> str:
     """The part of a failed run worth reading: the end, minus progress bars.
 
@@ -72,7 +79,14 @@ def failure_excerpt(stderr: str, stdout: str, *, limit: int = _EXCERPT_CHARS) ->
     # entirely — the first version of this function did exactly that.
     collapsed = "\n".join(line.rsplit("\r", 1)[-1].rstrip() for line in raw.split("\n"))
     # Drop frames that survived collapsing but still say nothing.
-    kept = [line for line in collapsed.splitlines() if line.strip()]
+    kept: list[str] = []
+    for line in collapsed.splitlines():
+        if not line.strip():
+            continue
+        if _PROGRESS_LINE.search(line) and kept and _PROGRESS_LINE.search(kept[-1]):
+            kept[-1] = line
+            continue
+        kept.append(line)
     text = "\n".join(kept)
     if len(text) <= limit:
         return text

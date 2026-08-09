@@ -627,3 +627,30 @@ def test_the_target_fallback_is_not_decided_by_union_ordering(tmp_path):
     # The union is still what `train_only_columns` reports — both kinds' labels
     # must be excluded from features, which is what that field is read for.
     assert set(profile.train_only_columns) == {"TVT", "AuxNote"}
+
+
+def test_the_target_fallback_reads_every_primary_kind_file(tmp_path):
+    """Reported on PR #117: the cross-kind fix read `frames[0]` alone, so
+    schema drift *within* the primary kind reproduced the same bug one layer
+    down — a `QCFlag` column in the first file and the real target only in
+    later ones inferred `QCFlag` as the label."""
+    import pandas as pd
+
+    root = tmp_path / "drift"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    pd.DataFrame({"MD": [1.0, 2.0], "GR": [3.0, 4.0], "QCFlag": [1.0, 0.0]}).to_csv(
+        root / "train" / "e0__main.csv", index=False
+    )
+    for i in (1, 2, 3):
+        pd.DataFrame({"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+    for i in range(4):
+        pd.DataFrame({"MD": [1.0, 2.0], "GR": [3.0, 4.0]}).to_csv(
+            root / "test" / f"e{i}__main.csv", index=False
+        )
+
+    profile = _profiler().profile_directory(root, "demo")
+
+    assert profile.target_column == "TVT"
