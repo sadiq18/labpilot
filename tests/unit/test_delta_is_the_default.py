@@ -69,3 +69,20 @@ def test_every_declared_problem_type_still_resolves(problem_type):
     from labpilot.research_engine.execution.baseline.registry import get_template
 
     assert get_template(problem_type) is not None
+
+
+def test_an_aider_delta_counts_as_an_authored_technique():
+    """Reported on PR #118.
+
+    `technique_origin` special-cased `"llm"` alone, so every delta — the
+    *default* strategy since §3 — mapped to `"none"`, and F5's "never applied"
+    vs "applied with no effect" distinction would read an aider-written
+    technique as never applied while `origin` on the same card said `aider`.
+    """
+    import inspect
+
+    from labpilot.research_engine.execution.capabilities.code_engineering import capability
+
+    source = inspect.getsource(capability.CodeEngineeringCapability._write)
+
+    assert '"technique_origin": "llm" if origin in {"llm", "aider"} else "none"' in source

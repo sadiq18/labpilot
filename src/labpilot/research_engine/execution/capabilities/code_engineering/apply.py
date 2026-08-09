@@ -105,19 +105,19 @@ def _check_dependency_block(rel: str, content: str) -> None:
         )
 
 
-def _imports_labpilot(content: str) -> str:
+def _imports_labpilot(tree: ast.Module) -> str:
     """The first real `labpilot` import, or "" — read from the AST.
 
     A regex over raw text also matches inside docstrings and comments, so a
     generated script whose module docstring *documents* the constraint
     ("never `import labpilot` in a declaring script") would be rejected for
-    obeying it. Reported on PR #118, and the tree is already parsed two lines
-    earlier.
+    obeying it. Reported on PR #118.
+
+    Takes the parsed tree rather than the source: the first version re-parsed
+    the same string the caller had just parsed, which doubled the AST cost on
+    the code-writing path while its own docstring claimed the tree was already
+    available. Reported on PR #118 as well.
     """
-    try:
-        tree = ast.parse(content)
-    except SyntaxError:  # pragma: no cover - the caller parses first
-        return ""
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -130,7 +130,7 @@ def _imports_labpilot(content: str) -> str:
     return ""
 
 
-def _check_standalone_script(rel: str, content: str) -> None:
+def _check_standalone_script(rel: str, content: str, tree: ast.Module) -> None:
     """A script that declares its own dependencies cannot import labpilot.
 
     `uv run --script` builds an ephemeral environment from the PEP 723 block,
@@ -146,7 +146,7 @@ def _check_standalone_script(rel: str, content: str) -> None:
     """
     if not _PEP723_OPEN.search(content):
         return
-    found = _imports_labpilot(content)
+    found = _imports_labpilot(tree)
     if not found:
         return
     raise ApplyError(
@@ -228,13 +228,13 @@ def apply_proposal(
         content = spec.content
         if rel.endswith(".py"):
             try:
-                ast.parse(content)
+                tree = ast.parse(content)
             except SyntaxError as exc:
                 raise ApplyError(f"syntax error in {rel}: {exc}") from exc
             # Syntax is necessary and not sufficient — both checks below pass
             # `ast.parse` and still cannot run.
             _check_dependency_block(rel, content)
-            _check_standalone_script(rel, content)
+            _check_standalone_script(rel, content, tree)
             _check_not_truncated(rel, content)
             content, dropped = strip_stdlib_dependencies(content)
             if dropped:

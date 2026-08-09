@@ -55,6 +55,18 @@ class ConsistencyReport:
     #: Recorded on the evidence card, never a reason to refuse.
     flags: list[str] = field(default_factory=list)
     touched_functions: list[str] = field(default_factory=list)
+    #: The subset of `violations` produced by checks that need no claim from
+    #: the author — "did the code change" and "can it run". Tracked as a field
+    #: rather than recovered by matching the sentences, because the consumer
+    #: that keeps them when nothing was claimed was doing exactly that, and a
+    #: copy edit to either message would have silently switched it off.
+    claim_free_violations: list[str] = field(default_factory=list)
+
+    def record(self, violations: list[str], *, needs_claim: bool = True) -> None:
+        """Add violations, remembering which needed no claim."""
+        self.violations.extend(violations)
+        if not needs_claim:
+            self.claim_free_violations.extend(violations)
 
     def as_metadata(self) -> dict[str, object]:
         return {
@@ -484,6 +496,10 @@ def unreachable_functions(tree: ast.Module) -> set[str]:
     never seeded and stays dead at any depth, and only top-level definitions are
     ever named, so the caller can always act on the answer.
 
+    Reported again on PR #118 from the other side: excluding one function's
+    own body let a mutually recursive pair vouch for each other, which the
+    walk answers without a special case.
+
     Nested functions are deliberately out of scope: they live and die with the
     function enclosing them, which this already judges.
 
@@ -779,14 +795,14 @@ def check_delta_consistency(
         # First, because every other verdict is about *how* the code changed
         # and this asks whether it changed at all. A docstring-only delta
         # otherwise passes each of them on its own terms.
-        report.violations.extend(check_effect(parent_tree, child_tree))
+        report.record(check_effect(parent_tree, child_tree), needs_claim=False)
         # Independent of the claim, and that is the point — see
         # `check_reachability`. A better claim would have hidden the defect
         # this catches, so it cannot be derived from one.
-        report.violations.extend(check_reachability(child_tree, report.touched_functions))
+        report.record(check_reachability(child_tree, report.touched_functions), needs_claim=False)
 
-    report.violations.extend(check_preservation(child_tree, keep or []))
-    report.violations.extend(check_addition(child_tree, add or []))
-    report.violations.extend(check_combination(child_tree, combine or []))
+    report.record(check_preservation(child_tree, keep or []))
+    report.record(check_addition(child_tree, add or []))
+    report.record(check_combination(child_tree, combine or []))
     report.ok = not report.violations
     return report

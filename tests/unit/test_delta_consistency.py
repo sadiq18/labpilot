@@ -638,8 +638,11 @@ def test_a_dead_function_nested_in_a_live_one_does_not_hang():
 
 
 def test_a_mutually_recursive_dead_pair_is_unreachable():
-    """Mentions let each vouch for the other. Reachability is walked from the
-    entry point now, so a cycle nothing outside it enters stays dead."""
+    """Reported on PR #118: `referenced_names(ignoring=name)` excluded one
+    function's own body, so a *pair* calling each other vouched for one another
+    and neither was ever flagged. Reachability is walked from the entry point
+    now, so a cycle nothing outside it enters stays dead however many hops it
+    spans."""
     import ast
 
     from labpilot.research_engine.execution.delta.consistency import unreachable_functions
@@ -663,6 +666,8 @@ def test_a_self_recursive_dead_function_is_unreachable():
 
 
 def test_a_live_chain_of_any_depth_survives():
+    """The carve-out must not cost the behaviour it guards: reachability
+    follows calls, so a helper three hops from `main` is live."""
     import ast
 
     from labpilot.research_engine.execution.delta.consistency import unreachable_functions
@@ -725,3 +730,35 @@ def test_a_decorator_on_a_reachable_function_is_reachable():
     )
 
     assert unreachable_functions(ast.parse(src)) == set()
+
+
+def test_claim_free_violations_are_tracked_not_matched():
+    """Reported on PR #118: the consumer recovered them by matching the
+    checks' sentences, so a copy edit would have switched it off silently."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = (
+        '"""Old."""\n\n\ndef main():\n    return 1\n\n\nif __name__ == "__main__":\n    main()\n'
+    )
+    child = parent.replace('"""Old."""', '"""New."""')
+
+    report = check_delta_consistency(parent, child)
+
+    assert report.claim_free_violations
+    assert report.claim_free_violations == report.violations
+
+
+def test_a_claim_violation_is_not_marked_claim_free():
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = (
+        "import lightgbm as lgb\n\n\n"
+        "def main():\n    return lgb.train()\n\n\n"
+        "if __name__ == '__main__':\n    main()\n"
+    )
+    child = parent
+
+    report = check_delta_consistency(parent, child, add=["catboost"])
+
+    assert report.violations
+    assert not [v for v in report.claim_free_violations if "catboost" in v]

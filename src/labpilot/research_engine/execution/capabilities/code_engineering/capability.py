@@ -139,17 +139,6 @@ def _summarise_profile(profile: dict) -> dict:
 _RETRY_EXCERPT = 2000
 
 
-#: Violations produced by checks that need no claim from the author, so they
-#: survive when nothing was claimed. Matched on the sentence each check emits,
-#: which is the only thing `ConsistencyReport` carries — a `kind` per violation
-#: would be better and is a bigger change than this fix.
-_CLAIM_FREE_MARKERS = ("changed no executable code", "cannot execute")
-
-
-def _NEEDS_NO_CLAIM(violation: str) -> bool:  # noqa: N802 - reads as a predicate
-    return any(marker in violation for marker in _CLAIM_FREE_MARKERS)
-
-
 def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object]:
     """Check the change against the claim its own author made. Gates nothing.
 
@@ -204,7 +193,7 @@ def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object
         # for, whenever the author happened to declare nothing. Reported on PR
         # #118: a docstring-only no-op with an empty claim recorded
         # `delta_unchecked: True` and no reason at all.
-        claim_free = [v for v in report.violations if _NEEDS_NO_CLAIM(v)]
+        claim_free = list(report.claim_free_violations)
         meta.pop("consistent", None)
         if claim_free:
             meta["violations"] = claim_free
@@ -644,7 +633,13 @@ class CodeEngineeringCapability(BaseCapability):
                 # There are no templates and no gates, so codegen is the only
                 # author left and the branch could never be taken — a value
                 # downstream readers would wait for forever.
-                "technique_origin": "llm" if origin == "llm" else "none",
+                #
+                # `aider` counts as authored. Special-casing `"llm"` alone sent
+                # every delta — the *default* strategy since §3 — to `"none"`,
+                # so F5's distinction would read an aider-written technique as
+                # never applied while `origin` on the same card said `aider`.
+                # Reported on PR #118.
+                "technique_origin": "llm" if origin in {"llm", "aider"} else "none",
             },
             error=None if train_path.is_file() else "train.py missing after apply",
         )
