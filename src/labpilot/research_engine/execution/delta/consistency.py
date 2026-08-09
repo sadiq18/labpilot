@@ -32,6 +32,7 @@ only the system holding the hypothesis knows what the experiment *claimed*.
 from __future__ import annotations
 
 import ast
+import copy
 import logging
 from dataclasses import dataclass, field
 
@@ -183,6 +184,61 @@ def touched_functions(parent: ast.Module, child: ast.Module) -> list[str]:
     before, after = _function_bodies(parent), _function_bodies(child)
     changed = {name for name in before.keys() & after.keys() if before[name] != after[name]}
     return sorted(changed | (before.keys() ^ after.keys()))
+
+
+def executable_signature(tree: ast.Module) -> str:
+    """The module's behaviour, with everything that cannot affect it removed.
+
+    Comments and formatting never reach the AST at all; docstrings do, so they
+    are stripped here. Two files with the same signature run identically.
+    """
+    clone = copy.deepcopy(tree)
+    for node in ast.walk(clone):
+        if not isinstance(node, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        body = node.body
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            node.body = body[1:]
+    return ast.dump(clone)
+
+
+def check_effect(parent: ast.Module, child: ast.Module) -> list[str]:
+    """A delta has to change what the code *does*.
+
+    Measured on rogii 2026-08-09, on H-015's third and final attempt. Handed
+    the LightGBM dtype error as its retry reason, aider edited the module
+    docstring — *"adds Decision Tree"* to *"adds rolling features"* — and
+    changed nothing else. Every existing check passed it:
+
+    * `touched_functions` compares function bodies, and a module docstring is
+      not in one, so it reported nothing touched;
+    * `check_reachability` needs a touched function before it has an opinion;
+    * `check_addition` passed because `rolling` and `groupby` had been added by
+      an earlier attempt and were still there;
+    * `aider_no_edit` never fired, because there *was* an edit.
+
+    So an attempt that could not possibly change the result was recorded as a
+    consistent delta, and it consumed the hypothesis's last attempt. The
+    hypothesis was then retired as failed three times, when it had really been
+    tested twice.
+
+    This is the same failure as the dead function and the dead parent, arriving
+    through the one door those two do not cover: not *unreachable* code, but
+    *identical* code. All three reduce to one rule — a change that cannot alter
+    behaviour is not an experiment — and each needed its own check because each
+    is invisible to the others.
+    """
+    if executable_signature(parent) != executable_signature(child):
+        return []
+    return [
+        "the delta changed no executable code — only comments, docstrings or "
+        "formatting differ, so the result behaves exactly like its parent"
+    ]
 
 
 def unreachable_functions(tree: ast.Module) -> set[str]:
@@ -388,6 +444,10 @@ def check_delta_consistency(
     if parent_tree is not None:
         report.touched_functions = touched_functions(parent_tree, child_tree)
         report.flags.extend(check_confinement(report.touched_functions))
+        # First, because every other verdict is about *how* the code changed
+        # and this asks whether it changed at all. A docstring-only delta
+        # otherwise passes each of them on its own terms.
+        report.violations.extend(check_effect(parent_tree, child_tree))
         # Independent of the claim, and that is the point — see
         # `check_reachability`. A better claim would have hidden the defect
         # this catches, so it cannot be derived from one.

@@ -400,3 +400,119 @@ def test_a_module_level_call_counts_as_an_entry_point():
 
     assert _has_entry_point(ast.parse("def main():\n    pass\n\n\nmain()\n")) is True
     assert _has_entry_point(ast.parse("def main():\n    pass\n")) is False
+
+
+# --- a change that cannot alter behaviour is not an experiment ---------------
+
+_EFFECT_PARENT = '''"""Keeps H-014 feature set and adds Decision Tree."""
+
+import pandas as pd
+
+
+def add_rolling_features(df):
+    return df.groupby("pid")["GR"].transform(lambda x: x.rolling(3).mean())
+
+
+def main():
+    df = pd.read_csv("x.csv")
+    return add_rolling_features(df)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def test_a_docstring_only_delta_is_a_violation():
+    """H-015's third and final attempt, measured on rogii 2026-08-09.
+
+    Handed the LightGBM dtype error as its retry reason, aider edited the
+    module docstring and nothing else. It consumed the hypothesis's last
+    attempt, and the hypothesis was retired as having failed three times when
+    it had really been tested twice.
+    """
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _EFFECT_PARENT.replace("adds Decision Tree", "adds rolling features")
+
+    report = check_delta_consistency(_EFFECT_PARENT, child, add=["rolling", "groupby"])
+
+    assert report.ok is False
+    assert any("no executable code" in v for v in report.violations)
+
+
+def test_the_checks_that_missed_it_still_miss_it():
+    """Why it needed its own check rather than a wider existing one.
+
+    Every other verdict is about *how* the code changed. Nothing touched, the
+    claimed symbols present from an earlier attempt, and an edit did happen —
+    so each of them passes on its own terms, correctly.
+    """
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import (
+        check_addition,
+        check_reachability,
+        touched_functions,
+    )
+
+    parent = ast.parse(_EFFECT_PARENT)
+    child = ast.parse(_EFFECT_PARENT.replace("adds Decision Tree", "adds rolling features"))
+
+    assert touched_functions(parent, child) == []
+    assert check_reachability(child, []) == []
+    assert check_addition(child, ["rolling", "groupby"]) == []
+
+
+def test_a_comment_only_delta_is_a_violation():
+    """Comments never reach the AST, so this is the same failure arriving in a
+    form the dump comparison cannot see at all."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _EFFECT_PARENT.replace(
+        "    df = pd.read_csv", "    # tuned for the new features\n    df = pd.read_csv"
+    )
+
+    report = check_delta_consistency(_EFFECT_PARENT, child, add=["rolling"])
+
+    assert report.ok is False
+
+
+def test_a_reformatted_delta_is_a_violation():
+    """Whitespace is not an experiment either."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _EFFECT_PARENT.replace("def main():\n", "def main():\n\n")
+
+    assert check_delta_consistency(_EFFECT_PARENT, child, add=["rolling"]).ok is False
+
+
+def test_a_one_character_behaviour_change_passes():
+    """The carve-out must be exact: the smallest real change is still a change,
+    and a check that fired on it would cost a re-ask on a correct experiment."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _EFFECT_PARENT.replace("rolling(3)", "rolling(5)")
+
+    report = check_delta_consistency(_EFFECT_PARENT, child, add=["rolling"])
+
+    assert report.ok is True, report.violations
+
+
+def test_a_docstring_change_alongside_a_real_change_passes():
+    """Deltas routinely update the docstring they are also implementing."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _EFFECT_PARENT.replace("adds Decision Tree", "adds rolling features").replace(
+        "rolling(3)", "rolling(5)"
+    )
+
+    assert check_delta_consistency(_EFFECT_PARENT, child, add=["rolling"]).ok is True
+
+
+def test_a_baseline_has_no_parent_to_be_identical_to():
+    """With no parent the question does not arise, and asking it would fail
+    every baseline."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    assert check_delta_consistency("", _EFFECT_PARENT, add=["rolling"]).ok is True
