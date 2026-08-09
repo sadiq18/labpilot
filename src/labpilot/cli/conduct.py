@@ -520,6 +520,25 @@ def conduct_status(
             f"pending={sum(1 for t in tasks if t.status == 'pending')})"
         )
         console.print(f"  decisions: {len(decisions)}")
+
+        # The delta failure rate, in the product rather than only in a docstring.
+        # M19 §3 flipped the default strategy "when the rate justifies it", and a
+        # rate a reviewer cannot recompute is an assertion, not evidence.
+        from labpilot.research_engine.telemetry.delta_rate import delta_rate
+
+        # All recorded history, and labelled as such: a rate is meaningless
+        # without its window, and this one spans every fix ever made to the
+        # adapter. `delta_rate(since=...)` narrows it.
+        rate = delta_rate(ws.knowledge_dir, competition)
+        if rate.attempts:
+            share = "n/a" if rate.failure_rate is None else f"{rate.failure_rate:.1%}"
+            console.print(
+                f"  delta (all recorded): {rate.attempts} aider attempt(s), "
+                f"{rate.succeeded} usable, {rate.failed} failed "
+                f"({share}), {rate.excused} excused"
+            )
+            if rate.by_kind:
+                console.print(f"    by kind: {rate.by_kind}")
         if cp:
             console.print(
                 f"  checkpoint: tools={cp.get('completed_tools')} "

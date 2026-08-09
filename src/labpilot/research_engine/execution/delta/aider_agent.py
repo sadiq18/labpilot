@@ -230,11 +230,12 @@ class AiderAgent:
         retrying = bool(str((getattr(ctx, "data", None) or {}).get("retry_reason") or "").strip())
 
         # Redundancy is a question about a *hypothesis*, so it is not asked on
-        # a repair. The first attempt adds the feature and the run fails
-        # downstream; on retry the parent legitimately contains that code, so
-        # the same `added` claim reads as already implemented and the
-        # hypothesis is permanently retired instead of repaired. The check
-        # would be correct about the parent and wrong about the question.
+        # a repair. Reported on PR #118: the first attempt adds the feature and
+        # the run fails downstream — a dtype error, an unwritten `metrics.json`
+        # — and on retry the parent legitimately contains that code, so the
+        # same `added` claim reads as already implemented and the hypothesis is
+        # **permanently retired** instead of repaired. The check would be
+        # correct about the parent and wrong about the question.
         #
         # Not left to the brief's "claim nothing new" instruction either: that
         # is a request to a model, and a model that ignores it retires the
@@ -252,14 +253,8 @@ class AiderAgent:
         # model reading the actual code, which is better evidence than any name
         # match. A false suspicion costs one call; a missed one costs nothing,
         # since aider edits and the experiment proceeds.
-        #
-        # Not asked at all on a repair: the parent legitimately contains the
-        # earlier attempt's code, so "already implemented" is true and beside
-        # the point.
         suspected = (
-            None
-            if retrying
-            else _suspected_redundant(_parent_source(parent, ctx), brief.added)
+            None if retrying else _suspected_redundant(_parent_source(parent, ctx), brief.added)
         )
         # The brief's own reading rides along on a repair rather than being
         # thrown away. `delta_brief_system.md` now teaches it to answer a

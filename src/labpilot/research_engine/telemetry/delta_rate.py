@@ -25,8 +25,24 @@ from pathlib import Path
 #: declining is the correct answer and the hypothesis selector owns it.
 #: `no_parent` — a baseline has nothing to diff against, which is the
 #: whole-file agent's job by design.
-#: `no_gateway` — configuration, not capability.
-EXCUSED_KINDS: frozenset[str] = frozenset({"hypothesis_redundant", "no_parent", "no_gateway"})
+#: `no_source` — nothing editable under the parent tree; a workspace shape,
+#: not an edit the adapter got wrong.
+EXCUSED_KINDS: frozenset[str] = frozenset(
+    {"hypothesis_redundant", "no_parent", "no_source"}
+)
+
+#: Failures the adapter *is* answerable for. Declared rather than implied by
+#: "everything else", so `test_every_raised_kind_is_classified` can hold both
+#: lists against the kinds `AiderAgent` actually raises.
+#:
+#: They drifted immediately: `no_gateway` was excused here and is raised
+#: nowhere — the constructor refuses a missing gateway outright — while
+#: `no_source`, `aider_timeout`, `aider_missing` and `aider_failed` were raised
+#: and classified by neither list. A rate computed from a stale vocabulary is
+#: wrong in a way nothing surfaces.
+COUNTED_KINDS: frozenset[str] = frozenset(
+    {"aider_no_edit", "aider_failed", "aider_missing", "aider_timeout"}
+)
 
 
 @dataclass

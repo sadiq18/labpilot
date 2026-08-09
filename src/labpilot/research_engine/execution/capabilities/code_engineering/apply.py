@@ -105,7 +105,29 @@ def _check_dependency_block(rel: str, content: str) -> None:
         )
 
 
-_LABPILOT_IMPORT = re.compile(r"^\s*(?:from|import)\s+labpilot\b", re.MULTILINE)
+def _imports_labpilot(content: str) -> str:
+    """The first real `labpilot` import, or "" — read from the AST.
+
+    A regex over raw text also matches inside docstrings and comments, so a
+    generated script whose module docstring *documents* the constraint
+    ("never `import labpilot` in a declaring script") would be rejected for
+    obeying it. Reported on PR #118, and the tree is already parsed two lines
+    earlier.
+    """
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:  # pragma: no cover - the caller parses first
+        return ""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "labpilot" or alias.name.startswith("labpilot."):
+                    return f"import {alias.name}"
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == "labpilot" or module.startswith("labpilot."):
+                return f"from {module} import ..."
+    return ""
 
 
 def _check_standalone_script(rel: str, content: str) -> None:
@@ -124,12 +146,12 @@ def _check_standalone_script(rel: str, content: str) -> None:
     """
     if not _PEP723_OPEN.search(content):
         return
-    match = _LABPILOT_IMPORT.search(content)
-    if match is None:
+    found = _imports_labpilot(content)
+    if not found:
         return
     raise ApplyError(
         f"{rel} declares PEP 723 dependencies and also imports labpilot "
-        f"({match.group(0).strip()!r}). `uv run --script` runs it in an "
+        f"({found!r}). `uv run --script` runs it in an "
         "ephemeral environment where labpilot is absent, so the script cannot "
         "start. Declare dependencies and stand alone, or use labpilot's "
         "environment — never both."

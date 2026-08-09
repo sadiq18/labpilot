@@ -246,9 +246,7 @@ def _local_bindings(body: list[ast.stmt]) -> set[str]:
                 declared_elsewhere.update(child.names)
                 continue
             if isinstance(child, ast.Import | ast.ImportFrom):
-                bound.update(
-                    alias.asname or alias.name.split(".")[0] for alias in child.names
-                )
+                bound.update(alias.asname or alias.name.split(".")[0] for alias in child.names)
                 continue
             if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
                 bound.add(child.id)
@@ -417,7 +415,7 @@ def check_effect(parent: ast.Module, child: ast.Module) -> list[str]:
     ]
 
 
-def referenced_names(tree: ast.Module) -> set[str]:
+def referenced_names(tree: ast.Module, *, ignoring: str = "") -> set[str]:
     """Every name the module mentions as a value, plus attribute names.
 
     Mentions, not calls. A function handed to something else runs perfectly
@@ -441,13 +439,31 @@ def referenced_names(tree: ast.Module) -> set[str]:
     A `Name` node covers direct calls too, since `helper()` puts one in
     `Call.func`. Being mentioned without running is a far cheaper mistake here
     than a false violation, which costs a re-ask on a correct experiment.
+
+    `ignoring` drops one function's own body from the scan, so a function that
+    only calls itself does not vouch for its own reachability. Reported on PR
+    #118: `def helper(): return helper()`, never wired into `main()`, counted
+    its own recursive call and escaped the check built to catch exactly that.
     """
+    scope: ast.AST = tree
+    if ignoring:
+        scope = ast.Module(
+            body=[
+                node
+                for node in tree.body
+                if not (
+                    isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+                    and node.name == ignoring
+                )
+            ],
+            type_ignores=list(tree.type_ignores),
+        )
     found = {
         node.id
-        for node in ast.walk(tree)
+        for node in ast.walk(scope)
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
     }
-    found |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    found |= {node.attr for node in ast.walk(scope) if isinstance(node, ast.Attribute)}
     return found
 
 
@@ -647,7 +663,7 @@ def check_reachability(child: ast.Module, touched: list[str]) -> list[str]:
     """
     if not touched or not _has_entry_point(child):
         return []
-    dead = [name for name in touched if name not in referenced_names(child)]
+    dead = [name for name in touched if name not in referenced_names(child, ignoring=name)]
     if len(dead) != len(touched):
         return []
     listed = ", ".join(repr(name) for name in sorted(dead))

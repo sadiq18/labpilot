@@ -103,11 +103,13 @@ EXECUTABLE_TECHNIQUES: tuple[TechniqueSpec, ...] = (
         description="Discretise a numeric column into bins.",
     ),
     # --- model-family / hyperparameter techniques ---
-    # `catboost` deliberately absent: it would set `model_family`, which
-    # `CodeRenderer.render` does not accept (design §9.4 says it should). The
-    # resolution would report `applied` while the rendered bytes were unchanged
-    # — provenance asserting work that did not happen. Re-add it together with
-    # the renderer change, not before.
+    # `catboost` deliberately absent, and the reason has changed. It used to be
+    # that `CodeRenderer.render` would not accept `model_family`, so resolution
+    # reported `applied` while the rendered bytes were unchanged. M19 §2 deleted
+    # the renderer, so nothing structural blocks it now — what is missing is
+    # evidence that codegen implements a model-family swap faithfully, which
+    # `_observe_delta`'s preservation check can supply. Re-add it with that
+    # measurement, not before.
     TechniqueSpec(
         name="deeper_trees",
         aliases=["deeper trees", "deeper tree depth"],

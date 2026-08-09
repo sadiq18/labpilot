@@ -107,3 +107,33 @@ def test_since_excludes_older_runs(tmp_path):
     rate = delta_rate(tmp_path, _COMP, since="2026-06-01T00:00:00+00:00")
 
     assert (rate.attempts, rate.succeeded, rate.failed) == (1, 1, 0)
+
+
+def test_every_raised_kind_is_classified():
+    """The two lists must cover what `AiderAgent` actually raises.
+
+    Reported on PR #118 and true at the time: `no_gateway` was excused and is
+    raised nowhere, while `no_source`, `aider_timeout`, `aider_missing` and
+    `aider_failed` were raised and classified by neither list. A rate computed
+    from a stale vocabulary is wrong in a way nothing surfaces — the number
+    still prints.
+
+    Read from the source rather than declared twice, so adding a kind fails
+    here until someone decides which side it belongs on.
+    """
+    import re
+    from pathlib import Path
+
+    from labpilot.research_engine.telemetry.delta_rate import COUNTED_KINDS, EXCUSED_KINDS
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "src/labpilot/research_engine/execution/delta/aider_agent.py"
+    ).read_text()
+    raised = set(re.findall(r'kind="([a-z_]+)"', source))
+
+    assert raised, "no kinds found — this guard would pass vacuously"
+    unclassified = raised - EXCUSED_KINDS - COUNTED_KINDS
+    assert not unclassified, f"classify these in delta_rate: {sorted(unclassified)}"
+    phantom = (EXCUSED_KINDS | COUNTED_KINDS) - raised
+    assert not phantom, f"classified but never raised: {sorted(phantom)}"

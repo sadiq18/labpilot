@@ -109,8 +109,6 @@ def _precondition_met(req: str, profile: dict[str, Any], choice: Any) -> bool:
     return False
 
 
-def _template_name(choice: Any) -> str:
-    return str(getattr(choice, "template_name", "") or "")
 
 
 def requested_technique(plan_meta: dict[str, Any], hyp_fields: dict[str, Any]) -> str:

@@ -81,3 +81,54 @@ def test_a_valid_proposal_still_writes_every_file(tmp_path):
     assert len(written) == 2
     assert (tmp_path / "pipeline" / "train.py").read_text() == _GOOD
     assert (tmp_path / "pipeline" / "helper.py").read_text() == _GOOD
+
+
+def test_a_docstring_mentioning_the_rule_is_not_an_import(tmp_path):
+    """Reported on PR #118.
+
+    The check scanned raw text, so a generated script whose docstring
+    *documents* the constraint — "never `import labpilot` in a declaring
+    script" — was rejected for obeying it. The tree is already parsed two lines
+    earlier; an import is an AST fact.
+    """
+    content = (
+        '"""Trains the model.\n'
+        "\n"
+        "    Declares its own dependencies, so it must never\n"
+        "    import labpilot or use `from labpilot...` here.\n"
+        '    """\n'
+        "# /// script\n"
+        '# dependencies = ["lightgbm>=4.0"]\n'
+        "# ///\n"
+        "import lightgbm as lgb\n"
+        "\n"
+        "\n"
+        "def main():\n"
+        "    return lgb\n"
+        "\n"
+        "\n"
+        'if __name__ == "__main__":\n'
+        "    main()\n"
+    )
+
+    assert apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))
+
+
+def test_a_real_import_is_still_caught(tmp_path):
+    content = (
+        "# /// script\n"
+        '# dependencies = ["lightgbm>=4.0"]\n'
+        "# ///\n"
+        "from labpilot.research_engine.execution.metrics import compute_metric\n"
+        "\n"
+        "\n"
+        "def main():\n"
+        "    return compute_metric\n"
+        "\n"
+        "\n"
+        'if __name__ == "__main__":\n'
+        "    main()\n"
+    )
+
+    with pytest.raises(ApplyError, match="ephemeral environment"):
+        apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))

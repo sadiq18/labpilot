@@ -235,6 +235,27 @@ def test_an_empty_metrics_file_is_not_a_result(workspace):
     assert "no metrics" in (result.error or "")
 
 
+def test_stale_metrics_do_not_ride_along_with_the_failure(workspace):
+    """Reported on PR #118.
+
+    The stale file was still loaded and returned beside `passed=False`, so any
+    reader trusting `evidence.metrics` without checking `passed` first saw a
+    plausible number belonging to an earlier execution — the same file, and the
+    same confusion, the freshness guard exists to end.
+    """
+    import os
+
+    stale = workspace / "metrics.json"
+    stale.write_text(json.dumps({"cv_rmse": 194.8}), encoding="utf-8")
+    old = time.time() - 86_400
+    os.utime(stale, (old, old))
+
+    result = _run(workspace)
+
+    assert result.passed is False
+    assert result.metrics == {}
+
+
 def test_a_crash_keeps_the_exception_not_the_progress_bar(workspace):
     """The smoke gate was switched to `failure_excerpt` and this path was not,
     so a crash whose stderr opens with a tqdm bar handed the retry the bar."""
@@ -258,6 +279,7 @@ def test_a_crash_keeps_the_exception_not_the_progress_bar(workspace):
 
     assert result.passed is False
     assert "KeyError: 'TVT'" in (result.error or "")
+    assert result.metrics == {}
 
 
 def test_empty_metrics_also_marks_the_code_suspect():
