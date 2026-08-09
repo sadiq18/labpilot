@@ -140,11 +140,29 @@ def apply_proposal(
     *,
     allowed_roots: tuple[str, ...] = ALLOWED_ROOTS,
 ) -> list[Path]:
-    """Write proposal files; return written paths. Validates Python syntax."""
-    written: list[Path] = []
+    """Write proposal files; return written paths. Validates Python syntax.
+
+    **Validate every file, then write every file.** M19 §2's second exit
+    criterion is that the workspace is untouched when a proposal is rejected,
+    and a single loop that validated and wrote each file in turn could not meet
+    it: a proposal refused on its third file had already written the first two,
+    leaving a tree that is neither the parent nor the proposal.
+
+    That state is worse than either. The next experiment's parent is whatever
+    the half-apply left, so a rejected proposal silently becomes the baseline
+    for the run after it — and the delta checks then compare against a file
+    nobody proposed. Measured on rogii 2026-08-09 in the neighbouring case: a
+    *failed* run's leftover edit made the next attempt at the same hypothesis
+    look already implemented, and it was retired for work that had never run.
+
+    Retries are deliberately unaffected. A rejected proposal writes nothing; a
+    proposal that applied and then failed downstream keeps its files, which is
+    what the retry loop reads and repairs.
+    """
     if not proposal.files:
         raise ApplyError("CodeProposal has no files")
 
+    staged: list[tuple[Path, str]] = []
     for spec in proposal.files:
         rel = spec.path.replace("\\", "/").lstrip("./")
         if not _is_allowed(rel) or not any(
@@ -154,8 +172,6 @@ def apply_proposal(
         if not spec.content.strip():
             raise ApplyError(f"empty content for {spec.path}")
 
-        target = workspace_root / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
         content = spec.content
         if rel.endswith(".py"):
             try:
@@ -173,6 +189,11 @@ def apply_proposal(
                     rel,
                     ", ".join(dropped),
                 )
+        staged.append((workspace_root / rel, content))
+
+    written: list[Path] = []
+    for target, content in staged:
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         written.append(target)
     return written
