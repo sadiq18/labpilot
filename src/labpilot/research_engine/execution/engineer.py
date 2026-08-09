@@ -272,21 +272,37 @@ class ResearchEngineer:
 
     #: Tasks whose whole purpose is to prove the generated code runs. When one
     #: of these fails, the code is the thing that is wrong.
-    #: Failures that mean *the code* is wrong, so a rebuild is told why.
-    #:
-    #: `RUN_TRAINING` belongs here and was missing. A training run that exits 0
-    #: and writes no metrics is a code defect by definition — and on rogii
-    #: 2026-08-09 it was exactly that: the script wrote to
-    #: `./workspace/metrics.json`, a directory it invented. Because training was
-    #: not a validation task, `code_is_suspect` stayed false, `retry_reason`
-    #: stayed empty, and every retry re-queued codegen blind. Three consecutive
-    #: runs produced a nil delta while the error sat one field away.
-    #:
-    #: `_first_failure_reason` still prefers the earliest failure, so a smoke
-    #: failure keeps priority over a training one three steps later.
-    _CODE_VALIDATION_TASKS = frozenset(
-        {TaskType.RUN_SMOKE_TEST, TaskType.RUN_UNIT_TEST, TaskType.RUN_TRAINING}
-    )
+    _CODE_VALIDATION_TASKS = frozenset({TaskType.RUN_SMOKE_TEST, TaskType.RUN_UNIT_TEST})
+
+    @staticmethod
+    def _training_produced_nothing(plan: ResearchPlan) -> str:
+        """A training run that exited 0 and wrote no metrics — a code defect.
+
+        `RUN_TRAINING` is deliberately not a code-validation task: training
+        fails for reasons code cannot fix, a missing dataset or an OOM, and
+        rebuilding then throws away a file that passed its gates. That rule is
+        right and stays.
+
+        This one case is different, because the script *reported success*. It
+        did not crash; it simply did not do its job. Measured on rogii
+        2026-08-09: training wrote to `./workspace/metrics.json`, a directory it
+        invented, exited 0, and nothing read the result. `code_is_suspect`
+        stayed false, so `retry_reason` stayed empty and three consecutive
+        retries rebuilt blind while the error sat one field away.
+
+        Keyed on the constant the training capability writes, so renaming the
+        message breaks the import rather than silently disabling this.
+        """
+        from labpilot.research_engine.execution.capabilities.training.capability import (
+            METRICS_NOT_WRITTEN,
+        )
+
+        for task in plan.tasks:
+            if task.type is not TaskType.RUN_TRAINING or task.status != TaskStatus.FAILED:
+                continue
+            if METRICS_NOT_WRITTEN in str(task.metadata.get("error") or ""):
+                return str(task.metadata.get("error") or "")
+        return ""
 
     def _record_hypothesis_attempt(self, plan: ResearchPlan, error: str) -> None:
         """Retire or re-queue the hypothesis behind a failed execution.
@@ -435,6 +451,7 @@ class ResearchEngineer:
                 for t in plan.tasks
             )
             or self._train_script_is_unrunnable()
+            or bool(self._training_produced_nothing(plan))
         )
         if code_is_suspect:
             spine = spine | {TaskType.WRITE_CODE}

@@ -12,6 +12,10 @@ from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
+#: Marker for "exited 0 and produced no result". Imported by the Engineer to
+#: tell that apart from a training run that genuinely crashed.
+METRICS_NOT_WRITTEN = "did not write metrics.json"
+
 
 class TrainingCapability(BaseCapability):
     name = "training"
@@ -106,7 +110,7 @@ class TrainingCapability(BaseCapability):
             if ok and not fresh:
                 ok = False
                 error = (
-                    "training exited 0 but did not write metrics.json "
+                    f"training exited 0 but {METRICS_NOT_WRITTEN} "
                     + (
                         "— the file on disk predates this run, so it belongs to an "
                         "earlier execution"

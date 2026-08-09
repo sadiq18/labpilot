@@ -149,17 +149,43 @@ def test_the_real_e227_file_would_now_be_rejected(workspace):
     assert "earlier execution" in (result.error or "")
 
 
-def test_a_training_failure_makes_the_code_suspect():
-    """Otherwise the retry rebuilds blind.
+def test_a_silent_training_failure_makes_the_code_suspect():
+    """The narrow case, and only it.
 
-    Measured on rogii 2026-08-09: training exited 0 having written to
-    `./workspace/metrics.json`, a directory it invented. `RUN_TRAINING` was not
-    a code-validation task, so `code_is_suspect` stayed false, `retry_reason`
-    stayed empty, and three consecutive retries produced a nil delta while the
-    error sat one field away.
+    `RUN_TRAINING` is deliberately not a code-validation task — training fails
+    for reasons code cannot fix, and rebuilding would discard a file that
+    passed its gates. But a run that *exits 0* and writes nothing did not
+    crash; it failed to do its job. On rogii 2026-08-09 that was a script
+    writing to `./workspace/metrics.json`, a directory it invented, and three
+    retries rebuilt blind because nothing marked the code suspect.
     """
+    from labpilot.research_engine.execution.capabilities.training.capability import (
+        METRICS_NOT_WRITTEN,
+    )
+    from labpilot.research_engine.execution.engineer import ResearchEngineer
+    from labpilot.research_engine.planner.schemas.task_types import TaskStatus, TaskType
+
+    class _Task:
+        def __init__(self, error):
+            self.type = TaskType.RUN_TRAINING
+            self.status = TaskStatus.FAILED
+            self.metadata = {"error": error}
+
+    class _Plan:
+        def __init__(self, error):
+            self.tasks = [_Task(error)]
+
+    silent = _Plan(f"training exited 0 but {METRICS_NOT_WRITTEN} \u2014 predates this run")
+    crashed = _Plan("CUDA out of memory")
+
+    assert ResearchEngineer._training_produced_nothing(silent)
+    assert not ResearchEngineer._training_produced_nothing(crashed)
+
+
+def test_training_is_still_not_a_code_validation_task():
+    """The existing rule stands: a crash or an OOM must not throw away code
+    that passed its gates."""
     from labpilot.research_engine.execution.engineer import ResearchEngineer
     from labpilot.research_engine.planner.schemas.task_types import TaskType
 
-    assert TaskType.RUN_TRAINING in ResearchEngineer._CODE_VALIDATION_TASKS
-    assert TaskType.RUN_SMOKE_TEST in ResearchEngineer._CODE_VALIDATION_TASKS
+    assert TaskType.RUN_TRAINING not in ResearchEngineer._CODE_VALIDATION_TASKS
