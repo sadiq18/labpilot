@@ -33,6 +33,13 @@ Hard rules:
 - Scripts are executed with the competition workspace as cwd (parent of pipeline/).
   Open config as ``pipeline/config.yaml``; write ``metrics.json`` and
   ``submission.csv`` at the workspace root (not inside pipeline/).
+- **Relative paths only. Never write an absolute path.** `workspace_root` is
+  given to you as context, not as a string to embed — the script runs with that
+  directory as cwd, so ``"metrics.json"`` is already the right answer and
+  ``"/workspace/metrics.json"`` is not a place. rogii burned two retries on
+  ``OSError: Cannot save file into a non-existent directory: '/workspace'`` and
+  then ``Read-only file system: '/workspace'``, from a container path the model
+  assumed rather than read.
 - When prior_train_py / improve_on_prior is set: keep what already works in the
   prior pipeline and apply the hypothesis technique(s) as a delta. When
   combo_techniques is non-empty, apply ALL listed techniques in that single
