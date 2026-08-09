@@ -147,3 +147,19 @@ def test_the_real_e227_file_would_now_be_rejected(workspace):
 
     assert result.passed is False
     assert "earlier execution" in (result.error or "")
+
+
+def test_a_training_failure_makes_the_code_suspect():
+    """Otherwise the retry rebuilds blind.
+
+    Measured on rogii 2026-08-09: training exited 0 having written to
+    `./workspace/metrics.json`, a directory it invented. `RUN_TRAINING` was not
+    a code-validation task, so `code_is_suspect` stayed false, `retry_reason`
+    stayed empty, and three consecutive retries produced a nil delta while the
+    error sat one field away.
+    """
+    from labpilot.research_engine.execution.engineer import ResearchEngineer
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    assert TaskType.RUN_TRAINING in ResearchEngineer._CODE_VALIDATION_TASKS
+    assert TaskType.RUN_SMOKE_TEST in ResearchEngineer._CODE_VALIDATION_TASKS

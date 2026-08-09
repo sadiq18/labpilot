@@ -272,7 +272,21 @@ class ResearchEngineer:
 
     #: Tasks whose whole purpose is to prove the generated code runs. When one
     #: of these fails, the code is the thing that is wrong.
-    _CODE_VALIDATION_TASKS = frozenset({TaskType.RUN_SMOKE_TEST, TaskType.RUN_UNIT_TEST})
+    #: Failures that mean *the code* is wrong, so a rebuild is told why.
+    #:
+    #: `RUN_TRAINING` belongs here and was missing. A training run that exits 0
+    #: and writes no metrics is a code defect by definition — and on rogii
+    #: 2026-08-09 it was exactly that: the script wrote to
+    #: `./workspace/metrics.json`, a directory it invented. Because training was
+    #: not a validation task, `code_is_suspect` stayed false, `retry_reason`
+    #: stayed empty, and every retry re-queued codegen blind. Three consecutive
+    #: runs produced a nil delta while the error sat one field away.
+    #:
+    #: `_first_failure_reason` still prefers the earliest failure, so a smoke
+    #: failure keeps priority over a training one three steps later.
+    _CODE_VALIDATION_TASKS = frozenset(
+        {TaskType.RUN_SMOKE_TEST, TaskType.RUN_UNIT_TEST, TaskType.RUN_TRAINING}
+    )
 
     def _record_hypothesis_attempt(self, plan: ResearchPlan, error: str) -> None:
         """Retire or re-queue the hypothesis behind a failed execution.
