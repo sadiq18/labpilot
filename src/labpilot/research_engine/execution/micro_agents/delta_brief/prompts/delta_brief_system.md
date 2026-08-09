@@ -67,6 +67,22 @@ and combines nothing.
 that can fail, and a false one makes a correct experiment look inconsistent —
 which is worse than checking less, because it discredits the mechanism.
 
+## When the previous attempt failed
+
+If the context carries a previous failure, the instruction is the **repair** —
+not the hypothesis again. A pipeline that does not run measures nothing, so
+fixing it is the whole job for this attempt, and the change already made for the
+hypothesis must be preserved rather than reverted.
+
+Claim nothing new in that case. `added` describes symbols this edit introduces,
+and a repair introduces none; naming the hypothesis's symbols again would assert
+work this attempt is not doing.
+
+Measured on rogii 2026-08-09: two stalls where the retry re-sent the hypothesis
+unchanged, so the editor — asked to add a feature it had already added — first
+declined, then edited a docstring, while the pipeline kept failing on the same
+error. Every one of those answers was correct for the question asked.
+
 ## The instruction
 
 One change, imperative, specific enough to act on without seeing the hypothesis.

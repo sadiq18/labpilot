@@ -351,15 +351,47 @@ def _parent_source(parent: Path, ctx: StructuredContext) -> str:
 
 
 def _instruction(ctx: StructuredContext) -> str:
-    """What to ask aider for, drawn from the hypothesis the plan already holds."""
+    """What to ask aider for: the repair if there is one, else the hypothesis.
+
+    A retry used to re-send the hypothesis unchanged — `retry_reason` reached
+    the whole-file prompt and the delta brief, but never this one, so aider was
+    asked to add the same technique again with no mention of what had failed.
+
+    Measured on rogii 2026-08-09 across two separate stalls: aider declined
+    ("no edit"), then edited a module docstring, then declined again, while the
+    pipeline failed on the same `Geology: object` and later `KeyError: 'TVT'`.
+    Each of those is the right answer to the question it was asked. It was the
+    wrong question.
+
+    Repair leads, because a pipeline that does not run measures nothing. The
+    hypothesis stays as context so the fix preserves it rather than reverting
+    it — the failure being repaired is usually *in* the change.
+    """
     data = getattr(ctx, "data", None) or {}
+    hypothesis = "\n\n".join(
+        p
+        for p in (
+            str(data.get("plan_goal") or "").strip(),
+            str(data.get("prediction") or "").strip(),
+            str(data.get("reason") or "").strip(),
+        )
+        if p
+    )
+    retry_reason = str(data.get("retry_reason") or "").strip()
+    if not retry_reason:
+        return hypothesis or "Improve the training script for this competition."
+
     parts = [
-        str(data.get("plan_goal") or "").strip(),
-        str(data.get("prediction") or "").strip(),
-        str(data.get("reason") or "").strip(),
+        "The pipeline currently fails to run. Fix that, and change nothing "
+        "else — this is a repair, not a new experiment.",
+        f"The error:\n{retry_reason}",
     ]
-    body = "\n\n".join(p for p in parts if p)
-    return body or "Improve the training script for this competition."
+    if hypothesis:
+        parts.append(
+            "Preserve the change already made for this hypothesis while you "
+            f"fix it:\n{hypothesis}"
+        )
+    return "\n\n".join(parts)
 
 
 def _copy_tree(parent: Path, scratch: Path) -> list[str]:
