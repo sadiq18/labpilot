@@ -63,6 +63,11 @@ def viable_hypothesis_count(knowledge_dir: Path, competition: str) -> int:
         proposed = store.list(status=HypothesisStatus.PROPOSED)
     except Exception:  # noqa: BLE001 — absent store means nothing queued
         return 0
+    return _viable_of(Path(knowledge_dir), competition, proposed)
+
+
+def _viable_of(knowledge_dir: Path, competition: str, proposed: list) -> int:
+    """The filter itself, over rows the caller has already read."""
     if not proposed:
         return 0
 
@@ -87,35 +92,30 @@ def viable_hypothesis_count(knowledge_dir: Path, competition: str) -> int:
         return len(proposed)
 
 
-def retired_hypothesis_ids(knowledge_dir: Path, competition: str) -> set[str]:
-    """Hypotheses settled as `rejected` — nothing further to learn from them.
+def pool_counts(knowledge_dir: Path, competition: str) -> tuple[int, int]:
+    """`(viable, proposed_total)` from **one** read of the store.
 
-    Needed because the campaign selects **plans**, not hypotheses, and the two
-    retire independently. Measured on rogii 2026-08-09: redundancy detection
-    correctly rejected `H-051`, and the very next step selected `P-021` again —
-    the plan carrying it, still `in_progress` and therefore still runnable.
+    Both numbers are wanted together — "46 proposed, 3 viable" says more than
+    either alone, and the gap is itself the signal that the pool has gone stale
+    — and asking for them separately meant globbing every `H-*.json`, parsing
+    each and mirroring the whole pool into SQLite twice, back to back, on every
+    policy step.
 
-    Retiring the idea has to retire the work queued against it, or the loop the
-    retirement exists to break simply continues one level up.
+    `should_gather_evidence` still asks for the viable count on its own, so a
+    step reads the store twice rather than three times. Removing the last one
+    needs a per-step context object to hang it on; `build_observe_bundle` and
+    `available_tools` are called separately by `decide_next` and share nothing
+    today.
     """
     from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
     from labpilot.research_engine.shared.experiments.models import HypothesisStatus
 
     try:
         store = HypothesisStore(Path(knowledge_dir), competition)
-        return {h.id for h in store.list(status=HypothesisStatus.REJECTED)}
-    except Exception:  # noqa: BLE001 — unreadable store retires nothing
-        return set()
-
-
-def plan_is_selectable(plan: object, retired: set[str]) -> bool:
-    """False when this plan tests an idea already retired.
-
-    A plan with no hypothesis — a baseline — is always selectable: there is no
-    retired idea behind it.
-    """
-    hypothesis_id = str(getattr(plan, "hypothesis_id", "") or "")
-    return not hypothesis_id or hypothesis_id not in retired
+        proposed = store.list(status=HypothesisStatus.PROPOSED)
+    except Exception:  # noqa: BLE001 — absent store means nothing queued
+        return 0, 0
+    return _viable_of(Path(knowledge_dir), competition, proposed), len(proposed)
 
 
 def _selection_times(knowledge_dir: Path, competition: str) -> tuple[tuple[object, str], ...]:

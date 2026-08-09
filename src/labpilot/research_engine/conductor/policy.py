@@ -16,6 +16,7 @@ from labpilot.research_engine.conductor.approvals import (
 from labpilot.research_engine.conductor.models import NextAction
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.intelligence.hypothesis.viability import (
+    pool_counts,
     viable_hypothesis_count,
 )
 from labpilot.research_engine.planner.schemas.task_types import (
@@ -103,9 +104,13 @@ def build_observe_bundle(
     # same label, different number, for every consumer including the policy
     # prompt itself. A number the model reads deserves a name it can trust, so
     # the new meaning gets a new key and the old name keeps the old meaning.
-    viable = viable_hypothesis_count(workspace.knowledge_dir, workspace.competition)
+    #
+    # One store read for both. Asked separately they globbed every `H-*.json`,
+    # parsed each and mirrored the whole pool into SQLite — twice, back to back,
+    # on every policy step.
+    viable, proposed_total = pool_counts(workspace.knowledge_dir, workspace.competition)
     observe["viable_hypotheses"] = viable
-    observe["untested_hypotheses"] = untested_hypothesis_count(workspace)
+    observe["untested_hypotheses"] = proposed_total
     observe["hours_since_last_artifact"] = hours_since_last_artifact(workspace)
     _attach_evidence_refresh(observe, workspace)
     if include_context:
