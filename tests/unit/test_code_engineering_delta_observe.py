@@ -291,3 +291,40 @@ def test_the_missing_claim_is_recorded_not_refused():
     meta = _observe_delta(_PARENT_LGB, _proposal(_ENSEMBLED))
     assert isinstance(meta, dict)
     assert "delta_consistent" not in meta
+
+
+# --- a retry must be handed the error, not the frame list --------------------
+
+
+def test_a_long_traceback_keeps_the_exception_not_the_paths():
+    """Measured on rogii 2026-08-09: two retries produced no edit while
+    `retry_reason` began `Traceback (most recent call last):  File "/U…` and
+    `KeyError: 'TVT'` sat past the 2000-character cut. The editor was handed a
+    stack of file paths and asked to fix something."""
+    from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
+        _failure_excerpt,
+    )
+
+    frames = "\n".join(
+        f'  File "/very/long/path/to/site-packages/mod{i}.py", line {i}' for i in range(400)
+    )
+    text = _failure_excerpt("Traceback (most recent call last):\n" + frames + "\nKeyError: 'TVT'")
+
+    assert "KeyError: 'TVT'" in text
+    assert len(text) <= 2100
+
+
+def test_a_short_failure_is_passed_through_whole():
+    from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
+        _failure_excerpt,
+    )
+
+    assert _failure_excerpt("KeyError: 'TVT'") == "KeyError: 'TVT'"
+
+
+def test_truncation_is_marked_so_it_reads_as_an_excerpt():
+    from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
+        _failure_excerpt,
+    )
+
+    assert _failure_excerpt("x" * 5000).startswith("…")

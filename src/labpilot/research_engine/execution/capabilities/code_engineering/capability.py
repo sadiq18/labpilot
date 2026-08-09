@@ -129,6 +129,31 @@ def _summarise_profile(profile: dict) -> dict:
     return trimmed
 
 
+#: How much of a failure to hand back to codegen.
+_RETRY_EXCERPT = 2000
+
+
+def _failure_excerpt(reason: object, limit: int = _RETRY_EXCERPT) -> str:
+    """The **end** of a failure, because that is where the error is.
+
+    This took the first 2000 characters, which on a Python traceback is the
+    frame list — file paths and library internals — and never reaches the
+    exception on the last line. Measured on rogii 2026-08-09: two retries in a
+    row produced no edit at all while `retry_reason` began
+    `Traceback (most recent call last):\\n  File "/U…`, and `KeyError: 'TVT'`
+    sat past the cut. The editor was handed a stack of paths and asked to fix
+    something.
+
+    Exactly the defect this project already fixed once for training errors,
+    where the stored failure was 1523 characters of progress bar — head-first
+    truncation keeping the noise. Same lesson, different caller.
+    """
+    text = str(reason or "").strip()
+    if len(text) <= limit:
+        return text
+    return "…\n" + text[-limit:]
+
+
 def _observe_delta(prior_train: str, proposal: CodeProposal) -> dict[str, object]:
     """Check the change against the claim its own author made. Gates nothing.
 
@@ -469,7 +494,9 @@ class CodeEngineeringCapability(BaseCapability):
                 # try again from the inputs that produced the broken file, and
                 # reproduces the same mistake — measured on rogii 2026-08-08,
                 # where a `Geology: object` column was handed to LightGBM.
-                "retry_reason": str(context.task.metadata.get("retry_reason") or "")[:2000],
+                "retry_reason": _failure_excerpt(
+                    context.task.metadata.get("retry_reason") or ""
+                ),
                 "parent_hypothesis_id": plan_meta.get("parent_hypothesis_id"),
                 "parent_metrics": plan_meta.get("parent_metrics") or {},
                 **technique_fields,
