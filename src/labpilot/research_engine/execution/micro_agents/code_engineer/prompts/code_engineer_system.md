@@ -47,6 +47,16 @@ Hard rules:
   ``DataFrame.reindex(columns=feature_cols, fill_value=0)`` (or intersection of
   train/test columns) **before** indexing — never ``df[feature_cols]`` when
   columns may be missing. Train-only columns must not be required at inference.
+- Select model features **by dtype, not by exclusion list**. An exclusion list
+  only holds until a column you did not anticipate appears — and on a
+  partitioned dataset the concatenated frame is the union of every file's
+  schema, so it will. Use ``select_dtypes(include=[np.number])`` (minus the
+  target and ids), or encode the non-numeric columns you want. Gradient
+  boosters reject object columns outright: rogii died four times on
+  ``pandas dtypes must be int, float or bool. Fields with bad pandas dtypes:
+  Geology: object``, from ``[c for c in df.columns if c not in excluded]``
+  where ``Geology`` lived in only one of the two file kinds.
+  ``profile_summary.columns`` carries ``is_numeric`` for exactly this — read it.
 - Match problem_type / modality from the profile (image/video/tracking/zarr vs
   tabular). Prefer a minimal runnable baseline that reads the actual files and
   writes a valid submission shape.
