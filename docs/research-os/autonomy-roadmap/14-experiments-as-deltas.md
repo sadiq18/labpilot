@@ -81,7 +81,7 @@ provenance.
 | 0 | fitroute OpenAI-compatible proxy | **shipped** (PR #110) |
 | 1a | `CodeAgent` seam + hypothesis-consistency checks | **shipped** (PR #111) |
 | 1b | wire the checks into the whole-file path, observe-only | **shipped** (PR #112) — four of §5's five checks |
-| — | **validation-region flagging**, §5's fifth check | **not built** — see below |
+| — | **validation-region flagging**, §5's fifth check | **not built** — and step 4 widened it from detection to enforcement; see below |
 | — | per-execution code provenance (§6) | **shipped** (PR #113) — `runs/<execution_id>/` |
 | 1c | `AiderAgent` + copy/diff/propose + **campaign circuit breaker** | **shipped** (PR #115) — default off |
 | 2 | opt-in via config; measure the failure rate | **shipped** — 18 attempts, 1 failure (5.6%); see below |
@@ -117,6 +117,23 @@ region**; `consistency.py` implements the first four. Nothing detects a delta
 landing in `partition_suffix_holdout`, `_driver_columns` or the holdout
 construction — which is the mitigation §8 names for the only risk it calls *the
 one that would hurt*, and the property that justifies deltas at all.
+
+**Step 4 raised its price.** When this was written, leaving the check unbuilt
+meant no *detection* of a delta touching the validation region, with the
+templates still enforcing exclusion structurally at the point where features
+are derived. Deleting the pack removed that enforcement, so the same gap now
+covers both halves: nothing prevents a leakage column reaching the feature set
+and nothing flags it afterwards. A leaky score looks *better*, not worse, so
+neither the metric nor the evidence card will say anything is wrong.
+
+That closes the argument this milestone kept making about ordering. Step 4 was
+safe on its own precondition — 0 template fallbacks since the codegen fixes —
+and unsafe on one nobody stated: that a mechanism being deleted is not carrying
+a rule nothing else carries. Two of the pack's rules were noticed and moved into
+`apply`; the third was noticed three review rounds later; this one was not
+noticed at all until PR #118 asked what F7 was enforced by. **A deletion should
+be preceded by an inventory of what the deleted thing enforced** — the same
+discipline §5's exit criterion applies to the flip.
 
 It does not depend on aider. Like confinement it needs no claim from the author,
 so the argument that put 1b before 1c applies to it unchanged: whole-file
@@ -425,11 +442,34 @@ did not name:
   `not_applicable` for every recipe-backed technique; codegen implements them
   from the hypothesis description instead. This is the header's *"subsumes the
   technique registry"* arriving in practice.
-* **Two rules moved rather than died.** Syntax validation is asked of every
-  proposal whoever wrote it. And *a PEP 723 script must not import labpilot* —
+* **Three rules moved rather than died.** Syntax validation is asked of every
+  proposal whoever wrote it. *A PEP 723 script must not import labpilot* —
   caught in PR #102's review over two templates that did exactly that — now runs
-  in `apply`, the gate every proposal passes through. It was never really about
-  templates.
+  in `apply`, the gate every proposal passes through. And *a PEP 723 block must
+  declare every third-party import the script makes*, which PR #102 also fixed
+  and which the pack held as a static check over `.j2` source
+  (`test_a_declaring_template_declares_every_third_party_import`): it went out
+  with the pack and came back in `apply` during PR #118's review. None of the
+  three was ever really about templates.
+
+  That last one is worth the line it costs. It was restored only because a
+  reviewer went looking for what the deletion had taken, three rounds after the
+  deletion shipped. The rule is *more* load-bearing now, not less: every
+  `train.py` is model-written, and an undeclared dependency is a
+  `ModuleNotFoundError` one campaign step later.
+
+* **One rule died outright: F7 leakage exclusion.** The pack was the only thing
+  enforcing it. `tabular_regression_partitioned` skipped
+  `column in set(EXCLUDE_FEATURES)` when deriving features, which is what kept
+  `TVT`/`ANCC` out on rogii. Nothing enforces it now — `resolver.py` cannot,
+  because recipes declare no input columns, and the only thing left between a
+  hypothesis and a leakage column is a bullet in `code_engineer_system.md`: an
+  instruction to a model, with no check behind it. Reported on PR #118, and the
+  docstring that claimed the deleted mechanism was still live has been
+  corrected to say so.
+
+  This is not a separate gap. It is **§5's fifth check**, arriving from the
+  other direction — see below.
 
 ### Prerequisites cleared on the way
 
@@ -443,7 +483,10 @@ did not name:
 
 ## Exit criteria
 
-All five met, 2026-08-09.
+All five met, 2026-08-09. They are not the whole of §5: the fifth consistency
+check is outstanding, and step 4 turned it from a missing flag into a missing
+guard. Met is not the same as complete, and the criteria were written before the
+deletion showed what it was carrying.
 
 1. **Met.** A child experiment produces a delta; a baseline still produces a
    whole file — `delta` degrades to `whole_file` when there is no parent, which
@@ -478,3 +521,10 @@ it reviewable, not impossible. The mitigation is detection, not prohibition — 
 validation region and record it on the evidence card. A
 hypothesis *about* validation is legitimate; one that changes validation while
 claiming to test a feature is a false result.
+
+**As of step 4 this is the only mitigation left, and it does not exist.** The
+templates enforced leakage exclusion structurally; deleting them left the risk
+named, the mitigation planned, and nothing in between. The design question that
+stopped the check — what defines the region, given that a curated list of
+function names is the pattern this plan has rejected four times — is now the
+thing standing between the milestone and the property it exists to protect.
