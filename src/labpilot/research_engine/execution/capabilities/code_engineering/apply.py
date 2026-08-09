@@ -344,11 +344,19 @@ def _missing_parents(target: Path) -> list[Path]:
 
 
 def _roll_back(
-    written: list[Path],
+    attempted: list[Path],
     previous: dict[Path, bytes | None],
     created_dirs: list[Path],
 ) -> None:
     """Put the tree back, best effort, without ever raising.
+
+    `attempted`, not `written`. The file that raised is the one most likely to
+    need restoring and was the one never restored: it is appended to `written`
+    only *after* `write_text` returns, so the rollback skipped it. That is not
+    a corner — it is what a disk-full write looks like. `open(...,"w")` succeeds
+    and truncates, then `write()` fails, so the original content is already
+    gone when the exception arrives. Reported on PR #118, with the file
+    destroyed and the error saying "Nothing was applied."
 
     Every restore is isolated: the condition that broke the write — a full
     disk, a revoked permission — is usually still true, so a second `OSError`
@@ -357,7 +365,7 @@ def _roll_back(
     created are removed too, since "nothing was applied" is not true of a tree
     left holding new empty ones. Reported on PR #118.
     """
-    for target in written:
+    for target in attempted:
         original = previous.get(target)
         try:
             if original is None:
@@ -451,6 +459,7 @@ def apply_proposal(
     # claimed the property and the code held it only for one of the two ways to
     # lose it. Reported on PR #118. So the prior bytes are kept and put back.
     written: list[Path] = []
+    attempted: list[Path] = []
     created_dirs: list[Path] = []
     previous: dict[Path, bytes | None] = {}
     failed: Path | None = None
@@ -463,11 +472,12 @@ def apply_proposal(
             previous[target] = target.read_bytes() if target.is_file() else None
         for target, content in staged:
             failed = target
+            attempted.append(target)
             created_dirs.extend(_missing_parents(target))
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
             written.append(target)
     except OSError as exc:
-        _roll_back(written, previous, created_dirs)
+        _roll_back(attempted, previous, created_dirs)
         raise ApplyError(f"could not write {failed}: {exc}. Nothing was applied.") from exc
     return written

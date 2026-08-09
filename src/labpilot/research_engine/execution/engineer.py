@@ -200,8 +200,17 @@ class ResearchEngineer:
             # here once rather than left to each caller to remember. A caller
             # that read the workspace config still wins — this only fills the
             # gap that three separate constructors fell into on PR #118.
+            #
+            # From the workspace this method already resolved, not from the
+            # packaged default: `code_workspace_root()` *is* the slug folder,
+            # so `configs/default.yaml` sits right there, and filling the gap
+            # by ignoring the config would reproduce the flaw the rest of this
+            # change removes. Reported on PR #118.
             constraints = dict(self.constraints)
-            constraints.setdefault("codegen_strategy", resolve_codegen_strategy(None))
+            constraints.setdefault(
+                "codegen_strategy",
+                resolve_codegen_strategy(workspace / "configs" / "default.yaml"),
+            )
             context = TaskContext(
                 plan=plan,
                 task=task,

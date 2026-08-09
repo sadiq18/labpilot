@@ -397,3 +397,39 @@ def test_an_optional_import_under_try_is_not_required(tmp_path):
     )
 
     assert apply_proposal(tmp_path, _proposal(("pipeline/train.py", content)))
+
+
+def test_the_file_that_failed_is_restored_too(tmp_path):
+    """Reported on PR #118, and the most severe of the series.
+
+    `_roll_back` walked the list of *completed* writes, and the file that raised
+    joins that list only after `write_text` returns — so the one file most
+    likely to need restoring was the one never restored. Not a corner case: it
+    is what a disk-full write looks like. `open(..., "w")` succeeds and
+    truncates, then `write()` fails, so the original content is already gone
+    when the exception arrives. The earlier tests all raised *before* any I/O,
+    which is why they passed while the guarantee did not hold.
+    """
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text("ORIGINAL TRAIN\n", encoding="utf-8")
+    (tmp_path / "pipeline" / "infer.py").write_text("ORIGINAL INFER\n", encoding="utf-8")
+    real_write = Path.write_text
+
+    def _truncate_then_fail(self, data, *args, **kwargs):
+        if self.name == "infer.py":
+            self.write_bytes(b"")  # open() succeeded and truncated
+            raise OSError("disk full")  # write() then failed
+        return real_write(self, data, *args, **kwargs)
+
+    with mock.patch.object(Path, "write_text", _truncate_then_fail):
+        with pytest.raises(ApplyError, match="Nothing was applied"):
+            apply_proposal(
+                tmp_path,
+                _proposal(
+                    ("pipeline/train.py", "def main():\n    return 2\n" + _GUARD),
+                    ("pipeline/infer.py", "def main():\n    return 1\n" + _GUARD),
+                ),
+            )
+
+    assert (tmp_path / "pipeline" / "train.py").read_text(encoding="utf-8") == "ORIGINAL TRAIN\n"
+    assert (tmp_path / "pipeline" / "infer.py").read_text(encoding="utf-8") == "ORIGINAL INFER\n"

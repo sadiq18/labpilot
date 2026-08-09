@@ -15,6 +15,7 @@ rather than by a campaign quietly regenerating whole files for a week.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,16 @@ def resolve_codegen_strategy(config_path: Path | None) -> str:
 
 
 def workspace_config_path(workspace: object) -> Path | None:
-    """`configs/default.yaml` under a workspace, or None without one."""
-    root = getattr(workspace, "root", None)
+    """`configs/default.yaml` for a workspace, or None without one.
+
+    Accepts a `Workspace` (read via `.root`) or the root path itself. The path
+    case is handled explicitly rather than falling through to `getattr(...,
+    "root")`, because `Path("/a/b").root` is `"/"` — so duck typing turned a
+    perfectly reasonable argument into the filesystem root and read a config
+    that was never there. Reported on PR #118.
+    """
+    if isinstance(workspace, str | os.PathLike):
+        root: object | None = workspace
+    else:
+        root = getattr(workspace, "root", None)
     return None if root is None else Path(root) / "configs" / "default.yaml"

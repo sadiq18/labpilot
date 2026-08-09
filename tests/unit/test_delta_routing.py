@@ -183,18 +183,47 @@ def test_every_task_context_sets_the_codegen_strategy():
 
     Enumerated from the source rather than listed here: a fourth constructor
     fails this test instead of quietly regenerating whole files for a week.
+
+    Scoped to the **enclosing function**, not the file. The first version asked
+    whether `"codegen_strategy"` appeared anywhere in a file that built a
+    `TaskContext`, which held only because each file happened to have one
+    construction — a second one added to either file would have passed on its
+    neighbour's constraint. Reported on PR #118, and it is the same mistake the
+    test it replaced made: checking that an identifier is present somewhere
+    rather than that it is used where it matters.
     """
-    import re
+    import ast
     from pathlib import Path
 
-    src = Path("src/labpilot")
-    builders = [
-        path for path in src.rglob("*.py") if re.search(r"\bTaskContext\(", path.read_text())
-    ]
+    def enclosing_functions(tree: ast.Module) -> dict[int, ast.AST]:
+        owner: dict[int, ast.AST] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                for inner in ast.walk(node):
+                    owner.setdefault(id(inner), node)
+        return owner
 
-    assert builders, "no TaskContext construction found — has it been renamed?"
-    missing = [str(p) for p in builders if "codegen_strategy" not in p.read_text()]
-    assert not missing, f"TaskContext built without codegen_strategy in: {missing}"
+    sites: list[tuple[str, str]] = []
+    for path in Path("src/labpilot").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if "TaskContext(" not in source:
+            continue
+        tree = ast.parse(source)
+        owner = enclosing_functions(tree)
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "TaskContext"
+            ):
+                continue
+            function = owner.get(id(node))
+            scope = ast.unparse(function) if function is not None else source
+            sites.append((f"{path}:{node.lineno}", scope))
+
+    assert sites, "no TaskContext construction found — has it been renamed?"
+    missing = [where for where, scope in sites if "codegen_strategy" not in scope]
+    assert not missing, f"TaskContext built without codegen_strategy at: {missing}"
 
 
 def test_the_legacy_layout_reads_the_config_it_was_given():
@@ -211,3 +240,29 @@ def test_the_legacy_layout_reads_the_config_it_was_given():
     constraints = _engineer_constraints(config=config, workspace=None, dry_run=False, submit=False)
 
     assert constraints["codegen_strategy"] == "whole_file"
+
+
+def test_the_funnel_default_reads_the_workspace_config():
+    """Reported on PR #118: `ResearchEngineer`'s fill-in resolved the packaged
+    default while the workspace it had just computed sat sixteen lines above —
+    reproducing, in the one spot left open, the ignore-the-real-config flaw the
+    rest of this change removes."""
+    import inspect
+
+    from labpilot.research_engine.execution.engineer import ResearchEngineer
+
+    source = inspect.getsource(ResearchEngineer._run_task)
+
+    assert 'resolve_codegen_strategy(workspace / "configs" / "default.yaml")' in source
+
+
+def test_a_workspace_root_path_is_not_duck_typed():
+    """`Path("/a/b").root` is `"/"`, so reading `.root` off a path turned a
+    reasonable argument into the filesystem root. Reported on PR #118."""
+    from pathlib import Path
+
+    from labpilot.research_engine.execution.codegen_strategy import workspace_config_path
+
+    assert workspace_config_path(Path("/a/b")) == Path("/a/b/configs/default.yaml")
+    assert workspace_config_path("/a/b") == Path("/a/b/configs/default.yaml")
+    assert workspace_config_path(None) is None
