@@ -195,7 +195,10 @@ what keeps the claim independent of the code it checks. Third mechanism proposed
 for this job, after `technique` metadata and a technique→symbol map, and the
 first that preserves the ordering §5 depends on.
 
-## Why step 2 is blocked, and it is not the adapter
+## Why step 2 was blocked, and it was not the adapter
+
+*Resolved 2026-08-09 by M21 and the fixes in PR #117; kept because the
+diagnosis is what unblocked it.*
 
 Four campaigns ran with `codegen.strategy: delta`. Not one produced a successful
 delta experiment, and aider was right every time:
@@ -333,19 +336,15 @@ verdict.
 
 ### What this means for step 2
 
-| exit criterion | state |
-|---|---|
-| 1 — child produces a delta, baseline produces a whole file | **met** |
-| 2 — workspace untouched when a proposal is rejected | **not met**: a failed run leaves its edit behind, which is how the redundancy false positive above happened |
-| 3 — validation logic survives a feature-adding delta byte-identical | **met** on E-234 |
-| 4 — failure rate recorded in `agent_invocations` | **met** — `origin=aider`, brief recorded separately, kinds distinguish redundancy from adapter failure |
-| 5 — templates deleted in the same change that flips the default | not started |
+That was the state after one experiment: criteria 1 and 3 met, 2 not met, 4
+met, 5 not started. All five closed later the same day — see **Exit criteria**
+below, and **Steps 2–4** for the rate and the deletion.
 
-One experiment is not a rate. What step 2 still needs is N runs with
-`codegen.strategy: delta` and the outcome counts read off `agent_invocations`.
-The pool is ready for it — 40 viable hypotheses after `ingest` + `hypothesize
-new`, concrete ones like `typewell_gr_mean` and `tortuosity_50` rather than the
-`3D garment modeling` that used to fill it.
+One experiment was never a rate. What step 2 needed was N runs with
+`codegen.strategy: delta` and the outcome counts read off `agent_invocations`,
+which the refilled pool made possible — 40 viable hypotheses after `ingest` +
+`hypothesize new`, concrete ones like `typewell_gr_mean` and `tortuosity_50`
+rather than the `3D garment modeling` that used to fill it.
 
 Two things to know before reading those numbers:
 
