@@ -1,6 +1,7 @@
 # M19 — An experiment is a change to its parent
 
-**Status:** steps 0, 1a, 1b and §6 provenance shipped — **1c unblocked** ·
+**Status:** steps 0, 1a, 1b, 1c and §6 provenance shipped — **step 2 unblocked,
+first delta measured 2026-08-09** ·
 **Design:**
 [design/14-experiments-as-deltas.md](design/14-experiments-as-deltas.md) ·
 **Supersedes:** the Jinja template pack ·
@@ -83,7 +84,7 @@ provenance.
 | — | **validation-region flagging**, §5's fifth check | **not built** — see below |
 | — | per-execution code provenance (§6) | **shipped** (PR #113) — `runs/<execution_id>/` |
 | 1c | `AiderAgent` + copy/diff/propose + **campaign circuit breaker** | **shipped** (PR #115) — default off |
-| 2 | opt-in via config; measure the failure rate | **blocked** — see "What 1c measured" |
+| 2 | opt-in via config; measure the failure rate | **in progress** — unblocked by M21; first delta measured, see below |
 | 3 | flip the default when the rate justifies it | not started |
 | 4 | delete templates in that same change | not started |
 
@@ -221,6 +222,83 @@ Two consequences for step 2:
 So the measurement step 2 needs is not available until hypothesis selection can
 retire an idea it has already implemented. That work is sequenced in
 [16-hypothesis-selection.md](16-hypothesis-selection.md).
+
+## Step 2, first measurement — 2026-08-09
+
+Both blockers are gone. `hypothesis_redundant` separates "already there" from
+"the model could not do it", and the backlog ratchet is broken: rogii holds 46
+`proposed` and `should_gather_evidence` now returns `True`, because the clauses
+are ORed and the count is of *viable* rows.
+
+The measurement was taken **outside a campaign** — `research plan create -H
+H-015` then `research run -p P-022`. Four campaigns had been spent trying to
+observe one delta; the direct run took minutes, because a campaign spends its
+steps deciding what to do and this question does not need deciding.
+
+**The adapter produced a delta on the real pipeline.** `agent_invocations`
+records `DeltaBriefAgent` (llm) at 00:42:52 and `aider` at 00:44:05 with no
+failure. `pipeline/train.py` changed **+34 / −4**: rolling-window statistics
+grouped by `partition_id`, replacing a placeholder comment block. Exactly what
+H-015 (`rolling_features`) proposed, on a 132-line file, from a hypothesis the
+model had never seen a template for.
+
+**And §5 caught that it changed nothing.**
+
+```
+delta_claim       = {"kept": [], "added": ["engineer_features"], "combined": []}
+delta_consistent  = false
+delta_violations  = ["'engineer_features' was supposed to be added,
+                     but the result never calls or imports it"]
+```
+
+`engineer_features` is *defined* on line 45 and **never called** — `main()`
+reads the data and goes straight to `feature_cols`. The rolling features are
+dead code. The delta is clean, applies, parses, and does not run.
+
+This is the "added but unused" false attribution the design named, met for the
+first time on real output. Had the run completed, the card would have credited
+`rolling_features` for a score computed without them — and the number would
+have been real, which is what makes it dangerous.
+
+Worth stating plainly because the first instinct was wrong: this reads at a
+glance like a false alarm from a check that looks at calls and imports but not
+definitions, and "fix the check to count `def`" is a two-line change that would
+have passed its own new tests. It would also have blinded the check to the one
+thing it exists to see. `tests/unit/test_code_engineering_delta_observe.py::
+test_a_helper_that_is_defined_but_never_called_is_a_violation` is what stopped
+it — a test written from an earlier rogii observation, holding down a rule
+whose next challenger was a plausible-looking delta.
+
+**The pipeline failure is not the delta's.** `run_smoke_test` failed on
+`pandas dtypes must be int, float or bool. Fields with bad pandas dtypes:
+Geology: object` — the same defect recorded on 2026-08-08, before delta
+existed. Training never ran and the plan is `abandoned`, which is the honest
+record: the gate refused a pipeline that does not work rather than reporting a
+completed experiment.
+
+### What this means for step 2
+
+| exit criterion | state |
+|---|---|
+| 1 — child produces a delta, baseline produces a whole file | **delta half met**; baseline half already held |
+| 2 — workspace untouched when a proposal is rejected | not exercised: nothing was rejected |
+| 3 — validation logic survives a feature-adding delta byte-identical | not exercised: `run_training` never ran |
+| 4 — failure rate recorded in `agent_invocations` | **met** — `origin=aider`, and the brief recorded separately |
+| 5 — templates deleted in the same change that flips the default | not started |
+
+One delta is not a rate. The next measurements need hypotheses whose change is
+*wireable* — H-015 asked for features and got a function nobody calls, which is
+as much a statement about the hypothesis as about the adapter. Two candidates
+for what to fix first, in order of what the evidence supports:
+
+1. **`DeltaBriefAgent`'s `added` names the container, not the contribution.**
+   It claimed `engineer_features` — the function being edited — where the
+   symbols introduced were `rolling`, `groupby`, `_roll_mean`. A claim about
+   the enclosing function is unfalsifiable in the direction that matters.
+2. **Nothing asks aider to wire what it writes.** The instruction carries the
+   hypothesis; it does not say the change must execute. `check_addition` finds
+   this after the fact, which is the right place to *detect* it and the wrong
+   place to *prevent* it.
 
 ## Exit criteria
 
