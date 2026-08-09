@@ -363,9 +363,16 @@ first time.
 Repeatable, and specified so the same numbers can be produced before and after
 each phase.
 
-**Setup.** The rogii workspace, `LABPILOT_HYPOTHESIS_BACKLOG_TARGET=0` to force
-analyze to run (otherwise the backlog gate skips the agents entirely and the
-measurement is vacuous — see campaigns 6–9).
+**Setup.** The rogii workspace, `LABPILOT_MIN_RESWEEP_HOURS=0` to force analyze
+to run (otherwise the gate skips the agents entirely and the measurement is
+vacuous — see campaigns 6–9).
+
+The floor is the one to clear, not the backlog: the backlog and staleness
+clauses are ORed now, so a thin *viable* pool already opens the gate on its own
+and only the re-sweep floor can still hold it shut. `LABPILOT_HYPOTHESIS_
+BACKLOG_TARGET`, named here before, is no longer read anywhere — an operator
+following the old instruction would have set a variable with no effect and
+produced exactly the vacuous measurement this paragraph exists to prevent.
 
 **Runs.**
 

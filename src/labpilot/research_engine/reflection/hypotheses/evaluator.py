@@ -22,7 +22,20 @@ from labpilot.research_engine.shared.experiments.models import Hypothesis, Hypot
 logger = logging.getLogger(__name__)
 
 #: Verdicts reached by *measurement*. A failed attempt must not overwrite one.
-_SETTLED_STATUSES = frozenset({HypothesisStatus.CONFIRMED, HypothesisStatus.REJECTED})
+#:
+#: `INCONCLUSIVE` belongs here for the same reason as the other two: an
+#: experiment ran and the critic read the result. It was omitted because it
+#: reads like a non-answer, but the direction that matters is the destructive
+#: one — `record_failed_attempt` can classify a `DEAD_END` and write `REJECTED`,
+#: which would overwrite a measured "we looked and could not tell" with an
+#: infrastructure verdict. A run that crashed is not evidence about the idea.
+_SETTLED_STATUSES = frozenset(
+    {
+        HypothesisStatus.CONFIRMED,
+        HypothesisStatus.REJECTED,
+        HypothesisStatus.INCONCLUSIVE,
+    }
+)
 
 _OUTCOME_MAP = {
     "confirmed": HypothesisStatus.CONFIRMED,

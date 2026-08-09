@@ -97,10 +97,15 @@ def build_observe_bundle(
     # The raw count is kept beside it rather than dropped: "46 proposed, 3
     # viable" is a more useful observation than either number alone, and the
     # gap between them is itself a signal that the pool has gone stale.
-    observe["untested_hypotheses"] = viable_hypothesis_count(
-        workspace.knowledge_dir, workspace.competition
-    )
-    observe["proposed_hypotheses_total"] = untested_hypothesis_count(workspace)
+    #
+    # Both under names that say what they hold. `untested_hypotheses` used to
+    # mean the raw proposed count and was quietly repointed at the viable one —
+    # same label, different number, for every consumer including the policy
+    # prompt itself. A number the model reads deserves a name it can trust, so
+    # the new meaning gets a new key and the old name keeps the old meaning.
+    viable = viable_hypothesis_count(workspace.knowledge_dir, workspace.competition)
+    observe["viable_hypotheses"] = viable
+    observe["untested_hypotheses"] = untested_hypothesis_count(workspace)
     observe["hours_since_last_artifact"] = hours_since_last_artifact(workspace)
     _attach_evidence_refresh(observe, workspace)
     if include_context:

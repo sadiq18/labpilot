@@ -853,36 +853,47 @@ def test_latest_plan_prefers_a_runnable_one(tmp_path):
     assert loop_mod._latest_plan_id(_WS()) == "P-002"
 
 
-def test_latest_plan_is_none_when_none_runnable(monkeypatch, tmp_path):
+def test_latest_plan_is_none_when_none_runnable(tmp_path):
     """No runnable plan means no answer — not "the newest done one".
 
     This test previously asserted the fallback. It was encoding the bug: the
     Engineer refuses a done plan with "need ready or in_progress", so returning
     one made the Conductor offer `run_plan` and lose a step every time. `None`
     lets it offer `generate_plan` instead.
+
+    Against a real store, because the double this test used to install was of
+    `PlanArtifacts` — which `_latest_plan_id` stopped calling when it moved to
+    `PlanStore.selectable_plan_ids()`. It passed on an empty fresh SQLite file
+    rather than on plans filtered by status, so a regression in the filter would
+    have shipped green.
     """
+    from datetime import UTC, datetime
+
     import labpilot.research_engine.conductor.loop as loop_mod
+    from labpilot.research_engine.planner.schemas.models import ResearchPlan
+    from labpilot.research_engine.planner.schemas.task_types import PlanStatus
+    from labpilot.research_engine.planner.store import PlanStore
 
-    class _Plan:
-        def __init__(self, pid):
-            self.id = pid
-            self.status = "done"
-            self.metadata = {}
-
-    class _Artifacts:
-        def __init__(self, *a, **k):
-            pass
-
-        def list(self):
-            return [_Plan("P-001"), _Plan("P-008")]
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr("labpilot.research_engine.artifacts.plan.PlanArtifacts", _Artifacts)
+    store = PlanStore(tmp_path / "knowledge", "demo")
+    try:
+        for pid in ("P-001", "P-008"):
+            now = datetime.now(UTC)
+            store.upsert_plan(
+                ResearchPlan(
+                    id=pid,
+                    competition="demo",
+                    hypothesis_id="",
+                    goal="g",
+                    status=PlanStatus.DONE,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+    finally:
+        store.close()
 
     class _WS:
-        knowledge_dir = tmp_path
+        knowledge_dir = tmp_path / "knowledge"
         competition = "demo"
 
     assert loop_mod._latest_plan_id(_WS()) is None

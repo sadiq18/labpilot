@@ -277,6 +277,30 @@ class PlanStore:
         ).fetchall()
         return [str(row["id"]) for row in rows]
 
+    def hypothesis_selection_times(self) -> list[tuple[str, str]]:
+        """`(created_at, hypothesis_id)` for every plan that carries one.
+
+        A plan against a hypothesis is a *selection*: the moment that idea was
+        preferred over every other open one. Ordered oldest first.
+
+        The id travels with the timestamp because a hypothesis must not be aged
+        by its own selections — see `viability._is_stale`. Returning bare stamps
+        made that distinction impossible to draw at the call site.
+
+        One query, no hydration. The previous caller used `list_plans()`, which
+        loads every plan *and* its tasks *and* each task's dependency edges, to
+        answer a question about two columns — and it runs twice per policy step.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT created_at, hypothesis_id
+            FROM research_plans
+            WHERE hypothesis_id IS NOT NULL AND hypothesis_id != ''
+            ORDER BY created_at
+            """
+        ).fetchall()
+        return [(str(row["created_at"]), str(row["hypothesis_id"])) for row in rows]
+
     # -- helpers -----------------------------------------------------------
 
     def _load_tasks(self, plan_id: str) -> list[ResearchTask]:

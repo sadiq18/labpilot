@@ -132,3 +132,139 @@ def test_the_capability_retires_on_that_kind():
     source = inspect.getsource(capability.CodeEngineeringCapability._propose_delta)
     assert "hypothesis_redundant" in source
     assert "_retire_redundant_hypothesis" in source
+
+
+# -- what happens *after* detection -------------------------------------------
+
+
+class _Plan:
+    def __init__(self, hypothesis_id: str = "H-001") -> None:
+        self.hypothesis_id = hypothesis_id
+
+
+class _Paths:
+    def __init__(self, base_dir) -> None:
+        self.base_dir = base_dir
+
+
+class _Context:
+    """Only the attributes `_propose_delta` actually reads."""
+
+    def __init__(self, tmp_path, *, strategy: str = "delta") -> None:
+        self.constraints = {"codegen_strategy": strategy}
+        self.workspace_root = tmp_path
+        self.plan = _Plan()
+        self.paths = _Paths(tmp_path / "knowledge")
+        self.competition = "demo"
+
+
+def _capability_that_finds_redundancy(monkeypatch, *, retired: list[str]):
+    """A capability whose aider raises `hypothesis_redundant`."""
+    from labpilot.research_engine.execution.capabilities.code_engineering import capability as mod
+
+    cap = mod.CodeEngineeringCapability(llm_client=_Gateway())
+
+    class _Agent:
+        def __init__(self, gateway):
+            pass
+
+        def propose(self, structured, parent):
+            raise AiderError("already implemented: parent calls 'cb'", kind="hypothesis_redundant")
+
+    monkeypatch.setattr("labpilot.research_engine.execution.delta.aider_agent.AiderAgent", _Agent)
+    monkeypatch.setattr(
+        mod.CodeEngineeringCapability,
+        "_retire_redundant_hypothesis",
+        lambda self, context, reason: (retired.append(reason), True)[1],
+    )
+    return cap, mod
+
+
+def test_redundancy_stops_the_step_instead_of_falling_back(tmp_path, monkeypatch):
+    """The gap the source-grep test above could not see.
+
+    Detection retired the hypothesis and then returned `(None, "")` like any
+    other decline, so the whole-file agent rewrote `train.py` and the runner
+    trained it — spending the entire experiment the retirement existed to
+    avoid, on work the system had just proved was already done.
+    """
+    retired: list[str] = []
+    cap, mod = _capability_that_finds_redundancy(monkeypatch, retired=retired)
+
+    with pytest.raises(mod.RedundantHypothesisError):
+        cap._propose_delta(_Context(tmp_path), _Ctx(), "print('parent')")
+
+    assert retired, "the hypothesis must still be retired when the step fails"
+
+
+def test_other_aider_failures_still_fall_back(tmp_path, monkeypatch):
+    """The carve-out is narrow on purpose. Every other decline is a codegen
+    problem, where the experiment is still worth running — §10 requires both
+    paths to coexist while the failure rate is measured."""
+    from labpilot.research_engine.execution.capabilities.code_engineering import capability as mod
+
+    cap = mod.CodeEngineeringCapability(llm_client=_Gateway())
+
+    class _Agent:
+        def __init__(self, gateway):
+            pass
+
+        def propose(self, structured, parent):
+            raise AiderError("aider made no edit", kind="aider_no_edit")
+
+    monkeypatch.setattr("labpilot.research_engine.execution.delta.aider_agent.AiderAgent", _Agent)
+
+    assert cap._propose_delta(_Context(tmp_path), _Ctx(), "print('parent')") == (None, "")
+
+
+def test_a_failed_retirement_is_named_in_the_error(tmp_path, monkeypatch):
+    """Swallowing a store failure left the hypothesis `proposed` while the
+    caller behaved as though it were retired — the loop this whole path exists
+    to break, reachable through one uncaught store error."""
+    from labpilot.research_engine.execution.capabilities.code_engineering import capability as mod
+
+    cap = mod.CodeEngineeringCapability(llm_client=_Gateway())
+
+    class _Agent:
+        def __init__(self, gateway):
+            pass
+
+        def propose(self, structured, parent):
+            raise AiderError("already implemented", kind="hypothesis_redundant")
+
+    monkeypatch.setattr("labpilot.research_engine.execution.delta.aider_agent.AiderAgent", _Agent)
+    monkeypatch.setattr(
+        mod.CodeEngineeringCapability,
+        "_retire_redundant_hypothesis",
+        lambda self, context, reason: False,
+    )
+
+    with pytest.raises(mod.RedundantHypothesisError, match="could not be retired"):
+        cap._propose_delta(_Context(tmp_path), _Ctx(), "print('parent')")
+
+
+def test_redundancy_reads_the_whole_parent_not_the_clipped_copy(tmp_path):
+    """`prior_train_py` is clipped to 120k by the capability. `ast.parse` on a
+    mid-statement clip raises `SyntaxError`, redundancy.py declines to judge,
+    and the verdict comes back "not redundant" — silently, and only for
+    pipelines large enough for the problem to matter."""
+    import ast
+
+    # An open brace, so the clip lands inside a literal and the parse fails.
+    # Comment padding would survive being cut and the test would pass against
+    # the bug it is written to catch — checked, not assumed.
+    entries = "\n".join(f'    "feature_{i}_{"x" * 20}": {i},' for i in range(6000))
+    big = _ENSEMBLE + "\nFEATURES = {\n" + entries + "\n}\n"
+    assert len(big) > 120_000
+    with pytest.raises(SyntaxError):
+        ast.parse(big[:120_000])
+    ast.parse(big)
+
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text(big, encoding="utf-8")
+    agent = _agent(DeltaBrief(instruction="ensemble them", added=["lgb", "DecisionTreeRegressor"]))
+
+    with pytest.raises(AiderError) as caught:
+        agent.propose(_Ctx(prior_train_py=big[:120_000]), tmp_path)
+
+    assert caught.value.kind == "hypothesis_redundant"

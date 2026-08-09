@@ -36,16 +36,28 @@ def should_gather_evidence(workspace) -> tuple[bool, str]:
 
 `analyze_competition` and `search_papers` are removed from the policy's
 allowlist when this returns False, so the tool is never even offered. The skip
-reason is logged and both signals (`untested_hypotheses`,
+reason is logged and the signals (`viable_hypotheses`, `untested_hypotheses`,
 `hours_since_last_artifact`) appear in the observe bundle so the policy reasons
 *with* the constraint rather than against it.
 
-Both thresholds are configurable:
+The two conditions are **independent** — either one is sufficient to gather.
+They were originally ANDed, which made each a veto on the other: with 46
+proposed hypotheses queued the staleness clause was never evaluated at all and
+gathering was disabled permanently, so the pool blocked the only thing that
+could refresh it. A floor sits under both as a rate limit, not as a third gate.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `LABPILOT_HYPOTHESIS_BACKLOG_TARGET` | `3` | Queue depth above which gathering stops |
-| `LABPILOT_EVIDENCE_COOLDOWN_HOURS` | `6.0` | Minimum age of newest artifact before refetching |
+| `LABPILOT_VIABLE_HYPOTHESIS_TARGET` | `5` | Gather while fewer than this many *viable* hypotheses are queued |
+| `LABPILOT_EVIDENCE_COOLDOWN_HOURS` | `24.0` | Gather once the newest artifact is at least this old |
+| `LABPILOT_MIN_RESWEEP_HOURS` | `0.5` | Floor under both: never re-sweep sooner than this |
+
+Viable, not merely queued: a hypothesis the selector has passed over twice
+stops voting on whether the campaign may look for something better. See
+[`intelligence/hypothesis/viability.py`](../../../src/labpilot/research_engine/intelligence/hypothesis/viability.py).
+
+`LABPILOT_HYPOTHESIS_BACKLOG_TARGET` was the name of the first of these and is
+**no longer read anywhere**. Setting it has no effect.
 
 Verified live:
 

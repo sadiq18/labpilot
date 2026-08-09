@@ -71,7 +71,20 @@ def viable_hypothesis_count(knowledge_dir: Path, competition: str) -> int:
         # Nothing has ever been selected, so nothing has been passed over.
         return len(proposed)
 
-    return sum(1 for hypothesis in proposed if not _is_stale(hypothesis, selections))
+    try:
+        return sum(1 for hypothesis in proposed if not _is_stale(hypothesis, selections))
+    except Exception as exc:  # noqa: BLE001 — the contract above is "never raises"
+        # The docstring's promise was only half kept: the store read was
+        # guarded and the count was not. `_is_stale` narrowed its own catch to
+        # (TypeError, ValueError) for good reason, which left anything else —
+        # an AttributeError off a malformed row — to propagate through
+        # `should_gather_evidence` into the policy step and end the campaign.
+        #
+        # That is the same failure this module exists to remove, reached by
+        # crashing instead of by lying. Failing open means the whole pool
+        # counts, which at worst delays a fetch; failing closed stops the run.
+        logger.warning("viability filter failed; counting the whole pool: %s", exc)
+        return len(proposed)
 
 
 def retired_hypothesis_ids(knowledge_dir: Path, competition: str) -> set[str]:
@@ -105,43 +118,61 @@ def plan_is_selectable(plan: object, retired: set[str]) -> bool:
     return not hypothesis_id or hypothesis_id not in retired
 
 
-def _selection_times(knowledge_dir: Path, competition: str) -> tuple:
-    """When the selector chose *some* hypothesis, oldest first.
+def _selection_times(knowledge_dir: Path, competition: str) -> tuple[tuple[object, str], ...]:
+    """`(when, hypothesis_id)` for every selection, oldest first.
 
     A plan carrying a `hypothesis_id` is a selection: that is the moment one
     idea was preferred over every other open one.
+
+    The id is carried alongside the timestamp so `_is_stale` can drop a
+    hypothesis's own selections before aging it.
     """
     from labpilot.research_engine.execution.technique.vocabulary import _parse_timestamp
     from labpilot.research_engine.planner.store import PlanStore
 
     store = PlanStore(Path(knowledge_dir), competition)
     try:
-        stamps = [
-            _parse_timestamp(plan.created_at)
-            for plan in store.list_plans()
-            if getattr(plan, "hypothesis_id", None)
+        pairs = [
+            (_parse_timestamp(created_at), hypothesis_id)
+            for created_at, hypothesis_id in store.hypothesis_selection_times()
         ]
     except Exception:  # noqa: BLE001 — no plans means nothing was ever chosen
         return ()
     finally:
         store.close()
-    return tuple(sorted(s for s in stamps if s is not None))
+    return tuple(sorted((s, h) for s, h in pairs if s is not None))
 
 
-def _is_stale(hypothesis: object, selections: tuple) -> bool:
-    """True when the selector chose something else `STALE_AFTER_SELECTIONS` times.
+def _is_stale(hypothesis: object, selections: tuple[tuple[object, str], ...]) -> bool:
+    """True when the selector chose *something else* `STALE_AFTER_SELECTIONS` times.
 
-    `evidence_for` / `evidence_against` being empty is the proxy for "never
-    planned": a hypothesis that reached a plan gets `testing` and leaves
-    `proposed` entirely, so anything still here with no evidence has never been
-    run.
+    Something else, and that word is the fix. A hypothesis's own selections are
+    dropped before aging it, exactly as `vocabulary.derive_technique_status`
+    excludes a technique's own via its `selected` set.
+
+    Without that, a hypothesis was aged by its own retries. `record_failed_
+    attempt` returns a `RETRYABLE` failure to `proposed` with no evidence
+    written, so H-001 selected at t1, failed on a rate limit, and back in the
+    pool would count t1 against itself; one more selection by anyone else and it
+    was stale after a single transient failure — out of `viable_hypothesis_
+    count`, with two of its three attempts unused, thinning the very pool the
+    count gates fetching on.
+
+    `evidence_for` / `evidence_against` being empty is the proxy for "no
+    measurement yet". It is not a proxy for "never planned": the retry path
+    above puts planned-but-unmeasured rows back here, which is precisely why the
+    id filter is needed rather than assumed unnecessary.
     """
     from labpilot.research_engine.execution.technique.vocabulary import campaigns_since
 
     if getattr(hypothesis, "evidence_for", None) or getattr(hypothesis, "evidence_against", None):
         return False
+    own_id = str(getattr(hypothesis, "id", "") or "")
+    others = tuple(stamp for stamp, hypothesis_id in selections if hypothesis_id != own_id)
+    if not others:
+        return False
     try:
-        age = campaigns_since(getattr(hypothesis, "created_at", None), selections)
+        age = campaigns_since(getattr(hypothesis, "created_at", None), others)
     except (TypeError, ValueError) as exc:
         # Narrow, and logged. A blanket `except Exception: return False` here
         # swallowed a real `TypeError` — campaign stamps are timezone-aware and
