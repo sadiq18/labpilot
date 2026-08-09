@@ -75,6 +75,21 @@ class TabularProfiler:
 
     def profile_file(self, path: Path) -> DatasetProfile:
         df = pd.read_csv(path, nrows=self.config.max_rows_sample)
+        return DatasetProfile(
+            competition="",
+            files=[str(path)],
+            row_count=len(df),
+            column_count=len(df.columns),
+            columns=self.profile_columns(df),
+        )
+
+    def profile_columns(self, df: pd.DataFrame) -> list[ColumnProfile]:
+        """Per-column facts for a frame that is already in memory.
+
+        Split out from `profile_file` because a partitioned dataset's training
+        frame is a concatenation of files rather than any one of them, and the
+        profile has to describe the frame the pipeline will actually build.
+        """
         columns: list[ColumnProfile] = []
 
         for col in df.columns:
@@ -99,13 +114,7 @@ class TabularProfiler:
                 )
             )
 
-        return DatasetProfile(
-            competition="",
-            files=[str(path)],
-            row_count=len(df),
-            column_count=len(df.columns),
-            columns=columns,
-        )
+        return columns
 
     def profile_directory(
         self,
@@ -316,9 +325,7 @@ class TabularProfiler:
         if len(train_files) < _MIN_PARTITIONS:
             return None
 
-        sample_paths = [
-            p for p in by_role["other"] if submission_pattern.lower() in p.name.lower()
-        ]
+        sample_paths = [p for p in by_role["other"] if submission_pattern.lower() in p.name.lower()]
         sample_path = sample_paths[0] if sample_paths else None
 
         # Group files by "kind" suffix (horizontal_well / typewell / …). A kind
@@ -332,7 +339,34 @@ class TabularProfiler:
         limit = max(1, min(self.config.max_files_sample, len(kinds[primary_kind])))
         sampled = kinds[primary_kind][:limit]
         frames = [pd.read_csv(p, nrows=self.config.max_rows_sample) for p in sampled]
-        sample_df = pd.concat(frames, ignore_index=True)
+
+        # Every kind, not only the most common one. The generated `load_data`
+        # concatenates *all* the CSVs under `train/`, so the frame it trains on
+        # holds the union of the kinds' columns — and a profile that describes
+        # one kind is not a description of that frame.
+        #
+        # Measured on rogii 2026-08-09. Two kinds of equal size, so `max()` on
+        # the counts picked `horizontal_well` arbitrarily; `Geology` lives only
+        # in `typewell` and never reached `profile.json`. Codegen, told the
+        # dataset had thirteen columns and all of them numeric, wrote feature
+        # selection as "every column except this exclusion list" — which is
+        # correct given that profile and fatal given the data. Training died on
+        # `pandas dtypes must be int, float or bool. Fields with bad pandas
+        # dtypes: Geology: object`, twice, two days apart.
+        #
+        # Null counts rise here, because a column absent from one kind is NaN
+        # for those rows. That is not noise: it is the true shape of the
+        # concatenated frame, and it is what makes a column's sparsity visible
+        # to whoever decides whether to use it.
+        union_frames = list(frames)
+        for kind, paths in kinds.items():
+            if kind == primary_kind:
+                continue
+            kind_limit = max(1, min(self.config.max_files_sample, len(paths)))
+            union_frames.extend(
+                pd.read_csv(p, nrows=self.config.max_rows_sample) for p in paths[:kind_limit]
+            )
+        sample_df = pd.concat(union_frames, ignore_index=True)
 
         mean_rows = sum(len(f) for f in frames) / len(frames)
         row_count = int(mean_rows * len(kinds[primary_kind]))
@@ -358,7 +392,10 @@ class TabularProfiler:
 
         profile = self.profile_file(sampled[0])
         profile.competition = competition
-        profile.columns = [c for c in profile.columns if c.name in sample_df.columns]
+        # From the union frame, not from one file filtered down to it. The
+        # filter could only ever remove columns, so a column that exists in
+        # another kind had no way to appear.
+        profile.columns = self.profile_columns(sample_df)
         profile.files = [str(p.relative_to(data_dir)) for p in csv_files[:200]]
         profile.train_file = str(sampled[0].relative_to(data_dir))
         profile.test_file = (

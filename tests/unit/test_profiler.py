@@ -4,7 +4,11 @@ import pandas as pd
 import pytest
 
 from labpilot.research_engine.execution.baseline.selector import BaselineSelector
-from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, MetricSpec, ProblemType
+from labpilot.research_engine.intelligence.competition.models import (
+    CompetitionSpec,
+    MetricSpec,
+    ProblemType,
+)
 from labpilot.config import ProfilerConfig
 from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
 
@@ -436,3 +440,109 @@ def test_real_partitioned_layout_still_detected(partitioned_data_dir):
     profile = _profiler().profile_directory(partitioned_data_dir, "part-comp")
     assert profile.partitioned is True
     assert profile.train_partition_count == 6
+
+
+# --- a partitioned profile must describe the frame the pipeline builds -------
+
+
+def _partitioned_dataset(root, *, kinds: dict[str, dict[str, list]], n: int = 4):
+    """`train/<entity>__<kind>.csv` for several entities, one schema per kind."""
+    import pandas as pd
+
+    train = root / "train"
+    test = root / "test"
+    train.mkdir(parents=True)
+    test.mkdir(parents=True)
+    for index in range(n):
+        for kind, data in kinds.items():
+            pd.DataFrame(data).to_csv(train / f"e{index}__{kind}.csv", index=False)
+            pd.DataFrame({k: v for k, v in data.items() if k != "TVT"}).to_csv(
+                test / f"e{index}__{kind}.csv", index=False
+            )
+    pd.DataFrame({"id": [0], "TVT": [0.0]}).to_csv(root / "sample_submission.csv", index=False)
+    return root
+
+
+def test_a_column_that_only_exists_in_a_second_kind_is_profiled(tmp_path):
+    """Measured on rogii 2026-08-09, twice, two days apart.
+
+    The dataset has two kinds of file per well. `max()` over the kind counts
+    picked `horizontal_well`, and the profile was built from one file of that
+    kind — so `Geology`, which lives only in `typewell`, never appeared. The
+    generated `load_data` concatenates *all* the CSVs, so the training frame
+    had it anyway, and codegen — told the data was thirteen columns and every
+    one numeric — wrote "use every column except this exclusion list".
+
+    LightGBM: `pandas dtypes must be int, float or bool. Fields with bad pandas
+    dtypes: Geology: object`.
+    """
+    from labpilot.accessor.profiler.tabular import TabularProfiler
+    from labpilot.config import ProfilerConfig
+
+    root = _partitioned_dataset(
+        tmp_path,
+        kinds={
+            "horizontal_well": {"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]},
+            "typewell": {"GR": [7.0, 8.0], "Geology": ["shale", "sand"], "TVT": [9.0, 1.0]},
+        },
+    )
+
+    profile = TabularProfiler(ProfilerConfig()).profile_directory(root, "demo")
+
+    names = {c.name for c in profile.columns}
+    assert "Geology" in names, f"only saw {sorted(names)}"
+
+
+def test_that_column_is_marked_non_numeric(tmp_path):
+    """Presence is not enough — codegen decides what to feed the model from
+    `is_numeric`, and a string column reported as numeric is the same crash."""
+    from labpilot.accessor.profiler.tabular import TabularProfiler
+    from labpilot.config import ProfilerConfig
+
+    root = _partitioned_dataset(
+        tmp_path,
+        kinds={
+            "horizontal_well": {"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]},
+            "typewell": {"GR": [7.0, 8.0], "Geology": ["shale", "sand"], "TVT": [9.0, 1.0]},
+        },
+    )
+
+    profile = TabularProfiler(ProfilerConfig()).profile_directory(root, "demo")
+    geology = next(c for c in profile.columns if c.name == "Geology")
+
+    assert geology.is_numeric is False
+
+
+def test_columns_from_the_primary_kind_survive(tmp_path):
+    """Widening the profile must not lose what it already reported."""
+    from labpilot.accessor.profiler.tabular import TabularProfiler
+    from labpilot.config import ProfilerConfig
+
+    root = _partitioned_dataset(
+        tmp_path,
+        kinds={
+            "horizontal_well": {"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]},
+            "typewell": {"GR": [7.0, 8.0], "Geology": ["shale", "sand"], "TVT": [9.0, 1.0]},
+        },
+    )
+
+    profile = TabularProfiler(ProfilerConfig()).profile_directory(root, "demo")
+    names = {c.name for c in profile.columns}
+
+    assert {"MD", "GR", "TVT"} <= names
+
+
+def test_a_single_kind_dataset_is_unchanged(tmp_path):
+    """No second kind, nothing to union — the common case must not shift."""
+    from labpilot.accessor.profiler.tabular import TabularProfiler
+    from labpilot.config import ProfilerConfig
+
+    root = _partitioned_dataset(
+        tmp_path,
+        kinds={"well": {"MD": [1.0, 2.0], "GR": [3.0, 4.0], "TVT": [5.0, 6.0]}},
+    )
+
+    profile = TabularProfiler(ProfilerConfig()).profile_directory(root, "demo")
+
+    assert {c.name for c in profile.columns} == {"MD", "GR", "TVT"}
+    assert all(c.is_numeric for c in profile.columns)
