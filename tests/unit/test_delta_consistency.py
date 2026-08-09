@@ -263,3 +263,140 @@ def test_the_report_serialises_for_the_evidence_card():
 
 def test_an_empty_report_is_consistent_by_default():
     assert ConsistencyReport().ok is True
+
+
+# --- a change that cannot run is not a change --------------------------------
+
+_PARENT = """
+import pandas as pd
+
+
+def engineer_features(df):
+    return df
+
+
+def main():
+    df = pd.read_csv("x.csv")
+    cols = [c for c in df.columns]
+    return cols
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+#: The real shape of rogii 2026-08-09: thirty-four correct lines written into a
+#: function `main()` never calls.
+_DEAD = """
+import pandas as pd
+
+
+def engineer_features(df):
+    df = df.copy()
+    for col in ["MD", "GR"]:
+        df[f"{col}_roll_mean"] = df.groupby("partition_id")[col].transform(
+            lambda x: x.rolling(5, min_periods=1).mean()
+        )
+    return df
+
+
+def main():
+    df = pd.read_csv("x.csv")
+    cols = [c for c in df.columns]
+    return cols
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+_WIRED = _DEAD.replace(
+    '    df = pd.read_csv("x.csv")\n',
+    '    df = pd.read_csv("x.csv")\n    df = engineer_features(df)\n',
+)
+
+
+def test_a_delta_into_a_function_nothing_calls_is_a_violation():
+    """The first delta the adapter produced against a real pipeline. It parsed,
+    it applied, and it could not execute."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    report = check_delta_consistency(_PARENT, _DEAD)
+
+    assert report.ok is False
+    assert any("cannot execute" in v for v in report.violations)
+
+
+def test_the_same_delta_passes_once_it_is_wired_in():
+    """The carve-out must not cost the behaviour it guards: the identical
+    feature code, called from `main`, is a real change."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    report = check_delta_consistency(_PARENT, _WIRED)
+
+    assert report.ok is True, report.violations
+
+
+def test_a_better_claim_would_not_have_caught_it():
+    """Why this cannot live in the claim.
+
+    `check_addition` looks for the claimed symbols in the child. Name the real
+    contribution — `rolling`, `groupby` — and both are present in the dead
+    function, so every claim-based check passes on code that never runs. The
+    accident that caught it was a *bad* claim naming the container.
+    """
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_addition
+
+    assert check_addition(ast.parse(_DEAD), ["rolling", "groupby"]) == []
+
+
+def test_one_dead_helper_among_live_changes_is_not_a_violation():
+    """Conservative on purpose. A delta that edits two functions and leaves one
+    helper uncalled has still changed behaviour, and a violation there is a
+    re-ask spent on a correct experiment."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    child = _WIRED.replace(
+        "def main():",
+        "def _unused_helper(a):\n    return a * 2\n\n\ndef main():",
+    )
+
+    report = check_delta_consistency(_PARENT, child)
+
+    assert report.ok is True, report.violations
+
+
+def test_a_delta_that_touches_nothing_is_not_accused():
+    """No touched functions means nothing to reach — an import-only or
+    constant-only change is not this failure."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import check_reachability
+
+    assert check_reachability(ast.parse(_PARENT), []) == []
+
+
+def test_a_library_module_is_never_accused():
+    """A module that runs nothing of its own cannot establish that a function
+    is unreachable — its callers are elsewhere. Without this precondition the
+    check condemned most of the fixtures in this file."""
+    from labpilot.research_engine.execution.delta.consistency import check_delta_consistency
+
+    parent = "def train(X):\n    return X\n"
+    child = "def train(X):\n    return X * 2\n"
+
+    report = check_delta_consistency(parent, child)
+
+    assert report.ok is True, report.violations
+
+
+def test_a_module_level_call_counts_as_an_entry_point():
+    """Not every script uses the __main__ guard."""
+    import ast
+
+    from labpilot.research_engine.execution.delta.consistency import _has_entry_point
+
+    assert _has_entry_point(ast.parse("def main():\n    pass\n\n\nmain()\n")) is True
+    assert _has_entry_point(ast.parse("def main():\n    pass\n")) is False

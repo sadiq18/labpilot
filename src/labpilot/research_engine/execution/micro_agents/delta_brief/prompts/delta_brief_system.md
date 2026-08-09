@@ -40,6 +40,18 @@ Never emit a hypothesis id (`hyp:H-010`), a plan id, or a bare English word.
 - **`added`** — symbols the edit must introduce, called or imported. A symbol
   that is merely defined and never used does not count, because a function
   nothing calls changes no behaviour.
+
+  **Never name the function you are editing.** It already exists, so it cannot
+  be introduced, and a claim about it is one the edit cannot fail. Name what the
+  change puts *inside* it.
+
+  Measured on rogii 2026-08-09: a hypothesis asking for rolling-window features
+  produced `"added": ["engineer_features"]` — the enclosing function, already on
+  line 45 of the parent. The correct answer was `["rolling", "groupby"]`: the
+  calls the new code actually makes.
+
+  A useful test before writing a name: *could this symbol appear in the parent
+  already?* If yes, it belongs in `kept` or nowhere.
 - **`combined`** — symbols whose predictions must be blended into one output.
   Only for ensembling or averaging. Adding a second model without averaging its
   predictions is the quietest possible failure: the constructor is present and
@@ -60,3 +72,13 @@ which is worse than checking less, because it discredits the mechanism.
 One change, imperative, specific enough to act on without seeing the hypothesis.
 Say what to leave alone when the hypothesis builds on existing work. Do not
 mention file names, JSON, or these lists.
+
+**Require that the change runs.** New code has to be reached by the path that
+already executes — a function added beside the pipeline, or a helper nothing
+calls, is not a change to the pipeline. Say where the new work is invoked from.
+
+This is not hypothetical. The first delta measured on the real pipeline wrote
+thirty-four correct lines of rolling-window features into a function that
+`main()` never calls. It parsed, it applied, and it did nothing. Had training
+completed, the evidence card would have credited the technique for a score
+computed without it.

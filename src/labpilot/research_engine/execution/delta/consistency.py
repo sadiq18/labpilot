@@ -185,6 +185,81 @@ def touched_functions(parent: ast.Module, child: ast.Module) -> list[str]:
     return sorted(changed | (before.keys() ^ after.keys()))
 
 
+def _has_entry_point(tree: ast.Module) -> bool:
+    """Does this module run something of its own when executed?
+
+    True when a locally-defined function is called from module level — directly
+    or inside the `if __name__ == "__main__":` guard, which is how every
+    generated `pipeline/train.py` ends.
+
+    Without this, `check_reachability` would condemn any module that defines
+    functions for someone else to call, which is most of them.
+    """
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    if not defined:
+        return False
+    for node in tree.body:
+        statements = node.body if isinstance(node, ast.If) else [node]
+        for statement in statements:
+            for inner in ast.walk(statement):
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Name)
+                    and inner.func.id in defined
+                ):
+                    return True
+    return False
+
+
+def check_reachability(child: ast.Module, touched: list[str]) -> list[str]:
+    """A delta whose every edited function is uncalled did not change anything.
+
+    Measured on rogii 2026-08-09, on the first delta the adapter produced
+    against the real pipeline: thirty-four correct lines of rolling-window
+    features written into `engineer_features`, which is defined on line 45 and
+    which `main()` never calls. It parsed, it applied, and it could not run.
+
+    That one was caught by accident. `DeltaBriefAgent` had claimed
+    `added=['engineer_features']` — the enclosing function rather than the
+    contribution — so `check_addition` looked for a symbol nothing calls and
+    reported a violation. Fix the brief to name what the change introduces, as
+    it should, and the claim becomes `['rolling', 'groupby']`; both appear in
+    the new code; every check passes; and the dead function goes unmentioned.
+
+    So the guard cannot live in the claim. Whether the change is reachable is a
+    fact about the file, not about what anyone said it would do, and it is the
+    one question that separates "the experiment ran" from "the experiment
+    produced a number".
+
+    Conservative in three ways, because a violation costs a re-ask and a
+    re-ask spent on a correct experiment is a step a campaign does not get back:
+
+    * it asks only of files that **run themselves** — a module with no entry
+      point is a library, where an uncalled function is called by someone else
+      and "unreachable" is not a fact this file can establish;
+    * **every** touched function must be uncalled, so a delta that edits three
+      functions and leaves one helper dead still passes;
+    * it asks whether the name is called *anywhere*, not whether it is reachable
+      from the entry point, which would also condemn a function called only by
+      another dead one. Fewer true positives, no false ones.
+    """
+    if not touched or not _has_entry_point(child):
+        return []
+    reachable = called_names(child)
+    dead = [name for name in touched if name not in reachable]
+    if len(dead) != len(touched):
+        return []
+    listed = ", ".join(repr(name) for name in sorted(dead))
+    return [
+        f"the delta only changed {listed}, which nothing in the result calls — "
+        "the change cannot execute, so any score it produces measures the parent"
+    ]
+
+
 def check_preservation(child: ast.Module, keep: list[str]) -> list[str]:
     """Things the hypothesis says to *keep* must still be called.
 
@@ -278,6 +353,10 @@ def check_delta_consistency(
     if parent_tree is not None:
         report.touched_functions = touched_functions(parent_tree, child_tree)
         report.flags.extend(check_confinement(report.touched_functions))
+        # Independent of the claim, and that is the point — see
+        # `check_reachability`. A better claim would have hidden the defect
+        # this catches, so it cannot be derived from one.
+        report.violations.extend(check_reachability(child_tree, report.touched_functions))
 
     report.violations.extend(check_preservation(child_tree, keep or []))
     report.violations.extend(check_addition(child_tree, add or []))
