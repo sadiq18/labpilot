@@ -40,6 +40,8 @@ class TrainingCapability(BaseCapability):
             pass
 
         started = time.monotonic()
+        # Wall clock, because mtime is compared against it; monotonic is not.
+        wall_started = time.time()
         if is_dry_run(context) or context.constraints.get("train_stub", False):
             metrics = {
                 "cv_accuracy": 0.5,
@@ -87,11 +89,30 @@ class TrainingCapability(BaseCapability):
             error = None if ok else (result.stderr or result.stdout)[:2000]
             # Exit 0 alone is not enough — codegen sometimes emits a broken
             # ``__main__`` guard so the script no-ops without writing metrics.
-            if ok and not metrics_path.is_file():
+            #
+            # And presence alone is not enough either. `metrics.json` from an
+            # earlier successful run sits at the workspace root and survives
+            # every failure after it, so "is there a file?" answers yes for a
+            # training run that wrote nothing. Measured on rogii 2026-08-09:
+            # execution E-227 reported **succeeded** and plan P-025 went
+            # **done** against a `metrics.json` written the previous evening —
+            # a green plan with no result, and the number on it belonged to a
+            # different experiment.
+            #
+            # `run_experiment` closed this hole with `_metrics_written_since`;
+            # the Engineer path never had the guard. Ask whether *this run*
+            # wrote it. A second of slack because some filesystems round mtime.
+            fresh = metrics_path.is_file() and metrics_path.stat().st_mtime >= wall_started - 1.0
+            if ok and not fresh:
                 ok = False
                 error = (
                     "training exited 0 but did not write metrics.json "
-                    "(check ``if __name__ == '__main__':`` and that main() runs)"
+                    + (
+                        "— the file on disk predates this run, so it belongs to an "
+                        "earlier execution"
+                        if metrics_path.is_file()
+                        else "(check ``if __name__ == '__main__':`` and that main() runs)"
+                    )
                 )
             return evidence(
                 context,
