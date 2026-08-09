@@ -125,39 +125,72 @@ def imported_modules(tree: ast.Module) -> set[str]:
     return found
 
 
-def present_names(tree: ast.Module) -> set[str]:
-    """Every symbol this module has available: referenced, or imported.
+def _referenced_definitions(tree: ast.Module) -> set[str]:
+    """Names that are *defined here and used where that definition is visible*.
 
-    One definition, because keeping several in step failed twice in a row on
-    PR #117 — `check_reachability` was switched to `referenced_names` while
-    `check_addition`, `check_preservation` and `check_combination` stayed on
-    `called_names`, and when those three were switched, `check_redundancy` and
-    the aggregator scan were still left behind. Each round the fix was correct
-    and incomplete. A consumer that calls this cannot be the one forgotten.
+    Python's own rule, rather than a set membership test. A reference resolves
+    to a definition when it sits in that definition's scope or in one nested
+    inside it — so a helper defined and used inside one function counts, and a
+    parameter that merely shares a name with some other function's private
+    helper does not.
 
-    A bare name counts only when it refers to a **function this module
-    defines** — the callback case these checks were switched for,
-    `df.apply(helper)`. `referenced_names` alone was too generous in the other
-    direction: reported on PR #117, `for rolling in range(3): print(rolling)`
-    made a hypothesis proposing a real rolling-window feature read as already
-    implemented, and an unrelated `for mean in [...]` let a delta that discards
-    both predictions pass as an ensemble. Load context does not separate those
-    — `print(rolling)` is a load — but "is this a function here" does.
+    This replaces four rounds of the same oscillation on PR #117. Matching any
+    name at any depth let a nested dead helper collide with an unrelated
+    parameter; restricting to top-level definitions then stopped recognising a
+    callback defined inside the function that uses it — the exact idiom round
+    one was about. Both are the same mistake, which is answering a question
+    about *scope* with a flat list of names. There is no third setting of that
+    dial that is right; the dial was the problem.
     """
-    # Top-level definitions only, matching the scope reachability works in.
-    # `ast.walk` found them at any depth and the match was a bare string
-    # compare, so a never-called helper nested inside a live function collided
-    # with an unrelated *parameter* of the same name and answered "present" for
-    # a feature nothing computed. Reported on PR #117. A nested helper is not a
-    # symbol a claim can name, so it has no business satisfying one.
-    defined = {
+    found: set[str] = set()
+
+    def visit(node: ast.AST, defined_here: set[str], visible: frozenset[str]) -> None:
+        # Names a reference in this scope could resolve to: whatever encloses
+        # it, plus what this scope itself defines.
+        in_scope = visible | defined_here
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                if child.id in in_scope:
+                    found.add(child.id)
+                continue
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                # Decorators and defaults are evaluated in the *enclosing*
+                # scope, not the new one.
+                for extra in (*child.decorator_list, *getattr(child, "bases", [])):
+                    outer = ast.Module(body=[ast.Expr(value=extra)], type_ignores=[])
+                    visit(outer, set(), in_scope)
+                inner = {
+                    grand.name
+                    for grand in child.body
+                    if isinstance(grand, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+                }
+                visit(child, inner, in_scope)
+                continue
+            visit(child, defined_here, visible)
+
+    top = {
         node.name
         for node in tree.body
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
     }
-    callbacks = {name for name in referenced_names(tree) if name in defined}
+    visit(tree, top, frozenset())
+    return found
+
+
+def present_names(tree: ast.Module) -> set[str]:
+    """Every symbol this module has available: called, imported, or defined-and-used.
+
+    One definition, because keeping several in step failed twice on PR #117 —
+    each round switched some consumers and left others behind. A consumer that
+    calls this cannot be the one forgotten.
+
+    A bare name counts only when it resolves to a definition *visible from
+    where it is used* (see `_referenced_definitions`), which is the callback
+    idiom these checks exist for without the name collisions that four rounds
+    of flat-set matching produced in both directions.
+    """
     attributes = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
-    return called_names(tree) | imported_modules(tree) | attributes | callbacks
+    return called_names(tree) | imported_modules(tree) | attributes | _referenced_definitions(tree)
 
 
 def bound_names(tree: ast.Module) -> set[str]:

@@ -83,12 +83,19 @@ def _same_bar(line: str, previous: str) -> bool:
         return False
     if line[: here.start()] != previous[: there.start()]:
         return False
-    return _bar_total(line) == _bar_total(previous)
+    return _bar_total(line, here.start()) == _bar_total(previous, there.start())
 
 
-def _bar_total(line: str) -> str:
-    """The `N` of tqdm's `n/N`, or "" when the line does not carry one."""
-    match = _BAR_TOTAL.search(line)
+def _bar_total(line: str, start: int = 0) -> str:
+    """The `N` of tqdm's `n/N`, or "" when the line does not carry one.
+
+    Searched from the bar onward, never from the start of the line. `re.search`
+    returns the leftmost match, so an epoch marker in a shared label —
+    ``"Epoch 3/10 Training: "`` — was read as the total, and two loops over
+    genuinely different totals both reported `10` and collapsed into one.
+    Reported on PR #117.
+    """
+    match = _BAR_TOTAL.search(line, start)
     return match.group(1) if match else ""
 
 

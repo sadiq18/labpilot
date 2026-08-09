@@ -701,3 +701,28 @@ def test_one_file_missing_the_target_does_not_lose_it(tmp_path):
         pd.DataFrame({"MD": [1.0, 2.0]}).to_csv(root / "test" / f"e{i}__main.csv", index=False)
 
     assert _profiler().profile_directory(root, "demo").target_column == "TVT"
+
+
+def test_a_genuine_tie_does_not_let_column_order_decide(tmp_path):
+    """Reported on PR #117, the last of five rounds where position stood in for
+    evidence. When two columns are equally supported we do not know which is
+    the label — so the answer is order-independent and the ambiguity is
+    warned, rather than resolved by whichever happens to come last."""
+    import pandas as pd
+
+    def build(order):
+        root = tmp_path / ("-".join(order))
+        (root / "train").mkdir(parents=True)
+        (root / "test").mkdir()
+        for i in range(4):
+            pd.DataFrame({c: [1.0, 2.0] for c in order}).to_csv(
+                root / "train" / f"e{i}__main.csv", index=False
+            )
+            pd.DataFrame({"MD": [1.0, 2.0]}).to_csv(root / "test" / f"e{i}__main.csv", index=False)
+        return _profiler().profile_directory(root, "demo")
+
+    first = build(["MD", "QCFlag", "TVT"])
+    reversed_order = build(["MD", "TVT", "QCFlag"])
+
+    assert first.target_column == reversed_order.target_column
+    assert any("ambiguous" in w for w in first.warnings)

@@ -400,6 +400,7 @@ class TabularProfiler:
 
         # Target inference: a column present in train but absent from test is a
         # label candidate; the one also named in the submission header wins.
+        ambiguous_target: list[str] = []
         train_only = [c for c in sample_df.columns if c not in test_columns]
         sub_lower = {c.lower() for c in submission_columns}
         target = next((c for c in train_only if c.lower() in sub_lower), None)
@@ -444,6 +445,19 @@ class TabularProfiler:
             if candidates:
                 most = max(seen_in[c] for c in candidates)
                 candidates = [c for c in candidates if seen_in[c] == most]
+            # A genuine tie is a thing we do not know, and picking the last one
+            # is position deciding again — the fragility four rounds on PR #117
+            # kept coming back to. Sorted so the answer at least does not
+            # depend on column order, and warned so it is visible rather than
+            # silently wrong.
+            if len(candidates) > 1:
+                ambiguous_target.append(
+                    "Target inference is ambiguous: "
+                    f"{sorted(candidates)} are equally supported by the training "
+                    "partitions and none is named in a sample submission. Set "
+                    "`target_column` in the competition config to decide it."
+                )
+                candidates = sorted(candidates)
             primary_only = candidates
             target = (primary_only or train_only)[-1]
 
@@ -480,6 +494,7 @@ class TabularProfiler:
             f"row_count estimated from {len(sampled)} sampled files",
             "rows are NOT iid across partitions — validation must group by partition",
         ]
+        profile.warnings.extend(ambiguous_target)
         if train_only:
             profile.warnings.append(f"train-only columns (unavailable at test): {train_only}")
         if profile.scored_is_partition_suffix:

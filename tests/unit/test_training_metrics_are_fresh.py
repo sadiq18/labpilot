@@ -341,3 +341,19 @@ def test_unlabeled_bars_are_told_apart_by_their_total():
 
     assert not _same_bar("45%|####5 | 450/1000 [00:01]", "12%|#2 | 120/2000 [00:01]")
     assert _same_bar("45%|####5 | 450/1000 [00:01]", "12%|#2 | 120/1000 [00:01]")
+
+
+def test_a_fraction_in_the_label_is_not_read_as_the_bar_total():
+    """Reported on PR #117: `re.search` returns the leftmost match, so an epoch
+    marker in a shared label was read as the total and two loops over different
+    totals collapsed into one."""
+    from labpilot.research_engine.execution.capabilities._helpers import _same_bar
+
+    assert not _same_bar(
+        "Epoch 3/10 Training:  50%|## | 100/200",
+        "Epoch 3/10 Training:  50%|## | 500/1000",
+    )
+    assert _same_bar(
+        "Epoch 3/10 Training:  50%|## | 100/200",
+        "Epoch 3/10 Training:  75%|###| 150/200",
+    )
