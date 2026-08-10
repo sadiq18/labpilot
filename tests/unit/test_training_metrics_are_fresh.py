@@ -76,7 +76,7 @@ def _run(workspace):
     return TrainingCapability().execute(_Ctx())
 
 
-@pytest.mark.rejects("training:metrics_json")
+@pytest.mark.rejects("training:train_runner")
 def test_a_stale_metrics_file_does_not_count_as_a_result(workspace):
     """The exact E-227 shape: yesterday's metrics, today's green plan.
 

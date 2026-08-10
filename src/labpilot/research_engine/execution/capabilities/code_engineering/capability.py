@@ -433,7 +433,7 @@ class CodeEngineeringCapability(BaseCapability):
             capability=self.name,
             passed=True,
             summary=f"inspected {len(paths)} files",
-            checks=["read_code"],
+            checks=["read_code", "no_verification"],
             paths=paths + [str(notes_path)],
             metadata={"file_count": len(paths)},
         )

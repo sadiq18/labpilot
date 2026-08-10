@@ -44,7 +44,7 @@ class VerificationCapability(BaseCapability):
                 capability=self.name,
                 passed=True,
                 summary="no unit tests; skipped",
-                checks=["no_tests"],
+                checks=["no_tests", "no_verification"],
                 paths=[str(log_path)],
                 metadata={"skipped": True},
             )
@@ -56,7 +56,7 @@ class VerificationCapability(BaseCapability):
                 capability=self.name,
                 passed=True,
                 summary="unit tests dry-run skip",
-                checks=["dry_run"],
+                checks=["dry_run", "no_verification"],
                 paths=[str(log_path)],
                 metadata={"dry_run": True},
             )

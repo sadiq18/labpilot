@@ -281,6 +281,59 @@ def _resolve_direction(knowledge_dir: Path, competition: str, workspace_root: Pa
     return resolved
 
 
+def _task_evidence_for(knowledge_dir: Path, competition: str, execution_id: str) -> list[dict]:
+    """Every readable task-evidence payload for one execution.
+
+    Scanned by directory rather than by task id, because the id belongs to the
+    plan and this layer has the execution. One unreadable file must not cost the
+    card its other evidence, and must not cost the card at all.
+    """
+    directory = evidence_dir(ResearchPaths(knowledge_dir, competition), execution_id)
+    if not directory.is_dir():
+        return []
+    payloads: list[dict] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            payloads.append(payload)
+    return payloads
+
+
+def _delta_flags_in(payloads: list[dict]) -> list[str]:
+    flags: list[str] = []
+    for payload in payloads:
+        recorded = (payload.get("metadata") or {}).get("delta_flags")
+        if isinstance(recorded, list):
+            flags.extend(str(flag) for flag in recorded if str(flag).strip())
+    return flags
+
+
+def _unverified_steps_in(payloads: list[dict]) -> list[str]:
+    steps: list[str] = []
+    for payload in payloads:
+        checks = payload.get("checks")
+        if not isinstance(checks, list) or "no_verification" not in checks:
+            continue
+        if (payload.get("metadata") or {}).get("dry_run"):
+            # The step says it was a dry run, so "it verified nothing" is the
+            # mode speaking rather than a fact about this experiment.
+            continue
+        capability = str(payload.get("capability") or "?")
+        # One entry per label, in `capability:check` — the form the `rejects`
+        # markers and the enumerator use. Joining them as `capability:a+b` was
+        # the first version and produced an identifier no other producer or
+        # consumer understands. Reported reviewing PR #121.
+        labels = [str(c) for c in checks if c != "no_verification"]
+        if labels:
+            steps.extend(f"{capability}:{label}" for label in labels)
+        else:
+            steps.append(capability)
+    return steps
+
+
 def delta_flags_for(knowledge_dir: Path, competition: str, execution_id: str) -> list[str]:
     """Every `delta_flags` entry recorded by the tasks of one execution.
 
@@ -294,25 +347,30 @@ def delta_flags_for(knowledge_dir: Path, competition: str, execution_id: str) ->
     That made the flags decorative, which is worse than absent: the design
     argument for flagging rather than refusing is *"a reader can discount the
     result"*, and no reader was ever shown one.
-
-    Read by scanning the execution's evidence directory rather than by task id,
-    because the id belongs to the plan and this layer has the execution.
     """
-    directory = evidence_dir(ResearchPaths(knowledge_dir, competition), execution_id)
-    if not directory.is_dir():
-        return []
-    flags: list[str] = []
-    for path in sorted(directory.glob("*.json")):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            # One unreadable evidence file must not cost the card its other
-            # flags, and must not cost the card at all.
-            continue
-        recorded = (payload.get("metadata") or {}).get("delta_flags")
-        if isinstance(recorded, list):
-            flags.extend(str(flag) for flag in recorded if str(flag).strip())
-    return flags
+    return _delta_flags_in(_task_evidence_for(knowledge_dir, competition, execution_id))
+
+
+def unverified_steps_for(knowledge_dir: Path, competition: str, execution_id: str) -> list[str]:
+    """Steps in this execution whose evidence says they verified nothing.
+
+    M20 gives a capability two options for a branch that cannot fail: give it a
+    failing path, or stop claiming it verified anything. Eight branches take the
+    second and stamp `no_verification` on their `checks` — *"no requirements
+    file; skipped install"*, *"no unit tests; skipped"*, *"runtime job already
+    active"*.
+
+    That stamp was written and **nothing read it**, which is the defect this
+    module was extended to fix two milestones running: `delta_flags` sat in a
+    file no part of the system opened, and the first fix for *that* was
+    overwritten before anyone saw it. A label only a test reads is the same
+    shape as a flag only a file holds.
+
+    So it reaches the card. A conclusion drawn from a run whose unit-test step
+    skipped because there were no tests is a weaker conclusion than one where
+    the tests passed, and the card is where that has to be visible.
+    """
+    return _unverified_steps_in(_task_evidence_for(knowledge_dir, competition, execution_id))
 
 
 def build_evidence_card(
@@ -447,7 +505,22 @@ def build_evidence_card(
     # writers recompute that field after the card is built, and each would drop
     # the qualification. `EvidenceCard.decision_summary` derives it from here
     # instead, so no writer can lose it. Reported on PR #119.
-    flags = delta_flags_for(knowledge_dir, competition, treatment_execution_id)
+    # **One** scan. Both readers used to call `_task_evidence_for` themselves, so
+    # every task-evidence file in the execution was globbed and `json.loads`-ed
+    # twice per card — the refactor had shared the code and not the work.
+    # Reported reviewing PR #121.
+    task_evidence = _task_evidence_for(knowledge_dir, competition, treatment_execution_id)
+    flags = _delta_flags_in(task_evidence)
+    # A dry run verifies nothing *by definition*, so the note would fire on every
+    # dry-run card and carry no information — and a qualifier that fires on a
+    # whole mode is one readers learn to skip, which is M20's own calibration
+    # argument.
+    #
+    # Keyed on what each step says about itself, not on `placeholder_treatment`:
+    # that is also true of a **real run that crashed and left a stub**, the E-147
+    # shape, and on that card the note is exactly what a reader needs. Reported
+    # reviewing PR #121.
+    unverified = _unverified_steps_in(task_evidence)
 
     card = EvidenceCard(
         competition=competition,
@@ -480,7 +553,10 @@ def build_evidence_card(
         impact_error=impact_error,
         maximize=maximize,
         noise_epsilon=_NOISE,
-        metadata={"delta_flags": flags} if flags else {},
+        metadata={
+            **({"delta_flags": flags} if flags else {}),
+            **({"unverified_steps": unverified} if unverified else {}),
+        },
     )
 
     if persist:

@@ -510,8 +510,9 @@ def test_the_card_carries_the_flags_and_says_so_in_its_reason():
 
     source = inspect.getsource(builder.build_evidence_card)
 
-    assert "delta_flags_for(" in source
-    assert 'metadata={"delta_flags": flags}' in source
+    assert "_delta_flags_in(" in source
+    assert '"delta_flags": flags' in source
+    assert "_unverified_steps_in(" in source
 
 
 def test_a_baseline_is_not_a_delta_landing_in_the_region():

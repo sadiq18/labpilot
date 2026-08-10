@@ -41,8 +41,34 @@ class EvaluationCapability(BaseCapability):
             submission = root / "submission.csv"
             if submission.is_file():
                 pred.write_text(submission.read_text(encoding="utf-8"), encoding="utf-8")
-            else:
+            elif is_dry_run(context):
+                # A dry run checks the wiring, and the placeholder is the wiring.
                 pred.write_text("id,prediction\n0,0\n", encoding="utf-8")
+            else:
+                # This wrote `id,prediction\n0,0` and then reported
+                # `passed=pred.is_file()` — a verdict about a file it had just
+                # fabricated, so a run that inferred nothing was indistinguishable
+                # from one that inferred correctly. The same defect as
+                # `submission`, in a different capability, found while writing a
+                # rejection test for this site rather than by reading it. M20.
+                return evidence(
+                    context,
+                    capability=self.name,
+                    passed=False,
+                    summary="nothing to infer from",
+                    checks=["inference"],
+                    # The same shape as every other return here. The first
+                    # version dropped both, so failure evidence for this step
+                    # differed from success evidence exactly when something had
+                    # already gone wrong. Reported reviewing PR #121.
+                    paths=[str(pred)],
+                    metadata={"dry_run": is_dry_run(context)},
+                    error=(
+                        "no predictions.csv and no submission.csv in the workspace. "
+                        "Writing a placeholder row would produce a file that predicts "
+                        "nothing and report it as inference."
+                    ),
+                )
         return evidence(
             context,
             capability=self.name,
@@ -108,15 +134,41 @@ class EvaluationCapability(BaseCapability):
             str(root / "comparison.json"),
             str(root / "artifacts" / "comparison.json"),
         ]
+        # A comparison that compared nothing is not a comparison — but *no
+        # control to compare against* is a different thing from *a control was
+        # there and this produced nothing*. The first version tested
+        # `cv_gain is not None`, which is False by construction on a
+        # `missing_control` card, so every campaign's **first** COMPARE failed:
+        # a baseline has no prior execution, and the baseline plan runs COMPARE
+        # on it. Reported reviewing PR #121 — the same shape as the credential
+        # gate on #120, right about the pathological input and wrong about the
+        # ordinary one.
+        #
+        # With no control this step verified nothing, which is a state to
+        # declare rather than a failure to report, so it takes the same
+        # `no_verification` stamp the other such branches take.
+        had_control = bool(card.control_experiment)
+        compared = card.observed.cv_gain is not None
+        checks = ["compare", "evidence_card"]
+        if not had_control:
+            checks.append("no_verification")
         return evidence(
             context,
             capability=self.name,
-            passed=True,
-            summary=(
-                f"Evidence {card.id}: {card.decision.value} "
-                f"(cv_gain={card.observed.cv_gain})"
+            passed=compared or not had_control,
+            error=(
+                None
+                if compared or not had_control
+                else (
+                    f"Evidence {card.id} compared nothing: a control was available "
+                    f"({card.control_experiment}) and the comparison still produced "
+                    f"no cv_gain. {card.decision_reason or ''}".strip()
+                )
             ),
-            checks=["compare", "evidence_card"],
+            summary=(
+                f"Evidence {card.id}: {card.decision.value} (cv_gain={card.observed.cv_gain})"
+            ),
+            checks=checks,
             paths=paths,
             metrics={
                 "cv_delta": card.observed.cv_gain,

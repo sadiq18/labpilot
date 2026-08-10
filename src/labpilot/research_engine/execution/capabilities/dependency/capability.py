@@ -92,7 +92,7 @@ class DependencyCapability(BaseCapability):
                 capability=self.name,
                 passed=True,
                 summary="no requirements file; skipped install",
-                checks=["no_requirements"],
+                checks=["no_requirements", "no_verification"],
                 metadata={"skipped": True},
             )
 
@@ -105,7 +105,7 @@ class DependencyCapability(BaseCapability):
                 capability=self.name,
                 passed=True,
                 summary=f"dependencies already satisfied ({primary.name})",
-                checks=["already_satisfied"],
+                checks=["already_satisfied", "no_verification"],
                 paths=[str(primary)],
                 metadata={"digest": digest, "idempotent": True},
             )
@@ -117,7 +117,7 @@ class DependencyCapability(BaseCapability):
                 capability=self.name,
                 passed=True,
                 summary=f"install disabled; recorded {primary.name}",
-                checks=["install_disabled"],
+                checks=["install_disabled", "no_verification"],
                 paths=[str(primary)],
                 metadata={"digest": digest, "would_install": True},
             )

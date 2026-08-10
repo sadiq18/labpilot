@@ -123,7 +123,7 @@ def test_verification_refuses_a_workspace_with_no_training_script(tmp_path):
     assert result.passed is False
 
 
-@pytest.mark.rejects("research_review")
+@pytest.mark.rejects("research_review:train_exists")
 def test_research_review_rejects_a_script_with_no_entry_point(tmp_path):
     """The real 2026-08-08 artifact: 624 bytes of docstring and half a comment,
     which `ast.parse` accepted and `run_smoke_test` passed because a file that
@@ -199,7 +199,6 @@ def test_workspace_refuses_a_tree_it_could_not_prepare(tmp_path):
     assert result.passed is False
 
 
-@pytest.mark.rejects("dependency")
 def test_dependency_refuses_a_stdlib_module_in_the_block(tmp_path):
     """Defect 11, from the real artifact: codegen declared `glob`, and uv
     refused all six dependencies — the run never started, so every gate
@@ -207,6 +206,12 @@ def test_dependency_refuses_a_stdlib_module_in_the_block(tmp_path):
 
     Red-then-green: without `sys.stdlib_module_names` filtering, `glob` survives
     into the resolved set.
+
+    **Deliberately unmarked.** This calls `strip_stdlib_dependencies` directly,
+    so no capability reports a verdict while it runs — checking the marker
+    against the run showed it observing nothing. The test is worth keeping and
+    the claim was not: it covers the helper, and the `dependency` gate's ability
+    to reject is proven by `test_a_failed_install_is_not_a_satisfied_dependency`.
     """
     from labpilot.research_engine.execution.capabilities.code_engineering.apply import (
         strip_stdlib_dependencies,
@@ -496,3 +501,23 @@ def test_a_verifying_capability_stamps_nothing_extra(tmp_path):
 
     assert "verified" not in card.metadata
     assert "no_verification" not in card.checks
+
+
+@pytest.mark.rejects("research_review:force_block")
+def test_the_review_can_be_told_to_block(tmp_path):
+    """A distinct verdict from the review itself, and a distinct site: the plan
+    can carry `force_block` and the step must stop. Proving the *real* review
+    through this hook was the mistake the sweep caught — the hook is its own
+    gate and gets its own test, rather than standing in for the other."""
+    from labpilot.research_engine.execution.capabilities.research_review import (
+        ResearchReviewCapability,
+    )
+
+    context = capability_context(
+        tmp_path, task_type=TaskType.RESEARCH_REVIEW, metadata={"force_block": True}
+    )
+
+    result = ResearchReviewCapability().execute(context)
+
+    assert result.passed is False
+    assert "force_block" in result.checks

@@ -111,7 +111,7 @@ The rule catches the fourth instance before it is written.
 
 | exit criterion | state |
 |---|---|
-| 1 — every pass/fail module has a red-then-green rejection test | **done.** `test_every_gate_rejects_something.py` enumerates the capabilities and requires each to carry a `@pytest.mark.rejects("<name>")` test. All 9 that verify are proven; `stub` declares `verifies = False` instead |
+| 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
 | 2 — no verification path rebuilds a command production owns | not started |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
 | 4 — a derived artifact re-derives or says it is derived | not started |
@@ -138,6 +138,86 @@ figure, while the verdict lives one branch up in `if ok and not fresh:`. A
 red-then-green run against the wrong line proves nothing just as surely as a weak
 test does, which is worth saying because the sweep is the thing everything else
 here rests on.
+
+### The parser that had to go
+
+`@pytest.mark.rejects("<capability>")` was, for seven review rounds, a claim
+nobody checked. Deciding which gates *existed* meant parsing the capability
+sources for `passed=` and resolving each to a name, and every round of review on
+PR #121 landed inside that parser:
+
+| round | what it missed |
+|---|---|
+| 2 | a `checks` list built as a variable, not a literal |
+| 3 | labels joined with `+`, and an `if/else` picking between two |
+| 4 | `no_verification` stamped from inside a nested block, exempting a gate that was not the one stamped |
+| 5 | `name: str = "..."` — the form `BaseCapability` declares — not matching the pattern for `name = "..."` |
+| 6 | `_by_type`, where a later `register()` for the same task type silently drops the earlier capability |
+| 7 | one file holding two capabilities; a dict keyed by name dropping a duplicate; `inspect.getfile` raising on a class with no file |
+
+Each fix was correct. Each left the next shape unhandled, and every failure was
+silent — a gate the parser could not read was a gate it did not require a test
+for. 36% of the file was AST machinery and all seven rounds were spent there.
+
+The question is behavioural — *can this gate say no?* — and the runtime answers
+it exactly. Every capability reports through `TaskEvidence`, which carries the
+capability, the checks and the verdict, so `tests/helpers/verdict_observer.py`
+records them as they happen and a marked test now has to have **caused** the
+rejection it claims. The parser and its ~370 lines of tests are gone.
+
+**Switching found two markers that had never been earned**, both previously read
+and approved, neither visible to the parser — it could see that a marker existed,
+never that the test rejected nothing:
+
+| marker | what the test actually did |
+|---|---|
+| `code_engineering:modify_config` | greps the capability module for `passed=config_path.is_file()`. No gate decides anything while it runs |
+| `dependency` | calls `strip_stdlib_dependencies` directly. A real test of a helper, not of the capability's verdict |
+
+Both markers are gone and both tests stay, each carrying a note saying what it
+does and does not prove. Neither capability lost coverage: `code_engineering` is
+covered by two `write_code` tests, `dependency` by `pip_install`.
+
+It also left a **finding against production**, not against a test:
+`_modify_config` writes `configs/baseline.yaml` and then returns
+`passed=config_path.is_file()` on the file it just wrote. No input reaches the
+`False` branch — it is a sixth gate that cannot fail, in the same shape as the
+five below, and it is not yet fixed.
+
+**Round 8 found four defects in the replacement**, which is worth recording
+plainly: leaving a mechanism because it kept producing defects did not stop the
+next one producing them. Three were the same silent-claim shape the observer
+exists to remove, arriving inside it.
+
+| finding | what it was |
+|---|---|
+| `KeyError` → `INTERNALERROR` | `item.stash[_OBSERVED]` subscripted a key the line above read with `.get(..., [])`. Unset stash plus an unmet claim killed the whole session, not the test — the same one-guarded-read-one-unguarded shape round 7 was about, two lines apart again |
+| a marker with no argument passed | `@pytest.mark.rejects` with nothing to check had nothing checked, so writing it wrong was quieter than not writing it |
+| a fixture could earn the marker | the recorder starts before the test's other fixtures, so a rejection during setup satisfied the claim without the body proving anything. Latent when found — 0 markers relied on it |
+| three marker forms out of four were invisible | `vars(module)` filtered to `test_*` missed methods of `Test...` classes and module-level `pytestmark`, both of which pytest honours. Latent — the suite has no test classes |
+
+All four are fixed, each with a test written from the failure first and each
+confirmed by mutation. Two of those tests were themselves vacuous on the first
+pass and the sweep caught them: asserting the phrase *"no argument"* appeared
+somewhere passed while the empty-string case was unhandled, because that case
+also fails as an unearned marker; and a `MarkDecorator` unwrap survived deletion,
+because `MarkDecorator` already proxies `.name` and `.args`. The counter-measure
+that works is not *"leave the fragile mechanism"* — it is writing the failing
+test first and mutating the fix afterwards.
+
+The partial-install that made the first one reachable is now its own guard: the
+observer is a fixture plus two hooks a conftest imports by name, any subset
+imports cleanly, and `test_the_conftest_installs_every_hook_this_module_defines`
+fails when one is missing. `pytest_plugins` would couple them properly, but
+pytest honours it only in the rootdir conftest and this suite's is in `tests/`.
+
+**The limit, stated rather than left to be found.** Observation sees the verdicts
+the suite *reaches*. A verdict no test ever exercises produces nothing and is
+invisible here — where the parser would have listed it, wrongly or otherwise.
+That is a narrower blind spot than the parser's six, and unlike them it does not
+report as coverage, but it is real: closing it needs the aggregate question
+*"which observed checks were never observed failing?"*, which needs session-wide
+collection and is not built.
 
 ### Five gates that cannot fail, found on the first day
 
@@ -212,6 +292,42 @@ Three things that only appeared once the tests were written:
 * `Path(None)` raises, and a `TypeError` escaping a question this calm would
   crash the conductor, so "no knowledge directory" is an answer rather than an
   error.
+
+### What proving the twenty sites turned up
+
+Two real defects, neither found by reading the code — both surfaced by trying to
+write a test that made the gate say no:
+
+* **`evaluation:compare` reported success on a card that compared nothing.**
+  `passed=True` was unconditional, so a comparison with no control, or over
+  placeholder metrics, passed — and the card is the thing COMPARE exists to
+  produce.
+* **`_infer` fabricated the artifact it then checked for.** It wrote
+  `id,prediction\n0,0` when there was nothing to infer from, and reported
+  `passed=pred.is_file()` on the file it had just written. The same defect as
+  `submission`, one capability over, three weeks later.
+
+And three tests of mine went green for the wrong reason before landing —
+`code_engineering:apply` twice, because the proposal reached the `last_resort`
+branch and the step failed *before* apply. The red-then-green sweep caught each;
+reading them did not.
+
+**Eight sites check nothing, and now say so.** *"no requirements file; skipped
+install"*, *"no unit tests; skipped"*, *"runtime job already active"* — their
+`passed=True` is honest about the step and dishonest about the card, where it
+reads identically to a gate that looked and found nothing wrong. They stamp
+`no_verification` in their `checks`, and the enumerator reads that from the
+source rather than from a list in a test file, which would drift the moment a
+branch changed.
+
+**And the stamp reaches the card**, which it did not for a day. Written into
+`TaskEvidence.checks` and read by nothing but a test is the same shape as
+`delta_flags` sitting in a file no part of the system opened — the defect this
+milestone found two rounds earlier, repeated on the same branch. `EvidenceCard`
+now carries `unverified_steps`, and `decision_summary` names them beside the
+verdict, so a conclusion drawn from a run whose unit-test step skipped for want
+of tests says so where a reader meets it. Derived from metadata, so the three
+writers that recompute `decision_reason` cannot drop it.
 
 ## Traps
 

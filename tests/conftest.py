@@ -3,6 +3,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+# M20: `@pytest.mark.rejects(...)` is enforced against what the run observed,
+# not against what the test source says. See `helpers/verdict_observer.py`.
+from helpers.verdict_observer import (  # noqa: F401
+    pytest_runtest_call,
+    pytest_runtest_makereport,
+    verdict_observer,
+)
+
 
 @pytest.fixture(autouse=True)
 def _no_real_dotenv_in_tests(monkeypatch):
