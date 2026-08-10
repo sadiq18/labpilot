@@ -81,6 +81,17 @@ def test_tool_contract(name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         monkeypatch.setattr(target, replacement)
 
     if not tool.varies_by:
+        # Exit criterion 3, applied to *any* tool that cannot prove variance
+        # — not only `fixed` ones. A `partial` tool with no `varies_by` makes
+        # the same promise a `fixed` one does and keeps it no better, so
+        # gating this on status alone would leave a hole exactly the width of
+        # a hypothetical `optimise` that merely degrades politely.
+        assert not _reads_as_action_verb(name), (
+            f"{name} declares varies_by=[] but is named like a capability — "
+            "either make it vary, or rename it to admit it is a fixed step "
+            "(M15 exit criterion 3)"
+        )
+
         if tool.capability_status == "partial":
             result = registry.invoke(
                 name,
@@ -92,14 +103,6 @@ def test_tool_contract(name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                 f"{name} is partial with no varies_by but declares no degraded check"
             )
             fixture.assert_degraded(result.data)
-            return
-
-        # `fixed`: nothing varies, so the name must not claim otherwise.
-        assert not _reads_as_action_verb(name), (
-            f"{name} declares varies_by=[] but is named like a capability — "
-            "either make it vary, or rename it to admit it is a fixed step "
-            "(M15 exit criterion 3)"
-        )
         return
 
     assert fixture.observe is not None, f"{name} declares varies_by but no observe()"
@@ -166,6 +169,30 @@ def test_the_contract_would_catch_a_hollow_tool(name: str, tmp_path: Path) -> No
     )
     assert _run("b", "third") != repeated[0], (
         f"{name}: sanity — the declared varies_by input must still change the result"
+    )
+
+
+def test_no_action_named_tool_is_a_fixed_step() -> None:
+    """M15 exit criterion 3, stated once over the whole catalog.
+
+    The parametrized test enforces this per tool, but only reaches the check
+    for tools with an empty `varies_by`. This states the criterion in the
+    form the milestone words it, so the guarantee survives a refactor of the
+    branch above.
+
+    Current verdict (2026-08-11 re-audit): **no tool needs renaming.**
+    `submit` is the only `fixed` entry and reads as a noun-ish step, not a
+    promise. `implement` *is* an action verb, and stays — it genuinely varies
+    (by `description`), so it is not a fixed step dressed as a capability.
+    """
+    offenders = [
+        descriptor.name
+        for descriptor in default_tool_descriptors()
+        if not descriptor.varies_by and _reads_as_action_verb(descriptor.name)
+    ]
+    assert not offenders, (
+        "these tools promise an action but cannot vary their output — "
+        f"rename them or make them vary: {offenders}"
     )
 
 

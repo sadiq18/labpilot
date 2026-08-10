@@ -1,8 +1,15 @@
 # M15 — The capability layer audit
 
-**Status:** not started · **Purpose:** stop the control plane outrunning the
-tools again  
+**Status:** all three exit criteria met 2026-08-11 · **Purpose:** stop the
+control plane outrunning the tools again  
 **Design:** [../design/12-capability-audit.md](../design/12-capability-audit.md)
+
+> **Three defects found, none by reading code — all three by building the
+> tests.** `implement`'s `prefer_patch` silent no-op; `implement` declaring a
+> `varies_by` it cannot honour; and `run_plan`/`run_experiment` whose payload
+> digest would have certified them real even if they ignored their input.
+> The last two were introduced *by this milestone* and caught *by this
+> milestone*, which is the argument for the mechanism in one line.
 
 > The table immediately below is the **2026-08-02** snapshot, kept for
 > history. It is superseded by **[the 2026-08-11 re-audit](#the-re-audit-2026-08-11)**
@@ -242,8 +249,26 @@ the hollow layer without reading source.
 
 1. Every catalog tool has a contract test proving different inputs yield
    different artifacts, or is renamed to admit it is fixed.
+   — **met 2026-08-11.** `tests/unit/test_tool_contracts.py`, parametrized
+   over `default_tool_descriptors()` so an eleventh tool cannot slip in
+   uncovered; fixtures in `tests/unit/tool_contract_fixtures.py`.
 2. `research tools` prints the inventory with capability status.
+   — **met 2026-08-11.** `research tools list` now prints `status` and
+   `varies by` per tool, with a legend; covered by
+   `tests/unit/test_tools_cli.py`.
 3. No tool named as an action (`implement`, `optimise`, `tune`) is a fixed step.
+   — **met 2026-08-11, with no rename required.** Checked rather than
+   assumed: `submit` is the only `fixed` entry and does not read as an action
+   verb; `implement` is an action verb but is *not* a fixed step — it varies
+   by `description`, so the criterion does not bite. Enforced by
+   `test_no_action_named_tool_is_a_fixed_step`, which applies to any tool
+   with an empty `varies_by` rather than only to `fixed` ones — a `partial`
+   tool that cannot vary makes the same false promise, and gating on status
+   alone would leave that hole open.
+
+Because no rename was needed, `conductor/actions.py` and `conductor/policy.py`
+are untouched by this milestone; §6.4 of the design doc records what *would*
+have to change if a later re-audit does force one.
 
 ## Traps
 
