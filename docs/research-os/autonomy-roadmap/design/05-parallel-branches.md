@@ -46,11 +46,12 @@ tests three hypotheses at once safely":
    `Experiment` promoted, and no code sets one.
 4. **No compute isolation.** Nothing in the training path sets thread or core
    limits — a repo-wide search for `n_jobs`/`num_threads`/`nthread` in
-   `src/labpilot` returns zero hits. Generated training code gets library
-   defaults, which for LightGBM/XGBoost/scikit-learn is typically "use every
-   core." K concurrent branches under those defaults oversubscribe the same
-   physical cores instead of getting K× the throughput — the parallelism this
-   milestone builds toward can end up *slower* than sequential, not faster.
+   `src/labpilot` returns zero hits. LightGBM/XGBoost default to using every
+   core, and generated code reaching for the common `n_jobs=-1` idiom does the
+   same on scikit-learn. K concurrent branches under that oversubscribe the
+   same physical cores instead of getting K× the throughput — the parallelism
+   this milestone builds toward can end up *slower* than sequential, not
+   faster (see §8 for exactly what does and doesn't fix this).
 
 None of this is exercised today because the loop is sequential, so these gaps
 are latent, not yet observed in production incidents.
@@ -166,7 +167,9 @@ this section.
 ```text
 Conductor step
    │
-   ├─ select top K untested hypotheses (K ≤ concurrency budget)
+   ├─ select top K untested hypotheses (K = min(desired fan-out, max_workers)
+   │     — K and max_workers must agree, or the compute-budget math below is
+   │     wrong, see §8)
    ├─ atomically claim each (fixed mark_testing_if_proposed)
    │     └─ on setup failure below: release the claim, do not leave it stuck
    │
@@ -204,7 +207,7 @@ of the sequential path.
 |---|---|---|
 | `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync` | Existing single-hypothesis path stays as the K=1 case; K>1 bypasses `Scheduler.dispatch`/`DecisionRecord`/checkpointing/breaker accounting — open question, see §8 |
 | `agents/parallel.py::ParallelWorkItem` | Minor: add `runtime: str = "local"` field (unread this milestone, forward-compat only) | Otherwise reused as-is; M5's concurrency primitives are sufficient |
-| `agents/coding.py` (M19 delta-codegen path) | New: inject a per-branch thread cap into generated training code | See §8. Exact mechanism (prompt instruction vs. env-var wrapper) not yet decided |
+| `execution/training/environment.py::child_environment` | New: inject a per-branch thread-cap env vars into the training subprocess's environment | See §8. **Not** `agents/coding.py` — that only generates code, it never executes it; `execution/training/runner.py::TrainingRunner.run()` is the actual `subprocess.run(...)` call, and `child_environment()` already builds the env dict it uses |
 | `git_evolution.py` / `git/python_backend.py` | New: worktree create/teardown per branch, crash-safe | `create_branch` today mutates the single working tree; needs a worktree-based sibling, not a modification of the existing checkout path |
 | *(new)* reconciliation check | New: startup-time `git worktree prune` + orphan sweep | Closes the crash gap — see §8. A worktree whose creating process dies before teardown runs is a standard git-worktree failure mode, not something this design can assume away |
 | `hypothesis.py::mark_testing_if_proposed` | Fix: atomic claim on the JSON file (not the DB mirror) + release-on-setup-failure | See §8 |
@@ -293,22 +296,31 @@ duplicated K times — if the latter, K needs a disk-aware ceiling in addition
 to the concurrency-budget ceiling already in §3. Record the answer here before
 implementation starts.
 
-**Compute budget (CPU/threads) — real, unaddressed gap.** Nothing in the
-training path sets thread or core limits today — confirmed via a repo-wide
-search: zero hits for `n_jobs`/`num_threads`/`nthread` in `src/labpilot`.
-Generated training code gets library defaults, which for LightGBM/XGBoost/
-scikit-learn is typically "use every core." K concurrent branches under those
-defaults oversubscribe the same physical cores instead of getting K× the
-throughput — cache thrashing and context-switch overhead can make wall-clock
-*worse* than sequential, directly undermining exit criterion 1, the actual
-justification for this milestone. Unlike §5, this needs no external sign-off
-— it's fully implementable inside M11: compute a per-branch cap
-(`available_cores // K`, or a configured ceiling) before fan-out and inject it
-into the generated training code via `agents/coding.py` (M19's delta-codegen
-path). Prefer wrapping execution with `OMP_NUM_THREADS`/`MKL_NUM_THREADS`/
-`OPENBLAS_NUM_THREADS` env vars over a prompt instruction telling the LLM to
-set `n_jobs` — env vars are enforced regardless of what the generated code
-does; a prompt instruction depends on the LLM actually complying.
+**Compute budget (CPU/threads) — real, unaddressed gap.** Nothing sets thread
+or core limits today — confirmed via a repo-wide search: zero hits for
+`n_jobs`/`num_threads`/`nthread` in `src/labpilot`. Note scikit-learn
+estimators default to `n_jobs=None` (serial) — the actual risk isn't "library
+defaults use every core," it's **generated code explicitly passing
+`n_jobs=-1`** (a common LightGBM/XGBoost/sklearn idiom the LLM is likely to
+reach for), which spawns joblib/loky workers sized off `loky.cpu_count()`.
+`OMP_NUM_THREADS`/`MKL_NUM_THREADS`/`OPENBLAS_NUM_THREADS` don't govern
+joblib/loky — `LOKY_MAX_CPU_COUNT` does, and needs to be set alongside them.
+Even then, a hard-coded explicit count (`n_jobs=8`, not `-1`) in generated
+code is a residual risk env vars don't fully close — flagging this as
+accepted, not solved, pending an OS-level fallback (cgroup/`taskset` around
+the `TrainingRunner.run()` subprocess) if it proves necessary in practice.
+
+The injection point is `execution/training/environment.py::child_environment()`
+(consumed by `execution/training/runner.py::TrainingRunner.run()`'s
+`subprocess.run(..., env=child_environment())`) — **not** `agents/coding.py`,
+which only generates `train.py` and never executes it. Compute the cap as
+`max(1, available_cores // K)` before fan-out (`// K` alone can truncate to 0
+on small/CI machines, which most of these env vars treat as "unset," silently
+reintroducing the oversubscription this exists to prevent). This is
+implementable entirely inside M11, no external sign-off needed, but the
+mechanism above (env vars only, vs. env vars + OS-level enforcement) is a
+leaning, not a final decision — record whichever is chosen back into this
+paragraph before implementation.
 
 **Budget scoping (blocked on §5).** Not implementable until M10's owner
 confirms an option. Once decided: if pre-split is chosen, allocate each
@@ -327,7 +339,7 @@ is resolved — this paragraph is the landing spot for it.
 | Write serialization | WAL only vs. WAL + module-level writer lock | both | WAL alone permits concurrent writers to still race on read-modify-write app logic; an instance-level lock (à la `BudgetLedger`) doesn't work here since `ConductorStore`/`KnowledgeStore` are constructed fresh per call — the lock must be module-level |
 | Promotion storage | field on `Experiment` vs. `manifest.metadata` | `manifest.metadata` | `Experiment` is assembled fresh on every call, not persisted — a pydantic field has nowhere to round-trip; `manifest.metadata` already has a writer (`save_manifest`) |
 | Worktree cleanup | teardown-only vs. teardown + startup reconciliation | both | Teardown alone doesn't survive a hard crash; reconciliation is what actually closes the orphan risk already visible in this repo |
-| Compute isolation | leave library defaults vs. inject per-branch thread cap | inject cap, via env vars | Library defaults (all-cores) oversubscribe under K-way fan-out and can make wall-clock worse than sequential; env vars don't depend on the LLM cooperating the way a prompt instruction would |
+| Compute isolation | no cap vs. env-var cap vs. env-var cap + OS-level enforcement | env-var cap (leaning; OS-level not ruled out) | Generated code passing explicit `n_jobs=-1` (or worse, a hard-coded count) under K-way fan-out can make wall-clock worse than sequential; `OMP_NUM_THREADS`+`LOKY_MAX_CPU_COUNT` cover the common case cheaply but don't fully close a hard-coded explicit count — not a final decision, see §8 |
 
 ## 10. Testing
 
