@@ -179,6 +179,40 @@ Worth naming what the first three have in common with the eight in the table
 above: none is a naming problem, and none would be caught by review. `reporting`
 is honestly named and does report. The claim it makes is `passed`.
 
+### The same shape one layer up: a fault that reads as an answer
+
+The gates were the surface this milestone named. Sweeping the *decisions* built
+on them found 137 handlers in the research loop that swallow without logging,
+and seven where the swallowed value is what the conductor acts on:
+
+| read | a fault used to mean | what that did |
+|---|---|---|
+| `_write`'s parent read | `prior_train = ""` | **an unreadable parent became "no parent"** — `_propose_delta` declines without it, so a permissions problem turned a delta experiment into a whole-file rewrite, on a card that said the step passed. M19's premise, lost to an `except` clause |
+| `has_runnable_plan` | *nothing runnable* | a locked database stopped a campaign and looked like a finished one |
+| `untested_hypothesis_count`, `viable_hypothesis_count`, `pool_counts` | *nothing queued* | M21's gathering gate stuck shut — the failure that module's own docstring exists to prevent, arriving through its error path |
+| `_latest_plan_id`, `_next_hypothesis_id`, `_baseline_plan_exists`, `_latest_execution_id` | *nothing exists yet* | the conductor rebuilds a baseline over whatever is already there |
+| `measured_effect` | `(0, 0.0)` | not "unknown" — *measured, and it was zero*. A claim about evidence, made because the evidence could not be read |
+| `EvidenceCardStore.get` / `list` | the card is not there | a corrupted verdict reads as no verdict, and the promoter, the belief updater and the planner all act on the difference |
+
+Every one carried a comment saying *"absent store means nothing yet"* — true of
+the case its author had in mind, false of every other one.
+
+**The fix is not a narrower `except`.** Absence is asked *first*, so the negative
+answer is reached without an exception at all, and the handler is left holding
+only genuine faults — which are then logged with their traceback, because the
+value returned after one is a guess and the log is the only place that says so.
+
+Three things that only appeared once the tests were written:
+
+* store **construction** sat outside the `try` in three of them, so a corrupt
+  database escaped the handler written for exactly that case;
+* `HypothesisStore` is file-backed, not SQLite, so asking `knowledge.db` about
+  hypotheses would answer *"none"* for a workspace full of them — the same
+  mistake in the other direction. Absence has to name the store it stands for;
+* `Path(None)` raises, and a `TypeError` escaping a question this calm would
+  crash the conductor, so "no knowledge directory" is an answer rather than an
+  error.
+
 ## Traps
 
 **Do not add a linter rule for "call it a gate".** The defects are not naming
