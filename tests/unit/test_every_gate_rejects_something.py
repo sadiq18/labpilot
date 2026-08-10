@@ -111,17 +111,26 @@ def _marked_capabilities() -> dict[str, list[str]]:
     return marked
 
 
+def _capabilities_marked() -> set[str]:
+    """Capability names, from markers in either form.
+
+    `@pytest.mark.rejects("reporting:reflect")` names a verdict site and also
+    covers the module for the coarser check below.
+    """
+    return {name.split(":", 1)[0] for name in _marked_capabilities()}
+
+
 def test_every_capability_that_reports_a_verdict_can_be_shown_to_fail():
     """The criterion itself. A capability with no rejection test is a gate
     nobody has proven can say no — and on 2026-08-08 that described eight."""
     capabilities = _capability_names()
-    marked = _marked_capabilities()
+    marked = _capabilities_marked()
 
     assert capabilities, "no capabilities found — has the layout moved?"
     # `_CANNOT_FAIL` is excluded because no test can prove rejection of
     # something the code is unable to do — those are answered by
     # `test_no_capability_reports_a_verdict_it_cannot_withhold` instead.
-    missing = sorted(set(capabilities) - set(marked) - set(_UNPROVEN) - set(_CANNOT_FAIL))
+    missing = sorted(set(capabilities) - marked - set(_UNPROVEN) - set(_CANNOT_FAIL))
 
     assert not missing, (
         "these report pass/fail with no test proving they can reject a real bad "
@@ -145,8 +154,18 @@ def test_no_capability_reports_a_verdict_it_cannot_withhold():
 
     A capability whose every `passed=` is a literal `True` is a gate that cannot
     fail — and unlike an untested gate, no test can fix it, because rejection is
-    not something the code is able to do. Found on M20's first day, in two
-    capabilities that had been running in every campaign.
+    not something the code is able to do.
+
+    **This is per-file and syntactic, and that is a real limit**, named here
+    rather than left for the next reviewer to find: one falsifiable verdict
+    exempts its siblings in the same module, and an expression like
+    `not result.get("skipped")` counts as "can fail" no matter whether any input
+    reaches it. Both loopholes were used: `reporting` has four verdicts, and two
+    of them — REFLECT and UPDATE_BELIEF, the two in every baseline plan — could
+    not fail while the file passed this check. Reported on PR #120.
+
+    `test_every_verdict_site_is_named_by_a_test` below closes the granularity
+    half by keying on the verdict's `checks=` label rather than the module.
     """
     unable = {}
     for name, path in _capability_names().items():
@@ -173,13 +192,95 @@ def test_no_capability_reports_a_verdict_it_cannot_withhold():
     assert not fixed, f"these can fail now — remove them from _CANNOT_FAIL: {fixed}"
 
 
+def _verdict_sites() -> dict[str, set[str]]:
+    """Every `evidence(...)`/`TaskEvidence(...)` verdict, by capability and check.
+
+    A capability is not one gate. `reporting` answers four different questions —
+    report, reflect, update belief, propose a hypothesis — and each has its own
+    `checks=` label, its own inputs and its own way of being wrong. Counting the
+    module as covered because *one* of them had a rejection test is how two
+    unfailable gates shipped inside the change written to remove them.
+    """
+    sites: dict[str, set[str]] = {}
+    for name, path in _capability_names().items():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            keywords = {k.arg: k.value for k in node.keywords}
+            if "passed" not in keywords or "checks" not in keywords:
+                continue
+            labels = keywords["checks"]
+            if not isinstance(labels, ast.List):
+                continue
+            for element in labels.elts:
+                if isinstance(element, ast.Constant) and isinstance(element.value, str):
+                    sites.setdefault(name, set()).add(element.value)
+    return sites
+
+
+#: Verdict sites with no rejection test yet, as `capability:check`. Only shrinks.
+_UNPROVEN_SITES: set[str] = {
+    "code_engineering:apply",
+    "code_engineering:modify_config",
+    "code_engineering:override",
+    "code_engineering:profile_required",
+    "code_engineering:read_code",
+    "dependency:already_satisfied",
+    "dependency:install_disabled",
+    "dependency:no_requirements",
+    "dependency:pip_install",
+    "evaluation:compare",
+    "evaluation:evidence_card",
+    "evaluation:inference",
+    "runtime:idempotent_skip_redispatch",
+    "training:train_runner",
+    "training:train_script",
+    "training:train_stub",
+    "verification:dry_run",
+    "verification:no_tests",
+    "verification:pytest",
+    "verification:syntax",
+}
+
+
+def test_every_verdict_site_is_named_by_a_test():
+    """The granularity fix. `@pytest.mark.rejects("capability:check")` names one
+    verdict; the bare `"capability"` form stays valid for single-gate modules.
+
+    Reported on PR #120: keying on the module let one marker stand for four
+    gates, and two of the four could not fail at all.
+    """
+    marked = set(_marked_capabilities())
+    sites = _verdict_sites()
+    # The bare `"capability"` form covers a module with **one** verdict, where
+    # there is no ambiguity about which gate it names. It does not cover a module
+    # with four. Written this way after the first version accepted the bare form
+    # everywhere and passed while proving nothing — the same shape as the gates
+    # it enumerates, in the enumerator.
+    missing = sorted(
+        f"{capability}:{check}"
+        for capability, checks in sites.items()
+        for check in checks
+        if f"{capability}:{check}" not in marked and not (len(checks) == 1 and capability in marked)
+    )
+
+    unexpected = sorted(set(missing) - _UNPROVEN_SITES)
+    assert not unexpected, (
+        f"verdict sites with nothing proving they can reject: {unexpected}. "
+        'Mark a test `@pytest.mark.rejects("capability:check")`.'
+    )
+
+
 def test_a_marker_names_a_capability_that_exists():
     """A marker pointing at a renamed or deleted capability silently stops
     proving anything, which is the failure mode of the thing it enforces."""
     capabilities = _capability_names()
 
     orphans = {
-        name: sites for name, sites in _marked_capabilities().items() if name not in capabilities
+        name: sites
+        for name, sites in _marked_capabilities().items()
+        if name.split(":", 1)[0] not in capabilities
     }
 
     assert not orphans, f"`rejects` markers naming no capability: {orphans}"

@@ -50,7 +50,7 @@ from labpilot.research_engine.execution.capabilities.verification import Verific
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 
-@pytest.mark.rejects("code_engineering")
+@pytest.mark.rejects("code_engineering:write_code")
 def test_code_engineering_refuses_when_it_produced_no_code(tmp_path):
     """The 2026-08-08 shape, at the capability boundary: codegen produces
     nothing, and the step must fail rather than continue on a stub whose fake
@@ -90,7 +90,7 @@ def test_code_engineering_refuses_when_it_produced_no_code(tmp_path):
     assert "no files" in (result.error or "").lower() or "codegen" in (result.error or "").lower()
 
 
-@pytest.mark.rejects("evaluation")
+@pytest.mark.rejects("evaluation:evaluate")
 def test_evaluation_refuses_a_run_that_wrote_no_metrics(tmp_path):
     """Defect 5's neighbour: a run that produced nothing must not evaluate. The
     capability reads `metrics.json`, and its absence is the honest answer that
@@ -107,7 +107,7 @@ def test_evaluation_refuses_a_run_that_wrote_no_metrics(tmp_path):
     assert "metrics" in (result.error or "")
 
 
-@pytest.mark.rejects("verification")
+@pytest.mark.rejects("verification:smoke_gate")
 def test_verification_refuses_a_workspace_with_no_training_script(tmp_path):
     """Defect 14 by another door: a `train.py` that is not there used to answer
     "yes, it runs" — `except OSError: return False` on the unrunnable check.
@@ -217,8 +217,8 @@ def test_dependency_refuses_a_stdlib_module_in_the_block(tmp_path):
     assert dropped == ["glob"]
 
 
-@pytest.mark.rejects("runtime")
-def test_runtime_refuses_an_unknown_name_when_runtimes_are_registered(tmp_path, monkeypatch):
+@pytest.mark.rejects("runtime:select_runtime")
+def test_runtime_refuses_an_unknown_name_when_runtimes_are_registered(tmp_path):
     """A runtime that was *asked for* and could not be found is the one thing
     this step can get wrong, and it was the one thing it could not report: the
     lookup fell through to the local default and the card read "selected runtime
@@ -234,17 +234,24 @@ def test_runtime_refuses_an_unknown_name_when_runtimes_are_registered(tmp_path, 
     Red-then-green, verified 2026-08-10: dropping the `unresolved` branch makes
     this pass.
     """
-    from labpilot.research_engine.execution.capabilities.runtime import RuntimeCapability
-    from labpilot.research_engine.execution.runtimes import registry
+    import shutil
 
-    real = registry.list_runtimes()
-    monkeypatch.setattr(registry, "list_runtimes", lambda *a, **k: [*real, *real])
+    from labpilot.research_engine.execution.capabilities.runtime import RuntimeCapability
 
     context = capability_context(
         tmp_path,
         task_type=TaskType.SELECT_RUNTIME,
         constraints={"runtime_id": "a100-cluster-that-does-not-exist"},
     )
+    # A real registered runtime, not a patched count. `len(list_runtimes()) > 1`
+    # was the first version and could never fire for the shipped
+    # `configs/runtimes/`, which holds one file that *overrides the builtin of
+    # the same id* — so the merged registry still has one entry. Reported on
+    # PR #120. Registration is a fact about files.
+    runtimes = context.workspace_root / "runtimes"
+    runtimes.mkdir(parents=True, exist_ok=True)
+    shutil.copy("configs/runtimes/local-default.yaml", runtimes / "local-default.yaml")
+    context.constraints["runtimes_dir"] = str(runtimes)
 
     result = RuntimeCapability().execute(context)
 
@@ -267,7 +274,7 @@ def test_a_workspace_with_no_registered_runtimes_still_runs(tmp_path, requested)
     assert RuntimeCapability().execute(context).passed is True
 
 
-@pytest.mark.rejects("reporting")
+@pytest.mark.rejects("reporting:generate_report")
 def test_reporting_refuses_to_report_on_a_run_that_produced_nothing(tmp_path):
     """Four return sites, every one `passed=True`, because each ends by writing
     a file and `write_text` either works or raises. The verdict answered "did I
@@ -289,11 +296,76 @@ def test_reporting_refuses_to_report_on_a_run_that_produced_nothing(tmp_path):
     assert "metrics" in (result.error or "")
 
 
-def test_reflection_that_did_not_run_is_not_a_completed_reflection(tmp_path, monkeypatch):
-    """Reported on PR #120. `assessment` is `model_dump()`ed, so it is a dict of
-    eleven default keys and truthy even when nothing ran — the verdict read that
-    as success, which is the gate-that-cannot-fail shape surviving inside the
-    module written to remove it."""
+@pytest.mark.rejects("reporting:reflect")
+def test_reflection_that_wrote_no_belief_is_not_a_completed_reflection(tmp_path, monkeypatch):
+    """Third attempt at this gate, and the first two could not fail.
+
+    Attempt one trusted `assessment`, a `model_dump()` truthy at eleven default
+    keys. Attempt two read `not result.get("skipped")` — and **`run_reflection`
+    never sets a top-level `skipped`**; the verification-reject path sets it on
+    the `belief` and `hypothesis` sub-dicts. So the gate still could not fail,
+    and its test drove a stub returning `{"skipped": True}`, a shape production
+    never produces — while the sibling test in this same file asserts exactly
+    that. Reported on PR #120.
+
+    The signal production does set on both paths is the belief: a reflection
+    that reached a verdict wrote one, and `_rejected_belief_stub()` has
+    `belief_id: None`. **The result below is that stub, verbatim.**
+
+    Red-then-green, verified 2026-08-11: restoring `not result.get("skipped")`
+    makes this pass.
+    """
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        ReportingCapability,
+    )
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        capability as reporting_module,
+    )
+    from labpilot.research_engine.reflection.pipeline import _rejected_belief_stub
+
+    rejected = {
+        "evidence": {"id": "EV-001"},
+        "assessment": {"summary": "strength=weak", "generated_by": "llm"},
+        "belief": _rejected_belief_stub(),
+        "hypothesis": {"skipped": True, "reason": "verification_reject"},
+        "verification": {"decision": "reject"},
+    }
+    monkeypatch.setattr(reporting_module, "run_reflection", lambda *a, **k: rejected)
+    context = capability_context(tmp_path, task_type=TaskType.REFLECT)
+
+    result = ReportingCapability().execute(context)
+
+    assert "skipped" not in rejected, "the real pipeline sets it on `belief`, not the top level"
+    assert result.passed is False
+    assert "no belief" in (result.error or "")
+
+
+@pytest.mark.rejects("reporting:update_belief")
+def test_a_belief_stub_is_not_a_belief_update(tmp_path, monkeypatch):
+    """`bool(payload)` could not fail: the reject path returns
+    `_rejected_belief_stub()`, eight truthy keys that mean *no belief was
+    written*. Reported on PR #120 — and this gate is in the standard baseline
+    plan, unlike the one gate that did get a real failing path."""
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        ReportingCapability,
+    )
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        capability as reporting_module,
+    )
+    from labpilot.research_engine.reflection.pipeline import _rejected_belief_stub
+
+    stub = _rejected_belief_stub()
+    monkeypatch.setattr(reporting_module, "run_reflection", lambda *a, **k: {"belief": stub})
+    context = capability_context(tmp_path, task_type=TaskType.UPDATE_BELIEF)
+
+    result = ReportingCapability().execute(context)
+
+    assert bool(stub), "the stub is truthy — that is what made the old verdict unfailable"
+    assert result.passed is False
+
+
+def test_a_written_belief_passes(tmp_path, monkeypatch):
+    """The carve-out, for both gates above."""
     from labpilot.research_engine.execution.capabilities.reporting import (
         ReportingCapability,
     )
@@ -304,16 +376,15 @@ def test_reflection_that_did_not_run_is_not_a_completed_reflection(tmp_path, mon
     monkeypatch.setattr(
         reporting_module,
         "run_reflection",
-        lambda *a, **k: {"skipped": True, "reason": "verification_reject", "assessment": {}},
+        lambda *a, **k: {"belief": {"belief_id": "B-001", "new_confidence": 0.7}},
     )
-    context = capability_context(tmp_path, task_type=TaskType.REFLECT)
 
-    result = ReportingCapability().execute(context)
-
-    assert result.passed is False
-    assert "verification_reject" in (result.error or "")
+    for task_type in (TaskType.REFLECT, TaskType.UPDATE_BELIEF):
+        context = capability_context(tmp_path, task_type=task_type)
+        assert ReportingCapability().execute(context).passed is True
 
 
+@pytest.mark.rejects("reporting:create_hypothesis")
 def test_an_apology_is_not_a_recommendation(tmp_path, monkeypatch):
     """Reported three times on PR #120, correctly each time, and the first two
     fixes were both inert.

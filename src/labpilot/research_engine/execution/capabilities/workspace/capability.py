@@ -23,6 +23,22 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 logger = logging.getLogger(__name__)
 
 
+def _cache_may_serve(kaggle: object, context: TaskContext) -> bool:
+    """Is there a download cache that could satisfy this competition offline?
+
+    `DataDownloader.download` reads `cache_dir` before authenticating, so a
+    warm cache is a legitimate way to have data without credentials — and the
+    first version of this gate refused before ever trying. Reported on PR #120.
+    """
+    cache_dir = getattr(kaggle, "cache_dir", None)
+    if cache_dir is None:
+        return False
+    cached = Path(cache_dir).expanduser()
+    if not cached.is_absolute():
+        cached = Path(context.workspace_root) / cached
+    return cached.is_dir() and any(cached.rglob("*"))
+
+
 def _has_credentials(kaggle: object) -> bool:
     """Are there credentials here that could actually authenticate?
 
@@ -282,7 +298,14 @@ class WorkspaceCapability(BaseCapability):
 
         kaggle = context.constraints.get("kaggle")
         client = context.constraints.get("kaggle_client")
-        if client is None and not _has_credentials(kaggle):
+        # Asked only when a download is the *only* way to get data. `DataDownloader`
+        # serves from `cache_dir` before it authenticates, so a workspace with a
+        # warm shared cache used to succeed offline — and refusing here on
+        # credentials alone took that away without ever trying. Reported on
+        # PR #120. The verdict below is about whether data arrived; credentials
+        # are a diagnosis, not the gate.
+        unusable = client is None and not _has_credentials(kaggle)
+        if unusable and not _cache_may_serve(kaggle, context):
             # **Skipped because asked to** and **skipped because unable** were
             # both `None`, and the verdict read anything-but-False as done. So a
             # workspace with no credentials reported `passed=True` carrying
@@ -292,9 +315,10 @@ class WorkspaceCapability(BaseCapability):
             metadata["download_skipped"] = "no_kaggle_credentials"
             checks.append("download_unavailable")
             errors.append(
-                "no usable Kaggle credentials, so the dataset was never fetched. "
-                "Set `kaggle.username`/`kaggle.key` (or KAGGLE_USERNAME/KAGGLE_KEY), "
-                "or pass --dry-run if this run does not need data."
+                "no usable Kaggle credentials and nothing cached, so the dataset was "
+                "never fetched. Set KAGGLE_API_TOKEN (or KAGGLE_USERNAME and "
+                "KAGGLE_KEY) in the workspace `.env`, or pass --dry-run if this run "
+                "does not need data."
             )
             return False
 

@@ -487,3 +487,61 @@ def test_a_measurement_refuses_a_set_that_quietly_shrank(tmp_path):
     assert store.list() == []
     with pytest.raises(ValueError, match="short by at least one"):
         store.list(strict=True)
+
+
+def test_the_conductor_reads_credentials_from_the_env_layer(tmp_path):
+    """Reported four times on PR #120, and the fourth pass pinned the file.
+
+    Credentials never live in `configs/default.yaml`:
+    `KaggleConfig.api_token/username/key` are `Field(exclude=True)` and
+    `_apply_settings` overwrites all three from `Settings` — the workspace
+    `.env`, which is exactly the layout `kaggle_credentials_setup_hint()` tells
+    users to create. So returning `None` when the YAML is missing reported "no
+    credentials" for the **documented** setup.
+
+    Asserted against `load_config(None)` rather than a monkeypatched
+    environment: the contract is *"a missing YAML falls back to the ambient
+    config"*, and pinning a specific token made the test depend on suite
+    ordering — green alone, red in the full run.
+    """
+    from labpilot.config import load_config
+    from labpilot.research_engine.tools.handlers.run import _kaggle_config
+
+    class _Workspace:
+        root = tmp_path / "titanic"  # labpilot.yaml + .env, no configs/
+
+    _Workspace.root.mkdir(parents=True)
+    ambient = load_config(None).kaggle
+
+    kaggle = _kaggle_config(_Workspace())
+
+    assert kaggle is not None, "a workspace without configs/default.yaml still has an env layer"
+    assert kaggle.api_token == ambient.api_token
+    assert (kaggle.username, kaggle.key) == (ambient.username, ambient.key)
+
+
+def test_a_warm_cache_is_not_pre_empted_by_the_credential_gate(tmp_path):
+    """`DataDownloader.download` serves from `cache_dir` before it
+    authenticates, so a workspace with a warm shared cache used to succeed
+    offline — and refusing on credentials alone took that away without ever
+    trying. Reported on PR #120."""
+    from helpers.capability_context import capability_context
+
+    from labpilot.config import KaggleConfig
+    from labpilot.research_engine.execution.capabilities.workspace import (
+        WorkspaceCapability,
+    )
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    cache = tmp_path / "shared-cache"
+    (cache / "demo").mkdir(parents=True)
+    (cache / "demo" / "train.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    context = capability_context(
+        tmp_path,
+        task_type=TaskType.PREPARE_WORKSPACE,
+        constraints={"dry_run": False, "kaggle": KaggleConfig(cache_dir=cache)},
+    )
+
+    result = WorkspaceCapability().execute(context)
+
+    assert "no usable Kaggle credentials" not in (result.error or "")

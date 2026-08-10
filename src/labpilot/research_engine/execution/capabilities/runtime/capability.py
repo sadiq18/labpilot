@@ -16,6 +16,20 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 logger = logging.getLogger(__name__)
 
 
+def _registry_is_configured(directories: tuple[Path, ...]) -> bool:
+    """Has this workspace registered runtimes of its own?
+
+    Asked of the **files**, not of a count. `len(list_runtimes(...)) > 1` looked
+    equivalent and was not: the shipped `configs/runtimes/` holds exactly one
+    file, `local-default.yaml`, which *overrides the builtin of the same id* — so
+    the merged registry still has one entry and the refusal branch was
+    unreachable for every workspace using the shipped directory. A count cannot
+    tell "nothing registered" from "one thing registered that replaced a
+    builtin". Reported on PR #120.
+    """
+    return any(d.is_dir() and any(d.glob("*.yaml")) for d in directories)
+
+
 def _runtimes_dirs(context: TaskContext) -> tuple[Path, ...]:
     """Where this workspace keeps its runtime definitions, if anywhere.
 
@@ -81,10 +95,7 @@ class RuntimeCapability(BaseCapability):
         # 2026-08-09.
         unresolved = ""
         try:
-            from labpilot.research_engine.execution.runtimes.registry import (
-                get_runtime,
-                list_runtimes,
-            )
+            from labpilot.research_engine.execution.runtimes.registry import get_runtime
 
             # With the workspace's runtimes directory, the way `research
             # runtime show` resolves them. Called with none, this saw the single
@@ -96,7 +107,7 @@ class RuntimeCapability(BaseCapability):
             if runtime is not None:
                 provider = getattr(runtime, "provider", "local")
                 runtime_id = runtime.id
-            elif requested and len(list_runtimes(*directories)) > 1:
+            elif requested and _registry_is_configured(directories):
                 # Only when resolution is configured here. `get_runtime` is
                 # called with no directories, so it sees the single builtin and
                 # nothing else — meaning *every* name fails to resolve on a
@@ -116,6 +127,14 @@ class RuntimeCapability(BaseCapability):
                     requested,
                     self._default,
                 )
+                # The *name* goes back to the default too. Keeping the
+                # unresolved one made the card read `selected runtime a100` and
+                # wrote `runtime_id: a100, provider: local` into
+                # `artifacts/runtime.json` — the original M20 defect with the
+                # card now positively asserting the runtime it did not get,
+                # which is worse than the version that at least said "local".
+                # Reported on PR #120.
+                runtime_id = self._default
         except ImportError as exc:
             # Narrowed from `except Exception`, which caught a `NameError` from
             # this module's own missing `logger` and reported it as "the runtime

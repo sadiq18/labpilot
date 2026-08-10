@@ -18,6 +18,19 @@ from labpilot.research_engine.reflection.pipeline import run_reflection
 logger = logging.getLogger(__name__)
 
 
+def _reflection_landed(result: dict) -> bool:
+    """Did this reflection actually write a belief?
+
+    The one signal the pipeline sets on both paths. `run_reflection` returns
+    `_rejected_belief_stub()` when verification rejects — stable keys so callers
+    can read `belief_id` safely — and a populated `belief_result` otherwise. So
+    `belief_id` is the fact, and `skipped` at the top level (which two previous
+    attempts read) does not exist. Reported on PR #120.
+    """
+    belief = result.get("belief") or {}
+    return bool(belief.get("belief_id")) and not belief.get("skipped")
+
+
 class ReportingCapability(BaseCapability):
     """Report, reflect, update beliefs, propose the next hypothesis.
 
@@ -160,16 +173,26 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            # `assessment` is `model_dump()`ed, so it is a dict of eleven
-            # default keys and truthy even when nothing ran — the first version
-            # read that as success, which is the gate-that-cannot-fail shape
-            # surviving inside the module written to remove it. Reported on
-            # PR #120. The pipeline says outright when it did not run.
-            passed=not result.get("skipped"),
+            # Third attempt, and the first two were the same mistake. `assessment`
+            # is a `model_dump()` and truthy at eleven default keys. Then
+            # `not result.get("skipped")` — but **`run_reflection` never sets a
+            # top-level `skipped`**: the verification-reject path sets it on the
+            # `belief` and `hypothesis` sub-dicts. So the gate could not fail, and
+            # its test drove a stub returning a shape production never produces —
+            # while the sibling test two functions down asserts exactly that
+            # ("the real offline pipeline does not set it"). Reported on PR #120.
+            #
+            # The signal production does set is the belief: a reflection that
+            # reached a verdict wrote one, and a rejected verification returns
+            # `_rejected_belief_stub()`, whose `belief_id` is None.
+            passed=_reflection_landed(result),
             error=(
                 None
-                if not result.get("skipped")
-                else f"reflection did not run: {result.get('reason') or 'skipped'}"
+                if _reflection_landed(result)
+                else (
+                    "reflection produced no belief update: "
+                    f"{(result.get('belief') or {}).get('reason') or 'nothing was written'}"
+                )
             ),
             summary=(
                 "reflection pipeline completed"
@@ -193,10 +216,16 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            # An empty payload is not a belief update; it is an empty file named
-            # after one.
-            passed=bool(payload),
-            error=None if payload else "no belief update was produced",
+            # `bool(payload)` could not fail: the reject path returns
+            # `_rejected_belief_stub()`, eight truthy keys that mean *no belief
+            # was written*. Reported on PR #120 — and this gate is in the standard
+            # baseline plan, unlike the one that did get a real failing path.
+            passed=_reflection_landed(result),
+            error=(
+                None
+                if _reflection_landed(result)
+                else f"no belief update was written: {payload.get('reason') or 'unknown'}"
+            ),
             summary="belief update recorded",
             checks=["update_belief"],
             paths=[str(path)],

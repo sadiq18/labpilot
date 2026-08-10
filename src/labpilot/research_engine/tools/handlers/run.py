@@ -39,14 +39,24 @@ def _kaggle_config(workspace: Workspace):
     from labpilot.research_engine.execution.codegen_strategy import workspace_config_path
 
     path = workspace_config_path(workspace)
-    if path is None or not path.is_file():
-        return None
     try:
         from labpilot.config import load_config
 
-        return load_config(path).kaggle
-    except Exception as exc:  # noqa: BLE001 — reported at the step that needs it
-        logger.debug("kaggle config unreadable, leaving it unset: %s", exc)
+        # `load_config(None)` still applies the env layer, and that is where
+        # credentials actually are: `KaggleConfig.api_token/username/key` are
+        # `Field(exclude=True)` and `_apply_settings` overwrites all three from
+        # `Settings` unconditionally. Returning `None` when `configs/default.yaml`
+        # is missing therefore reported "no credentials" for the **documented**
+        # setup — a `.env` beside `labpilot.yaml`, which is exactly what
+        # `kaggle_credentials_setup_hint()` tells users to create. Reported four
+        # times on PR #120.
+        return load_config(path if path and path.is_file() else None).kaggle
+    except Exception:
+        # Loudly, and with the traceback. This is the PR's own subject: a
+        # swallowed config error here returns `None`, which `prepare_workspace`
+        # then reports as "no credentials" — a false diagnosis, and at `debug`
+        # nobody would ever see the real one.
+        logger.exception("kaggle config unreadable for %s; leaving it unset", workspace)
         return None
 
 
