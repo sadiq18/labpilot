@@ -14,6 +14,8 @@ from pathlib import Path
 import pytest
 
 from labpilot.research_engine.agents.git_worktree import (
+    WORKTREE_DIRNAME,
+    ExperimentWorktree,
     create_experiment_worktree,
     experiment_worktree,
     list_registered_worktrees,
@@ -169,6 +171,74 @@ def test_reconcile_prunes_a_directory_deleted_out_from_under_git(tmp_path: Path)
     reconcile_worktrees(root, live_branches=set())
 
     assert wt.path.resolve() not in list_registered_worktrees(root)
+
+
+@pytest.mark.parametrize(
+    ("session_id", "experiment_key"),
+    [
+        ("..", "knowledge"),  # deleted <workspace>/knowledge before the fix
+        ("../..", "exp"),
+        ("../victim", "exp"),
+        ("s1", "../../escape"),
+    ],
+)
+def test_traversing_ids_are_refused_before_anything_is_deleted(
+    tmp_path: Path, session_id: str, experiment_key: str
+) -> None:
+    """`research_branch_name` permits `.` and `/`, so `..` reaches the path.
+
+    git rejects `..` in a refname — but only *after* `_force_unregister`'s
+    rmtree has already run, so the containment check has to come first.
+    """
+    root = _repo(tmp_path)
+    (root / WORKTREE_DIRNAME).mkdir()  # true after any prior experiment
+    victim = root / "knowledge"
+    victim.mkdir()
+    (victim / "knowledge.db").write_text("hypotheses, beliefs, claims", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside the experiment worktree root"):
+        create_experiment_worktree(
+            root, session_id=session_id, experiment_key=experiment_key
+        )
+
+    assert (victim / "knowledge.db").read_text() == "hypotheses, beliefs, claims"
+
+
+def test_remove_refuses_a_handle_pointing_outside_the_worktree_root(
+    tmp_path: Path,
+) -> None:
+    """`ExperimentWorktree` is a plain dataclass — the handle is not trusted."""
+    root = _repo(tmp_path)
+    victim = root / "knowledge"
+    victim.mkdir()
+    (victim / "knowledge.db").write_text("data", encoding="utf-8")
+    forged = ExperimentWorktree(path=victim, branch="research/s1/x", repo_root=root)
+
+    with pytest.raises(ValueError, match="outside the experiment worktree root"):
+        remove_experiment_worktree(forged)
+
+    assert (victim / "knowledge.db").exists()
+
+
+def test_reconcile_does_not_report_a_removal_that_failed(tmp_path: Path) -> None:
+    """A failed removal must not read as a reconciled one."""
+    root = _repo(tmp_path)
+    wt = create_experiment_worktree(root, session_id="s1", experiment_key="stuck")
+
+    import labpilot.research_engine.agents.git_worktree as gw
+
+    # Simulate a removal that cannot complete (read-only mount, busy file):
+    # git's remove fails and the directory survives.
+    original = gw._force_unregister
+    gw._force_unregister = lambda tool, path: None
+    try:
+        removed = reconcile_worktrees(root, live_branches=set())
+    finally:
+        gw._force_unregister = original
+
+    assert wt.path.is_dir(), "precondition: the directory should still be there"
+    assert wt.path not in removed, "reported a removal that did not happen"
+    remove_experiment_worktree(wt)
 
 
 def test_create_is_idempotent_for_the_same_key(tmp_path: Path) -> None:

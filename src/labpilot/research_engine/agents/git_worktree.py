@@ -70,10 +70,37 @@ def experiment_worktree_root(repo_root: Path) -> Path:
 
 
 def _worktree_path(repo_root: Path, branch: str) -> Path:
-    # `research/<session>/<experiment>` → `.worktrees/<session>/<experiment>`.
-    # Branch names are already sanitised by `research_branch_name`.
+    """Map `research/<session>/<experiment>` → `.worktrees/<session>/<experiment>`.
+
+    Containment-checked, because `research_branch_name` does **not** make its
+    output path-safe: its `_SAFE` pattern permits `.` and `/`, so `..` passes
+    through intact. Without this check a branch built from `session_id=".."`
+    resolves outside `.worktrees/`, and `_force_unregister`'s `rmtree` runs on
+    that path *before* git ever rejects the refname — deleting, say, the whole
+    `knowledge/` directory and then reporting the failure git raised.
+    """
     suffix = branch.removeprefix("research/")
-    return experiment_worktree_root(repo_root) / suffix
+    root = experiment_worktree_root(repo_root)
+    path = root / suffix
+    _assert_contained(path, root)
+    return path
+
+
+def _assert_contained(path: Path, root: Path) -> None:
+    """Refuse any path that escapes `root`, resolved against symlinks.
+
+    The one gate every destructive operation in this module passes through —
+    `reconcile_worktrees` already refused to touch anything outside its own
+    directory, and this puts the same rule in front of create and remove
+    rather than leaving it in the one function that happened to have it.
+    """
+    resolved_root = root.resolve()
+    resolved = path.resolve()
+    if resolved != resolved_root and not resolved.is_relative_to(resolved_root):
+        raise ValueError(
+            f"refusing to operate on {path}: resolves to {resolved}, outside "
+            f"the experiment worktree root {resolved_root}"
+        )
 
 
 def create_experiment_worktree(
@@ -107,8 +134,14 @@ def remove_experiment_worktree(
     *,
     git: GitTool | None = None,
 ) -> None:
-    """Unregister and delete one worktree. Safe to call twice."""
+    """Unregister and delete one worktree. Safe to call twice.
+
+    Re-checks containment rather than trusting the handle: an
+    `ExperimentWorktree` is a plain dataclass a caller can construct directly,
+    so its `path` has not necessarily been through `_worktree_path`.
+    """
     tool = git or open_git_tool(worktree.repo_root)
+    _assert_contained(worktree.path, experiment_worktree_root(worktree.repo_root))
     _force_unregister(tool, worktree.path)
 
 
@@ -190,6 +223,7 @@ def reconcile_worktrees(
     tool = git or open_git_tool(repo_root)
     own_root = experiment_worktree_root(repo_root).resolve()
     removed: list[Path] = []
+    failed: list[Path] = []
 
     for path, branch in list_registered_worktrees(repo_root, git=tool).items():
         if not path.is_relative_to(own_root):
@@ -197,12 +231,28 @@ def reconcile_worktrees(
         if branch is not None and branch in live_branches:
             continue
         _force_unregister(tool, path)
-        removed.append(path)
+        # Report what actually went, not what was attempted: `_force_unregister`
+        # swallows its failures by design (a missing worktree is the normal
+        # case), so claiming a removal without checking would let a read-only
+        # or busy directory read as reconciled — and the caller would then fan
+        # out believing the branch is free.
+        if path.exists():
+            failed.append(path)
+        else:
+            removed.append(path)
 
     # Also clears registrations whose directory vanished without `remove`.
     tool.execute("worktree", "prune")
     if removed:
         logger.info("reconciled %d orphaned experiment worktree(s)", len(removed))
+    if failed:
+        logger.warning(
+            "%d experiment worktree(s) could not be removed and still hold their "
+            "branches checked out; a later run of the same experiment key will "
+            "fail until they are cleared by hand: %s",
+            len(failed),
+            ", ".join(str(p) for p in failed),
+        )
     return removed
 
 
