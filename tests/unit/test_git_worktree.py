@@ -162,6 +162,31 @@ def test_reconcile_ignores_worktrees_outside_our_directory(tmp_path: Path) -> No
     assert list_registered_worktrees(root)[outside.resolve()] == "my/work"
 
 
+def test_reconcile_never_removes_the_worktree_root_itself(tmp_path: Path) -> None:
+    """Reconcile's boundary — the case its own filter used to let through.
+
+    `git worktree add .worktrees` is something git permits, and
+    `is_relative_to` is True for an equal path, so the root passed the filter
+    and was handed to `_force_unregister`. An unattended startup sweep would
+    then delete every branch's checkout. Create and remove were covered at
+    this boundary; reconcile's filter was not, which is exactly where the
+    third instance of this bug lived.
+    """
+    root = _repo(tmp_path)
+    worktree_root = experiment_worktree_root(root)
+    subprocess.run(
+        ["git", "worktree", "add", "-B", "stray", str(worktree_root), "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+    result = reconcile_worktrees(root, live_branches=set())
+
+    assert worktree_root not in result.removed
+    assert worktree_root.is_dir(), "the root holding every branch was deleted"
+
+
 def test_reconcile_prunes_a_directory_deleted_out_from_under_git(tmp_path: Path) -> None:
     """Registration and directory disagree after a hard kill."""
     import shutil

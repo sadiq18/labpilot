@@ -106,31 +106,41 @@ def _worktree_path(repo_root: Path, branch: str) -> Path:
     return path
 
 
-def _assert_contained(path: Path, root: Path) -> None:
-    """Refuse any path that escapes `root`, resolved against symlinks.
+def _is_contained(path: Path, root: Path) -> bool:
+    """Is `path` strictly inside `root`, resolved against symlinks?
 
-    The one gate every destructive operation in this module passes through —
-    `reconcile_worktrees` already refused to touch anything outside its own
-    directory, and this puts the same rule in front of create and remove
-    rather than leaving it in the one function that happened to have it.
+    **The single containment rule for this module.** Every destructive
+    operation decides through this one predicate rather than its own
+    comparison: three call sites agreeing by inspection is what produced the
+    same boundary bug three times running, once in each hand-rolled variant.
+
+    "Strictly inside" is deliberate — `Path.is_relative_to` is `True` for an
+    equal path, but the root holds *every* branch's checkout, so deleting it
+    is categorically worse than the escape this guard was written for, and
+    several branch names reach it (`./.`, `a/..`).
     """
     resolved_root = root.resolve()
     resolved = path.resolve()
-    # Strictly *inside*, not merely "not outside". `.worktrees` itself is
-    # reachable from several branch names (`./.`, `a/..`), and deleting it
-    # takes out every concurrently running branch rather than one — worse
-    # than the escape this guard was added for. `is_relative_to` is True for
-    # an equal path, so equality has to be rejected on its own.
-    if resolved == resolved_root:
+    return resolved != resolved_root and resolved.is_relative_to(resolved_root)
+
+
+def _assert_contained(path: Path, root: Path) -> None:
+    """Raising form of `_is_contained`, for callers that cannot skip.
+
+    Only formats the explanation; the rule itself lives in the predicate.
+    """
+    if _is_contained(path, root):
+        return
+    resolved_root = root.resolve()
+    if path.resolve() == resolved_root:
         raise ValueError(
             f"refusing to operate on {path}: resolves to the experiment "
             f"worktree root {resolved_root} itself, which holds every branch"
         )
-    if not resolved.is_relative_to(resolved_root):
-        raise ValueError(
-            f"refusing to operate on {path}: resolves to {resolved}, outside "
-            f"the experiment worktree root {resolved_root}"
-        )
+    raise ValueError(
+        f"refusing to operate on {path}: resolves to {path.resolve()}, outside "
+        f"the experiment worktree root {resolved_root}"
+    )
 
 
 def create_experiment_worktree(
@@ -257,7 +267,19 @@ def reconcile_worktrees(
     failed: list[Path] = []
 
     for path, branch in list_registered_worktrees(repo_root, git=tool).items():
-        if not path.is_relative_to(own_root):
+        if not _is_contained(path, own_root):
+            # Skipping rather than raising is the point of the predicate form:
+            # a developer's own worktree elsewhere in the repo is normal and
+            # must be left alone by an unattended sweep. The root itself lands
+            # here too — it is not ours to delete — but that one is anomalous
+            # enough to say out loud, since every branch creation will fail
+            # while it is registered.
+            if path == own_root:
+                logger.warning(
+                    "%s is itself registered as a git worktree; experiment "
+                    "branches cannot be created under it until that is cleared",
+                    own_root,
+                )
             continue
         if branch is not None and branch in live_branches:
             continue
