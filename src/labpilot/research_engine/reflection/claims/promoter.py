@@ -51,7 +51,11 @@ class ClaimPromoter:
         observations = 0
         net = 0.0
         try:
-            cards = self._evidence.list()
+            # `strict`, because this is a measurement: skipping a corrupt card
+            # and averaging the survivors changes the number rather than the
+            # answer, and the handler below could never fire while the
+            # corruption was swallowed upstream. Reported on PR #120.
+            cards = self._evidence.list(strict=True)
         except Exception:
             # `(0, 0.0)` is not "unknown", it is *measured, and it was zero* —
             # a claim about evidence, made because the evidence could not be

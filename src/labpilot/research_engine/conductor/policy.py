@@ -637,14 +637,27 @@ def should_gather_evidence(workspace: Workspace) -> tuple[bool, str]:
 
 def _plan_statuses(workspace: Workspace) -> list[str]:
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
+    from labpilot.research_engine.intelligence.paths import store_is_absent
 
-    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    if store_is_absent(workspace.knowledge_dir, workspace.competition):
+        return []
+    artifacts = None
     try:
+        # Constructed inside the guard, and absence asked before it — the same
+        # treatment its neighbours got. This one kept the original handler,
+        # comment and all, one function away from where it was removed:
+        # `has_unrun_plan` feeds `decide_next`, so a fault here still read as
+        # "no plans" and still escaped on construction. Reported on PR #120.
+        artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
         return [str(p.status) for p in artifacts.list()]
-    except Exception:  # noqa: BLE001 — absent store means "no plans"
+    except Exception:
+        logger.exception(
+            "cannot read plan statuses for %s; treating as none", workspace.competition
+        )
         return []
     finally:
-        artifacts.close()
+        if artifacts is not None:
+            artifacts.close()
 
 
 def has_unrun_plan(workspace: Workspace) -> bool:

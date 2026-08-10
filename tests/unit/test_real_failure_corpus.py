@@ -58,6 +58,30 @@ def test_every_artifact_says_where_it_came_from():
         assert "rogii" in row, f"{path.name} has no source workspace"
 
 
+def test_every_artifact_is_the_size_the_manifest_claims():
+    """The corpus's own fidelity, checked rather than asserted.
+
+    `truncated_train_py.txt` was a **79-byte fragment typed from memory** while
+    the manifest and three docstrings described the 624-byte artifact it stood
+    for. Everything downstream still passed, because a fragment truncated inside
+    the PEP 723 block fails the same gate the real one does — which is exactly
+    why nothing caught it. Reported on PR #120. A corpus whose whole argument is
+    *"do not test the guard against a synthetic input when a real one exists"*
+    cannot hold a synthetic input.
+    """
+    manifest = (CORPUS / "MANIFEST.md").read_text(encoding="utf-8")
+
+    wrong = []
+    for path in corpus_artifacts():
+        row = next(line for line in manifest.splitlines() if path.name in line)
+        claimed = row.split("|")[2].strip()
+        actual = path.stat().st_size
+        if claimed != str(actual):
+            wrong.append(f"{path.name}: manifest says {claimed}, file is {actual}")
+
+    assert not wrong, f"the corpus has drifted from what it claims to be: {wrong}"
+
+
 def test_a_missing_artifact_is_an_error_not_an_empty_string():
     """An empty string is a *different* bad input, and a guard proven against
     the wrong bad input is the shape this milestone exists to end."""

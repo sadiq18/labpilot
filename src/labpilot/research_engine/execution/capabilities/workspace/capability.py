@@ -22,6 +22,27 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 logger = logging.getLogger(__name__)
 
+
+def _has_credentials(kaggle: object) -> bool:
+    """Are there credentials here that could actually authenticate?
+
+    `kaggle is None` was the test, and it asked whether a *constraint had been
+    passed* rather than whether credentials exist — the M20 shape, inside the
+    M20 change. It got the diagnosis wrong in both directions: a workspace with
+    no `configs/default.yaml` failed with *"no Kaggle credentials"* when the
+    real cause was no config at all, and a config carrying an **empty**
+    `KaggleConfig` sailed through the check and failed further down, where the
+    message is about the download rather than the setup. Reported on PR #120,
+    four times, and right every time. The tests kept missing it because they ran
+    against a workspace that has a config.
+    """
+    if kaggle is None:
+        return False
+    token = str(getattr(kaggle, "api_token", "") or "").strip()
+    username = str(getattr(kaggle, "username", "") or "").strip()
+    key = str(getattr(kaggle, "key", "") or "").strip()
+    return bool(token or (username and key))
+
 #: Relative dirs under the competition workspace root (idempotent).
 _WORKSPACE_SUBDIRS = (
     "pipeline",
@@ -261,17 +282,18 @@ class WorkspaceCapability(BaseCapability):
 
         kaggle = context.constraints.get("kaggle")
         client = context.constraints.get("kaggle_client")
-        if kaggle is None and client is None:
+        if client is None and not _has_credentials(kaggle):
             # **Skipped because asked to** and **skipped because unable** were
             # both `None`, and the verdict read anything-but-False as done. So a
             # workspace with no credentials reported `passed=True` carrying
             # `download_skipped: no_kaggle_config` in its own metadata: it said
             # what was wrong and passed anyway, and every step after it ran
             # against an empty tree. M20 finding, 2026-08-09.
-            metadata["download_skipped"] = "no_kaggle_config"
+            metadata["download_skipped"] = "no_kaggle_credentials"
             checks.append("download_unavailable")
             errors.append(
-                "no Kaggle credentials, so the dataset was never fetched. Set them, "
+                "no usable Kaggle credentials, so the dataset was never fetched. "
+                "Set `kaggle.username`/`kaggle.key` (or KAGGLE_USERNAME/KAGGLE_KEY), "
                 "or pass --dry-run if this run does not need data."
             )
             return False

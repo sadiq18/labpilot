@@ -1,4 +1,17 @@
-"""Partition-aware regression baseline."""
+"""Partition-aware regression baseline for predict-forward tasks with Decision Tree ensemble.
+
+The dataset stores one file per entity and the scored rows are a contiguous
+suffix of each test partition, so this script:
+
+  * concatenates every train partition,
+  * drops columns that do not exist at inference time,
+  * anchors on the last observed target instead of predicting an absolute
+    level, and
+  * validates by holding out each training partition's tail, reproducing the
+    same gap the leaderboard measures.
+
+Ensemble: LightGBM + DecisionTreeRegressor (averaged residuals).
+"""
 
 # /// script
 # requires-python = \

@@ -82,16 +82,30 @@ class EvidenceCardStore:
                 return card
         return None
 
-    def list(self) -> list[EvidenceCard]:
+    def list(self, *, strict: bool = False) -> list[EvidenceCard]:
+        """Every readable card. With `strict`, refuse to answer over a short set.
+
+        Skipping a corrupt card and returning the survivors is right for a
+        listing and wrong for a *measurement*: `measured_effect` reports
+        "observed N times, net X" over whatever came back, so a card that would
+        not parse silently changed the number rather than the answer. Logging it
+        was not enough — the promoter's own handler could never fire, because
+        the corruption was already swallowed here. Reported on PR #120.
+
+        So the caller says which it is. A reader that only wants the cards it
+        can show keeps the default; a caller computing a figure asks for
+        `strict` and gets the fault.
+        """
         out: list[EvidenceCard] = []
         for path in sorted(self.dir.glob("EV-*.json")):
             try:
-                out.append(
-                    EvidenceCard.model_validate_json(path.read_text(encoding="utf-8"))
-                )
-            except (OSError, ValueError):
-                # Skipped, but no longer silently: a corrupt card disappearing
-                # from a listing is evidence going missing without a trace.
-                logger.exception("evidence card at %s could not be read; skipping", path)
+                out.append(EvidenceCard.model_validate_json(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError) as exc:
+                logger.exception("evidence card at %s could not be read", path)
+                if strict:
+                    raise ValueError(
+                        f"evidence card at {path} could not be read, so any figure "
+                        f"computed over this set would be short by at least one: {exc}"
+                    ) from exc
                 continue
         return out

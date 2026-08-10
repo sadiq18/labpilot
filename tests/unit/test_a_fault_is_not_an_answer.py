@@ -390,3 +390,100 @@ def test_the_agent_path_inherits_the_kaggle_credentials():
     spread_at = source.index("**(constraints or {})")
 
     assert kaggle_at < spread_at, "a caller's constraints must be able to override, not precede"
+
+
+def test_the_credential_gate_asks_about_credentials_not_constraints(tmp_path):
+    """Reported four times on PR #120, and right every time.
+
+    The check was `kaggle is None`, which asks whether a *constraint was passed*
+    rather than whether credentials exist — the M20 shape, inside the M20 change.
+    It got the diagnosis wrong in both directions: a workspace with no
+    `configs/default.yaml` failed saying *"no Kaggle credentials"* when the real
+    cause was no config at all, and a config carrying an **empty**
+    `KaggleConfig` sailed through and failed further down, where the message is
+    about the download rather than the setup.
+
+    Every previous verification of mine ran against rogii, which has a config.
+    """
+    from helpers.capability_context import capability_context
+
+    from labpilot.config import KaggleConfig
+    from labpilot.research_engine.execution.capabilities.workspace import (
+        WorkspaceCapability,
+    )
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    empty = capability_context(
+        tmp_path / "a",
+        task_type=TaskType.PREPARE_WORKSPACE,
+        constraints={"dry_run": False, "kaggle": KaggleConfig()},
+    )
+
+    result = WorkspaceCapability().execute(empty)
+
+    assert result.passed is False
+    assert "no usable Kaggle credentials" in (result.error or "")
+
+
+def test_real_credentials_get_past_the_credential_gate(tmp_path):
+    """The carve-out: with credentials the step proceeds to the download, and
+    whatever happens there is the download's verdict, not the gate's."""
+    from helpers.capability_context import capability_context
+
+    from labpilot.config import KaggleConfig
+    from labpilot.research_engine.execution.capabilities.workspace import (
+        WorkspaceCapability,
+    )
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    context = capability_context(
+        tmp_path,
+        task_type=TaskType.PREPARE_WORKSPACE,
+        constraints={"dry_run": False, "kaggle": KaggleConfig(username="u", key="k")},
+    )
+
+    result = WorkspaceCapability().execute(context)
+
+    assert "no usable Kaggle credentials" not in (result.error or "")
+
+
+def test_the_neighbouring_plan_read_got_the_same_treatment(tmp_path, caplog):
+    """Reported on PR #120: `_plan_statuses` kept the exact
+    `except Exception: # absent store means "no plans"` handler removed from its
+    neighbour, and still built `PlanArtifacts` outside the `try`. It feeds
+    `has_unrun_plan`, which feeds `decide_next`."""
+    from labpilot.research_engine.conductor import policy
+
+    workspace = _Workspace(_with_a_store(tmp_path))
+
+    with caplog.at_level(logging.ERROR):
+        assert policy._plan_statuses(workspace) == []
+
+    assert any(record.exc_info for record in caplog.records)
+
+
+def test_an_empty_workspace_still_reports_no_plans_quietly(tmp_path, caplog):
+    from labpilot.research_engine.conductor import policy
+
+    workspace = _Workspace(tmp_path / "never-written")
+
+    with caplog.at_level(logging.ERROR):
+        assert policy._plan_statuses(workspace) == []
+
+    assert caplog.records == []
+
+
+def test_a_measurement_refuses_a_set_that_quietly_shrank(tmp_path):
+    """Reported on PR #120 with the consequence spelled out: `list()` skipped
+    corrupt cards and returned the survivors, so `measured_effect` reported a
+    figure over incomplete evidence — and the promoter's handler, hardened in
+    this same change, could never fire because the corruption was swallowed
+    upstream."""
+    from labpilot.research_engine.evidence.store import EvidenceCardStore
+
+    store = EvidenceCardStore(tmp_path / "knowledge", "demo")
+    (store.dir / "EV-broken.json").write_text("{ not json", encoding="utf-8")
+
+    assert store.list() == []
+    with pytest.raises(ValueError, match="short by at least one"):
+        store.list(strict=True)
