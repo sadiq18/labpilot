@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 
 from labpilot.research_engine.execution.capabilities._helpers import evidence, is_dry_run
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
@@ -13,6 +14,30 @@ from labpilot.research_engine.execution.schemas import TaskEvidence
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 logger = logging.getLogger(__name__)
+
+
+def _runtimes_dirs(context: TaskContext) -> tuple[Path, ...]:
+    """Where this workspace keeps its runtime definitions, if anywhere.
+
+    The registry takes directories and this call site passed none, so only the
+    builtin ever resolved. Read from the workspace config, the way
+    `resolve_runtimes_dir` does for the CLI.
+    """
+    from labpilot.research_engine.execution.codegen_strategy import workspace_config_path
+
+    explicit = context.constraints.get("runtimes_dir")
+    if explicit:
+        return (Path(explicit),)
+    config_path = workspace_config_path(context.workspace_root)
+    if config_path is None or not config_path.is_file():
+        return ()
+    try:
+        from labpilot.config import load_config, resolve_runtimes_dir
+
+        return (resolve_runtimes_dir(load_config(config_path)),)
+    except Exception as exc:  # noqa: BLE001 — reported by the caller's verdict
+        logger.debug("runtimes directory unreadable: %s", exc)
+        return ()
 
 
 class RuntimeCapability(BaseCapability):
@@ -61,11 +86,17 @@ class RuntimeCapability(BaseCapability):
                 list_runtimes,
             )
 
-            runtime = get_runtime(str(runtime_id))
+            # With the workspace's runtimes directory, the way `research
+            # runtime show` resolves them. Called with none, this saw the single
+            # builtin and every real name — `kaggle-gpu`, `local`, `a100` —
+            # failed to resolve. Reported on PR #120: the one-line fix every
+            # other call site already had.
+            directories = _runtimes_dirs(context)
+            runtime = get_runtime(str(runtime_id), *directories)
             if runtime is not None:
                 provider = getattr(runtime, "provider", "local")
                 runtime_id = runtime.id
-            elif requested and len(list_runtimes()) > 1:
+            elif requested and len(list_runtimes(*directories)) > 1:
                 # Only when resolution is configured here. `get_runtime` is
                 # called with no directories, so it sees the single builtin and
                 # nothing else — meaning *every* name fails to resolve on a

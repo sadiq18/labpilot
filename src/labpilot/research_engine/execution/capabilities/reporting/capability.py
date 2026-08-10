@@ -171,7 +171,11 @@ class ReportingCapability(BaseCapability):
                 if not result.get("skipped")
                 else f"reflection did not run: {result.get('reason') or 'skipped'}"
             ),
-            summary="reflection pipeline completed",
+            summary=(
+                "reflection pipeline completed"
+                if str((result.get("assessment") or {}).get("generated_by")) == "llm"
+                else "reflection pipeline completed on the template fallback (no LLM)"
+            ),
             checks=["reflect"],
             paths=[str(path)],
             metadata=projection,
@@ -203,36 +207,44 @@ class ReportingCapability(BaseCapability):
         result = self._run_reflection_pipeline(context)
         path = context.workspace_root / "artifacts" / "next_hypothesis.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        # The pipeline's own `recommendation` — which the first version ignored
-        # in favour of the assessment's copy, so the step reported on a field
-        # nobody downstream reads. Reported on PR #120.
-        recommendation = result.get("recommendation") or (result.get("assessment") or {}).get(
-            "recommendation"
-        )
+        assessment = result.get("assessment") or {}
+        # `generated_by` is the signal, and it was already there. The first two
+        # attempts asked whether `recommendation` was non-empty (it always is —
+        # the critic fills it) and then whether the pipeline was `skipped` (it is
+        # not — only a verification reject sets that). Both left the gate unable
+        # to fail, and the second was worse than the first because a stub in its
+        # test set `skipped=True` and made it *look* proven. Reported three times
+        # on PR #120, correctly each time.
+        #
+        # `template_fallback` means the critic ran with no LLM and mapped
+        # outcomes from evidence strength, filling `recommendation` with
+        # *"Re-run reflection with a reachable LLM."* — an apology, not a
+        # proposal. Read from the field the critic already sets rather than by
+        # matching that sentence: a list of known placeholder strings is the
+        # curated-set pattern this milestone keeps refusing.
+        reasoned = str(assessment.get("generated_by") or "") == "llm"
+        recommendation = assessment.get("recommendation") or ""
         payload = {
             "suggestion": recommendation
             or "Propose an improvement hypothesis against baseline metrics.",
             "plan_id": context.plan.id,
             "execution_id": context.execution.id,
             "hypothesis_evaluation": result.get("hypothesis"),
+            "generated_by": assessment.get("generated_by"),
             "created_at": datetime.now(UTC).isoformat(),
         }
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         return evidence(
             context,
             capability=self.name,
-            # A recommendation only counts when reflection actually ran: with no
-            # LLM the critic fills the field with *"Re-run reflection with a
-            # reachable LLM."*, which is an apology, not a proposal, and the
-            # first version read it as success. Reported on PR #120. Asked as
-            # "did the pipeline run" rather than by matching that sentence — a
-            # list of known placeholder strings is the curated-set pattern this
-            # milestone keeps refusing.
-            passed=bool(recommendation) and not result.get("skipped"),
+            passed=reasoned and bool(recommendation),
             error=(
                 None
-                if (recommendation and not result.get("skipped"))
-                else "no recommendation was produced; the file holds the default text"
+                if (reasoned and recommendation)
+                else (
+                    "no LLM was available, so the recommendation is the critic's "
+                    "template fallback rather than a proposal about this run"
+                )
             ),
             summary="hypothesis suggestion recorded",
             checks=["create_hypothesis"],

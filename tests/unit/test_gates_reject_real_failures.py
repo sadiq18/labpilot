@@ -315,11 +315,63 @@ def test_reflection_that_did_not_run_is_not_a_completed_reflection(tmp_path, mon
 
 
 def test_an_apology_is_not_a_recommendation(tmp_path, monkeypatch):
-    """With no LLM the critic fills `recommendation` with *"Re-run reflection
-    with a reachable LLM."* — an apology, not a proposal, and the first version
-    read it as success. Reported on PR #120. Asked as "did the pipeline run"
-    rather than by matching that sentence: a list of known placeholder strings is
-    the curated-set pattern this milestone keeps refusing."""
+    """Reported three times on PR #120, correctly each time, and the first two
+    fixes were both inert.
+
+    Attempt one asked whether `recommendation` was non-empty — the critic always
+    fills it. Attempt two asked whether the pipeline was `skipped` — only a
+    verification reject sets that, so an offline run sails through. **Attempt two
+    looked proven** because its test drove a stub that set `skipped=True`; the
+    real pipeline does not, and nothing in the suite ran the real one.
+
+    The verdict now reads `generated_by`, which the critic already sets to
+    `template_fallback` when it had no LLM and mapped outcomes from evidence
+    strength — filling `recommendation` with *"Re-run reflection with a
+    reachable LLM."*, an apology rather than a proposal.
+
+    **The result below is copied from a real offline run**, not invented:
+    `run_reflection(..., llm_client=None)` outside the suite returns exactly
+    this — `skipped` unset, a populated `recommendation`, and
+    `generated_by="template_fallback"`. It has to be replayed rather than driven
+    end-to-end because `conftest`'s autouse `_inject_per_agent_llm_doubles`
+    wires a double into every micro agent, so the critic always has an LLM in
+    here. That is the same gap that let attempt two look proven, which is why
+    the shape is anchored to an observed run and this note exists.
+
+    Red-then-green, verified 2026-08-10: pinning `reasoned = True` makes this
+    pass.
+    """
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        ReportingCapability,
+    )
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        capability as reporting_module,
+    )
+
+    offline_result = {
+        "assessment": {
+            "summary": "strength=weak",
+            "likely_cause": "LLM critic unavailable; outcomes mapped from evidence strength.",
+            "recommendation": "Re-run reflection with a reachable LLM.",
+            "generated_by": "template_fallback",
+        },
+        "recommendation": {"action": "analyze_or_hypothesize"},
+        "hypothesis": None,
+        "needs_review": False,
+    }
+    monkeypatch.setattr(reporting_module, "run_reflection", lambda *a, **k: offline_result)
+    context = capability_context(tmp_path, task_type=TaskType.CREATE_HYPOTHESIS)
+
+    result = ReportingCapability().execute(context)
+
+    assert result.passed is False
+    assert "template fallback" in (result.error or "")
+    assert "skipped" not in offline_result, "the real offline pipeline does not set it"
+
+
+def test_a_reasoned_recommendation_passes(tmp_path, monkeypatch):
+    """The carve-out: when the critic did reach an LLM, the step succeeded and
+    must keep saying so."""
     from labpilot.research_engine.execution.capabilities.reporting import (
         ReportingCapability,
     )
@@ -331,13 +383,45 @@ def test_an_apology_is_not_a_recommendation(tmp_path, monkeypatch):
         reporting_module,
         "run_reflection",
         lambda *a, **k: {
-            "skipped": True,
-            "reason": "no_llm",
-            "recommendation": "Re-run reflection with a reachable LLM.",
+            "assessment": {
+                "recommendation": "Add rolling-window features over the partition key.",
+                "generated_by": "llm",
+            }
         },
     )
     context = capability_context(tmp_path, task_type=TaskType.CREATE_HYPOTHESIS)
 
-    result = ReportingCapability().execute(context)
+    assert ReportingCapability().execute(context).passed is True
 
-    assert result.passed is False
+
+def test_a_capability_that_declines_to_verify_says_so_on_its_card(tmp_path):
+    """Reported on PR #120, with the framing that made it matter: `verifies =
+    False` exempts a capability from M20's rejection-test requirement, and for
+    one round it did so while the card stayed indistinguishable from a verified
+    pass. That is a silent opt-out of the guarantee this milestone exists to
+    make — worse than the documentation slip it was first filed as."""
+    from labpilot.research_engine.execution.capabilities.stub import StubCapability
+
+    context = capability_context(tmp_path, task_type=TaskType.REFLECT)
+    capability = StubCapability()
+
+    card = capability.collect_evidence(context, capability.execute(context))
+
+    assert card.metadata.get("verified") is False
+    assert "no_verification" in card.checks
+
+
+def test_a_verifying_capability_stamps_nothing_extra(tmp_path):
+    """The carve-out: the stamp marks the exemption, so it must not appear on
+    capabilities that did not take it."""
+    from labpilot.research_engine.execution.capabilities.evaluation import (
+        EvaluationCapability,
+    )
+
+    context = capability_context(tmp_path, task_type=TaskType.EVALUATE)
+    capability = EvaluationCapability()
+
+    card = capability.collect_evidence(context, capability.execute(context))
+
+    assert "verified" not in card.metadata
+    assert "no_verification" not in card.checks
