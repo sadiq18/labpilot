@@ -56,17 +56,20 @@ are latent, not yet observed in production incidents.
 - Each hypothesis's experiment runs in its own git worktree, so concurrent
   branches don't share a working tree.
 - A hypothesis can be claimed by exactly one branch (fix the TOCTOU race in
-  `mark_testing_if_proposed`).
+  `mark_testing_if_proposed`), and a claim that fails to reach a running
+  branch (setup failure after claim) is released rather than left stuck.
 - Writes to `knowledge.db`, the hypothesis DB mirror, and `ConductorStore`
   during a parallel step are serialized (WAL + single-writer lock, or
   equivalent) so concurrent branches don't corrupt or silently drop rows.
+- After all branches finish (or fail, or the process crashes), every worktree
+  created for the step is torn down — no orphaned worktrees left on disk.
 - After all branches finish, a comparison step ranks results by the
   competition's metric, promotes the winner, and every result (including
   losers) is visible in the experiment graph with a reflection filed for each
   loser.
 - The shared LLM budget (M10's `BudgetLedger`) is respected across concurrent
-  branches — no branch should be able to starve the others of the entire
-  budget mid-step.
+  branches, including the reflection calls losers trigger — no branch or
+  reflection should be able to starve the others of the entire step's budget.
 
 **Non-functional** (from the plan's exit criteria)
 - Three hypotheses tested in one campaign step, wall-clock materially less
@@ -74,13 +77,17 @@ are latent, not yet observed in production incidents.
 - A single branch failure does not abort the other branches in the same step
   (already true inside `run_parallel_async`; must hold end-to-end through the
   campaign loop, not just the worker layer).
+- Disk usage from K concurrent worktrees is bounded and understood — see §5.
+
+**Blocking pre-requisite:** the budget-scoping decision in §5 must be made
+(with M10 sign-off) before implementation starts — §7's design depends on it.
 
 ## 4. Scope
 
 **In scope**
 - Wiring `run_parallel_async` into the campaign loop for the experiment step.
-- Worktree-based branch isolation (create/teardown per branch).
-- Atomic hypothesis claim.
+- Worktree-based branch isolation, including crash-safe teardown (§5, §7).
+- Atomic hypothesis claim, with release-on-setup-failure (§7).
 - Write serialization for the three SQLite consumers above.
 - A comparison/promotion subscriber on the existing Blinker bus.
 - Reflection filing for losing branches (reuse existing reflection code,
@@ -95,13 +102,38 @@ docstring — do not redo)
 - Arbitrary branch-merge policy or conflict resolution beyond "pick one
   winner, keep the losers as evidence."
 
-## 5. Design
+## 5. Blocking decision — budget scoping
+
+`BudgetLedger` is one file per workspace (`config.budget_path`, no
+per-branch/session dimension) and its `RLock` only guards intra-process
+concurrency — the code comment notes real safety today depends on
+`server._GATEWAY_LOCK` serializing calls at the proxy layer. Three concurrent
+branches sharing one ledger means the first branch to call can exhaust the
+whole step's budget before the other two get a turn — and reflection calls for
+losers (§4) are a second, easy-to-miss consumer of the same ledger, stacking
+on top of the 3 experiment runs. This has to be settled before §7 is built,
+not discovered during it. Two options:
+
+- Pre-split the step's budget K-ways before fan-out (each `ParallelWorkItem`
+  gets `cost` pre-allocated from a per-step sub-budget), reusing M5's existing
+  `ParallelBudget` for this rather than touching `BudgetLedger` at all.
+  Extend the same pre-split to cover each loser's reflection call.
+- Leave `BudgetLedger` as the hard backstop (cooldowns/RPM/TPM) and let
+  `ParallelBudget` be the soft per-step allocator — the two are already
+  different budgets (LLM calls vs. experiment cost) and don't need to merge.
+
+Leaning toward the second — it needs zero changes to `fitroute` — but this is
+**not implementable until M10's owner confirms it**, since `BudgetLedger` is
+their component.
+
+## 6. Design
 
 ```text
 Conductor step
    │
    ├─ select top K untested hypotheses (K ≤ concurrency budget)
    ├─ atomically claim each (fixed mark_testing_if_proposed)
+   │     └─ on setup failure below: release the claim, do not leave it stuck
    │
    ├─ per hypothesis: create git worktree on research/<session>/<experiment>
    │
@@ -118,36 +150,50 @@ new subscriber: branch comparison
    └─ file reflection for each loser (existing reflection path)
    │
    ▼
-teardown worktrees
+teardown worktrees — always, including on crash (§7)
+   │
+   ▼
+startup reconciliation — prune any worktree from a step that never reached
+teardown (§7)
 ```
 
 The campaign loop still decides *whether* to fan out (K > 1) or stay
 single-step (K = 1, current behavior) — this is additive, not a replacement
 of the sequential path.
 
-## 6. Components & Responsibility
+## 7. Components & Responsibility
 
 | Component | Change | Notes |
 |---|---|---|
 | `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync` | Existing single-hypothesis path stays as the K=1 case |
 | `agents/parallel.py` | None | Reused as-is; M5 primitives are sufficient |
-| `git_evolution.py` / `git/python_backend.py` | New: worktree create/teardown per branch | `create_branch` today mutates the single working tree; needs a worktree-based sibling, not a modification of the existing checkout path |
-| `hypothesis.py::mark_testing_if_proposed` | Fix: atomic claim | See §7 |
-| `accessor/sqlite/client.py`, `conductor/store.py` | New: WAL + serialized writer | See §7 |
+| `git_evolution.py` / `git/python_backend.py` | New: worktree create/teardown per branch, crash-safe | `create_branch` today mutates the single working tree; needs a worktree-based sibling, not a modification of the existing checkout path |
+| *(new)* reconciliation check | New: startup-time `git worktree prune` + orphan sweep | Closes the crash gap below — this repo already has stray worktrees today (`.claude/worktrees/code-review-pr-104-daf104`, a detached-HEAD leftover), so the failure mode is real, not speculative |
+| `hypothesis.py::mark_testing_if_proposed` | Fix: atomic claim + release-on-setup-failure | See §8 |
+| `accessor/sqlite/client.py`, `conductor/store.py` | New: WAL + serialized writer | See §8 |
 | `agents/events.py` / `agents/subscribers.py` | New subscriber: comparison + promotion | Same pattern as the existing evidence-refresh and experience-memory subscribers on `ExperimentCompleted` |
-| `shared/experiments/models.py::Experiment` | New: a promoted/winner marker | See §7 |
-| `fitroute/budget.py` | Possibly: per-step budget scoping | See §9 |
+| `shared/experiments/models.py::Experiment` | New: a promoted/winner marker | See §8 |
+| `fitroute/budget.py` | Possibly: per-step budget scoping | Blocked on §5 |
 
-## 7. Implementation notes
+## 8. Implementation notes
 
-**Atomic claim.** Replace the read-then-write in `mark_testing_if_proposed`
-with a single conditional write. Since hypotheses are file-backed JSON mirrored
-to `knowledge.db`, the simplest fix is a per-hypothesis file lock (`fcntl` /
-`filelock`) around the read-modify-write, or moving the claim itself to be a
-conditional `UPDATE ... WHERE status = 'proposed'` against the DB mirror and
-treating `rowcount == 0` as "already claimed." The DB-conditional-update route
-is preferable — it doesn't add a new lock primitive and the mirror already
-exists.
+**Atomic claim, with rollback.** Replace the read-then-write in
+`mark_testing_if_proposed` with a single conditional write: a conditional
+`UPDATE ... WHERE status = 'proposed'` against the hypothesis DB mirror,
+treating `rowcount == 0` as "already claimed." Preferable over a new file-lock
+primitive since the mirror already exists. If worktree setup then fails for a
+claimed hypothesis (disk full, name collision), release the claim back to
+`proposed` before surfacing the failure — a hypothesis must never end a step
+stuck in `testing` with no branch behind it.
+
+**Crash-safe worktree teardown.** Teardown runs in a `finally`-equivalent
+around the fan-out, so it executes on branch failure as well as success. That
+still doesn't cover a hard process crash (killed process, host restart) — for
+that, reconciliation is a startup check: `git worktree list`, drop any entry
+whose branch is not referenced by a currently-running campaign step (tracked
+in `ConductorStore`), and run `git worktree prune`. This mirrors an existing
+condition already observed in this repo's own worktree list, so it is treated
+as a required path, not a nice-to-have.
 
 **Write serialization.** Turn on `PRAGMA journal_mode=WAL` in `SqliteClient.__init__`
 (cheap, and read concurrency during a parallel step matters). WAL alone doesn't
@@ -162,33 +208,22 @@ so a field on the model is visible immediately with no new persistence layer.
 The comparison subscriber sets it via the existing experiment-record write path
 after ranking finishes.
 
-## 8. Tradeoffs
+**Disk usage.** K worktrees means K full checkouts of the tracked tree. Before
+implementation, confirm whether large inputs (`.cache/`, `runs/`) are shared
+across worktrees (they can be, via a symlink into a common directory outside
+the git-tracked tree) or would otherwise be duplicated K times — if the latter,
+K needs a disk-aware ceiling in addition to the concurrency-budget ceiling
+already in §3.
+
+## 9. Tradeoffs
 
 | Decision | Options | Choice | Why |
 |---|---|---|---|
 | Branch isolation | worktree vs. sequential checkout-lock (mutex around `create_branch`) | worktree | Checkout-lock defeats the purpose — branches would serialize on the working tree, which is what M11 exists to remove |
-| Claim mechanism | file lock vs. conditional DB update | conditional DB update | No new lock primitive; mirror already exists; matches "SQLite owns its own serialization" direction of §7 |
+| Claim mechanism | file lock vs. conditional DB update | conditional DB update | No new lock primitive; mirror already exists; matches "SQLite owns its own serialization" direction of §8 |
 | Write serialization | WAL only vs. WAL + explicit writer lock | both | WAL alone permits concurrent writers to still race on read-modify-write app logic; the lock is still needed on top |
 | Promotion storage | field on `Experiment` vs. new table | field | `ExperimentGraph` already treats `Experiment` records as the source of truth; a new table would need its own read path |
-
-## 9. Open question — budget scoping
-
-`BudgetLedger` is one file per workspace (`config.budget_path`, no
-per-branch/session dimension) and its `RLock` only guards intra-process
-concurrency — the code comment notes real safety today depends on
-`server._GATEWAY_LOCK` serializing calls at the proxy layer. Three concurrent
-branches sharing one ledger means the first branch to call can exhaust the
-whole step's budget before the other two get a turn. Two ways to close this,
-not yet decided:
-- Pre-split the step's budget K-ways before fan-out (each `ParallelWorkItem`
-  gets `cost` pre-allocated from a per-step sub-budget), reusing M5's existing
-  `ParallelBudget` for this rather than touching `BudgetLedger` at all.
-- Leave `BudgetLedger` as the hard backstop (cooldowns/RPM/TPM) and let
-  `ParallelBudget` be the soft per-step allocator — the two are already
-  different budgets (LLM calls vs. experiment cost) and don't need to merge.
-
-Leaning toward the second — it needs zero changes to `fitroute` — but flagging
-since M10 owns `BudgetLedger` and should weigh in before this is built.
+| Worktree cleanup | teardown-only vs. teardown + startup reconciliation | both | Teardown alone doesn't survive a hard crash; reconciliation is what actually closes the orphan risk already visible in this repo |
 
 ## 10. Testing
 
@@ -202,6 +237,15 @@ since M10 owns `BudgetLedger` and should weigh in before this is built.
 - **Claim race**: fire `mark_testing_if_proposed` concurrently (threads or
   `anyio` tasks) against the same hypothesis id, assert exactly one caller
   transitions it to `TESTING`.
+- **Claim rollback**: force worktree setup to fail after a successful claim,
+  assert the hypothesis returns to `proposed` rather than sticking in
+  `testing`.
+- **Write serialization stress**: N threads/tasks writing to `ConductorStore`
+  and the hypothesis DB mirror concurrently under WAL + lock, assert no lost
+  writes and no corruption — as important as the claim race test since it's
+  the same class of bug across three call sites, not one.
+- **Crash reconciliation**: create a worktree, simulate a crash before
+  teardown runs, assert the startup reconciliation check removes it.
 - **Promotion**: three branches with distinct scores, assert exactly one
   `Experiment.promoted == True` and it's the best-scoring one, and the other
   two have reflections filed.
