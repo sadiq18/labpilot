@@ -71,16 +71,24 @@ are latent, not yet observed in production incidents.
   branches, including the reflection calls losers trigger — no branch or
   reflection should be able to starve the others of the entire step's budget.
 
-**Non-functional** (from the plan's exit criteria)
+**Non-functional**
 - Three hypotheses tested in one campaign step, wall-clock materially less
-  than three sequential runs.
+  than three sequential runs (plan exit criterion 1).
 - A single branch failure does not abort the other branches in the same step
-  (already true inside `run_parallel_async`; must hold end-to-end through the
-  campaign loop, not just the worker layer).
-- Disk usage from K concurrent worktrees is bounded and understood — see §8.
+  (plan exit criterion 3; already true inside `run_parallel_async`; must hold
+  end-to-end through the campaign loop, not just the worker layer).
+- Disk usage from K concurrent worktrees is bounded and understood — see §8
+  (this design's own addition, not one of the plan's three exit criteria).
+- Each branch's execution is still auditable — whether it produces its own
+  `DecisionRecord`, updates checkpoints, and counts toward the consecutive-
+  failure circuit breaker the same way sequential dispatch does today is not
+  yet designed (see §8).
 
-**Blocking pre-requisite:** the budget-scoping decision in §5 must be made
-(with M10 sign-off) before implementation starts — §7's design depends on it.
+**Blocking pre-requisites, neither resolved yet:**
+1. The budget-scoping decision in §5, needing M10 sign-off.
+2. How `DecisionRecord`, checkpointing, and the circuit breaker apply to
+   K-way fan-out (§8) — `run_parallel_async` bypasses `Scheduler.dispatch`
+   entirely today, and this design doesn't yet say whether that's acceptable.
 
 ## 4. Scope
 
@@ -150,7 +158,7 @@ list[ParallelResult]  →  each ok branch publishes ExperimentCompleted (existin
    │
    ▼
 new subscriber: branch comparison
-   ├─ rank by competition metric (reuse ExperimentGraph.best_path)
+   ├─ rank by competition metric (`_pick_best`, not `best_path` — see §8)
    ├─ mark winner promoted
    └─ file reflection for each loser (existing reflection path)
    │
@@ -170,23 +178,40 @@ of the sequential path.
 
 | Component | Change | Notes |
 |---|---|---|
-| `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync` | Existing single-hypothesis path stays as the K=1 case |
+| `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync` | Existing single-hypothesis path stays as the K=1 case; K>1 bypasses `Scheduler.dispatch`/`DecisionRecord`/checkpointing/breaker accounting — open question, see §8 |
 | `agents/parallel.py` | None | Reused as-is; M5 primitives are sufficient |
 | `git_evolution.py` / `git/python_backend.py` | New: worktree create/teardown per branch, crash-safe | `create_branch` today mutates the single working tree; needs a worktree-based sibling, not a modification of the existing checkout path |
-| *(new)* reconciliation check | New: startup-time `git worktree prune` + orphan sweep | Closes the crash gap — see §8. This repo already has stray worktrees today (`.claude/worktrees/code-review-pr-104-daf104`, a detached-HEAD leftover), so the failure mode is real, not speculative |
-| `hypothesis.py::mark_testing_if_proposed` | Fix: atomic claim + release-on-setup-failure | See §8 |
-| `accessor/sqlite/client.py`, `conductor/store.py` | New: WAL + serialized writer | See §8 |
+| *(new)* reconciliation check | New: startup-time `git worktree prune` + orphan sweep | Closes the crash gap — see §8. A worktree whose creating process dies before teardown runs is a standard git-worktree failure mode, not something this design can assume away |
+| `hypothesis.py::mark_testing_if_proposed` | Fix: atomic claim on the JSON file (not the DB mirror) + release-on-setup-failure | See §8 |
+| `accessor/sqlite/client.py`, `conductor/store.py` | New: WAL + module-level serialized writer | See §8 |
 | `agents/events.py` / `agents/subscribers.py` | New subscriber: comparison + promotion | Same pattern as the existing evidence-refresh and experience-memory subscribers on `ExperimentCompleted` |
-| `shared/experiments/models.py::Experiment` | New: a promoted/winner marker | See §8 |
+| `agents/experiment.py::event_payload` | New: `completed_at` field | Needed for deterministic tie-break, see §8 |
+| `shared/experiments/graph.py::assemble_experiment` + manifest write path | New: read/write a `promoted` flag via `manifest.metadata`, not a new `Experiment` field | See §8 |
 | `fitroute/budget.py` | Possibly: per-step budget scoping | Blocked on §5 |
 
 ## 8. Implementation notes
 
-**Atomic claim, with rollback.** Replace the read-then-write in
-`mark_testing_if_proposed` with a single conditional write: a conditional
-`UPDATE ... WHERE status = 'proposed'` against the hypothesis DB mirror,
-treating `rowcount == 0` as "already claimed." Preferable over a new file-lock
-primitive since the mirror already exists. If worktree setup then fails for a
+**Auditability & breaker accounting — open, not designed.**
+`run_parallel_async` calls `item.agent.execute(...)` directly; it does not go
+through `Scheduler.dispatch`, `store.enqueue`/`OsTask`, `DecisionRecord`, or
+`_record_experiment_outcome`'s consecutive-failure circuit breaker
+(`conductor/loop.py`) — all of which wrap every other tool dispatch today.
+That file's own comments describe past silent-degradation bugs this machinery
+exists to catch. Before implementation starts: decide whether each of the K
+branches produces its own `DecisionRecord` and checkpoint, and whether a
+branch failure counts toward the breaker the same way a sequential failure
+does. Skipping this silently reopens exactly the class of bug
+`_record_experiment_outcome`'s comments describe.
+
+**Atomic claim, with rollback.** The hypothesis DB mirror is not a valid claim
+target — it's a best-effort dual-write cache (`_mirror_many_to_db`'s own
+comment calls it a backfill for file-only hypotheses); `get()`, `list()`, and
+`rank_hypotheses()` all read the **JSON file**, which is where the actual
+TOCTOU race from §2 lives. A conditional `UPDATE` against the mirror would
+leave that race exactly as it is today. The claim has to lock the JSON file
+itself — a per-hypothesis file lock (`fcntl`/`filelock`) held across the
+existing `get()` → `update_status()` sequence, so two callers can't both
+observe `proposed` before either writes. If worktree setup then fails for a
 claimed hypothesis (disk full, name collision), release the claim back to
 `proposed` before surfacing the failure — a hypothesis must never end a step
 stuck in `testing` with no branch behind it.
@@ -202,18 +227,36 @@ as a required path, not a nice-to-have.
 
 **Write serialization.** Turn on `PRAGMA journal_mode=WAL` in `SqliteClient.__init__`
 (cheap, and read concurrency during a parallel step matters). WAL alone doesn't
-serialize writers, so wrap `ConductorStore` and the hypothesis DB mirror's
-write paths in the same kind of `threading.RLock` `BudgetLedger` already uses —
-consistent with the existing convention rather than a new one.
+serialize writers, and an instance-level lock like `BudgetLedger`'s
+`threading.RLock` only works there because one `BudgetLedger` is constructed
+once and shared for the process's lifetime. `ConductorStore` and
+`KnowledgeStore` are not used that way — both are freshly constructed at each
+call site (6 and 37 call sites respectively), so a `self._lock` added the same
+way would be a new, uncontended lock every call and serialize nothing. The
+lock has to be **module-level** — one lock object shared by every
+`ConductorStore`/`KnowledgeStore` instantiation in the process, not an
+instance attribute.
 
-**Promotion.** Add a `promoted: bool = False` field to `Experiment`
-(`shared/experiments/models.py`) rather than a separate promotion table —
-`ExperimentGraph` already rebuilds from `Experiment` records on disk each call,
-so a field on the model is visible immediately with no new persistence layer.
-The comparison subscriber sets it via the existing experiment-record write path
-after ranking finishes. Ties on the metric are broken by earliest
-`ExperimentCompleted` timestamp — the first branch to finish wins — so
-promotion is deterministic even when scores are numerically equal.
+**Promotion.** Rank the step's K results with the module-level
+`_pick_best(candidates, metric_key, maximize)` (`shared/experiments/graph.py`),
+not `ExperimentGraph.best_path()` — `best_path()` walks a single lineage
+starting from `self.roots`, descending only through the child it already
+picked as best, so it never compares K siblings hanging off one shared parent
+that may not sit on the overall best-scoring path. `_pick_best` is the actual
+all-candidates comparison and is already what `best_path()` calls internally.
+
+`Experiment` is explicitly a read-side aggregate, not a persisted record — its
+own docstring: "Not a new file written to `runs/<id>/`... there is exactly one
+writer per field elsewhere in the pipeline." A `promoted` field on the
+pydantic model has nowhere to round-trip to. Write it into `manifest.metadata`
+instead (`save_manifest` already has a writer for that file) and add a
+corresponding read in `assemble_experiment()` so it survives the next
+`build_graph()` call.
+
+**Tie-break.** `ExperimentCompleted`'s payload (`agents/experiment.py`) has no
+timestamp field today — add a `completed_at` field to `event_payload` at
+publish time. Ties on the metric are then broken by earliest `completed_at`,
+the first branch to finish wins, and promotion stays deterministic.
 
 **Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
 a required pre-build check, same as §5's budget question, but it does not need
@@ -238,9 +281,9 @@ is resolved — this paragraph is the landing spot for it.
 | Decision | Options | Choice | Why |
 |---|---|---|---|
 | Branch isolation | worktree vs. sequential checkout-lock (mutex around `create_branch`) | worktree | Checkout-lock defeats the purpose — branches would serialize on the working tree, which is what M11 exists to remove |
-| Claim mechanism | file lock vs. conditional DB update | conditional DB update | No new lock primitive; mirror already exists; matches "SQLite owns its own serialization" direction of §8 |
-| Write serialization | WAL only vs. WAL + explicit writer lock | both | WAL alone permits concurrent writers to still race on read-modify-write app logic; the lock is still needed on top |
-| Promotion storage | field on `Experiment` vs. new table | field | `ExperimentGraph` already treats `Experiment` records as the source of truth; a new table would need its own read path |
+| Claim mechanism | file lock vs. conditional DB update against the mirror | file lock | The mirror is a best-effort cache, not the source of truth `get()`/`list()` actually read — a DB-side conditional update wouldn't touch the real race |
+| Write serialization | WAL only vs. WAL + module-level writer lock | both | WAL alone permits concurrent writers to still race on read-modify-write app logic; an instance-level lock (à la `BudgetLedger`) doesn't work here since `ConductorStore`/`KnowledgeStore` are constructed fresh per call — the lock must be module-level |
+| Promotion storage | field on `Experiment` vs. `manifest.metadata` | `manifest.metadata` | `Experiment` is assembled fresh on every call, not persisted — a pydantic field has nowhere to round-trip; `manifest.metadata` already has a writer (`save_manifest`) |
 | Worktree cleanup | teardown-only vs. teardown + startup reconciliation | both | Teardown alone doesn't survive a hard crash; reconciliation is what actually closes the orphan risk already visible in this repo |
 
 ## 10. Testing
