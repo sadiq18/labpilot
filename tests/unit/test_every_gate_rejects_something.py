@@ -192,40 +192,148 @@ def test_no_capability_reports_a_verdict_it_cannot_withhold():
     assert not fixed, f"these can fail now — remove them from _CANNOT_FAIL: {fixed}"
 
 
+#: Labels inside a literal list that this resolver cannot read, collected as it
+#: goes. Each is an element it dropped, and dropping one silently is the shape of
+#: every blind spot this file has had.
+#:
+#: `code_engineering` has the only one: `checks=["write_code", "apply", origin,
+#: "override"]`, where `origin` is `"llm"` / `"aider"` / `"last_resort"` — the
+#: provenance of the proposal, not a gate. Recorded rather than exempted, and
+#: `test_no_verdict_label_is_silently_dropped` holds the count so a *new* one
+#: has to be looked at.
+_UNREADABLE_LABELS: list[str] = []
+
+#: Verdicts whose `checks=` could not be resolved at all, as `file:line — why`.
+_UNRESOLVED_VERDICTS: list[str] = []
+
+
+class _Unresolvable(Exception):
+    """A verdict whose `checks=` this resolver cannot read.
+
+    The reason every earlier blind spot was silent: unresolvable and absent were
+    the same answer, so each new syntax quietly shrank the requirement instead of
+    failing. `checks=checks` removed the whole of `workspace`; a literal holding
+    a non-string element would lose that gate; a verdict outside a function would
+    vanish. Now the resolver says so and `test_every_verdict_resolves_to_a_site`
+    fails with the file and line.
+    """
+
+
+def _literal_strings(node: ast.expr) -> set[str]:
+    """String labels in a list literal, or a concatenation of them.
+
+    `ast.BinOp` is handled because `research_review` writes
+    `["train_exists", "syntax"] + (["llm_note"] if llm_notes else [])` — three
+    labels sitting in plain sight, which the first version discarded by falling
+    through to the variable branch and naming the *function* instead. Two real
+    gates, one site, one marker covering both: the per-module granularity this
+    file exists to replace, re-created by a `+`. Reported reviewing PR #121.
+    """
+    if isinstance(node, ast.List | ast.Tuple):
+        found: set[str] = set()
+        for element in node.elts:
+            if isinstance(element, ast.Constant) and isinstance(element.value, str):
+                found.add(element.value)
+            else:
+                # A name, a call, a starred expression. Recorded, though it no
+                # longer changes the answer: a multi-label call is named by its
+                # function, so an unreadable element cannot move a site or lose
+                # one. Kept because a *single*-label call whose one label is
+                # unreadable would otherwise fall through quietly. Reported
+                # reviewing PR #121, where `origin` turned out to be live.
+                _UNREADABLE_LABELS.append(ast.unparse(element))
+        return found
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _literal_strings(node.left) | _literal_strings(node.right)
+    if isinstance(node, ast.IfExp):
+        return _literal_strings(node.body) | _literal_strings(node.orelse)
+    raise _Unresolvable(f"cannot read {ast.unparse(node)!r}")
+
+
+def _stamps_no_verification(name: str, scope: ast.AST) -> bool:
+    """Does this function stamp `name` **unconditionally**?
+
+    The declaration is invisible on a dynamic verdict otherwise: `_checks_at`
+    returns the *function* name, which never contains `no_verification`, so a
+    capability building its list conditionally could not declare that a branch
+    verifies nothing however it behaved at run time. Reported reviewing PR #121.
+
+    **Unconditionally**, because a *conditional* stamp means the verdict
+    sometimes checks and sometimes does not — and a gate that can fail must
+    still be shown to. `evaluation._compare` appends it inside
+    `if not had_control:`: a baseline compared nothing, a run with a control
+    that produced no gain is a real failure, and exempting the site from a
+    rejection test on the strength of the first would lose the second. So only
+    an append at the function's own top level counts, which is what a branch
+    that *only* reports a state looks like.
+    """
+    body = getattr(scope, "body", [])
+    for statement in body:
+        for node in ast.walk(statement) if not isinstance(statement, ast.If) else ():
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "append"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == name
+                and any(
+                    isinstance(a, ast.Constant) and a.value == "no_verification" for a in node.args
+                )
+            ):
+                return True
+    return False
+
+
 def _checks_at(call: ast.Call, scope: ast.AST | None) -> set[str] | None:
-    """The site name(s) of one verdict call, or None if it has no `checks`.
+    """The site name of one verdict call, or None if it has no `checks`.
 
-    A **literal** list names one site per label: `reporting` answers four
-    different questions and each deserves its own rejection test.
+    **One verdict call is one site.** Named by its label when it carries exactly
+    one, and by its enclosing function otherwise. Both halves were learned the
+    hard way:
 
-    A **variable** names one site, `capability:<function>`. Reading only literals
-    was the first version, and it meant any capability building its list
-    conditionally vanished from the enumeration: the whole of `workspace` had
-    never been discovered, and `evaluation:compare` left the moment a stamp had
-    to be appended to it. Both silently — a coverage test cannot miss what it
-    cannot see. Reported reviewing PR #121, and it is this file's own subject.
+    * naming by *label* alone missed every capability that builds its list
+      conditionally — the whole of `workspace` had never been enumerated, and
+      `evaluation`'s compare verdict left the moment a stamp had to be appended
+      to it. Silently, because a coverage test cannot miss what it cannot see;
+    * naming *per label* over-counted in the other direction. `workspace` threads
+      one list through `_ensure_data` and `_ensure_profile` and ends with twelve
+      labels on a single `passed=` expression; `research_review` writes
+      `["train_exists", "syntax"] + (["llm_note"] if llm_notes else [])` on one.
+      Those are annotations on one gate, and demanding a rejection test each
+      would be busywork that invites gaming.
 
-    Resolving the variable's *labels* instead was tried and is wrong in kind:
-    `workspace` threads one list through `_ensure_data` and `_ensure_profile`
-    and ends with twelve labels on a **single** `passed=` expression. Those are
-    annotations on one gate, not twelve gates, and demanding twelve rejection
-    tests would be busywork that invites gaming. One verdict, one site.
+    So the labels answer *how many gates is this*, not *what are they called*.
+    A capability like `reporting`, which answers four questions from four calls
+    with one label each, still gets four sites — which is the granularity this
+    file exists for. Reported reviewing PR #121 across three rounds.
+
+    `no_verification` is not a label; it rides along and is returned so the
+    caller can see the declaration.
     """
     argument = {k.arg: k.value for k in call.keywords}.get("checks")
     if argument is None:
         return None
-    if isinstance(argument, ast.List):
-        return _string_elements(argument)
-    function = getattr(scope, "name", None)
-    return {function} if function else set()
-
-
-def _string_elements(node: ast.List) -> set[str]:
-    return {
-        element.value
-        for element in node.elts
-        if isinstance(element, ast.Constant) and isinstance(element.value, str)
-    }
+    if isinstance(argument, ast.Name):
+        function = getattr(scope, "name", None)
+        if not function:
+            raise _Unresolvable("a verdict outside any function")
+        site = {function}
+        if _stamps_no_verification(argument.id, scope):
+            site.add("no_verification")
+        return site
+    labels = _literal_strings(argument)
+    stamped = "no_verification" in labels
+    gates = labels - {"no_verification"}
+    if len(gates) == 1:
+        site = set(gates)
+    else:
+        function = getattr(scope, "name", None)
+        if not function:
+            raise _Unresolvable("a multi-label verdict outside any function")
+        site = {function}
+    if stamped:
+        site.add("no_verification")
+    return site
 
 
 def _enclosing_functions(tree: ast.Module) -> dict[int, ast.AST]:
@@ -258,7 +366,11 @@ def _declared_non_verifying() -> dict[str, set[str]]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            names = _checks_at(node, owner.get(id(node)))
+            try:
+                names = _checks_at(node, owner.get(id(node)))
+            except _Unresolvable as why:
+                _UNRESOLVED_VERDICTS.append(f"{path}:{node.lineno} — {why}")
+                continue
             if not names or "no_verification" not in names:
                 continue
             labels = names - {"no_verification"}
@@ -297,7 +409,14 @@ def _verdict_sites() -> dict[str, set[str]]:
             keywords = {k.arg: k.value for k in node.keywords}
             if "passed" not in keywords:
                 continue
-            labels = _checks_at(node, owner.get(id(node)))
+            try:
+                labels = _checks_at(node, owner.get(id(node)))
+            except _Unresolvable as why:
+                # Recorded, not skipped in silence — `test_every_verdict_resolves`
+                # names the file and line so a form the resolver does not
+                # understand fails loudly instead of shrinking the requirement.
+                _UNRESOLVED_VERDICTS.append(f"{path}:{node.lineno} — {why}")
+                continue
             if not labels:
                 continue
             # The stamp is the declaration, not a gate.
@@ -306,6 +425,40 @@ def _verdict_sites() -> dict[str, set[str]]:
 
 
 _DECLARED_NON_VERIFYING = _declared_non_verifying()
+
+
+def test_every_verdict_resolves_to_a_site():
+    """No verdict may be skipped because this resolver could not read it.
+
+    The single change that closes four separate findings. Every blind spot this
+    file has had was the same one — **unresolvable and absent were the same
+    answer** — so each new syntax quietly shrank the requirement rather than
+    failing: `checks=checks` removed the whole of `workspace`, a `+` collapsed
+    two `research_review` gates into one, and a verdict outside a function would
+    vanish entirely. Reported reviewing PR #121 across three rounds.
+    """
+    assert not _UNRESOLVED_VERDICTS, (
+        "verdicts whose `checks=` could not be read, so they are not enumerated: "
+        f"{_UNRESOLVED_VERDICTS}. Teach `_checks_at` the form, or write the labels "
+        "as literals."
+    )
+
+
+def test_no_verdict_label_is_silently_dropped():
+    """One element inside a literal list, dropped without a signal, is a gate
+    leaving the requirement unnoticed — the same defect as the whole capability
+    disappearing, one element down.
+
+    Both are `code_engineering`'s `origin` — `checks=["write_code", "apply",
+    origin, "override"]`, holding `"llm"` / `"aider"` / `"last_resort"`, which is
+    provenance rather than a gate. Held at the count so a *new* one has to be
+    looked at rather than discovered three rounds later.
+    """
+    assert len(_UNREADABLE_LABELS) <= 2, (
+        f"labels this resolver cannot read: {_UNREADABLE_LABELS}. If it names a "
+        "gate, write it as a literal; if it is provenance, say so here."
+    )
+
 
 #: Verdict sites with no rejection test yet, as `capability:check`.
 #:

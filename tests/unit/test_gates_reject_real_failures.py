@@ -107,6 +107,7 @@ def test_evaluation_refuses_a_run_that_wrote_no_metrics(tmp_path):
     assert "metrics" in (result.error or "")
 
 
+@pytest.mark.rejects("verification:_smoke")
 @pytest.mark.rejects("verification:smoke_gate")
 def test_verification_refuses_a_workspace_with_no_training_script(tmp_path):
     """Defect 14 by another door: a `train.py` that is not there used to answer

@@ -52,7 +52,7 @@ def _profile(context) -> None:
 # -- code_engineering ---------------------------------------------------------
 
 
-@pytest.mark.rejects("code_engineering:profile_required")
+@pytest.mark.rejects("code_engineering:_write")
 def test_write_code_refuses_without_a_dataset_profile(tmp_path):
     """Codegen writes a pipeline against the dataset's shape. Without a profile
     it would be writing against an imagined one, and the file it produced would
@@ -73,7 +73,7 @@ def test_write_code_refuses_without_a_dataset_profile(tmp_path):
     assert "profile" in (result.error or "").lower()
 
 
-@pytest.mark.rejects("code_engineering:apply")
+@pytest.mark.rejects("code_engineering:_write")
 def test_write_code_refuses_a_proposal_that_cannot_run(tmp_path, monkeypatch):
     """When `apply_proposal` refuses, the step must fail rather than carry on.
 
@@ -146,7 +146,6 @@ def test_write_code_refuses_a_proposal_that_cannot_run(tmp_path, monkeypatch):
     assert "PEP 723" in (result.error or "")
 
 
-@pytest.mark.rejects("code_engineering:override")
 @pytest.mark.rejects("code_engineering:modify_config")
 def test_the_override_and_config_verdicts_read_the_file_that_landed(tmp_path):
     """Both verdicts are `path.is_file()` — a fact about the tree, not about
@@ -289,6 +288,7 @@ def test_a_baseline_has_no_control_and_that_is_not_a_failure(tmp_path, monkeypat
 # -- training -----------------------------------------------------------------
 
 
+@pytest.mark.rejects("training:execute")
 @pytest.mark.rejects("training:train_script")
 def test_training_refuses_a_workspace_with_no_script(tmp_path):
     """Defect 14's neighbour: a `train.py` that is not there. `except OSError:
@@ -350,7 +350,7 @@ def test_a_training_run_that_exits_non_zero_fails(tmp_path, monkeypatch):
 # -- verification -------------------------------------------------------------
 
 
-@pytest.mark.rejects("verification:syntax")
+@pytest.mark.rejects("verification:_smoke")
 def test_the_smoke_gate_refuses_a_file_that_does_not_parse(tmp_path):
     """Syntax is necessary and not sufficient — but it is still necessary, and a
     file that does not parse cannot be smoke-tested.
@@ -493,17 +493,22 @@ def test_the_inference_refusal_keeps_the_shape_of_its_siblings(tmp_path):
     assert "dry_run" in result.metadata
 
 
-def test_a_stamp_exempts_one_gate_not_everything_beside_it(tmp_path, monkeypatch):
-    """Reported reviewing PR #121. `update(names - {"no_verification"})` treated
-    every label in a stamped list as non-verifying, so stamping `evaluation`'s
-    two-label site would have dropped **both** gates from the coverage
-    requirement — the *"one marker stands for four gates"* defect this file was
-    rewritten to fix, on the exemption path instead of the marker path.
+def test_a_stamp_exempts_exactly_one_site(tmp_path, monkeypatch):
+    """A `no_verification` stamp exempts **one** site, never several.
 
-    Driven through a real capability source rather than asserted against the
-    guard's text: the first version matched the literal `"if len(labels) != 1"`,
-    which an equivalent rewrite would break and a broken rewrite would pass. The
-    same criticism this PR took two rounds ago.
+    The first version of the rule exempted every label beside the stamp, so a
+    two-label site would have dropped two gates from the coverage requirement
+    with nothing proving either — the *"one marker stands for four gates"*
+    defect, on the exemption path. Reported reviewing PR #121.
+
+    What "one site" means settled a round later: **one verdict call**, named by
+    its label when it carries one and by its function otherwise. So a stamped
+    call with three labels still exempts one thing, because three labels on one
+    `passed=` expression are annotations on one gate.
+
+    Driven over real capability sources rather than asserted against the guard's
+    text — the first version matched a literal `"if len(labels) != 1"`, which an
+    equivalent rewrite would break and a broken rewrite would pass.
     """
     import importlib.util
 
@@ -513,28 +518,46 @@ def test_a_stamp_exempts_one_gate_not_everything_beside_it(tmp_path, monkeypatch
     enumerator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(enumerator)
 
-    one_label = tmp_path / "one.py"
-    one_label.write_text(
+    one = tmp_path / "one.py"
+    one.write_text(
         'class C:\n    name = "one"\n\n    def go(self):\n'
         '        return evidence(passed=True, checks=["skipped", "no_verification"])\n',
         encoding="utf-8",
     )
-    two_labels = tmp_path / "two.py"
-    two_labels.write_text(
-        'class C:\n    name = "two"\n\n    def go(self):\n'
-        '        return evidence(passed=True, checks=["a", "b", "no_verification"])\n',
+    many = tmp_path / "many.py"
+    many.write_text(
+        'class C:\n    name = "many"\n\n    def go(self):\n'
+        '        return evidence(passed=True, checks=["a", "b", "c", "no_verification"])\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        enumerator, "_capability_names", lambda: {"one": one_label, "two": two_labels}
-    )
+    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"one": one, "many": many})
 
     declared = enumerator._declared_non_verifying()
 
-    assert declared == {"one": {"skipped"}}, "a two-label stamp must exempt nothing"
+    assert declared == {"one": {"skipped"}, "many": {"go"}}
+    assert all(len(sites) == 1 for sites in declared.values()), "one stamp, one site"
 
 
-def test_discovery_finds_capabilities_that_build_their_checks_list():
+def _enumerator():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "enumerator", "tests/unit/test_every_gate_rejects_something.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _capability(tmp_path, name: str, body: str):
+    path = tmp_path / f"{name}.py"
+    path.write_text(
+        f'class C:\n    name = "{name}"\n\n    def go(self):\n{body}\n', encoding="utf-8"
+    )
+    return path
+
+
+def test_discovery_finds_capabilities_that_build_their_checks_list(tmp_path, monkeypatch):
     """Reported reviewing PR #121, and the sharpest of that round.
 
     `_verdict_sites` read only literal `checks=[...]` arguments, so the whole of
@@ -543,23 +566,123 @@ def test_discovery_finds_capabilities_that_build_their_checks_list():
     verdict left the moment a stamp had to be appended to it.
 
     **The coverage test could not catch either**, because it cannot miss what it
-    cannot see: `_UNPROVEN_SITES` stayed empty and
-    `test_every_verdict_site_is_named_by_a_test` stayed green while two gates sat
-    outside the requirement. So the guard has to be here, on discovery itself,
-    naming the two capabilities known to build their lists dynamically.
+    cannot see. So the guard is here, on discovery, driven over a synthetic
+    capability rather than by naming the two real ones — naming them protects
+    the instances found rather than the property, and fails spuriously the day
+    either is refactored to literals.
     """
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "enumerator", "tests/unit/test_every_gate_rejects_something.py"
+    enumerator = _enumerator()
+    dynamic = _capability(
+        tmp_path,
+        "dyn",
+        '        checks = ["a"]\n        checks.append("b")\n'
+        "        return evidence(passed=False, checks=checks)",
     )
-    enumerator = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(enumerator)
+    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"dyn": dynamic})
+
+    assert enumerator._verdict_sites() == {"dyn": {"go"}}, "a variable must still be a site"
+
+
+def test_the_real_capabilities_that_build_lists_are_enumerated():
+    """The two live instances, as a smoke check on the property above."""
+    sites = _enumerator()._verdict_sites()
+
+    assert "workspace" in sites
+    assert "_compare" in sites.get("evaluation", set())
+
+
+def test_a_concatenated_checks_list_is_still_one_site(tmp_path, monkeypatch):
+    """`research_review` writes `["train_exists", "syntax"] + (["llm_note"] if
+    llm_notes else [])`. An `ast.BinOp` is neither a literal nor a name, so the
+    first version fell through and named the function by accident; a later one
+    resolved the labels and over-counted three annotations as three gates.
+    Reported reviewing PR #121. One verdict call, one site, either way."""
+    enumerator = _enumerator()
+    concatenated = _capability(
+        tmp_path,
+        "cat",
+        '        return evidence(passed=False, checks=["a", "b"] + (["c"] if x else []))',
+    )
+    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"cat": concatenated})
+
+    assert enumerator._verdict_sites() == {"cat": {"go"}}
+    assert not enumerator._UNRESOLVED_VERDICTS, "a concatenation is readable, not unresolvable"
+
+
+def test_a_verdict_the_resolver_cannot_read_is_reported(tmp_path, monkeypatch):
+    """The single change that closes four findings at once: **unresolvable and
+    absent stop being the same answer**. Every blind spot this file has had was
+    that — each new syntax quietly shrank the requirement instead of failing.
+    Reported reviewing PR #121 across three rounds."""
+    enumerator = _enumerator()
+    unreadable = tmp_path / "odd.py"
+    unreadable.write_text(
+        'class C:\n    name = "odd"\n\n    def go(self):\n'
+        "        return evidence(passed=False, checks=make_checks())\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"odd": unreadable})
+    enumerator._UNRESOLVED_VERDICTS.clear()
 
     sites = enumerator._verdict_sites()
 
-    assert "workspace" in sites, "a capability passing `checks=checks` must still be enumerated"
-    assert "_compare" in sites.get("evaluation", set()), "the compare verdict must be discovered"
+    assert sites == {}, "it could not be read, so it is not a site"
+    assert enumerator._UNRESOLVED_VERDICTS, "and that has to be said out loud"
+    assert "odd.py:5" in enumerator._UNRESOLVED_VERDICTS[0]
+
+
+def test_a_dynamic_verdict_can_declare_non_verification(tmp_path, monkeypatch):
+    """`_checks_at` returns the *function* name for a variable, which never
+    contains `no_verification` — so a capability building its list conditionally
+    could not declare that a branch verifies nothing, however it behaved at run
+    time. Reported reviewing PR #121."""
+    enumerator = _enumerator()
+    declares = _capability(
+        tmp_path,
+        "dec",
+        '        checks = ["skipped"]\n        checks.append("no_verification")\n'
+        "        return evidence(passed=True, checks=checks)",
+    )
+    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"dec": declares})
+
+    assert enumerator._declared_non_verifying() == {"dec": {"go"}}
+
+
+def test_a_conditional_stamp_does_not_exempt(tmp_path, monkeypatch):
+    """A verdict that stamps *sometimes* still has a failing path the rest of the
+    time. `evaluation._compare` appends it under `if not had_control:` — a
+    baseline compared nothing, a run with a control that produced no gain is a
+    real failure — and exempting on the strength of the first would lose the
+    second."""
+    enumerator = _enumerator()
+    conditional = _capability(
+        tmp_path,
+        "cond",
+        '        checks = ["compare"]\n        if not control:\n'
+        '            checks.append("no_verification")\n'
+        "        return evidence(passed=False, checks=checks)",
+    )
+    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"cond": conditional})
+
+    assert enumerator._declared_non_verifying() == {}
+
+
+def test_an_unreadable_label_is_recorded(tmp_path, monkeypatch):
+    """One element dropped without a signal is a gate leaving the requirement
+    unnoticed. `code_engineering` has two live ones — `origin` in
+    `checks=["write_code", "apply", origin, "override"]`, which is provenance
+    rather than a gate. Reported reviewing PR #121, where it turned out to be
+    live rather than latent."""
+    enumerator = _enumerator()
+    mixed = _capability(
+        tmp_path, "mix", '        return evidence(passed=False, checks=["a", origin])'
+    )
+    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"mix": mixed})
+    enumerator._UNREADABLE_LABELS.clear()
+
+    enumerator._verdict_sites()
+
+    assert enumerator._UNREADABLE_LABELS == ["origin"]
 
 
 def test_a_multi_label_step_names_each_gate_separately():
