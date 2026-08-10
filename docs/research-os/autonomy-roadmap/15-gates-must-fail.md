@@ -240,6 +240,15 @@ reads identically to a gate that looked and found nothing wrong. They stamp
 source rather than from a list in a test file, which would drift the moment a
 branch changed.
 
+**And the stamp reaches the card**, which it did not for a day. Written into
+`TaskEvidence.checks` and read by nothing but a test is the same shape as
+`delta_flags` sitting in a file no part of the system opened — the defect this
+milestone found two rounds earlier, repeated on the same branch. `EvidenceCard`
+now carries `unverified_steps`, and `decision_summary` names them beside the
+verdict, so a conclusion drawn from a run whose unit-test step skipped for want
+of tests says so where a reader meets it. Derived from metadata, so the three
+writers that recompute `decision_reason` cannot drop it.
+
 ## Traps
 
 **Do not add a linter rule for "call it a gate".** The defects are not naming

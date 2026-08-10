@@ -87,6 +87,12 @@ class EvidenceCard(BaseModel):
         return [str(flag) for flag in recorded] if isinstance(recorded, list) else []
 
     @property
+    def unverified_steps(self) -> list[str]:
+        """Steps in this run whose evidence says they verified nothing."""
+        recorded = (self.metadata or {}).get("unverified_steps")
+        return [str(step) for step in recorded] if isinstance(recorded, list) else []
+
+    @property
     def decision_summary(self) -> str:
         """`decision_reason`, qualified by the flags that should temper it.
 
@@ -103,11 +109,19 @@ class EvidenceCard(BaseModel):
         none of them touch the key. Deriving from it means no future writer can
         lose the qualification by rewriting a sentence.
         """
+        parts = [self.decision_reason]
         flags = self.delta_flags
-        if not flags:
-            return self.decision_reason
-        listed = "; ".join(flags)
-        return f"{self.decision_reason} · {len(flags)} delta flag(s): {listed}".lstrip(" ·")
+        if flags:
+            parts.append(f"{len(flags)} delta flag(s): {'; '.join(flags)}")
+        unverified = self.unverified_steps
+        if unverified:
+            # A conclusion drawn from a run whose unit-test step skipped because
+            # there were no tests is weaker than one where the tests passed, and
+            # this is where that has to be visible. The stamp existed on the task
+            # evidence and nothing read it — the same shape as `delta_flags`
+            # sitting in a file no part of the system opened.
+            parts.append(f"{len(unverified)} step(s) verified nothing: {', '.join(unverified)}")
+        return " · ".join(part for part in parts if part).lstrip(" ·")
 
     def to_comparison_dict(self) -> dict[str, Any]:
         """Keys outcome._learning_deltas expects on comparison.json."""

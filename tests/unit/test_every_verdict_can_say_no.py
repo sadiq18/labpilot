@@ -134,9 +134,7 @@ def test_write_code_refuses_a_proposal_that_cannot_run(tmp_path, monkeypatch):
         def run(self, ctx):
             return CodeProposal(
                 summary="truncated",
-                files=[
-                    CodeFileSpec(path="pipeline/train.py", content=truncated, action="write")
-                ],
+                files=[CodeFileSpec(path="pipeline/train.py", content=truncated, action="write")],
             )
 
     capability = CodeEngineeringCapability()
@@ -377,3 +375,75 @@ def test_a_failing_unit_test_fails_the_step(tmp_path, monkeypatch):
     result = VerificationCapability().execute(context)
 
     assert result.passed is False
+
+
+# -- the declaration has to reach a reader ------------------------------------
+
+
+def test_a_step_that_verified_nothing_reaches_the_card(tmp_path):
+    """The stamp was written and nothing read it — the same shape as
+    `delta_flags` sitting in a file no part of the system opened, on the same
+    branch, one milestone later. A label only a test reads is not a label.
+    """
+    import json
+
+    from labpilot.research_engine.evidence.builder import unverified_steps_for
+    from labpilot.research_engine.execution.evidence import evidence_dir
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+
+    paths = ResearchPaths(tmp_path, "demo").ensure()
+    directory = evidence_dir(paths, "E-001")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "T-unit.json").write_text(
+        json.dumps({"capability": "verification", "checks": ["no_tests", "no_verification"]}),
+        encoding="utf-8",
+    )
+    (directory / "T-real.json").write_text(
+        json.dumps({"capability": "training", "checks": ["metrics_json"]}),
+        encoding="utf-8",
+    )
+
+    assert unverified_steps_for(tmp_path, "demo", "E-001") == ["verification:no_tests"]
+
+
+def test_the_summary_names_what_was_not_verified():
+    """A conclusion drawn from a run whose unit-test step skipped because there
+    were no tests is weaker than one where the tests passed, and the summary is
+    where a reader meets the verdict."""
+    from labpilot.research_engine.evidence.models import EvidenceCard
+
+    card = EvidenceCard(
+        decision_reason="cv_gain_positive",
+        metadata={"unverified_steps": ["verification:no_tests"]},
+    )
+
+    assert "verified nothing" in card.decision_summary
+    assert "verification:no_tests" in card.decision_summary
+
+
+def test_it_survives_a_writer_rewriting_the_reason():
+    """`submit_learn` and `repair` recompute `decision_reason` after the card is
+    built — three writers between them. Deriving from metadata is what stopped
+    the delta flags being lost that way, and this rides the same mechanism."""
+    from labpilot.research_engine.evidence.models import EvidenceCard
+
+    card = EvidenceCard(
+        decision_reason="cv_gain_positive",
+        metadata={"unverified_steps": ["dependency:no_requirements"]},
+    )
+
+    patched = card.model_copy(update={"decision_reason": "lb_gain_non_negative"})
+
+    assert "dependency:no_requirements" in patched.decision_summary
+    assert patched.decision_summary.startswith("lb_gain_non_negative")
+
+
+def test_a_fully_verified_run_reads_exactly_as_before():
+    """The carve-out: the note marks an absence, so it must not appear when
+    every step checked something."""
+    from labpilot.research_engine.evidence.models import EvidenceCard
+
+    card = EvidenceCard(decision_reason="cv_gain_positive")
+
+    assert card.decision_summary == "cv_gain_positive"
+    assert card.unverified_steps == []
