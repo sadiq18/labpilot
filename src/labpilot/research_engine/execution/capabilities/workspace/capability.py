@@ -22,6 +22,43 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 logger = logging.getLogger(__name__)
 
+
+def _cache_may_serve(kaggle: object, context: TaskContext) -> bool:
+    """Is there a download cache that could satisfy this competition offline?
+
+    `DataDownloader.download` reads `cache_dir` before authenticating, so a
+    warm cache is a legitimate way to have data without credentials — and the
+    first version of this gate refused before ever trying. Reported on PR #120.
+    """
+    cache_dir = getattr(kaggle, "cache_dir", None)
+    if cache_dir is None:
+        return False
+    cached = Path(cache_dir).expanduser()
+    if not cached.is_absolute():
+        cached = Path(context.workspace_root) / cached
+    return cached.is_dir() and any(cached.rglob("*"))
+
+
+def _has_credentials(kaggle: object) -> bool:
+    """Are there credentials here that could actually authenticate?
+
+    `kaggle is None` was the test, and it asked whether a *constraint had been
+    passed* rather than whether credentials exist — the M20 shape, inside the
+    M20 change. It got the diagnosis wrong in both directions: a workspace with
+    no `configs/default.yaml` failed with *"no Kaggle credentials"* when the
+    real cause was no config at all, and a config carrying an **empty**
+    `KaggleConfig` sailed through the check and failed further down, where the
+    message is about the download rather than the setup. Reported on PR #120,
+    four times, and right every time. The tests kept missing it because they ran
+    against a workspace that has a config.
+    """
+    if kaggle is None:
+        return False
+    token = str(getattr(kaggle, "api_token", "") or "").strip()
+    username = str(getattr(kaggle, "username", "") or "").strip()
+    key = str(getattr(kaggle, "key", "") or "").strip()
+    return bool(token or (username and key))
+
 #: Relative dirs under the competition workspace root (idempotent).
 _WORKSPACE_SUBDIRS = (
     "pipeline",
@@ -96,6 +133,13 @@ class WorkspaceCapability(BaseCapability):
             summary = "workspace prepared (data downloaded)"
         elif metadata.get("data_reused"):
             summary = "workspace prepared (cached data)"
+        elif not passed:
+            # The card has to agree with the verdict. It read *"workspace
+            # prepared; download skipped"* beside `passed=False` — the summary
+            # describing the old, silent behaviour while the verdict described
+            # the new one, which is a card that argues with itself. Reported on
+            # PR #120.
+            summary = "workspace not prepared: " + (errors[0] if errors else "see error")
         elif metadata.get("download_skipped"):
             summary = f"{summary}; download skipped"
 
@@ -254,16 +298,37 @@ class WorkspaceCapability(BaseCapability):
 
         kaggle = context.constraints.get("kaggle")
         client = context.constraints.get("kaggle_client")
-        if kaggle is None and client is None:
-            metadata["download_skipped"] = "no_kaggle_config"
-            checks.append("download_skipped")
-            return None
+        # Asked only when a download is the *only* way to get data. `DataDownloader`
+        # serves from `cache_dir` before it authenticates, so a workspace with a
+        # warm shared cache used to succeed offline — and refusing here on
+        # credentials alone took that away without ever trying. Reported on
+        # PR #120. The verdict below is about whether data arrived; credentials
+        # are a diagnosis, not the gate.
+        unusable = client is None and not _has_credentials(kaggle)
+        if unusable and not _cache_may_serve(kaggle, context):
+            # **Skipped because asked to** and **skipped because unable** were
+            # both `None`, and the verdict read anything-but-False as done. So a
+            # workspace with no credentials reported `passed=True` carrying
+            # `download_skipped: no_kaggle_config` in its own metadata: it said
+            # what was wrong and passed anyway, and every step after it ran
+            # against an empty tree. M20 finding, 2026-08-09.
+            metadata["download_skipped"] = "no_kaggle_credentials"
+            checks.append("download_unavailable")
+            errors.append(
+                "no usable Kaggle credentials and nothing cached, so the dataset was "
+                "never fetched. Set KAGGLE_API_TOKEN (or KAGGLE_USERNAME and "
+                "KAGGLE_KEY) in the workspace `.env`, or pass --dry-run if this run "
+                "does not need data."
+            )
+            return False
 
         try:
             from labpilot.accessor.data.downloader import DataDownloader
             from labpilot.config import KaggleConfig
 
-            config = kaggle if isinstance(kaggle, KaggleConfig) else KaggleConfig.model_validate(kaggle)
+            config = (
+                kaggle if isinstance(kaggle, KaggleConfig) else KaggleConfig.model_validate(kaggle)
+            )
             downloader = DataDownloader(context.competition, config, client=client)
             downloader.download(root)
             files = [p for p in raw_dir.rglob("*") if p.is_file()]
@@ -304,9 +369,9 @@ class WorkspaceCapability(BaseCapability):
             return None
 
         try:
-            from labpilot.config import ProfilerConfig
             from labpilot.accessor.profiler.report import write_profile
             from labpilot.accessor.profiler.tabular import TabularProfiler
+            from labpilot.config import ProfilerConfig
             from labpilot.research_engine.intelligence.competition.models import (
                 CompetitionSpec,
             )

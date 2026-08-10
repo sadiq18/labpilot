@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from labpilot.accessor.common import allocate_sequential_id
 from labpilot.research_engine.evidence.models import EvidenceCard
 from labpilot.research_engine.intelligence.paths import ResearchPaths
+
+logger = logging.getLogger(__name__)
 
 _EV_PREFIX = "EV"
 
@@ -42,6 +45,11 @@ class EvidenceCardStore:
         try:
             return EvidenceCard.model_validate_json(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            # A card that will not parse is not a card that does not exist.
+            # Returning `None` for both means a corrupted verdict reads as *no
+            # verdict*, and the promoter, the belief updater and the planner all
+            # act on that difference. M20, 2026-08-09.
+            logger.exception("evidence card at %s could not be read", path)
             return None
 
     def get_for_execution(self, execution_id: str) -> EvidenceCard | None:
@@ -51,6 +59,9 @@ class EvidenceCardStore:
                     path.read_text(encoding="utf-8")
                 )
             except (OSError, ValueError):
+                # Skipped, but no longer silently: a corrupt card disappearing
+                # from a listing is evidence going missing without a trace.
+                logger.exception("evidence card at %s could not be read; skipping", path)
                 continue
             if card.treatment_experiment == execution_id:
                 return card
@@ -63,18 +74,38 @@ class EvidenceCardStore:
                     path.read_text(encoding="utf-8")
                 )
             except (OSError, ValueError):
+                # Skipped, but no longer silently: a corrupt card disappearing
+                # from a listing is evidence going missing without a trace.
+                logger.exception("evidence card at %s could not be read; skipping", path)
                 continue
             if card.hypothesis_id == hypothesis_id:
                 return card
         return None
 
-    def list(self) -> list[EvidenceCard]:
+    def list(self, *, strict: bool = False) -> list[EvidenceCard]:
+        """Every readable card. With `strict`, refuse to answer over a short set.
+
+        Skipping a corrupt card and returning the survivors is right for a
+        listing and wrong for a *measurement*: `measured_effect` reports
+        "observed N times, net X" over whatever came back, so a card that would
+        not parse silently changed the number rather than the answer. Logging it
+        was not enough — the promoter's own handler could never fire, because
+        the corruption was already swallowed here. Reported on PR #120.
+
+        So the caller says which it is. A reader that only wants the cards it
+        can show keeps the default; a caller computing a figure asks for
+        `strict` and gets the fault.
+        """
         out: list[EvidenceCard] = []
         for path in sorted(self.dir.glob("EV-*.json")):
             try:
-                out.append(
-                    EvidenceCard.model_validate_json(path.read_text(encoding="utf-8"))
-                )
-            except (OSError, ValueError):
+                out.append(EvidenceCard.model_validate_json(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError) as exc:
+                logger.exception("evidence card at %s could not be read", path)
+                if strict:
+                    raise ValueError(
+                        f"evidence card at {path} could not be read, so any figure "
+                        f"computed over this set would be short by at least one: {exc}"
+                    ) from exc
                 continue
         return out

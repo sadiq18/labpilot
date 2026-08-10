@@ -9,9 +9,18 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 
 class StubCapability(BaseCapability):
-    """Handles every TaskType; used until real capabilities register."""
+    """Handles every TaskType; used until real capabilities register.
+
+    `verifies = False` because always passing is what a stub is *for*, and that
+    is precisely what made it dangerous: on an evidence card its `passed=True`
+    was indistinguishable from a capability that had checked something. Four
+    campaigns on 2026-08-08 ran with codegen silently falling back to a template
+    and every card reading clean. M20 does not ask a stub to fail; it asks it to
+    stop claiming a verification it never performed.
+    """
 
     name = "stub"
+    verifies = False
 
     def __init__(self, task_types: frozenset[TaskType] | None = None) -> None:
         self._types = task_types or frozenset(TaskType)
@@ -26,5 +35,6 @@ class StubCapability(BaseCapability):
             execution_id=context.execution.id,
             capability=self.name,
             passed=True,
-            summary=f"stub completed {context.task.type}",
+            checks=["stub_no_verification"],
+            summary=f"stub ran {context.task.type} — nothing was verified",
         )

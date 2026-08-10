@@ -40,8 +40,29 @@ class SubmissionCapability(BaseCapability):
             pred = root / "predictions.csv"
             if pred.is_file():
                 shutil.copy(pred, source)
-            else:
+            elif is_dry_run(context):
+                # A dry run is checking the wiring, and the placeholder is the
+                # wiring. A real run is not.
                 source.write_text("id,prediction\n0,0\n", encoding="utf-8")
+            else:
+                # This wrote `id,prediction\n0,0` and then reported
+                # `passed=packaged.is_file()` — a verdict about a file it had
+                # just fabricated. The step promised "a submission was built"
+                # and tested "did I write something", so a workspace with no
+                # model, no predictions and no data passed it. M20 finding,
+                # 2026-08-09.
+                return evidence(
+                    context,
+                    capability=self.name,
+                    passed=False,
+                    summary="nothing to submit",
+                    checks=["build_submission"],
+                    error=(
+                        "no submission.csv and no predictions.csv in the workspace. "
+                        "Writing a placeholder row would package a file that "
+                        "predicts nothing and report it as a submission."
+                    ),
+                )
 
         packaged = package_execution_submission(root, execution_id)
 

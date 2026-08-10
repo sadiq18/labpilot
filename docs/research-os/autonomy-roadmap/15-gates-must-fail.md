@@ -1,6 +1,6 @@
 # M20 — A gate that cannot fail is not a gate
 
-**Status:** not started · **Evidence:**
+**Status:** in progress — the mechanism landed 2026-08-09 · **Evidence:**
 [evidence-log-2026-08-08.md](evidence-log-2026-08-08.md) ·
 **Generalises:** M9 (verification-first), M15's contract test ·
 **Blocked by:** nothing — every item is independent of the research loop
@@ -106,6 +106,112 @@ The rule catches the fourth instance before it is written.
 5. A deliberately broken artifact fails the campaign **at the gate that owns
    it**, not three steps downstream. This is the check that cannot be satisfied
    by accident: it requires the gate to be both present and correct.
+
+## Where this stands
+
+| exit criterion | state |
+|---|---|
+| 1 — every pass/fail module has a red-then-green rejection test | **done.** `test_every_gate_rejects_something.py` enumerates the capabilities and requires each to carry a `@pytest.mark.rejects("<name>")` test. All 9 that verify are proven; `stub` declares `verifies = False` instead |
+| 2 — no verification path rebuilds a command production owns | not started |
+| 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
+| 4 — a derived artifact re-derives or says it is derived | not started |
+| 5 — a broken artifact fails at the gate that owns it | not started |
+
+### Three of the first nine rejection tests proved nothing
+
+The sweep the criterion asks for — disable the guard, confirm the test goes red,
+restore — was run over all nine. Three stayed green, and **review had passed all
+three**:
+
+| test | why it proved nothing |
+|---|---|
+| `code_engineering` | refused at an earlier precondition (*"missing dataset profile"*) and never reached the branch it claimed to test |
+| `training` | a second, weaker copy of a test that already existed properly elsewhere. The marker moved to the real one; the copy went |
+| `research_review` | drove `force_block`, a **test hook** — proving a gate through its own hook is close to circular, and with the hook disabled the capability failed anyway, for an unrelated reason |
+
+That is this milestone's own claim landing on itself: each read as correct, and
+each said pass.
+
+**The lever matters as much as the test.** `training`'s first sweep disabled
+`metrics=metrics if fresh else {}` and stayed green — that line blanks the
+figure, while the verdict lives one branch up in `if ok and not fresh:`. A
+red-then-green run against the wrong line proves nothing just as surely as a weak
+test does, which is worth saying because the sweep is the thing everything else
+here rests on.
+
+### Five gates that cannot fail, found on the first day
+
+The enumerator asks the question of the *code*, not of its tests: does this
+capability have any path to `passed=False`?
+
+| capability | what it reports | what it tests |
+|---|---|---|
+| `reporting` | 4 return sites, every one `passed=True` | nothing — it writes a summary and calls it verified |
+| `runtime` | 2 return sites, both `passed=True` | nothing — it provisions a runtime and cannot report that it did not |
+| `stub` | always passes | that it ran. Always passing is what a stub is *for*, and that is the point: on the card it is indistinguishable from a capability that verified something, which is how four campaigns ran with codegen silently falling back |
+| `submission` | `passed=packaged.is_file()` | that a file exists — one **it wrote itself** moments earlier. Passes on a workspace with no model, no predictions and no data |
+| `workspace` | `passed=passed` | that the directories exist. Run without Kaggle credentials it reports `passed=True` carrying `download_skipped: no_kaggle_config` and `profile_skipped: no_data` in its own metadata: it says it skipped everything, and passes |
+
+**All five are fixed.** They were held as strict xfails for about an hour, which
+turned out to be the right shape for exactly as long as it took to fix them — the
+markers had to come off the moment the verdicts started meaning what they
+promised, because a strict xfail that passes is a failure.
+
+* `runtime` refuses to substitute the local default for a runtime that was asked
+  for and could not be resolved;
+* `workspace` separates *skipped because asked to* from *skipped because
+  unable* — both were `None`, and the verdict read anything-but-False as done;
+* `submission` no longer fabricates `id,prediction\n0,0` on a real run, so the
+  file it checks for is one it did not write;
+* `reporting`'s four verdicts ask whether there was anything to report, reflect
+  on, believe, or suggest — the hypothesis one previously counted its own canned
+  fallback string as a suggestion;
+* `stub` declares `verifies = False` and stamps `stub_no_verification` on its
+  evidence, which is M20's other option taken in the open.
+
+The `workspace` fix immediately made three existing tests fail. All three were
+about directory creation and idempotency and never wanted data — they simply had
+never had to say so, because the old gate accepted silence. Declaring
+`skip_download` in those three is the fix, and it is the gate working: an
+assumption that was invisible is now written down.
+
+Worth naming what the first three have in common with the eight in the table
+above: none is a naming problem, and none would be caught by review. `reporting`
+is honestly named and does report. The claim it makes is `passed`.
+
+### The same shape one layer up: a fault that reads as an answer
+
+The gates were the surface this milestone named. Sweeping the *decisions* built
+on them found 137 handlers in the research loop that swallow without logging,
+and seven where the swallowed value is what the conductor acts on:
+
+| read | a fault used to mean | what that did |
+|---|---|---|
+| `_write`'s parent read | `prior_train = ""` | **an unreadable parent became "no parent"** — `_propose_delta` declines without it, so a permissions problem turned a delta experiment into a whole-file rewrite, on a card that said the step passed. M19's premise, lost to an `except` clause |
+| `has_runnable_plan` | *nothing runnable* | a locked database stopped a campaign and looked like a finished one |
+| `untested_hypothesis_count`, `viable_hypothesis_count`, `pool_counts` | *nothing queued* | M21's gathering gate stuck shut — the failure that module's own docstring exists to prevent, arriving through its error path |
+| `_latest_plan_id`, `_next_hypothesis_id`, `_baseline_plan_exists`, `_latest_execution_id` | *nothing exists yet* | the conductor rebuilds a baseline over whatever is already there |
+| `measured_effect` | `(0, 0.0)` | not "unknown" — *measured, and it was zero*. A claim about evidence, made because the evidence could not be read |
+| `EvidenceCardStore.get` / `list` | the card is not there | a corrupted verdict reads as no verdict, and the promoter, the belief updater and the planner all act on the difference |
+
+Every one carried a comment saying *"absent store means nothing yet"* — true of
+the case its author had in mind, false of every other one.
+
+**The fix is not a narrower `except`.** Absence is asked *first*, so the negative
+answer is reached without an exception at all, and the handler is left holding
+only genuine faults — which are then logged with their traceback, because the
+value returned after one is a guess and the log is the only place that says so.
+
+Three things that only appeared once the tests were written:
+
+* store **construction** sat outside the `try` in three of them, so a corrupt
+  database escaped the handler written for exactly that case;
+* `HypothesisStore` is file-backed, not SQLite, so asking `knowledge.db` about
+  hypotheses would answer *"none"* for a workspace full of them — the same
+  mistake in the other direction. Absence has to name the store it stands for;
+* `Path(None)` raises, and a `TypeError` escaping a question this calm would
+  crash the conductor, so "no knowledge directory" is an answer rather than an
+  error.
 
 ## Traps
 

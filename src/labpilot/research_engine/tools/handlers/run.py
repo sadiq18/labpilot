@@ -29,6 +29,37 @@ def _codegen_strategy(workspace: Workspace) -> str:
     return resolve_codegen_strategy(workspace_config_path(workspace))
 
 
+def _kaggle_config(workspace: Workspace):
+    """The workspace's Kaggle credentials, or None when it has no config.
+
+    Read the same way `_codegen_strategy` reads its setting, and never raising:
+    a campaign should not fail to start because a config file has a typo in an
+    unrelated section — it should fail at the step that needs the thing.
+    """
+    from labpilot.research_engine.execution.codegen_strategy import workspace_config_path
+
+    path = workspace_config_path(workspace)
+    try:
+        from labpilot.config import load_config
+
+        # `load_config(None)` still applies the env layer, and that is where
+        # credentials actually are: `KaggleConfig.api_token/username/key` are
+        # `Field(exclude=True)` and `_apply_settings` overwrites all three from
+        # `Settings` unconditionally. Returning `None` when `configs/default.yaml`
+        # is missing therefore reported "no credentials" for the **documented**
+        # setup — a `.env` beside `labpilot.yaml`, which is exactly what
+        # `kaggle_credentials_setup_hint()` tells users to create. Reported four
+        # times on PR #120.
+        return load_config(path if path and path.is_file() else None).kaggle
+    except Exception:
+        # Loudly, and with the traceback. This is the PR's own subject: a
+        # swallowed config error here returns `None`, which `prepare_workspace`
+        # then reports as "no credentials" — a false diagnosis, and at `debug`
+        # nobody would ever see the real one.
+        logger.exception("kaggle config unreadable for %s; leaving it unset", workspace)
+        return None
+
+
 def run_plan(
     workspace: Workspace,
     *,
@@ -59,6 +90,12 @@ def run_plan(
     # caller-supplied `codegen_strategy` still wins, since it is spread after.
     merged: dict[str, Any] = {
         "codegen_strategy": _codegen_strategy(workspace),
+        # The conductor's path never forwarded these, so `prepare_workspace`
+        # reached its download step with no credentials on *every* campaign and
+        # skipped it — silently, because a skip and a success were the same
+        # answer. M20 made the skip visible, which turned an old silent gap into
+        # a loud failure and exposed the gap itself. Reported on PR #120.
+        "kaggle": _kaggle_config(workspace),
         "dry_run": dry_run,
         "allow_upload": submit,
         "smoke_syntax_only": dry_run,

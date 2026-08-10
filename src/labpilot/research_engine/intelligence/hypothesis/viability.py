@@ -55,13 +55,20 @@ def viable_hypothesis_count(knowledge_dir: Path, competition: str) -> int:
     gate rather than closing it — the failure this module exists to prevent is a
     gate stuck shut.
     """
+    from labpilot.research_engine.intelligence.paths import hypotheses_are_absent
     from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
     from labpilot.research_engine.shared.experiments.models import HypothesisStatus
 
+    if hypotheses_are_absent(knowledge_dir, competition):
+        return 0
     try:
         store = HypothesisStore(Path(knowledge_dir), competition)
         proposed = store.list(status=HypothesisStatus.PROPOSED)
-    except Exception:  # noqa: BLE001 — absent store means nothing queued
+    except Exception:
+        # This count opens M21's gathering gate. A fault reporting zero is the
+        # gate stuck shut — the failure this module's own docstring exists to
+        # prevent, arriving through its error path. M20, 2026-08-09.
+        logger.exception("cannot count viable hypotheses for %s; treating as none", competition)
         return 0
     return _viable_of(Path(knowledge_dir), competition, proposed)
 
@@ -107,13 +114,18 @@ def pool_counts(knowledge_dir: Path, competition: str) -> tuple[int, int]:
     `available_tools` are called separately by `decide_next` and share nothing
     today.
     """
+    from labpilot.research_engine.intelligence.paths import hypotheses_are_absent
     from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
     from labpilot.research_engine.shared.experiments.models import HypothesisStatus
 
+    if hypotheses_are_absent(knowledge_dir, competition):
+        return 0, 0
     try:
         store = HypothesisStore(Path(knowledge_dir), competition)
         proposed = store.list(status=HypothesisStatus.PROPOSED)
-    except Exception:  # noqa: BLE001 — absent store means nothing queued
+    except Exception:
+        # Both numbers, because both are read here. See `viable_hypothesis_count`.
+        logger.exception("cannot read the hypothesis pool for %s; reporting none", competition)
         return 0, 0
     return _viable_of(Path(knowledge_dir), competition, proposed), len(proposed)
 

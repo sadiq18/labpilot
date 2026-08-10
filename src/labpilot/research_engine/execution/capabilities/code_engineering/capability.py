@@ -448,8 +448,29 @@ class CodeEngineeringCapability(BaseCapability):
         if train_path.is_file():
             try:
                 prior_train = train_path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                prior_train = ""
+            except OSError as exc:
+                # An unreadable parent is not the same as no parent, and this
+                # said it was. `prior_train == ""` is how the capability decides
+                # a run is a *baseline*: `_propose_delta` declines without it,
+                # `improve_on_prior` goes false, and the whole-file agent
+                # rewrites `train.py` from scratch. So a permissions problem or
+                # a truncated read turned an experiment into a fresh start, on a
+                # card that says the step passed — the M19 premise lost to an
+                # `except` clause. M20, 2026-08-09.
+                logger.exception("cannot read the parent train.py at %s", train_path)
+                return evidence(
+                    context,
+                    capability=self.name,
+                    passed=False,
+                    summary="cannot read the parent train.py",
+                    checks=["write_code"],
+                    error=(
+                        f"{train_path} exists but could not be read ({exc}). Continuing "
+                        "would regenerate it from scratch and record that as an "
+                        "experiment against a parent nothing compared it to."
+                    ),
+                    paths=[str(train_path)],
+                )
             backup_dir = root / "artifacts" / "code_backups"
             backup_dir.mkdir(parents=True, exist_ok=True)
             backup_path = backup_dir / f"train_{context.execution.id}.py"

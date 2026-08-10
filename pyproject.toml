@@ -54,6 +54,7 @@ markers = [
     "llm: marks tests that require the llm extra",
     "image: marks tests that require the image extra (torch, pillow)",
     "deep: marks tests that require the deep extra (transformers)",
+    "rejects: names the capability whose rejection this test proves (M20)",
 ]
 
 [tool.ruff]

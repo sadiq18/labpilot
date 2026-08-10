@@ -145,11 +145,13 @@ class ExperimentCritic:
         elif not isinstance(contradiction, ContradictionReport):
             contradiction = ContradictionReport.model_validate(contradiction.model_dump())
 
-        used_llm = (
-            self._root_cause.last_used_llm
-            or self._confidence.last_used_llm
-            or self._contradiction.last_used_llm
-        )
+        # The *draft's* provenance, not "any of three agents reached an LLM".
+        # `recommendation` is taken from the root-cause draft alone, so an OR
+        # across all three reported `generated_by="llm"` while the recommendation
+        # was still the canned *"Re-run reflection with a reachable LLM."* — and
+        # the gate written to reject that exact string accepted it, one degraded
+        # agent away. Reported on PR #120.
+        used_llm = self._root_cause.last_used_llm
         recommendation = draft.next_steps[0] if draft.next_steps else draft.likely_cause
         return CriticAssessment(
             summary=draft.summary,

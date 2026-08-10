@@ -637,14 +637,27 @@ def should_gather_evidence(workspace: Workspace) -> tuple[bool, str]:
 
 def _plan_statuses(workspace: Workspace) -> list[str]:
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
+    from labpilot.research_engine.intelligence.paths import store_is_absent
 
-    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    if store_is_absent(workspace.knowledge_dir, workspace.competition):
+        return []
+    artifacts = None
     try:
+        # Constructed inside the guard, and absence asked before it — the same
+        # treatment its neighbours got. This one kept the original handler,
+        # comment and all, one function away from where it was removed:
+        # `has_unrun_plan` feeds `decide_next`, so a fault here still read as
+        # "no plans" and still escaped on construction. Reported on PR #120.
+        artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
         return [str(p.status) for p in artifacts.list()]
-    except Exception:  # noqa: BLE001 — absent store means "no plans"
+    except Exception:
+        logger.exception(
+            "cannot read plan statuses for %s; treating as none", workspace.competition
+        )
         return []
     finally:
-        artifacts.close()
+        if artifacts is not None:
+            artifacts.close()
 
 
 def has_unrun_plan(workspace: Workspace) -> bool:
@@ -666,26 +679,47 @@ def has_runnable_plan(workspace: Workspace) -> bool:
     tasks and each task's dependency edges. That is N+2 queries and a full
     object graph to answer a boolean, on every policy step.
     """
+    from labpilot.research_engine.intelligence.paths import store_is_absent
     from labpilot.research_engine.planner.store import PlanStore
 
-    store = PlanStore(workspace.knowledge_dir, workspace.competition)
+    if store_is_absent(workspace.knowledge_dir, workspace.competition):
+        return False
+    store = None
     try:
+        # Inside the guard: opening the store is where a corrupt database fails.
+        store = PlanStore(workspace.knowledge_dir, workspace.competition)
         return bool(store.selectable_plan_ids())
-    except Exception:  # noqa: BLE001 — absent store means nothing runnable
+    except Exception:
+        # This answer decides whether the conductor runs anything at all, and a
+        # fault used to give the same one as an empty store: *nothing runnable*.
+        # A locked database stopped a campaign and looked like a finished one.
+        # M20, 2026-08-09.
+        logger.exception(
+            "cannot read plans for %s; treating as nothing runnable", workspace.competition
+        )
         return False
     finally:
-        store.close()
+        if store is not None:
+            store.close()
 
 
 def untested_hypothesis_count(workspace: Workspace) -> int:
     """How many proposed hypotheses are waiting to be tested."""
+    from labpilot.research_engine.intelligence.paths import hypotheses_are_absent
     from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
     from labpilot.research_engine.shared.experiments.models import HypothesisStatus
 
+    if hypotheses_are_absent(workspace.knowledge_dir, workspace.competition):
+        return 0
     try:
         store = HypothesisStore(workspace.knowledge_dir, workspace.competition)
         return len(store.list(status=HypothesisStatus.PROPOSED))
-    except Exception:  # noqa: BLE001 — absent store means nothing queued
+    except Exception:
+        # Zero is how the conductor learns there is nothing left to test, and a
+        # fault said zero. See `has_runnable_plan`.
+        logger.exception(
+            "cannot count hypotheses for %s; treating as none queued", workspace.competition
+        )
         return 0
 
 

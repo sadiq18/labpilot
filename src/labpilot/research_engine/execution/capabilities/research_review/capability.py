@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 from labpilot.research_engine.execution.capabilities._helpers import evidence, is_dry_run
 from labpilot.research_engine.execution.capabilities.base import BaseCapability

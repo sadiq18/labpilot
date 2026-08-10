@@ -18,7 +18,34 @@ from labpilot.research_engine.reflection.pipeline import run_reflection
 logger = logging.getLogger(__name__)
 
 
+def _reflection_landed(result: dict) -> bool:
+    """Did this reflection actually write a belief?
+
+    The one signal the pipeline sets on both paths. `run_reflection` returns
+    `_rejected_belief_stub()` when verification rejects — stable keys so callers
+    can read `belief_id` safely — and a populated `belief_result` otherwise. So
+    `belief_id` is the fact, and `skipped` at the top level (which two previous
+    attempts read) does not exist. Reported on PR #120.
+    """
+    belief = result.get("belief") or {}
+    return bool(belief.get("belief_id")) and not belief.get("skipped")
+
+
 class ReportingCapability(BaseCapability):
+    """Report, reflect, update beliefs, propose the next hypothesis.
+
+    Every one of the four used to return `passed=True` unconditionally, because
+    each ends by writing a file and `write_text` either works or raises. That is
+    the M20 shape exactly: the verdict answered *"did I write something"* while
+    the step promises *"this execution was reported on"*. A run that produced no
+    metrics still got a report, a reflection with no assessment still "completed
+    the pipeline", and a hypothesis step still recorded a suggestion — the canned
+    fallback string, which is a default, not a suggestion.
+
+    So each now reports whether it had **anything to say**. Writing the artifact
+    is not the achievement; having content in it is.
+    """
+
     name = "reporting"
 
     @property
@@ -92,8 +119,11 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            passed=True,
-            summary="report written",
+            # A report of an execution that produced no metrics is a heading and
+            # an empty JSON block. The run it describes did not happen.
+            passed=bool(metrics),
+            error=None if metrics else "no metrics to report — the run produced none",
+            summary="report written" if metrics else "report written with no metrics",
             checks=["generate_report"],
             paths=[str(report_path), str(local)],
             metrics=metrics,
@@ -143,8 +173,32 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            passed=True,
-            summary="reflection pipeline completed",
+            # Third attempt, and the first two were the same mistake. `assessment`
+            # is a `model_dump()` and truthy at eleven default keys. Then
+            # `not result.get("skipped")` — but **`run_reflection` never sets a
+            # top-level `skipped`**: the verification-reject path sets it on the
+            # `belief` and `hypothesis` sub-dicts. So the gate could not fail, and
+            # its test drove a stub returning a shape production never produces —
+            # while the sibling test two functions down asserts exactly that
+            # ("the real offline pipeline does not set it"). Reported on PR #120.
+            #
+            # The signal production does set is the belief: a reflection that
+            # reached a verdict wrote one, and a rejected verification returns
+            # `_rejected_belief_stub()`, whose `belief_id` is None.
+            passed=_reflection_landed(result),
+            error=(
+                None
+                if _reflection_landed(result)
+                else (
+                    "reflection produced no belief update: "
+                    f"{(result.get('belief') or {}).get('reason') or 'nothing was written'}"
+                )
+            ),
+            summary=(
+                "reflection pipeline completed"
+                if str((result.get("assessment") or {}).get("generated_by")) == "llm"
+                else "reflection pipeline completed on the template fallback (no LLM)"
+            ),
             checks=["reflect"],
             paths=[str(path)],
             metadata=projection,
@@ -162,7 +216,16 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            passed=True,
+            # `bool(payload)` could not fail: the reject path returns
+            # `_rejected_belief_stub()`, eight truthy keys that mean *no belief
+            # was written*. Reported on PR #120 — and this gate is in the standard
+            # baseline plan, unlike the one that did get a real failing path.
+            passed=_reflection_landed(result),
+            error=(
+                None
+                if _reflection_landed(result)
+                else f"no belief update was written: {payload.get('reason') or 'unknown'}"
+            ),
             summary="belief update recorded",
             checks=["update_belief"],
             paths=[str(path)],
@@ -174,19 +237,44 @@ class ReportingCapability(BaseCapability):
         path = context.workspace_root / "artifacts" / "next_hypothesis.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         assessment = result.get("assessment") or {}
+        # `generated_by` is the signal, and it was already there. The first two
+        # attempts asked whether `recommendation` was non-empty (it always is —
+        # the critic fills it) and then whether the pipeline was `skipped` (it is
+        # not — only a verification reject sets that). Both left the gate unable
+        # to fail, and the second was worse than the first because a stub in its
+        # test set `skipped=True` and made it *look* proven. Reported three times
+        # on PR #120, correctly each time.
+        #
+        # `template_fallback` means the critic ran with no LLM and mapped
+        # outcomes from evidence strength, filling `recommendation` with
+        # *"Re-run reflection with a reachable LLM."* — an apology, not a
+        # proposal. Read from the field the critic already sets rather than by
+        # matching that sentence: a list of known placeholder strings is the
+        # curated-set pattern this milestone keeps refusing.
+        reasoned = str(assessment.get("generated_by") or "") == "llm"
+        recommendation = assessment.get("recommendation") or ""
         payload = {
-            "suggestion": assessment.get("recommendation")
+            "suggestion": recommendation
             or "Propose an improvement hypothesis against baseline metrics.",
             "plan_id": context.plan.id,
             "execution_id": context.execution.id,
             "hypothesis_evaluation": result.get("hypothesis"),
+            "generated_by": assessment.get("generated_by"),
             "created_at": datetime.now(UTC).isoformat(),
         }
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         return evidence(
             context,
             capability=self.name,
-            passed=True,
+            passed=reasoned and bool(recommendation),
+            error=(
+                None
+                if (reasoned and recommendation)
+                else (
+                    "no LLM was available, so the recommendation is the critic's "
+                    "template fallback rather than a proposal about this run"
+                )
+            ),
             summary="hypothesis suggestion recorded",
             checks=["create_hypothesis"],
             paths=[str(path)],
