@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+from functools import lru_cache
 from pathlib import Path
 
 _CAPABILITIES = Path("src/labpilot/research_engine/execution/capabilities")
@@ -61,6 +62,21 @@ _UNPROVEN: dict[str, str] = {}
 _CANNOT_FAIL: dict[str, str] = {}
 
 
+@lru_cache(maxsize=1)
+def _registry():
+    """The registry, built once.
+
+    `_scan()` runs at import and in every test that loads this module, and
+    `default_capability_registry` instantiates all ten capabilities — one of
+    which builds a `CodeEngineerAgent`. Reading files was cheap; constructing
+    object graphs repeatedly is not, and any capability that later does real
+    work in its constructor would make it worse. Reported reviewing PR #121.
+    """
+    from labpilot.research_engine.execution.engineer import default_capability_registry
+
+    return default_capability_registry(install_packages=False)
+
+
 def _capability_names() -> dict[str, Path]:
     """Capabilities that *claim to verify*, by their registered name.
 
@@ -84,11 +100,18 @@ def _capability_names() -> dict[str, Path]:
     the verdict says the step ran, the card says nothing was checked, and a
     reviewer can see the claim being declined.
     """
-    from labpilot.research_engine.execution.engineer import default_capability_registry
-
-    registry = default_capability_registry(install_packages=False)
+    registry = _registry()
     found: dict[str, Path] = {}
-    for capability in registry._by_type.values():
+    # `capabilities`, the public list, not `_by_type`. That dict is
+    # `TaskType -> capability` and the last `register()` for a type wins, so a
+    # capability whose types are all claimed by a later registration vanishes
+    # from it — reproduced: two capabilities both declaring `{RUN_TRAINING}`
+    # give `capabilities == ['alpha', 'beta']` and `_by_type.values() ==
+    # ['beta']`. `register()` appends to `_capabilities` for exactly this
+    # reason. Reported reviewing PR #121, sixth round: the same
+    # under-report-in-silence, arriving through the choice of collection rather
+    # than the choice of parser.
+    for capability in registry.capabilities:
         if not getattr(capability, "verifies", True):
             continue
         found[capability.name] = Path(inspect.getfile(type(capability)))

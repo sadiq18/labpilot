@@ -815,8 +815,7 @@ def test_discovery_does_not_depend_on_how_a_capability_spells_its_name():
 
     `_capability_names` matched `name = "..."` and not `name: str = "..."` — the
     form `BaseCapability` itself declares — so a capability written in the style
-    it inherits from would never have been enumerated, silently. The `verifies`
-    opt-out had the mirror gap.
+    it inherits from would never have been enumerated, silently.
 
     Five rounds of this file were spent moving one silence outward: from the
     verdict, to the resolver, to the filter deciding which files the resolver
@@ -824,18 +823,56 @@ def test_discovery_does_not_depend_on_how_a_capability_spells_its_name():
     answered by the registry that runs them, so `name` and `verifies` are read
     from the objects and no source style can hide one.
     """
-    from labpilot.research_engine.execution.engineer import default_capability_registry
-
     enumerator = _enumerator()
-    registry = default_capability_registry(install_packages=False)
+    registry = enumerator._registry()
     verifying = {
         capability.name
-        for capability in registry._by_type.values()
+        for capability in registry.capabilities
         if getattr(capability, "verifies", True)
     }
 
     assert set(enumerator._capability_names()) == verifying
     assert verifying, "the registry must actually register something"
+
+
+def test_a_capability_shadowed_on_every_task_type_is_still_enumerated(monkeypatch):
+    """Reported reviewing PR #121, sixth round.
+
+    `CapabilityRegistry.register` keeps two collections: `_capabilities`, which
+    is complete, and `_by_type`, where the last registration for a task type
+    wins. Iterating the dict drops any capability whose types are all claimed by
+    a later one — no sites, no coverage requirement, every guard green.
+
+    **Driven with a registry that actually shadows.** The first attempt at this
+    guard compared two sets both built from `_by_type`, so it reproduced the bug
+    rather than catching it; the second used the *real* registry, where no
+    shadowing happens, so reverting the fix left it green. A guard needs the
+    adversarial input, not the one that happens to be lying around — which is
+    the whole subject of this file, arriving in its own tests for the third
+    time.
+    """
+    from labpilot.research_engine.execution.registry import CapabilityRegistry
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    class _Shadowed:
+        name = "shadowed"
+        verifies = True
+        supported_task_types = frozenset({TaskType.RUN_TRAINING})
+
+    class _Winner:
+        name = "winner"
+        verifies = True
+        supported_task_types = frozenset({TaskType.RUN_TRAINING})
+
+    registry = CapabilityRegistry()
+    registry.register(_Shadowed())
+    registry.register(_Winner())
+    assert [c.name for c in registry._by_type.values()] == ["winner"], "the dict does lose one"
+
+    enumerator = _enumerator()
+    monkeypatch.setattr(enumerator, "_registry", lambda: registry)
+
+    assert set(enumerator._capability_names()) == {"shadowed", "winner"}
 
 
 def test_a_verdict_naming_no_check_is_never_silent(tmp_path, monkeypatch):
