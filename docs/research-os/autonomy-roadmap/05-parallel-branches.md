@@ -1,6 +1,7 @@
 # M11 — Parallel research branches
 
-**Status:** not started · **Blocked by:** M7 (branches must be able to differ)
+**Status:** not started · **Blocked by:** M7 (branches must be able to differ) ·
+**Design:** [design/05-parallel-branches.md](design/05-parallel-branches.md)
 
 ---
 
