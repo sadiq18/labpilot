@@ -206,7 +206,34 @@ time is a decision the card records rather than an absence.
 Bounds: smoke 120s (unchanged), unit **600s** — a real generated suite may
 legitimately take minutes and the bound is for hangs, not slowness — and install
 **900s**, because a source build of a large wheel is slow and being killed
-mid-build is a worse failure than waiting.
+mid-build is a worse failure than waiting. All three are overridable via
+`smoke_timeout_s` / `unit_timeout_s` / `install_timeout_s`, and each override is
+now driven by a test: nothing had ever read any of those keys, including the
+pre-existing one, so a rename would have fallen back to the default in silence.
+
+#### The verdict was empty
+
+Reviewing *that* found the next layer. Both timeout handlers wrote their own
+one-line message and dropped `TimeoutExpired.output` — so a suite hanging in
+`test_alpha` produced a log reading `pytest timed out after 600s` and nothing
+else, while the success path writes returncode, stdout and stderr to the same
+file. The harder failure produced the thinner record, which is the asymmetry
+PR #121 fixed in `evaluation._infer`, reappearing inside the handler written to
+stop a *different* silence. Writing "return a verdict, not an exception" in a
+docstring did not prevent shipping a verdict with nothing in it.
+
+Two details the fix turns on, both easy to get wrong:
+
+- `TimeoutExpired.output` is **bytes on POSIX even when `text=True` was passed** —
+  the exception comes from the inner `communicate()`, before decoding. Naively
+  interpolating it writes a literal `b'collected 3 items\n'` into the log, which
+  looks like a record and reads like an escape sequence. `stream_text` in
+  `capabilities/_helpers.py` decodes with `errors="replace"`, since output from a
+  process killed mid-write can end in half a character.
+- `failure_excerpt` takes `stderr or stdout`, which is right for a crash — the
+  traceback is on stderr. A timeout has no traceback, and the tail of *stdout* is
+  what says how far it got, so a one-line stderr warning was enough to hide the
+  test name entirely. The timeout paths pass both streams joined.
 
 ### The parser that had to go
 

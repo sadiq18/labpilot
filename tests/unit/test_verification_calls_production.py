@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from helpers.capability_context import capability_context
@@ -215,11 +216,24 @@ def test_the_unit_gate_is_not_told_it_is_a_smoke_run(tmp_path, monkeypatch):
 # -- bounds: every gate that runs model-written code says when to stop ---------
 
 
-def _timeout_after(monkeypatch, module) -> None:
-    """Make the gate's subprocess exceed its own limit."""
+#: What the child managed to print before it was killed. **Bytes**, because that
+#: is what `TimeoutExpired` carries on POSIX even when `text=True` was passed —
+#: the exception comes from the inner `communicate()`, before decoding. A handler
+#: that interpolates it writes a literal `b'...'` into the log.
+_PARTIAL_STDOUT = b"collected 3 items\nrunning test_alpha\n"
+_PARTIAL_STDERR = b"warning: slow fixture\n"
+
+
+def _timeout_after(monkeypatch, module, *, partial: bool = True) -> None:
+    """Make the gate's subprocess exceed its own limit, as the real one does."""
 
     def _hangs(cmd, **kwargs):
-        raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout") or 0)
+        raise subprocess.TimeoutExpired(
+            cmd,
+            kwargs.get("timeout") or 0,
+            output=_PARTIAL_STDOUT if partial else None,
+            stderr=_PARTIAL_STDERR if partial else None,
+        )
 
     monkeypatch.setattr(module.subprocess, "run", _hangs)
 
@@ -331,3 +345,105 @@ def test_an_install_that_times_out_returns_a_verdict_rather_than_raising(tmp_pat
     assert result.passed is False
     assert "timeout" in result.checks
     assert "timed out" in (result.error or "").lower()
+
+
+# -- a timeout is still a report ----------------------------------------------
+
+
+@pytest.mark.parametrize("gate", ["smoke", "unit"])
+def test_a_gate_that_times_out_keeps_what_the_process_managed_to_say(tmp_path, monkeypatch, gate):
+    """Reported reviewing PR #124, round 2.
+
+    The first version of `_timed_out` wrote its own one-line message and dropped
+    `expired.output`, so `logs/unit_tests.log` read `pytest timed out after 600s`
+    and nothing else — while the success path writes returncode, stdout and
+    stderr to that same file. The failing case was the thinner record, which is
+    the asymmetry PR #121 fixed in `evaluation._infer` reappearing in the handler
+    written to stop a different silence.
+
+    The partial output is the whole diagnosis: it names the test that was running
+    when the clock ran out.
+    """
+    context = (_smoke_context if gate == "smoke" else _unit_context)(tmp_path, monkeypatch)
+    _timeout_after(monkeypatch, verification_module)
+
+    result = VerificationCapability().execute(context)
+
+    log = Path(result.paths[0]).read_text(encoding="utf-8")
+    assert "running test_alpha" in log
+    assert "warning: slow fixture" in log
+    assert "running test_alpha" in (result.error or "")
+
+
+@pytest.mark.parametrize("gate", ["smoke", "unit"])
+def test_a_timeout_report_is_text_not_a_bytes_repr(tmp_path, monkeypatch, gate):
+    """`TimeoutExpired.output` is bytes on POSIX **even when `text=True` was
+    passed** — the exception is raised by the inner `communicate()` before
+    decoding. Interpolating it puts `b'collected 3 items\\n...'` in the log, which
+    is worse than useless: it looks like a record and reads like an escape
+    sequence."""
+    context = (_smoke_context if gate == "smoke" else _unit_context)(tmp_path, monkeypatch)
+    _timeout_after(monkeypatch, verification_module)
+
+    result = VerificationCapability().execute(context)
+
+    log = Path(result.paths[0]).read_text(encoding="utf-8")
+    assert "\\n" not in log, "an escaped newline means bytes were interpolated"
+    assert "b'" not in log and 'b"' not in log
+
+
+@pytest.mark.parametrize("gate", ["smoke", "unit"])
+def test_a_gate_that_times_out_with_no_output_still_reports(tmp_path, monkeypatch, gate):
+    """A process killed before it printed anything leaves `output=None`. The
+    handler must still produce its verdict rather than fail formatting it."""
+    context = (_smoke_context if gate == "smoke" else _unit_context)(tmp_path, monkeypatch)
+    _timeout_after(monkeypatch, verification_module, partial=False)
+
+    result = VerificationCapability().execute(context)
+
+    assert result.passed is False
+    assert "timed out" in (result.error or "").lower()
+
+
+def test_an_install_that_times_out_keeps_what_pip_managed_to_say(tmp_path, monkeypatch):
+    """Same defect, same fix, in the installer. Without it a hung build names no
+    package, though pip's partial output says which one it was collecting."""
+    context = _install_context(tmp_path, monkeypatch)
+    _timeout_after(monkeypatch, dependency_module)
+
+    result = DependencyCapability(install=True).execute(context)
+
+    assert "running test_alpha" in (result.error or "")
+    assert "b'" not in (result.error or "")
+
+
+# -- the bounds are actually overridable --------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("gate", "key"),
+    [("smoke", "smoke_timeout_s"), ("unit", "unit_timeout_s")],
+    ids=["smoke", "unit"],
+)
+def test_a_gate_bound_can_be_overridden_by_its_constraint(tmp_path, monkeypatch, gate, key):
+    """Reported reviewing PR #124, round 2: nothing read any of these keys, not
+    even the pre-existing `smoke_timeout_s`, while the roadmap said the bounds
+    were constraint-overridable. A renamed or mistyped key falls back to the
+    default in silence, and every test that asserts the default still passes."""
+    context = (_smoke_context if gate == "smoke" else _unit_context)(tmp_path, monkeypatch)
+    context.constraints[key] = 7
+    seen = _capture(monkeypatch)
+
+    VerificationCapability().execute(context)
+
+    assert _launched(seen)["timeout"] == 7
+
+
+def test_the_install_bound_can_be_overridden_by_its_constraint(tmp_path, monkeypatch):
+    context = _install_context(tmp_path, monkeypatch)
+    context.constraints["install_timeout_s"] = 11
+    seen = _capture(monkeypatch, dependency_module)
+
+    DependencyCapability(install=True).execute(context)
+
+    assert _launched(seen)["timeout"] == 11

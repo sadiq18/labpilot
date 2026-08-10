@@ -8,6 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from labpilot.research_engine.execution.capabilities._helpers import (
+    failure_excerpt,
+    stream_text,
+)
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
@@ -147,6 +151,15 @@ class DependencyCapability(BaseCapability):
             )
         except subprocess.TimeoutExpired as expired:
             message = f"pip install timed out after {expired.timeout:.0f}s"
+            # pip's partial output names the package it was collecting or
+            # building when the clock ran out; without it a hung build reports
+            # no package at all, while the branch below carries stderr into
+            # `error` on an ordinary failure. Reported reviewing PR #124.
+            streams = [stream_text(expired.output), stream_text(expired.stderr)]
+            # Both streams: see `VerificationCapability._timed_out` — a timeout
+            # has no traceback, so stderr-or-stdout would drop the line naming
+            # the package pip was building.
+            excerpt = failure_excerpt("", "\n".join(p for p in streams if p.strip()))
             return TaskEvidence(
                 task_id=context.task.id,
                 execution_id=context.execution.id,
@@ -159,6 +172,7 @@ class DependencyCapability(BaseCapability):
                     f"{message}. Nothing was verified about these dependencies — "
                     "an install that did not finish leaves the environment in an "
                     "unknown state rather than a satisfied one."
+                    + (f"\nLast output before it was stopped:\n{excerpt}" if excerpt else "")
                 ),
                 metadata={"digest": digest, "timeout_s": expired.timeout, "cmd": cmd},
             )

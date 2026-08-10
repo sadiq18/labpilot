@@ -10,6 +10,7 @@ from labpilot.research_engine.execution.capabilities._helpers import (
     evidence,
     failure_excerpt,
     is_dry_run,
+    stream_text,
 )
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
@@ -54,7 +55,21 @@ class VerificationCapability(BaseCapability):
         """
         limit = expired.timeout
         message = f"{check} timed out after {limit:.0f}s"
-        log_path.write_text(f"{message}\n", encoding="utf-8")
+        # Everything the process printed before it was killed. Dropping it left
+        # the log holding one line while the *success* path wrote returncode,
+        # stdout and stderr to the same file — the harder failure producing the
+        # thinner record, which is the asymmetry PR #121 fixed in
+        # `evaluation._infer`. It is also the whole diagnosis: it names the test
+        # that was running when the clock ran out. Reported reviewing PR #124.
+        stdout = stream_text(expired.output)
+        stderr = stream_text(expired.stderr)
+        log_path.write_text(f"{message}\n{stdout}\n{stderr}\n", encoding="utf-8")
+        # Both streams, not `stderr or stdout`. `failure_excerpt` prefers stderr
+        # because a crash puts its traceback there — but a timeout has no
+        # traceback, the tail of *stdout* is what says how far it got, and a
+        # one-line stderr warning would hide it completely. Passing the join
+        # keeps the tqdm collapsing and the tail budget over both.
+        excerpt = failure_excerpt("", "\n".join(p for p in (stdout, stderr) if p.strip()))
         return evidence(
             context,
             capability=self.name,
@@ -65,6 +80,7 @@ class VerificationCapability(BaseCapability):
             error=(
                 f"{message}. The step was stopped, so nothing here says whether it "
                 "would have passed — a run that does not finish has not been verified."
+                + (f"\nLast output before it was stopped:\n{excerpt}" if excerpt else "")
             ),
             metadata={"timeout_s": limit, "cmd": list(expired.cmd)},
         )
