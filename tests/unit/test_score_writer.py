@@ -23,8 +23,13 @@ from labpilot.research_engine.conductor.budgets import (
     evaluate_stops,
 )
 from labpilot.research_engine.conductor.checkpoint import load_budget_pair
-from labpilot.research_engine.conductor.loop import _record_experiment_outcome, _score_event_for
+from labpilot.research_engine.conductor.loop import (
+    _direction_for,
+    _record_experiment_outcome,
+    _score_event_for,
+)
 from labpilot.research_engine.conductor.store import ConductorStore
+from labpilot.research_engine.intelligence.competition.direction import _direction_to_maximize
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import scaffold_workspace
@@ -306,6 +311,54 @@ def test_the_spec_is_found_in_the_knowledge_tree_too(tmp_path: Path):
     assert event.metric_name == "cv_rmse"
     assert event.value == 194.80
     assert event.maximize is False
+
+
+@pytest.mark.parametrize(
+    "raw", ["minimize", "Minimize", "MINIMIZE", "min", "maximize", "Maximize", "max", "MAX"]
+)
+@pytest.mark.parametrize("shape", ["metric", "evaluation_metric"])
+def test_direction_resolution_agrees_with_the_canonical_reader(tmp_path: Path, raw, shape):
+    """The conductor must not answer this question differently from the module
+    that owns it.
+
+    Both bugs this replaced were disagreements on an identical input: a
+    hand-rolled `!= "minimize"` read `"Minimize"` as maximize, and pydantic's
+    `direction` default turned an absent field into a confident answer. Asking
+    the two readers the same question is the check that catches that class —
+    testing this function alone never can.
+    """
+    ws = _ws(tmp_path)
+    (ws.root / "competition.json").write_text(
+        json.dumps({"slug": ws.competition, "title": ws.competition, shape: {"direction": raw}}),
+        encoding="utf-8",
+    )
+
+    assert _direction_for(ws, "E-001", ResearchPaths(ws.knowledge_dir, ws.competition)) == (
+        _direction_to_maximize(raw)
+    )
+
+
+def test_an_absent_direction_stays_unknowable(tmp_path: Path):
+    """A spec naming a metric but no direction must not resolve.
+
+    `MetricSpec.direction` defaults to "maximize", so parsing through the
+    model turns silence into a confident wrong sign and stops the search
+    before the Analyze profile artifact — which is where a real competition's
+    `minimize` was actually found.
+    """
+    ws = _ws(tmp_path)
+    (ws.root / "competition.json").write_text(
+        json.dumps(
+            {
+                "slug": ws.competition,
+                "title": ws.competition,
+                "evaluation_metric": {"name": "rmse", "key": "rmse"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _direction_for(ws, "E-001", ResearchPaths(ws.knowledge_dir, ws.competition)) is None
 
 
 def test_the_direction_falls_back_to_the_campaigns_own_when_unknowable(tmp_path: Path):

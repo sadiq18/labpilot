@@ -183,12 +183,9 @@ def _score_event_for(
         logger.info("no resolvable primary metric for %s; no score recorded", execution_id)
         return None
 
-    # Direction comes from the canonical resolver — the same three sources, in
-    # the same order, that `evidence/builder.py::_resolve_direction` uses,
-    # including the Analyze profile artifact that no `competition.json` search
-    # reaches. The comparator's own flag is discarded: it defaults to `True`
+    # The comparator's own direction flag is discarded: it defaults to `True`
     # when it finds no spec, so trusting it records "higher is better" for an
-    # error metric, and the whole reason `maximize` travels with the value is
+    # error metric — and the whole reason `maximize` travels with the value is
     # that the sign is not re-derived later.
     #
     # `None` is a real answer here. Rather than guess, fall back to the
@@ -225,38 +222,30 @@ def _score_event_for(
 def _direction_for(workspace: Workspace, execution_id: str, paths: Any) -> bool | None:
     """Whether this competition maximises its metric, or None if unknowable.
 
-    Two readers of `competition.json` disagree about its shape, and each is
-    right about a different file. The parser writes a `CompetitionSpec`, whose
-    direction lives at `evaluation_metric.direction`; `resolve_maximize` reads
-    `metric.direction`, the hand-written workspace shape, and is the only
-    thing that reads the Analyze profile artifact — where rogii's `minimize`
-    actually lived. Consulting one alone leaves a real workspace unresolved,
-    so both are asked, nearest-first.
+    Chooses *where* to look and leaves *how to read it* to `resolve_maximize`,
+    which owns that question. An earlier version of this function parsed the
+    spec itself so it could search the run directory too, and promptly
+    disagreed with the canonical reader on the same file: it took pydantic's
+    `direction` default as an answer, and matched `"minimize"` case-sensitively
+    so `"Minimize"` came back as maximize. Re-deriving logic that already
+    exists is what produced the resolver disagreement this milestone keeps
+    tripping over.
 
-    `None` is a real answer and stays one: the caller decides, rather than
-    this guessing a sign.
+    Two calls because `resolve_maximize` takes a nearest-first pair of
+    directories, and there are three worth asking before the profile artifact.
     """
     from labpilot.research_engine.intelligence.competition.direction import resolve_maximize
-    from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 
-    for directory in (
-        workspace.effective_runs_dir / execution_id,
-        workspace.root,
-        paths.root,
-    ):
-        path = directory / "competition.json"
-        if not path.is_file():
-            continue
-        try:
-            spec = CompetitionSpec.model_validate_json(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if spec.evaluation_metric is not None and spec.evaluation_metric.direction:
-            return spec.evaluation_metric.direction != "minimize"
+    resolved = resolve_maximize(
+        competition=workspace.competition,
+        workspace_root=workspace.effective_runs_dir / execution_id,
+        knowledge_root=workspace.root,
+    )
+    if resolved is not None:
+        return resolved
     return resolve_maximize(
         competition=workspace.competition,
-        workspace_root=workspace.root,
-        knowledge_root=paths.root,
+        workspace_root=paths.root,
         extracted_dir=paths.extracted_dir,
     )
 
