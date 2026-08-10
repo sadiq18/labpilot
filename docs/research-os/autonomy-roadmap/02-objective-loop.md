@@ -1,6 +1,7 @@
 # M8 — Close the objective feedback loop
 
-**Status:** not started · **Blocked by:** M7 (scores must be able to differ)
+**Status:** not started · **Blocked by:** M7 (scores must be able to differ) ·
+**Design:** [design/02-objective-loop.md](design/02-objective-loop.md)
 
 ---
 
