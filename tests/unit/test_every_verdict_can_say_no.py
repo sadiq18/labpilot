@@ -244,7 +244,14 @@ def test_a_comparison_that_compared_nothing_is_not_a_comparison(tmp_path, monkey
         EvaluationCapability,
     )
 
-    nothing_compared = EvidenceCard(id="EV-001", decision_reason="missing_control")
+    # **With** a control. "No control to compare against" is a legitimate state
+    # — every campaign's first experiment — and the first version of this test
+    # used a card without one, which is why the verdict it pinned failed every
+    # baseline COMPARE. Reported reviewing PR #121. The failure this site owns is
+    # *a control was there and the comparison still produced nothing*.
+    nothing_compared = EvidenceCard(
+        id="EV-001", control_experiment="E-000", decision_reason="metric_key_mismatch"
+    )
     # Patched where it lives, not where it is used: the capability imports it
     # inside the method, so patching the capability module would have changed a
     # name nothing reads — a test that passes without touching the code path.
@@ -258,6 +265,26 @@ def test_a_comparison_that_compared_nothing_is_not_a_comparison(tmp_path, monkey
     assert nothing_compared.observed.cv_gain is None
     assert result.passed is False
     assert "compared nothing" in (result.error or "")
+
+
+def test_a_baseline_has_no_control_and_that_is_not_a_failure(tmp_path, monkeypatch):
+    """The carve-out the first version of the test above cost. A campaign's first
+    experiment has nothing to compare against, and the baseline plan runs COMPARE
+    on it — so `cv_gain is not None` failed every campaign's opening step."""
+    from labpilot.research_engine.evidence import compare_service
+    from labpilot.research_engine.evidence.models import EvidenceCard
+    from labpilot.research_engine.execution.capabilities.evaluation import (
+        EvaluationCapability,
+    )
+
+    baseline = EvidenceCard(id="EV-002", decision_reason="missing_control")
+    monkeypatch.setattr(compare_service, "run_compare_and_build_card", lambda *a, **k: baseline)
+    context = capability_context(tmp_path, task_type=TaskType.COMPARE)
+
+    result = EvaluationCapability().execute(context)
+
+    assert result.passed is True
+    assert "no_verification" in result.checks, "it compared nothing, and says so"
 
 
 # -- training -----------------------------------------------------------------
@@ -447,3 +474,45 @@ def test_a_fully_verified_run_reads_exactly_as_before():
 
     assert card.decision_summary == "cv_gain_positive"
     assert card.unverified_steps == []
+
+
+def test_the_inference_refusal_keeps_the_shape_of_its_siblings(tmp_path):
+    """Reported reviewing PR #121: the new early return dropped `paths` and
+    `metadata`, which every other return in this capability sets — so failure
+    evidence differed from success evidence exactly when something had already
+    gone wrong, the worst moment for a second, unrelated failure."""
+    from labpilot.research_engine.execution.capabilities.evaluation import (
+        EvaluationCapability,
+    )
+
+    context = capability_context(tmp_path, task_type=TaskType.RUN_INFERENCE)
+
+    result = EvaluationCapability().execute(context)
+
+    assert result.passed is False
+    assert result.paths, "the refusal must still name the artefact it looked for"
+    assert "dry_run" in result.metadata
+
+
+def test_a_stamp_exempts_one_gate_not_everything_beside_it():
+    """Reported reviewing PR #121. `update(names - {"no_verification"})` treated
+    every label in a stamped list as non-verifying, so stamping `evaluation`'s
+    two-label site would have dropped **both** gates from the coverage
+    requirement — the *"one marker stands for four gates"* defect this file was
+    rewritten to fix, on the exemption path instead of the marker path.
+    """
+    import ast
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "enumerator", "tests/unit/test_every_gate_rejects_something.py"
+    )
+    enumerator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(enumerator)
+
+    enumerator_path = Path("tests/unit/test_every_gate_rejects_something.py")
+    source = ast.unparse(ast.parse(enumerator_path.read_text()))
+
+    assert "if len(labels) != 1" in source, "a multi-label stamp must exempt nothing"
+    for capability, labels in enumerator._DECLARED_NON_VERIFYING.items():
+        assert labels, f"{capability} declared an exemption naming no gate"

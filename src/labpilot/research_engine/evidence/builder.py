@@ -302,6 +302,30 @@ def _task_evidence_for(knowledge_dir: Path, competition: str, execution_id: str)
     return payloads
 
 
+def _delta_flags_in(payloads: list[dict]) -> list[str]:
+    flags: list[str] = []
+    for payload in payloads:
+        recorded = (payload.get("metadata") or {}).get("delta_flags")
+        if isinstance(recorded, list):
+            flags.extend(str(flag) for flag in recorded if str(flag).strip())
+    return flags
+
+
+def _unverified_steps_in(payloads: list[dict]) -> list[str]:
+    steps: list[str] = []
+    for payload in payloads:
+        checks = payload.get("checks")
+        if not isinstance(checks, list) or "no_verification" not in checks:
+            continue
+        capability = str(payload.get("capability") or "?")
+        # Every label the site carries, not the first. `labels[0]` named an
+        # arbitrary one when a site had several, so a reader followed the note
+        # to the wrong gate. Reported reviewing PR #121.
+        labels = [str(c) for c in checks if c != "no_verification"]
+        steps.append(f"{capability}:{'+'.join(labels)}" if labels else capability)
+    return steps
+
+
 def delta_flags_for(knowledge_dir: Path, competition: str, execution_id: str) -> list[str]:
     """Every `delta_flags` entry recorded by the tasks of one execution.
 
@@ -316,12 +340,7 @@ def delta_flags_for(knowledge_dir: Path, competition: str, execution_id: str) ->
     argument for flagging rather than refusing is *"a reader can discount the
     result"*, and no reader was ever shown one.
     """
-    flags: list[str] = []
-    for payload in _task_evidence_for(knowledge_dir, competition, execution_id):
-        recorded = (payload.get("metadata") or {}).get("delta_flags")
-        if isinstance(recorded, list):
-            flags.extend(str(flag) for flag in recorded if str(flag).strip())
-    return flags
+    return _delta_flags_in(_task_evidence_for(knowledge_dir, competition, execution_id))
 
 
 def unverified_steps_for(knowledge_dir: Path, competition: str, execution_id: str) -> list[str]:
@@ -343,15 +362,7 @@ def unverified_steps_for(knowledge_dir: Path, competition: str, execution_id: st
     skipped because there were no tests is a weaker conclusion than one where
     the tests passed, and the card is where that has to be visible.
     """
-    steps: list[str] = []
-    for payload in _task_evidence_for(knowledge_dir, competition, execution_id):
-        checks = payload.get("checks")
-        if not isinstance(checks, list) or "no_verification" not in checks:
-            continue
-        capability = str(payload.get("capability") or "?")
-        labels = [str(c) for c in checks if c != "no_verification"]
-        steps.append(f"{capability}:{labels[0]}" if labels else capability)
-    return steps
+    return _unverified_steps_in(_task_evidence_for(knowledge_dir, competition, execution_id))
 
 
 def build_evidence_card(
@@ -486,8 +497,17 @@ def build_evidence_card(
     # writers recompute that field after the card is built, and each would drop
     # the qualification. `EvidenceCard.decision_summary` derives it from here
     # instead, so no writer can lose it. Reported on PR #119.
-    flags = delta_flags_for(knowledge_dir, competition, treatment_execution_id)
-    unverified = unverified_steps_for(knowledge_dir, competition, treatment_execution_id)
+    # **One** scan. Both readers used to call `_task_evidence_for` themselves, so
+    # every task-evidence file in the execution was globbed and `json.loads`-ed
+    # twice per card — the refactor had shared the code and not the work.
+    # Reported reviewing PR #121.
+    task_evidence = _task_evidence_for(knowledge_dir, competition, treatment_execution_id)
+    flags = _delta_flags_in(task_evidence)
+    # A dry run verifies nothing *by definition*, so the note would fire on every
+    # dry-run card and carry no information — and a qualifier that fires on a
+    # whole mode is one readers learn to skip, which is M20's own calibration
+    # argument. Suppressed where the run itself is a placeholder.
+    unverified = [] if placeholder_treatment else _unverified_steps_in(task_evidence)
 
     card = EvidenceCard(
         competition=competition,

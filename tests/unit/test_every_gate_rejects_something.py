@@ -220,8 +220,22 @@ def _declared_non_verifying() -> dict[str, set[str]]:
                 for element in labels.elts
                 if isinstance(element, ast.Constant) and isinstance(element.value, str)
             }
-            if "no_verification" in names:
-                declared.setdefault(name, set()).update(names - {"no_verification"})
+            if "no_verification" not in names:
+                continue
+            labels = names - {"no_verification"}
+            if len(labels) != 1:
+                # A stamp exempts **one** gate. The first version exempted every
+                # label beside it, so stamping a two-label site — `evaluation`
+                # already has `checks=["compare", "evidence_card"]` — would drop
+                # both from the coverage requirement with nothing proving either
+                # can reject. That is the *"one marker stands for four gates"*
+                # defect this file was rewritten to fix, on the exemption path
+                # instead of the marker path. Reported reviewing PR #121.
+                #
+                # Left unexempted rather than guessed at: the enumerator then
+                # demands a test, which is the safe direction.
+                continue
+            declared.setdefault(name, set()).update(labels)
     return declared
 
 

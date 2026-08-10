@@ -121,7 +121,11 @@ class EvidenceCard(BaseModel):
             # evidence and nothing read it — the same shape as `delta_flags`
             # sitting in a file no part of the system opened.
             parts.append(f"{len(unverified)} step(s) verified nothing: {', '.join(unverified)}")
-        return " · ".join(part for part in parts if part).lstrip(" ·")
+        # No `lstrip` — the filter here is what handles an empty
+        # `decision_reason`, and leaving a strip beside it invited someone to
+        # remove the filter believing the strip covered it. Reported reviewing
+        # PR #121.
+        return " · ".join(part for part in parts if part)
 
     def to_comparison_dict(self) -> dict[str, Any]:
         """Keys outcome._learning_deltas expects on comparison.json."""

@@ -57,6 +57,12 @@ class EvaluationCapability(BaseCapability):
                     passed=False,
                     summary="nothing to infer from",
                     checks=["inference"],
+                    # The same shape as every other return here. The first
+                    # version dropped both, so failure evidence for this step
+                    # differed from success evidence exactly when something had
+                    # already gone wrong. Reported reviewing PR #121.
+                    paths=[str(pred)],
+                    metadata={"dry_run": is_dry_run(context)},
                     error=(
                         "no predictions.csv and no submission.csv in the workspace. "
                         "Writing a placeholder row would produce a file that predicts "
@@ -128,29 +134,41 @@ class EvaluationCapability(BaseCapability):
             str(root / "comparison.json"),
             str(root / "artifacts" / "comparison.json"),
         ]
-        # A comparison that compared nothing is not a comparison. `passed=True`
-        # was unconditional, so a card built with no control, or over placeholder
-        # metrics, reported success — and the card it wrote is what COMPARE
-        # exists to produce. M20: the verdict has to be about the card's
-        # substance, not about having reached the end of the function.
+        # A comparison that compared nothing is not a comparison — but *no
+        # control to compare against* is a different thing from *a control was
+        # there and this produced nothing*. The first version tested
+        # `cv_gain is not None`, which is False by construction on a
+        # `missing_control` card, so every campaign's **first** COMPARE failed:
+        # a baseline has no prior execution, and the baseline plan runs COMPARE
+        # on it. Reported reviewing PR #121 — the same shape as the credential
+        # gate on #120, right about the pathological input and wrong about the
+        # ordinary one.
+        #
+        # With no control this step verified nothing, which is a state to
+        # declare rather than a failure to report, so it takes the same
+        # `no_verification` stamp the other such branches take.
+        had_control = bool(card.control_experiment)
         compared = card.observed.cv_gain is not None
+        checks = ["compare", "evidence_card"]
+        if not had_control:
+            checks.append("no_verification")
         return evidence(
             context,
             capability=self.name,
-            passed=compared,
+            passed=compared or not had_control,
             error=(
                 None
-                if compared
+                if compared or not had_control
                 else (
-                    f"Evidence {card.id} compared nothing: no cv_gain. "
-                    f"{card.decision_reason or 'no control to compare against'}"
+                    f"Evidence {card.id} compared nothing: a control was available "
+                    f"({card.control_experiment}) and the comparison still produced "
+                    f"no cv_gain. {card.decision_reason or ''}".strip()
                 )
             ),
             summary=(
-                f"Evidence {card.id}: {card.decision.value} "
-                f"(cv_gain={card.observed.cv_gain})"
+                f"Evidence {card.id}: {card.decision.value} (cv_gain={card.observed.cv_gain})"
             ),
-            checks=["compare", "evidence_card"],
+            checks=checks,
             paths=paths,
             metrics={
                 "cv_delta": card.observed.cv_gain,
