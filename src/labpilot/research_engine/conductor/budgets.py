@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 StopReason = Literal[
     "none",
@@ -137,6 +140,17 @@ class BudgetState(BaseModel):
         return max(0.0, (current - start).total_seconds())
 
 
+#: Above this many events, `persist_budgets` rewriting the whole series on
+#: every write (not just the steps that grow it — `steps_since_success`
+#: increments alone trigger a call) is worth watching. Not a cap: truncating
+#: would silently break citing an arbitrary prior experiment by id. A warning
+#: instead, so a runaway campaign is visible rather than only slowing down —
+#: the real fix past this point is an indexed `ScoreEvent` table (an INSERT,
+#: not a blob rewrite), per docs/research-os/autonomy-roadmap/design/02-objective-loop.md
+#: §3 "Series growth".
+_SCORE_EVENTS_WARN_THRESHOLD = 500
+
+
 def recompute_metric_history(state: BudgetState) -> None:
     """Derive `metric_history`/`last_metric` from `score_events`, in place.
 
@@ -147,6 +161,19 @@ def recompute_metric_history(state: BudgetState) -> None:
     fields `evaluate_stops` reads can never drift from the event series they
     summarize.
     """
+    # `persist_budgets` is called far more often than `score_events` actually
+    # grows (e.g. every `steps_since_success` increment) — gating on a length
+    # change too, not just the threshold, is what keeps this to one warning
+    # total instead of one per no-op call while the series sits at exactly
+    # the threshold.
+    grew = len(state.score_events) != len(state.metric_history)
+    if grew and len(state.score_events) == _SCORE_EVENTS_WARN_THRESHOLD:
+        logger.warning(
+            "score_events has reached %d entries; persist_budgets rewrites the "
+            "full series on every call. See the design doc's 'Series growth' "
+            "note for the indexed-table fix if this campaign keeps growing.",
+            _SCORE_EVENTS_WARN_THRESHOLD,
+        )
     state.metric_history = [event.value for event in state.score_events]
     state.last_metric = state.score_events[-1].value if state.score_events else None
 

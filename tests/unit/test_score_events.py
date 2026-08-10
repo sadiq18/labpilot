@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from labpilot.research_engine.conductor.budgets import (
+    _SCORE_EVENTS_WARN_THRESHOLD,
     BudgetConfig,
     BudgetState,
     ScoreEvent,
@@ -146,3 +147,53 @@ def test_stagnation_mint_fired_defaults_false_and_round_trips():
 
     assert BudgetState().stagnation_mint_fired is False
     assert restored.stagnation_mint_fired is True
+
+
+def test_score_events_past_the_warn_threshold_log_once(caplog):
+    """A runaway campaign must be visible, not just slower.
+
+    `score_events` is deliberately not capped (truncating it would break
+    citing an arbitrary prior experiment by id) — so past a generous
+    threshold, recompute logs instead of silently degrading. Once, not every
+    call after — a long campaign must not spam the log for every step past
+    the threshold.
+    """
+    state = BudgetState(
+        score_events=[_event(f"E-{i:03d}", float(i)) for i in range(_SCORE_EVENTS_WARN_THRESHOLD)]
+    )
+
+    with caplog.at_level("WARNING", logger="labpilot.research_engine.conductor.budgets"):
+        recompute_metric_history(state)
+        recompute_metric_history(state)
+
+    warnings = [r for r in caplog.records if "score_events" in r.message]
+    assert len(warnings) == 1
+
+
+def test_budget_metadata_recomputes_from_an_existing_session():
+    """`_budget_metadata` (cli/conduct.py) is a second write path, not routed
+    through `persist_budgets` — it must not skip the recompute it exists to
+    guarantee, or a resumed session's `metric_history` goes stale the moment
+    this is the function that writes it back out."""
+    from labpilot.cli.conduct import _budget_metadata
+
+    existing_state = BudgetState(
+        score_events=[_event("E-001", 194.80), _event("E-002", 190.97)],
+        metric_history=[1.0],
+        last_metric=1.0,
+    )
+    existing = {"budget_state": existing_state.model_dump()}
+
+    meta = _budget_metadata(
+        max_submissions=None,
+        max_wall_s=None,
+        max_cost_usd=None,
+        target_metric=None,
+        target_value=None,
+        plateau_window=3,
+        maximize=None,
+        existing=existing,
+    )
+
+    assert meta["budget_state"]["metric_history"] == [194.80, 190.97]
+    assert meta["budget_state"]["last_metric"] == 190.97
