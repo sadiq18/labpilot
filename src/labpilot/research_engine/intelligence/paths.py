@@ -123,3 +123,49 @@ class ResearchPaths:
         for directory in self.all_dirs():
             directory.mkdir(parents=True, exist_ok=True)
         return self
+
+
+def store_is_absent(knowledge_dir, competition: str) -> bool:
+    """Has *anything* been written for this competition yet?
+
+    The question every "is there work to do" helper needs, and none of them
+    asked. They wrapped a store read in `except Exception: return None` with a
+    comment saying *"absent store means nothing yet"* — true of the case they
+    had in mind, and false of every other one. A locked database, a schema the
+    code no longer matches, a permissions problem: all became "no plans", "no
+    hypotheses", "nothing measured", and the conductor acted on that. An error
+    that is indistinguishable from an answer is the M20 shape one layer up from
+    the gates.
+
+    Asked before the read, so absence returns cleanly and the handler is left
+    holding only genuine faults — which are then worth logging loudly, because
+    they mean something.
+    A workspace with no knowledge directory at all counts as absent, which is
+    what it is: nothing has been written, because there is nowhere to write it.
+    Said explicitly because `Path(None)` raises, and a `TypeError` escaping here
+    would crash the conductor at a call site whose whole purpose is to answer a
+    question calmly.
+    """
+    from pathlib import Path
+
+    if not knowledge_dir:
+        return True
+    return not ResearchPaths(Path(knowledge_dir), competition).db_path.is_file()
+
+
+def hypotheses_are_absent(knowledge_dir, competition: str) -> bool:
+    """Has any hypothesis been written for this competition yet?
+
+    Separate from `store_is_absent` because `HypothesisStore` is file-backed,
+    not SQLite — asking about `knowledge.db` would answer *"no hypotheses"* for
+    a workspace that has a directory full of them. The absence check has to name
+    the store it is standing in for, or it becomes the same mistake in the other
+    direction.
+    """
+    from pathlib import Path
+
+    from labpilot.workspace import competition_data_root
+
+    if not knowledge_dir:
+        return True
+    return not (competition_data_root(Path(knowledge_dir), competition) / "hypotheses").is_dir()

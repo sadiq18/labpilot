@@ -52,7 +52,14 @@ class ClaimPromoter:
         net = 0.0
         try:
             cards = self._evidence.list()
-        except Exception:  # noqa: BLE001 — absent store means "nothing measured"
+        except Exception:
+            # `(0, 0.0)` is not "unknown", it is *measured, and it was zero* —
+            # a claim about evidence, made because the evidence could not be
+            # read. The one case that is genuinely nothing-measured returns an
+            # empty list rather than raising. M20, 2026-08-09.
+            logger.exception(
+                "cannot read evidence cards; reporting %r as unmeasured", technique
+            )
             return 0, 0.0
         for card in cards:
             if not self._card_compared_something_real(card):

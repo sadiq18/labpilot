@@ -137,15 +137,29 @@ def _latest_plan_id(workspace: Workspace) -> str | None:
     returning None lets the caller offer `generate_plan` instead of burning a
     step on a run that cannot succeed.
     """
+    from labpilot.research_engine.intelligence.paths import store_is_absent
     from labpilot.research_engine.planner.store import PlanStore
 
-    store = PlanStore(workspace.knowledge_dir, workspace.competition)
+    if store_is_absent(workspace.knowledge_dir, workspace.competition):
+        return None
+    store = None
     try:
+        # Constructed inside the guard: opening the store is where a corrupt
+        # database actually fails, and it used to fail *outside* it — so the
+        # handler written for this case never saw the case.
+        store = PlanStore(workspace.knowledge_dir, workspace.competition)
         selectable = store.selectable_plan_ids()
-    except Exception:  # noqa: BLE001 — absent store simply means "no plans yet"
+    except Exception:
+        # Absence is answered above, so this handler now holds only genuine
+        # faults: a locked database, a schema the code no longer matches, a
+        # permissions problem. All three used to return exactly what "no plans
+        # yet" returns, and say nothing. The answer below is a guess, and the
+        # log is the only place that admits it. M20, 2026-08-09.
+        logger.exception("cannot read plans for %s; treating as none", workspace.competition)
         return None
     finally:
-        store.close()
+        if store is not None:
+            store.close()
     return selectable[-1] if selectable else None
 
 
@@ -156,13 +170,21 @@ def _next_hypothesis_id(workspace: Workspace) -> str | None:
     next plan has to be built against a hypothesis rather than re-requesting an
     idempotent baseline.
     """
+    from labpilot.research_engine.intelligence.paths import hypotheses_are_absent
     from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
     from labpilot.research_engine.shared.experiments.models import HypothesisStatus
 
+    if hypotheses_are_absent(workspace.knowledge_dir, workspace.competition):
+        return None
     try:
         store = HypothesisStore(workspace.knowledge_dir, workspace.competition)
         proposed = store.list(status=HypothesisStatus.PROPOSED)
-    except Exception:  # noqa: BLE001 — absent store means "nothing to test yet"
+    except Exception:
+        # See `_latest_plan_id`: absence is answered above, so this is a fault.
+        logger.exception(
+            "cannot read hypotheses for %s; treating as none to test",
+            workspace.competition,
+        )
         return None
     if not proposed:
         return None
@@ -180,14 +202,22 @@ def _next_hypothesis_id(workspace: Workspace) -> str | None:
 def _baseline_plan_exists(workspace: Workspace) -> bool:
     """True when a baseline plan has already been compiled for this competition."""
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
+    from labpilot.research_engine.intelligence.paths import store_is_absent
 
-    artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
+    if store_is_absent(workspace.knowledge_dir, workspace.competition):
+        return False
+    artifacts = None
     try:
+        artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
         plans = artifacts.list()
-    except Exception:  # noqa: BLE001
+    except Exception:
+        # A fault reads as "no baseline yet", and the conductor answers that by
+        # compiling one over the top of whatever is already there.
+        logger.exception("cannot read plans for %s; treating as no baseline", workspace.competition)
         return False
     finally:
-        artifacts.close()
+        if artifacts is not None:
+            artifacts.close()
     return any((p.metadata or {}).get("plan_kind") == "baseline" for p in plans)
 
 
@@ -201,7 +231,13 @@ def _latest_execution_id(workspace: Workspace) -> str | None:
             workspace.competition,
             knowledge_dir=workspace.knowledge_dir,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
+        # "Nothing has run yet" is what the conductor plans against, so a graph
+        # it cannot build must not read as an empty one.
+        logger.exception(
+            "cannot build the execution graph for %s; treating as nothing run",
+            workspace.competition,
+        )
         return None
     nodes = sorted(graph.nodes.values(), key=lambda e: e.created_at)
     return nodes[-1].id if nodes else None
