@@ -96,6 +96,13 @@ class WorkspaceCapability(BaseCapability):
             summary = "workspace prepared (data downloaded)"
         elif metadata.get("data_reused"):
             summary = "workspace prepared (cached data)"
+        elif not passed:
+            # The card has to agree with the verdict. It read *"workspace
+            # prepared; download skipped"* beside `passed=False` — the summary
+            # describing the old, silent behaviour while the verdict described
+            # the new one, which is a card that argues with itself. Reported on
+            # PR #120.
+            summary = "workspace not prepared: " + (errors[0] if errors else "see error")
         elif metadata.get("download_skipped"):
             summary = f"{summary}; download skipped"
 

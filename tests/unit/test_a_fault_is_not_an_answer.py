@@ -326,3 +326,67 @@ def test_the_conductor_path_forwards_kaggle_credentials():
     from labpilot.research_engine.tools.handlers import run
 
     assert '"kaggle": _kaggle_config(workspace)' in inspect.getsource(run.run_plan)
+
+
+def test_the_card_agrees_with_its_own_verdict(tmp_path):
+    """Reported on PR #120. A failing PREPARE_WORKSPACE card read *"workspace
+    prepared; download skipped"* beside `passed=False` — the summary describing
+    the old, silent behaviour while the verdict described the new one. A card
+    that argues with itself is worse than either half alone, because a reader
+    believes the sentence and the pipeline believes the boolean."""
+    from helpers.capability_context import capability_context
+
+    from labpilot.research_engine.execution.capabilities.workspace import (
+        WorkspaceCapability,
+    )
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    context = capability_context(
+        tmp_path,
+        task_type=TaskType.PREPARE_WORKSPACE,
+        constraints={"skip_download": False, "dry_run": False},
+    )
+
+    result = WorkspaceCapability().execute(context)
+
+    assert result.passed is False
+    assert "not prepared" in result.summary
+    assert "prepared;" not in result.summary
+
+
+def test_a_requested_skip_still_reads_as_prepared(tmp_path):
+    """The carve-out: asking not to download is not a failure, and the card
+    should keep saying so."""
+    from helpers.capability_context import capability_context
+
+    from labpilot.research_engine.execution.capabilities.workspace import (
+        WorkspaceCapability,
+    )
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    context = capability_context(
+        tmp_path,
+        task_type=TaskType.PREPARE_WORKSPACE,
+        constraints={"skip_download": True, "dry_run": False},
+    )
+
+    result = WorkspaceCapability().execute(context)
+
+    assert result.passed is True
+    assert "download skipped" in result.summary
+
+
+def test_the_agent_path_inherits_the_kaggle_credentials():
+    """`agents/experiment.py` passes its own constraints to `run_plan`, which
+    merges them *after* its own — so a caller that says nothing about Kaggle
+    inherits what `run_plan` read from the workspace. Raised on PR #120 as a
+    third unplumbed call site; it is covered by the second."""
+    import inspect
+
+    from labpilot.research_engine.tools.handlers import run
+
+    source = inspect.getsource(run.run_plan)
+    kaggle_at = source.index('"kaggle": _kaggle_config(workspace)')
+    spread_at = source.index("**(constraints or {})")
+
+    assert kaggle_at < spread_at, "a caller's constraints must be able to override, not precede"
