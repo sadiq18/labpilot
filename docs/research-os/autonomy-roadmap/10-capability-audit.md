@@ -4,9 +4,10 @@
 tools again  
 **Design:** [../design/12-capability-audit.md](../design/12-capability-audit.md)
 
-> The table below is the **2026-08-02** snapshot. M19 (merged 2026-08-09)
-> deleted `implement`'s Jinja fallback — that row is stale. The design doc's
-> first deliverable is re-running this audit against current `main`.
+> The table immediately below is the **2026-08-02** snapshot, kept for
+> history. It is superseded by **[the 2026-08-11 re-audit](#the-re-audit-2026-08-11)**
+> further down, which found a live instance of the same failure class in
+> `implement` — not the one M19 already fixed, a different one.
 
 ---
 
@@ -47,6 +48,87 @@ tools either filled or renamed.
 
 **One real capability drives the score** (`run_plan`), and it has exactly **one
 reachable configuration**.
+
+## The re-audit (2026-08-11)
+
+Re-verified against current `main`, tool by tool, code read directly rather
+than carried forward from the stale table above.
+
+| Tool | `capability_status` | `varies_by` | Notes |
+|---|---|---|---|
+| `analyze_competition` | **real** | `only` | Unchanged from 2026-08-02. Different analyzer selection (`build_default_registry()`'s `"competition"`/`"experiments"`/`"dataset"`/`"papers"`/`"repositories"`) genuinely produces different report content. |
+| `generate_plan` | **real** | `hypothesis_id` | Unchanged. `planner/templates.py` (deterministic) or `ResearchPlannerAgent` (LLM) select genuinely different task graphs per hypothesis/technique — the M14-promoted deterministic path, not a silent stand-in. |
+| `run_plan` | **real** | `plan_id` | Unchanged — confirmed independent of the `implement`-tool finding below: `run_plan`'s `WRITE_CODE` task routes directly to `CodeEngineeringCapability` via `default_capability_registry()` (`execution/engineer.py:546`), never through `ImplementationSpecialist`. |
+| `run_experiment` | **real** | `plan_id` | Independent handler from `run_plan` (`tools/handlers/specialists.py`), same verdict, same reasoning — jointly-scored in the 2026-08-02 table, now confirmed separately. |
+| `reflect` | **real, but inert** | `execution_id` | Unchanged — produces genuinely different beliefs/evidence per execution; still nothing downstream reads them ([M8](02-objective-loop.md)). |
+| `submit_learn` | **real** | `execution_id` | Unchanged. Verified `dry_run=True` still returns real per-execution metrics via `build_execution_outcome`/`load_execution_outcome`, not a canned stub. |
+| `query_memory` | **real** (was "unverified") | `query` | First confirmed verdict. `build_research_context` genuinely retrieves different content for different queries when the knowledge DB has data; an empty DB returns an empty context regardless of query, but that's a fixture-vacuity concern for the contract test (§6.2.2 of the design), not evidence the tool is unreal in a populated workspace. |
+| `search_papers` | **partial** | — | Unchanged. Real via Semantic Scholar when online; honestly degrades to an empty hit list (`source="offline"` or `source="error:<Type>"`) under `offline=True` or any network failure — the degradation is visible in its own output, not disguised as success. |
+| `submit` | **fixed** (was "real") | — | **Verdict changed.** `package_execution_submission` copies `workspace.root/submission.csv` verbatim; `execution_id` only relabels the destination filename (`execution/outcome.py:159-187`). The packaged *content* never depends on the input. This is an honest `fixed` step, not a regression — `submit` doesn't read as a capability verb (`implement`/`optimise`/`tune`) the way exit criterion 3 warns about, so no rename is needed. The 2026-08-02 table's "real" verdict here was never actually checked against the code; it was carried over. |
+| `implement` | **partial** (was "hollow", M19 made it look "real") | `technique` — **conditionally** | **The significant finding this re-audit exists to make.** See below — the M19 fix is real but conditional, and the condition fails in the common case. |
+
+### `implement`: a second hollow path, one layer up from the one M19 fixed
+
+M19 (2026-08-09) genuinely fixed the codegen layer: `CodeEngineeringCapability._write`
+now tries delta → whole-file LLM → last-resort scaffold, and a non-dry run with
+no usable code fails the step instead of faking success
+([code_engineering/capability.py:558-615](../../../src/labpilot/research_engine/execution/capabilities/code_engineering/capability.py#L558-L615)).
+That fix is real, and `run_plan`/`run_experiment` reach it directly.
+
+The Conductor's standalone `implement` **tool** does not reach it the same
+way. Its call chain is `implement()` (tools/handlers/specialists.py) →
+`ImplementationSpecialist.execute()` (agents/implementation.py) →
+`V1CodeEngineeringCodingTool` → `CodeEngineeringCapability` — and
+`ImplementationSpecialist.execute()` has a short-circuit **before** that last
+step:
+
+```python
+# agents/implementation.py
+meta.setdefault("prefer_patch", True)   # set whenever code already exists
+prefer_patch = bool(meta.get("prefer_patch")) and not bool(meta.get("force_rewrite"))
+if existing and prefer_patch and agent_task.capability in {"implement", "write_code", "write"}:
+    # Preserve existing train/src; only ensure separable inference layout.
+    refs = ensure_separable_layout(workspace, task_id=agent_task.id)
+```
+
+`ensure_separable_layout` (agents/coding.py) does not regenerate
+`pipeline/train.py` — if it already exists, it returns an `ArtifactRef`
+pointing at the **unmodified file** and only writes `infer.py` if that one is
+missing. `CodeEngineeringCapability` — the M19-fixed path — is never called.
+
+Two things make this the same failure class as the one M19 fixed, not a
+smaller cousin of it:
+
+1. **It reports success.** `refs` is non-empty (it contains the untouched
+   `train.py` ref), so `tools/handlers/specialists.py::implement()`'s own
+   guard — `if not refs: raise ImplementProducedNothingError(...)` — never
+   fires. The tool returns `ToolResult(refs=[...], data={"paths": [...]})`
+   with `train.py`'s path in it, indistinguishable at the `ToolResult` level
+   from a call that actually regenerated the file.
+2. **It's the default, not an edge case.** `prefer_patch` defaults to `True`
+   whenever code already exists, and nothing sets `force_rewrite=True` for
+   this path by default: the tool's own signature defaults it to `False`
+   (`tools/handlers/specialists.py:42`), and `conductor/actions.py`'s
+   `_default_args` for `"implement"` returns only
+   `{"description": "update workspace code"}` — no `force_rewrite`
+   (confirmed by grep: `force_rewrite` is set exactly once in `src/`, in
+   `planner/planner.py:98`, and that write lands on `run_plan`'s *plan*
+   metadata, which `CodeEngineeringCapability._write` never reads — grepped,
+   zero occurrences — so it reaches neither path). **Every `implement` tool
+   call after the first, on a workspace that already has code, silently
+   no-ops on the actual training code while reporting success**, regardless
+   of what `technique` was requested.
+
+This is why `implement` is `"partial"` rather than `"real"`: it only reaches
+the M19-fixed real path on a fresh workspace or when a caller explicitly
+passes `force_rewrite=True` — and nothing in the reviewed code does that by
+default for this specific tool. Closing this — either making
+`ImplementationSpecialist` thread `technique`/force a rewrite when the
+requested technique differs from what's on disk, or removing the
+`prefer_patch` shortcut for the `implement` capability specifically — is
+**out of scope for M15** per its own rule (§4 of the design: this milestone
+finds and labels gaps, [M7](01-technique-to-model.md) closes them). Flagging
+it here is what the audit is for.
 
 ## Approach
 
