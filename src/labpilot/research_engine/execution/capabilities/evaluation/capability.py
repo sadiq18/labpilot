@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from pathlib import Path
 
 from labpilot.accessor.common.json_utils import dumps
 from labpilot.accessor.sqlite import SqliteClient

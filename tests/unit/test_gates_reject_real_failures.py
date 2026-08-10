@@ -131,19 +131,16 @@ def test_training_refuses_a_stale_metrics_file(tmp_path):
 
 
 @pytest.mark.rejects("submission")
-@pytest.mark.xfail(strict=True, reason="M20 finding 2026-08-09: verdict is weaker than the promise")
 def test_submission_refuses_when_nothing_was_packaged(tmp_path):
-    """**Currently fails, and that is the finding.**
-
-    `passed=packaged.is_file()` reads as a real check, and it is the eighth
+    """`passed=packaged.is_file()` read as a real check, and it is the eighth
     instance of the shape: the capability *writes* `submission_E-001.csv`
     itself, so the file it tests for is one it just created. The verdict asks
     "did I write a file" while promising "a submission was built" — and it says
     pass on a workspace with no model, no predictions and no data.
 
-    Strict xfail rather than a `_KNOWN` list: when the verdict starts meaning
-    what it says, this test fails until someone deletes the marker. A list
-    needs a reader; this does not.
+    Fixed 2026-08-09: a real run with nothing to submit now refuses instead of
+    fabricating `id,prediction\n0,0`. The placeholder survives only under
+    `--dry-run`, where the wiring *is* what is being checked.
     """
     from labpilot.research_engine.execution.capabilities.submission import (
         SubmissionCapability,
@@ -157,18 +154,17 @@ def test_submission_refuses_when_nothing_was_packaged(tmp_path):
 
 
 @pytest.mark.rejects("workspace")
-@pytest.mark.xfail(strict=True, reason="M20 finding 2026-08-09: skipped work counts as done")
 def test_workspace_refuses_a_tree_it_could_not_prepare(tmp_path):
-    """**Currently fails, and that is the finding.**
-
-    `passed=passed` looks computed, and it is — from whether the *directories*
+    """`passed=passed` looked computed, and it is — from whether the *directories*
     exist. Run against a workspace with no Kaggle credentials and no data, the
     step reports `passed=True` with `download_skipped: no_kaggle_config` and
     `profile_skipped: no_data` in its own metadata: it says so, and passes
     anyway. Every step downstream then runs against an empty tree, which is how
     a campaign spends nine runs discovering there was never any data.
 
-    Strict xfail, per the note on the submission case above.
+    Fixed 2026-08-09 by separating *skipped because asked to* from *skipped
+    because unable*. Both were `None`, and the verdict read anything-but-False
+    as done.
     """
     from labpilot.research_engine.execution.capabilities.workspace import (
         WorkspaceCapability,
@@ -201,3 +197,50 @@ def test_dependency_refuses_a_stdlib_module_in_the_block(tmp_path):
     _, dropped = strip_stdlib_dependencies(real_failure("stdlib_dependency_block.txt"))
 
     assert dropped == ["glob"]
+
+
+@pytest.mark.rejects("runtime")
+def test_runtime_refuses_to_substitute_for_a_runtime_it_cannot_resolve(tmp_path):
+    """A runtime that was *asked for* and could not be found is the one thing
+    this step can get wrong, and it was the one thing it could not report: the
+    lookup fell through to the local default and the card read "selected runtime
+    local". A campaign that asked for a GPU trained somewhere else and called it
+    a success.
+
+    Red-then-green: restoring the bare `except Exception: runtime_id =
+    self._default` makes this pass with a fabricated runtime name.
+    """
+    from labpilot.research_engine.execution.capabilities.runtime import RuntimeCapability
+
+    context = capability_context(
+        tmp_path,
+        task_type=TaskType.SELECT_RUNTIME,
+        constraints={"runtime_id": "a100-cluster-that-does-not-exist"},
+    )
+
+    result = RuntimeCapability().execute(context)
+
+    assert result.passed is False
+    assert "a100-cluster-that-does-not-exist" in (result.error or "")
+
+
+@pytest.mark.rejects("reporting")
+def test_reporting_refuses_to_report_on_a_run_that_produced_nothing(tmp_path):
+    """Four return sites, every one `passed=True`, because each ends by writing
+    a file and `write_text` either works or raises. The verdict answered "did I
+    write something" while the step promises "this execution was reported on" —
+    so a run with no metrics still got a report, and the card read clean.
+
+    Red-then-green: pinning `passed=True` makes this green against an empty
+    workspace.
+    """
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        ReportingCapability,
+    )
+
+    context = capability_context(tmp_path, task_type=TaskType.GENERATE_REPORT)
+
+    result = ReportingCapability().execute(context)
+
+    assert result.passed is False
+    assert "metrics" in (result.error or "")

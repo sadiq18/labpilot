@@ -255,15 +255,27 @@ class WorkspaceCapability(BaseCapability):
         kaggle = context.constraints.get("kaggle")
         client = context.constraints.get("kaggle_client")
         if kaggle is None and client is None:
+            # **Skipped because asked to** and **skipped because unable** were
+            # both `None`, and the verdict read anything-but-False as done. So a
+            # workspace with no credentials reported `passed=True` carrying
+            # `download_skipped: no_kaggle_config` in its own metadata: it said
+            # what was wrong and passed anyway, and every step after it ran
+            # against an empty tree. M20 finding, 2026-08-09.
             metadata["download_skipped"] = "no_kaggle_config"
-            checks.append("download_skipped")
-            return None
+            checks.append("download_unavailable")
+            errors.append(
+                "no Kaggle credentials, so the dataset was never fetched. Set them, "
+                "or pass --dry-run if this run does not need data."
+            )
+            return False
 
         try:
             from labpilot.accessor.data.downloader import DataDownloader
             from labpilot.config import KaggleConfig
 
-            config = kaggle if isinstance(kaggle, KaggleConfig) else KaggleConfig.model_validate(kaggle)
+            config = (
+                kaggle if isinstance(kaggle, KaggleConfig) else KaggleConfig.model_validate(kaggle)
+            )
             downloader = DataDownloader(context.competition, config, client=client)
             downloader.download(root)
             files = [p for p in raw_dir.rglob("*") if p.is_file()]
@@ -304,9 +316,9 @@ class WorkspaceCapability(BaseCapability):
             return None
 
         try:
-            from labpilot.config import ProfilerConfig
             from labpilot.accessor.profiler.report import write_profile
             from labpilot.accessor.profiler.tabular import TabularProfiler
+            from labpilot.config import ProfilerConfig
             from labpilot.research_engine.intelligence.competition.models import (
                 CompetitionSpec,
             )

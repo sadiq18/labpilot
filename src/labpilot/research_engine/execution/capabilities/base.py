@@ -40,6 +40,20 @@ class BaseCapability:
 
     name: str = "base"
 
+    #: Does this capability's `passed` mean *"I checked, and it is sound"*?
+    #:
+    #: M20's second option, made declarable. A capability whose verdict cannot
+    #: be false is a gate that cannot fail — and the fix is either to give it a
+    #: failing path, or to stop claiming it verified anything. This is the
+    #: second, said out loud: `verifies = False` means the verdict reports that
+    #: the step *ran*, not that its result was checked, and the evidence card
+    #: says so rather than looking like every other pass.
+    #:
+    #: Not a way out. `test_every_gate_rejects_something.py` accepts it in place
+    #: of a rejection test, so setting it is a claim a reviewer can see, and one
+    #: that shows up beside `passed` on the card.
+    verifies: bool = True
+
     @property
     def supported_task_types(self) -> frozenset[TaskType]:
         return frozenset()

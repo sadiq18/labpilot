@@ -36,42 +36,59 @@ _TESTS = Path("tests")
 _UNPROVEN: dict[str, str] = {}
 
 
-#: Capabilities whose every `passed=` is a literal `True` — they have no path to
-#: a failing verdict at all. Sharper than "untested": a test cannot prove
-#: rejection of something the code cannot do.
+#: Capabilities whose every `passed=` is a literal `True` — no path to a failing
+#: verdict at all. Sharper than "untested": a test cannot prove rejection of
+#: something the code is unable to do.
 #:
-#: Recorded rather than fixed here because the fix differs per capability and is
-#: a behaviour change: either the capability has a real failure mode nobody
-#: handles, or it has no verdict to give and reporting `passed=True` is a claim
-#: of verification it never performed. Both are M20 work; neither is a rename.
-_CANNOT_FAIL: dict[str, str] = {
-    "reporting": ("4 return sites, all `passed=True` — writes a summary and calls it verified"),
-    "runtime": (
-        "2 return sites, both `passed=True` — provisions a runtime and cannot "
-        "report that it did not"
-    ),
-    "stub": (
-        "the no-op used until real capabilities register. Always passing is what "
-        "it is *for*, and that is the point worth making: it is indistinguishable "
-        "from a capability that verified something, and on 2026-08-08 four "
-        "campaigns ran with codegen silently falling back. Listed rather than "
-        "excused — a stub that reports `passed=True` is a gate that cannot fail "
-        "wearing a capability's name."
-    ),
-}
+#: **Empty, and it is meant to stay that way.** It held five on 2026-08-09, the
+#: day M20 started, and all five were fixed rather than excused:
+#:
+#: * `runtime` substituted the local default for a runtime it could not resolve
+#:   and reported "selected runtime local" — a campaign that asked for a GPU
+#:   trained elsewhere, with a passing card;
+#: * `workspace` reported `passed=True` while its own metadata said
+#:   `download_skipped: no_kaggle_config`. *Skipped because asked to* and
+#:   *skipped because unable* were both `None`, and the verdict read
+#:   anything-but-False as done;
+#: * `submission` wrote `id,prediction\n0,0` and then reported
+#:   `passed=packaged.is_file()` — a verdict about a file it had just
+#:   fabricated;
+#: * `reporting` returned `passed=True` from four sites, each of which ends by
+#:   writing a file, so the verdict answered "did I write something" while the
+#:   step promised "this execution was reported on";
+#: * `stub` always passed, which is what a stub is for — so it now declares
+#:   `verifies = False` instead, and its card says nothing was checked.
+_CANNOT_FAIL: dict[str, str] = {}
 
 
 def _capability_names() -> dict[str, Path]:
-    """Capabilities that report a pass/fail verdict, by their registered name."""
+    """Capabilities that *claim to verify*, by their registered name.
+
+    A capability declaring `verifies = False` is excluded from both checks
+    below. That is not a loophole — it is M20's other option, taken in the open:
+    the verdict says the step ran, the card says nothing was checked, and a
+    reviewer can see the claim being declined.
+    """
     found: dict[str, Path] = {}
     for path in sorted(_CAPABILITIES.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
-        if "passed=" not in source:
+        if "passed=" not in source or re.search(r"^\s{4}verifies\s*=\s*False", source, re.M):
             continue
         match = re.search(r'^\s{4}name\s*=\s*"([a-z_]+)"', source, re.M)
         if match:
             found[match.group(1)] = path
     return found
+
+
+def test_declining_to_verify_is_declared_not_implied():
+    """A capability that opts out has to say so on the class, where a reviewer
+    reads it — and its evidence has to say so too, or the card is
+    indistinguishable from one that checked something."""
+    from labpilot.research_engine.execution.capabilities.stub import StubCapability
+
+    assert StubCapability.verifies is False
+    source = Path("src/labpilot/research_engine/execution/capabilities/stub.py").read_text()
+    assert "stub_no_verification" in source
 
 
 def _marked_capabilities() -> dict[str, list[str]]:

@@ -5,9 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from labpilot.research_engine.execution.capabilities.dependency import (
-    DependencyCapability,
-)
 from labpilot.research_engine.execution.capabilities.workspace import (
     WorkspaceCapability,
     default_workspace_dirs,
@@ -18,7 +15,6 @@ from labpilot.research_engine.execution.engineer import (
     default_capability_registry,
 )
 from labpilot.research_engine.execution.evidence import read_evidence
-from labpilot.research_engine.execution.registry import CapabilityRegistry
 from labpilot.research_engine.execution.schemas import ResearchExecution
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.planner.schemas.models import ResearchPlan, ResearchTask
@@ -85,6 +81,11 @@ def test_workspace_creates_expected_tree(tmp_path: Path) -> None:
         paths=paths,
         workspace_root=root,
         competition="demo",
+        # This test is about the tree and idempotency, and it never wanted data.
+        # It did not have to say so while "no credentials" and "not asked for"
+        # were the same answer — M20 made them different, so the assumption is
+        # declared instead of assumed.
+        constraints={"skip_download": True},
     )
     cap = WorkspaceCapability()
     first = cap.execute(context)
@@ -110,6 +111,7 @@ def test_dependency_noop_when_satisfied(tmp_path: Path) -> None:
         knowledge_dir=knowledge,
         competition="demo",
         registry=registry,
+        constraints={"skip_download": True},
     )
     try:
         execution = engineer.run_plan(plan_id)
@@ -135,6 +137,7 @@ def test_engineer_workspace_deps_integration(tmp_path: Path) -> None:
         knowledge_dir=knowledge,
         competition="demo",
         registry=default_capability_registry(install_packages=False),
+        constraints={"skip_download": True},
     )
     try:
         execution = engineer.run_plan(plan_id)

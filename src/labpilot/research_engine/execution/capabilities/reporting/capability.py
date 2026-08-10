@@ -19,6 +19,20 @@ logger = logging.getLogger(__name__)
 
 
 class ReportingCapability(BaseCapability):
+    """Report, reflect, update beliefs, propose the next hypothesis.
+
+    Every one of the four used to return `passed=True` unconditionally, because
+    each ends by writing a file and `write_text` either works or raises. That is
+    the M20 shape exactly: the verdict answered *"did I write something"* while
+    the step promises *"this execution was reported on"*. A run that produced no
+    metrics still got a report, a reflection with no assessment still "completed
+    the pipeline", and a hypothesis step still recorded a suggestion — the canned
+    fallback string, which is a default, not a suggestion.
+
+    So each now reports whether it had **anything to say**. Writing the artifact
+    is not the achievement; having content in it is.
+    """
+
     name = "reporting"
 
     @property
@@ -92,8 +106,11 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            passed=True,
-            summary="report written",
+            # A report of an execution that produced no metrics is a heading and
+            # an empty JSON block. The run it describes did not happen.
+            passed=bool(metrics),
+            error=None if metrics else "no metrics to report — the run produced none",
+            summary="report written" if metrics else "report written with no metrics",
             checks=["generate_report"],
             paths=[str(report_path), str(local)],
             metrics=metrics,
@@ -143,7 +160,14 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            passed=True,
+            # "Completed" was true of the call, not of the pipeline. A run that
+            # returns neither an assessment nor a card reflected on nothing.
+            passed=bool(result.get("assessment") or result.get("evidence")),
+            error=(
+                None
+                if (result.get("assessment") or result.get("evidence"))
+                else "the reflection pipeline returned neither an assessment nor a card"
+            ),
             summary="reflection pipeline completed",
             checks=["reflect"],
             paths=[str(path)],
@@ -162,7 +186,10 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            passed=True,
+            # An empty payload is not a belief update; it is an empty file named
+            # after one.
+            passed=bool(payload),
+            error=None if payload else "no belief update was produced",
             summary="belief update recorded",
             checks=["update_belief"],
             paths=[str(path)],
@@ -174,8 +201,13 @@ class ReportingCapability(BaseCapability):
         path = context.workspace_root / "artifacts" / "next_hypothesis.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         assessment = result.get("assessment") or {}
+        # The fallback is a *default*, not a suggestion — it says nothing about
+        # this execution and would read identically after every run. Kept so the
+        # file is well-formed, but it no longer counts as having proposed
+        # something.
+        recommendation = assessment.get("recommendation")
         payload = {
-            "suggestion": assessment.get("recommendation")
+            "suggestion": recommendation
             or "Propose an improvement hypothesis against baseline metrics.",
             "plan_id": context.plan.id,
             "execution_id": context.execution.id,
@@ -186,7 +218,12 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            passed=True,
+            passed=bool(recommendation),
+            error=(
+                None
+                if recommendation
+                else "no recommendation was produced; the file holds the default text"
+            ),
             summary="hypothesis suggestion recorded",
             checks=["create_hypothesis"],
             paths=[str(path)],
