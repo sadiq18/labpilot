@@ -9,6 +9,7 @@ after its block — rather than from the behaviour it is meant to allow.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -117,12 +118,25 @@ def _run_pytest(tmp_path: Path, body: str, conftest: str = _FULL_CONFTEST):
         encoding="utf-8",
     )
     (tmp_path / "test_generated.py").write_text(textwrap.dedent(body), encoding="utf-8")
+    # Run *from* tmp_path against `.`, so node ids are short relative paths.
+    # pytest truncates each summary line to the terminal width, and with an
+    # absolute tmp path in it the test name is what gets cut — a difference
+    # between this machine and CI rather than between pass and fail. `--tb=no`
+    # for the same reason: without it every reason is printed twice, once in the
+    # traceback block and once in the summary. Both learned from CI failing a
+    # commit that was green here.
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", str(tmp_path)],
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", "--tb=no", "."],
         capture_output=True,
         text=True,
-        cwd=_TESTS.parent,
+        cwd=tmp_path,
+        env={**os.environ, "COLUMNS": "200"},
     )
+
+
+def _failures(result) -> list[str]:
+    """The short-summary line per failed test: `FAILED <id> - <reason>`."""
+    return [line for line in result.stdout.splitlines() if line.startswith("FAILED")]
 
 
 _LYING_TEST = """
@@ -193,12 +207,14 @@ def test_a_marker_with_no_argument_is_refused_rather_than_ignored(tmp_path: Path
         """,
     )
 
-    assert "3 failed" in result.stdout, result.stdout
-    # Counted, not merely present. `rejects("")` also fails as an *unearned*
-    # marker — no verdict satisfies an empty claim — so asserting the phrase
-    # appears at all passed with the empty-string case unhandled. Caught by
-    # mutating the guard down to `if not claims:` and watching this stay green.
-    assert result.stdout.count("names no gate") == 3, result.stdout
+    # Asserted as behaviour, not as output shape. `rejects("")` also fails as an
+    # *unearned* marker — no verdict satisfies an empty claim — so "the phrase
+    # appears" passed with the empty-string case unhandled. Counting the phrase
+    # instead gave 3 locally and 6 on CI, and pinning the width still left
+    # pytest truncating the reason. What actually distinguishes the two is that
+    # none of the three may be reported as unearned.
+    assert len(_failures(result)) == 3, result.stdout
+    assert "unearned" not in result.stdout, result.stdout
 
 
 @pytest.mark.slow
