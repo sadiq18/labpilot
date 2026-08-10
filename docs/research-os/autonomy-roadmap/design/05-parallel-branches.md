@@ -76,8 +76,8 @@ are latent, not yet observed in production incidents.
   losers) is visible in the experiment graph with a reflection filed for each
   loser.
 - The shared LLM budget (M10's `BudgetLedger`) is respected across concurrent
-  branches, including the reflection calls losers trigger — no branch or
-  reflection should be able to starve the others of the entire step's budget.
+  branches, including the reflection calls losers trigger — already true via
+  the gateway's existing pace-and-retry behavior (§5); no new code needed.
 - Each branch's generated training code respects a per-branch compute budget
   (thread/core cap = available cores ÷ K) instead of the library defaults
   that assume sole use of the machine — nothing sets this today (§2 item 4).
@@ -90,16 +90,13 @@ are latent, not yet observed in production incidents.
   end-to-end through the campaign loop, not just the worker layer).
 - Disk usage from K concurrent worktrees is bounded and understood — see §8
   (this design's own addition, not one of the plan's three exit criteria).
-- Each branch's execution is still auditable — whether it produces its own
-  `DecisionRecord`, updates checkpoints, and counts toward the consecutive-
-  failure circuit breaker the same way sequential dispatch does today is not
-  yet designed (see §8).
+- Each branch's execution is fully auditable: its own `DecisionRecord`, its
+  own checkpoint, and its own contribution to the consecutive-failure circuit
+  breaker — full parity with sequential dispatch, decided below (see §8).
 
-**Blocking pre-requisites, neither resolved yet:**
-1. The budget-scoping decision in §5, needing M10 sign-off.
-2. How `DecisionRecord`, checkpointing, and the circuit breaker apply to
-   K-way fan-out (§8) — `run_parallel_async` bypasses `Scheduler.dispatch`
-   entirely today, and this design doesn't yet say whether that's acceptable.
+**Both design decisions below are now resolved** — §5 (budget scoping) needed
+no new code once the existing gateway behavior was checked against the
+threading model; §8 (auditability) is decided as full parity, not deferred.
 
 ## 4. Scope
 
@@ -133,34 +130,38 @@ docstring — do not redo)
 - Arbitrary branch-merge policy or conflict resolution beyond "pick one
   winner, keep the losers as evidence."
 
-## 5. Blocking decision — budget scoping
+## 5. Budget scoping — resolved, no `fitroute` changes
 
-`BudgetLedger` is one file per workspace (`config.budget_path`, no
-per-branch/session dimension) and its `RLock` only guards intra-process
-concurrency — the code comment notes real safety today depends on
-`server._GATEWAY_LOCK` serializing calls at the proxy layer. Three concurrent
-branches sharing one ledger means the first branch to call can exhaust the
-whole step's budget before the other two get a turn — and reflection calls for
-losers (§4) are a second, easy-to-miss consumer of the same ledger, stacking
-on top of the 3 experiment runs. This has to be settled before implementation
-starts, not discovered during it. Two options:
+Original concern: K branches sharing one `BudgetLedger` could starve each
+other, and a hard K-way pre-split (`ParallelBudget` sized per branch) looked
+like the fix. That was wrong on its own terms before it was wrong on
+mechanism — forks don't need equal LLM budget, so pre-allocating equal shares
+either starves a branch that needs more or wastes budget reserved for one
+that needs less.
 
-- Pre-split the step's budget K-ways before fan-out (each `ParallelWorkItem`
-  gets `cost` pre-allocated from a per-step sub-budget), reusing M5's existing
-  `ParallelBudget` for this rather than touching `BudgetLedger` at all.
-  Extend the same pre-split to cover each loser's reflection call.
-- Leave `BudgetLedger` as the hard backstop (cooldowns/RPM/TPM) and let
-  `ParallelBudget` be the soft per-step allocator — the two are already
-  different budgets (LLM calls vs. experiment cost) and don't need to merge.
+**The pacing mechanism this needs already exists.**
+`RoleBoundClient.complete(..., allow_wait=True)` — the default —
+(`src/fitroute/gateway.py`) does not fail on exhaustion; when `select_route`
+reports no provider available, it sleeps `decision.wait_seconds` (bounded by
+`spec.max_wait_seconds`, 900s default — `fitroute/catalog.py`) and retries,
+rather than raising. `wait_seconds` comes from `BudgetLedger.availability()`,
+which is already `threading.RLock`-guarded for concurrent callers
+(`fitroute/budget.py`).
 
-Leaning toward the second — it needs zero changes to `fitroute` — but this is
-**not implementable until M10's owner confirms it**, since `BudgetLedger` is
-their component.
+Each of the K branches runs on its own OS thread today
+(`ExperimentAgent.execute` via `anyio.to_thread.run_sync` — confirmed in §1's
+background research). A branch that hits a rate limit sleeps on **its own**
+thread — it does not block the other branches, which keep making calls
+against the same, correctly-locked ledger. That is exactly the "wait for the
+next-retry time and resume" behavior the budget question needed, and it costs
+M11 nothing — `ExperimentSpecialist` already calls through this gateway.
 
-**Action:** file this as an explicit question to M10's owner before opening
-any implementation PR for this milestone; do not start the `fitroute/budget.py`
-row in §7 or the budget parts of §8 until the answer is recorded back into
-this section.
+**No pre-split, no `fitroute` change, no M10 sign-off needed.** The only
+residual property worth naming, not fixing: if K branches simultaneously
+exhaust the *same* provider, each independently waits and retries — correct,
+bounded by `max_wait_seconds`, but not perfectly efficient (a small
+thundering-herd retry burst when the cooldown lifts). Not a defect in this
+milestone's scope.
 
 ## 6. Design
 
@@ -205,7 +206,7 @@ of the sequential path.
 
 | Component | Change | Notes |
 |---|---|---|
-| `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync` | Existing single-hypothesis path stays as the K=1 case; K>1 bypasses `Scheduler.dispatch`/`DecisionRecord`/checkpointing/breaker accounting — open question, see §8 |
+| `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync`; emit a `DecisionRecord`/checkpoint per branch and feed each branch's outcome to the circuit breaker | Existing single-hypothesis path stays as the K=1 case; full audit parity with sequential dispatch, decided in §8 |
 | `agents/parallel.py::ParallelWorkItem` | Minor: add `runtime: str = "local"` field (unread this milestone, forward-compat only) | Otherwise reused as-is; M5's concurrency primitives are sufficient |
 | `execution/training/environment.py::child_environment` | New: inject a per-branch thread-cap env vars into the training subprocess's environment | See §8. **Not** `agents/coding.py` — that only generates code, it never executes it; `execution/training/runner.py::TrainingRunner.run()` is the actual `subprocess.run(...)` call, and `child_environment()` already builds the env dict it uses |
 | `git_evolution.py` / `git/python_backend.py` | New: worktree create/teardown per branch, crash-safe | `create_branch` today mutates the single working tree; needs a worktree-based sibling, not a modification of the existing checkout path |
@@ -215,21 +216,24 @@ of the sequential path.
 | `agents/events.py` / `agents/subscribers.py` | New subscriber: comparison + promotion | Same pattern as the existing evidence-refresh and experience-memory subscribers on `ExperimentCompleted` |
 | `agents/experiment.py::event_payload` | New: `completed_at` field | Needed for deterministic tie-break, see §8 |
 | `shared/experiments/graph.py::assemble_experiment` + manifest write path | New: read/write a `promoted` flag via `manifest.metadata`, not a new `Experiment` field | See §8 |
-| `fitroute/budget.py` | Possibly: per-step budget scoping | Blocked on §5 |
+| `fitroute/budget.py` | None | Resolved in §5 — the existing gateway pacing already covers K concurrent callers, no change needed |
 
 ## 8. Implementation notes
 
-**Auditability & breaker accounting — open, not designed.**
+**Auditability & breaker accounting — decided: full parity.**
 `run_parallel_async` calls `item.agent.execute(...)` directly; it does not go
 through `Scheduler.dispatch`, `store.enqueue`/`OsTask`, `DecisionRecord`, or
 `_record_experiment_outcome`'s consecutive-failure circuit breaker
 (`conductor/loop.py`) — all of which wrap every other tool dispatch today.
 That file's own comments describe past silent-degradation bugs this machinery
-exists to catch. Before implementation starts: decide whether each of the K
-branches produces its own `DecisionRecord` and checkpoint, and whether a
-branch failure counts toward the breaker the same way a sequential failure
-does. Skipping this silently reopens exactly the class of bug
-`_record_experiment_outcome`'s comments describe.
+exists to catch, so K-way fan-out gets the same treatment, not a lighter one:
+each of the K branches produces its own `DecisionRecord` and checkpoint after
+its `ParallelResult` comes back, and each branch's outcome (ok/failed) feeds
+`_record_experiment_outcome`'s breaker the same way a sequential failure
+would — a step with 2 of 3 branches failing counts as 2 failures toward the
+breaker, not 1 step. This is more wiring in `conductor/loop.py` than a
+step-level shortcut would be, but it doesn't reopen the silent-degradation
+class of bug `_record_experiment_outcome`'s comments describe.
 
 **Atomic claim, with rollback.** The hypothesis DB mirror is not a valid claim
 target — it's a best-effort dual-write cache (`_mirror_many_to_db`'s own
@@ -322,14 +326,6 @@ mechanism above (env vars only, vs. env vars + OS-level enforcement) is a
 leaning, not a final decision — record whichever is chosen back into this
 paragraph before implementation.
 
-**Budget scoping (blocked on §5).** Not implementable until M10's owner
-confirms an option. Once decided: if pre-split is chosen, allocate each
-`ParallelWorkItem`'s `cost` from a per-step `ParallelBudget` sized to K
-branches plus their reflection calls, before fan-out starts; if `BudgetLedger`
-stays the sole backstop, no code changes are needed here beyond the branches
-sharing it as they already would. Fill in the actual implementation once §5
-is resolved — this paragraph is the landing spot for it.
-
 ## 9. Tradeoffs
 
 | Decision | Options | Choice | Why |
@@ -340,6 +336,8 @@ is resolved — this paragraph is the landing spot for it.
 | Promotion storage | field on `Experiment` vs. `manifest.metadata` | `manifest.metadata` | `Experiment` is assembled fresh on every call, not persisted — a pydantic field has nowhere to round-trip; `manifest.metadata` already has a writer (`save_manifest`) |
 | Worktree cleanup | teardown-only vs. teardown + startup reconciliation | both | Teardown alone doesn't survive a hard crash; reconciliation is what actually closes the orphan risk already visible in this repo |
 | Compute isolation | no cap vs. env-var cap vs. env-var cap + OS-level enforcement | env-var cap (leaning; OS-level not ruled out) | Generated code passing explicit `n_jobs=-1` (or worse, a hard-coded count) under K-way fan-out can make wall-clock worse than sequential; `OMP_NUM_THREADS`+`LOKY_MAX_CPU_COUNT` cover the common case cheaply but don't fully close a hard-coded explicit count — not a final decision, see §8 |
+| LLM budget under fan-out | pre-split `ParallelBudget` K-ways vs. reuse the gateway's existing pace-and-retry | reuse existing gateway behavior | A fixed split is wrong on its own terms (forks need unequal budget); `RoleBoundClient.complete(allow_wait=True)` already sleeps-and-retries per caller thread, which is sufficient once each branch runs on its own thread — zero new code, see §5 |
+| Auditability under fan-out | step-level `DecisionRecord`/breaker vs. per-branch parity | per-branch parity | A step-level shortcut is less code but a branch failing wouldn't show up in the audit trail the way a sequential failure does today — explicitly rejected in favor of not reopening the silent-degradation bug class `conductor/loop.py` already guards against |
 
 ## 10. Testing
 
@@ -379,3 +377,11 @@ is resolved — this paragraph is the landing spot for it.
   training process is capped near `cores // K` rather than the library
   default, and that the Perf test's wall-clock bound isn't violated by
   oversubscription.
+- **Budget pacing across branches**: force two branches to exhaust the same
+  provider's rate limit concurrently, assert both sleep-and-retry
+  independently (one branch's wait does not block or fail the other) and
+  both eventually complete rather than raising `RoleUnavailable` — the
+  regression guard for §5's resolution.
+- **Breaker parity**: run a step where 2 of 3 branches fail, assert the
+  circuit breaker's consecutive-failure count increments by 2, not 1 — the
+  regression guard for §8's full-parity decision.
