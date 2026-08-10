@@ -145,6 +145,24 @@ class BudgetState(BaseModel):
         return max(0.0, (current - start).total_seconds())
 
 
+def _comparable_metric_name(name: str | None) -> str:
+    """A metric name reduced to what makes two readings comparable.
+
+    The recorded key and the requested one come from different places and are
+    spelled differently on purpose: a `ScoreEvent` carries the resolver's key
+    (`cv_rmse`, cross-validated), while `--target-metric` takes the
+    competition's own metric (`rmse`, from `MetricSpec.key`). Requiring them
+    to be equal means a target the user states in the only spelling they have
+    never matches, so the stop never fires.
+
+    Dropping the `cv_` prefix compares the metric rather than the way it was
+    measured, which is the question being asked. A different metric — `lb_auc`
+    against `cv_rmse` — still does not match.
+    """
+    text = str(name or "").strip().lower()
+    return text[3:] if text.startswith("cv_") else text
+
+
 def _last_metric_matches_target(config: BudgetConfig, state: BudgetState) -> bool:
     """Whether `last_metric` is a reading of the metric the target names.
 
@@ -161,7 +179,9 @@ def _last_metric_matches_target(config: BudgetConfig, state: BudgetState) -> boo
     """
     if not state.score_events:
         return True
-    return state.score_events[-1].metric_name == config.target_metric
+    return _comparable_metric_name(state.score_events[-1].metric_name) == _comparable_metric_name(
+        config.target_metric
+    )
 
 
 def evaluate_stops(

@@ -130,8 +130,18 @@ def _score_event_for(workspace: Workspace, execution_id: str) -> Any | None:
     except (OSError, json.JSONDecodeError):
         logger.warning("unreadable execution outcome for %s; no score recorded", execution_id)
         return None
+    if not isinstance(outcome, dict):
+        # A truncated or half-written file can still parse — as `null`, a
+        # list, a bare string. Letting that raise here would surface as a
+        # dispatch error and record a *successful* experiment as a failure
+        # against the circuit breaker.
+        logger.warning("malformed execution outcome for %s; no score recorded", execution_id)
+        return None
 
-    metrics = outcome.get("metrics") or {}
+    metrics = outcome.get("metrics")
+    if not isinstance(metrics, dict):
+        logger.info("execution %s recorded no metrics; no score recorded", execution_id)
+        return None
     if is_placeholder_metrics(metrics):
         # A run that never trained a model has no score to compare, for the
         # same reason it must not reach an evidence card.
@@ -233,6 +243,19 @@ def _record_experiment_outcome(
     if succeeded and workspace is not None and execution_id:
         event = _score_event_for(workspace, execution_id)
         if event is not None:
+            # The series becomes authoritative the moment it has an entry. A
+            # resumed session's stored readings name no metric, so keeping them
+            # alongside keyed events would rebuild the mixed-scale series this
+            # milestone exists to prevent — but dropping them changes what
+            # `plateau` sees, so say so rather than doing it quietly.
+            if not budget_state.score_events and budget_state.metric_history:
+                logger.info(
+                    "replacing %d stored metric readings for this session with the "
+                    "recorded series; they name no metric, so they cannot be compared "
+                    "against %s",
+                    len(budget_state.metric_history),
+                    event.metric_name,
+                )
             budget_state.score_events.append(event)
             budget_state.metric_history = [e.value for e in budget_state.score_events]
             budget_state.last_metric = event.value

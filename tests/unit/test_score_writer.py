@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from labpilot.research_engine.conductor.budgets import (
     BudgetConfig,
     BudgetState,
@@ -225,9 +227,18 @@ def test_a_target_is_not_met_by_a_different_metric():
     assert evaluate_stops(config, state) == "none"
 
 
-def test_a_target_is_met_by_its_own_metric():
-    """The guard must not cost the stop it protects."""
-    config = BudgetConfig(target_metric="cv_rmse", target_value=200.0, maximize=False)
+@pytest.mark.parametrize("target_metric", ["rmse", "cv_rmse", "RMSE"])
+def test_a_target_is_met_however_the_user_spelled_the_metric(target_metric):
+    """The name the user types and the key the resolver records differ.
+
+    `--target-metric` takes the competition's own metric (`rmse`, from
+    `MetricSpec.key` — the only spelling the user has), while a `ScoreEvent`
+    carries the resolver's cross-validated key (`cv_rmse`). An earlier version
+    of this guard compared the two for equality, so the target a user could
+    actually state never matched and `metric_target` could not fire at all —
+    and the test missed it by passing the internal key, which no user types.
+    """
+    config = BudgetConfig(target_metric=target_metric, target_value=200.0, maximize=False)
     state = BudgetState(
         score_events=[_event("cv_rmse", 190.97)],
         metric_history=[190.97],
@@ -243,3 +254,58 @@ def test_a_session_without_events_keeps_the_older_looser_target_behaviour():
     config = BudgetConfig(target_metric="lb", target_value=0.9, maximize=True)
 
     assert evaluate_stops(config, BudgetState(last_metric=0.91)) == "metric_target"
+
+
+@pytest.mark.parametrize("body", ["[]", "null", '"nope"', "123"])
+def test_a_malformed_outcome_file_records_nothing_instead_of_raising(tmp_path: Path, body):
+    """These parse as JSON but are not objects.
+
+    Raising here would not stay local: `_record_experiment_outcome` runs inside
+    the dispatch try block, so the error would surface as a dispatch failure
+    and count a *successful* experiment against the circuit breaker — three of
+    them stop the campaign.
+    """
+    ws = _ws(tmp_path)
+    out = _write_outcome(ws, "E-006")
+    out.write_text(body, encoding="utf-8")
+
+    assert _score_event_for(ws, "E-006") is None
+
+
+@pytest.mark.parametrize("metrics", [["not", "a", "dict"], "a string", 7])
+def test_a_non_dict_metrics_field_records_nothing_instead_of_raising(tmp_path: Path, metrics):
+    """`outcome["metrics"]` is not guaranteed to be an object either.
+
+    A non-empty non-dict slips past a plain `or {}` and reaches
+    `is_placeholder_metrics`, whose `(metrics or {}).get(...)` then raises —
+    with the same consequence as a malformed file, a successful experiment
+    counted as a failure.
+    """
+    ws = _ws(tmp_path)
+    _write_outcome(ws, "E-007", metrics=metrics)
+
+    assert _score_event_for(ws, "E-007") is None
+
+
+def test_the_first_recorded_score_replaces_a_legacy_history(tmp_path: Path):
+    """Stored readings that predate the series name no metric, so they cannot
+    be compared against a keyed one — the series becomes authoritative rather
+    than being appended to a mixed-scale list."""
+    ws = _ws(tmp_path)
+    _write_outcome(ws, "E-001", metrics={"cv_rmse": 194.80})
+    _competition_json(ws, "E-001", "rmse", "minimize")
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        session = store.create_session(
+            "g", metadata={"budget_state": {"metric_history": [0.5, 0.6, 0.7], "last_metric": 0.7}}
+        )
+
+        _record_experiment_outcome(
+            store, session.id, succeeded=True, workspace=ws, execution_id="E-001"
+        )
+
+        _, state = load_budget_pair(store.get_session(session.id))
+        assert state.metric_history == [194.80]
+        assert state.last_metric == 194.80
+    finally:
+        store.close()
