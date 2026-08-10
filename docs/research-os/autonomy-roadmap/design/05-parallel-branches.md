@@ -21,7 +21,7 @@ primitives.
 
 ## 2. Problem
 
-Three things are missing between "M5's workers exist" and "a campaign step
+Four things are missing between "M5's workers exist" and "a campaign step
 tests three hypotheses at once safely":
 
 1. **No branch isolation.** `git_evolution.py` knows experiment branch *naming*
@@ -44,6 +44,13 @@ tests three hypotheses at once safely":
    branches finish, nothing picks a winner: `ExperimentGraph.best_path()` can
    *identify* the best-scoring path by a metric, but no field marks an
    `Experiment` promoted, and no code sets one.
+4. **No compute isolation.** Nothing in the training path sets thread or core
+   limits — a repo-wide search for `n_jobs`/`num_threads`/`nthread` in
+   `src/labpilot` returns zero hits. Generated training code gets library
+   defaults, which for LightGBM/XGBoost/scikit-learn is typically "use every
+   core." K concurrent branches under those defaults oversubscribe the same
+   physical cores instead of getting K× the throughput — the parallelism this
+   milestone builds toward can end up *slower* than sequential, not faster.
 
 None of this is exercised today because the loop is sequential, so these gaps
 are latent, not yet observed in production incidents.
@@ -70,6 +77,9 @@ are latent, not yet observed in production incidents.
 - The shared LLM budget (M10's `BudgetLedger`) is respected across concurrent
   branches, including the reflection calls losers trigger — no branch or
   reflection should be able to starve the others of the entire step's budget.
+- Each branch's generated training code respects a per-branch compute budget
+  (thread/core cap = available cores ÷ K) instead of the library defaults
+  that assume sole use of the machine — nothing sets this today (§2 item 4).
 
 **Non-functional**
 - Three hypotheses tested in one campaign step, wall-clock materially less
@@ -100,13 +110,25 @@ are latent, not yet observed in production incidents.
 - A comparison/promotion subscriber on the existing Blinker bus.
 - Reflection filing for losing branches (reuse existing reflection code,
   triggered per loser).
+- Per-branch compute (CPU thread/core) budgeting for generated training code,
+  so K-way fan-out doesn't oversubscribe the same cores (§8).
 
 **Out of scope** (per the backlog doc this plan resolves, and M5's own
 docstring — do not redo)
 - Max-workers enforcement, shared budget accounting primitive, and
   `asyncio.gather`-style fan-out — M5 already ships these in
   `agents/parallel.py`.
-- Distributed / multi-machine orchestration.
+- Distributed / multi-machine orchestration, including remote execution
+  backends (Kaggle, Colab, cloud). The Runtime abstraction for this already
+  shipped
+  ([research-engineer/plan-7-runtime.md](../../../research-pipeline/milestones/research-engineer/plan-7-runtime.md),
+  `execution/runtimes/`, `execution/capabilities/runtime/`); actual dispatch/
+  poll/artifact-sync execution against remote backends is a separately
+  tracked, already-deferred item
+  ([TODO.md](../../../research-pipeline/milestones/TODO.md), "P2 remote
+  execution"), not part of this milestone. `ParallelWorkItem` still gets a
+  `runtime` field defaulting to `"local"` (§7) so that work can build on this
+  fan-out later without retrofitting it.
 - Arbitrary branch-merge policy or conflict resolution beyond "pick one
   winner, keep the losers as evidence."
 
@@ -149,6 +171,8 @@ Conductor step
    │     └─ on setup failure below: release the claim, do not leave it stuck
    │
    ├─ per hypothesis: create git worktree on research/<session>/<experiment>
+   ├─ per hypothesis: allocate compute budget (cores ÷ K), injected into
+   │     the generated training code — not left to library defaults (§8)
    │
    ▼
 run_parallel_async([ParallelWorkItem(id=hyp_id, agent=ExperimentAgent, task=..., cost=...)])
@@ -179,7 +203,8 @@ of the sequential path.
 | Component | Change | Notes |
 |---|---|---|
 | `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync` | Existing single-hypothesis path stays as the K=1 case; K>1 bypasses `Scheduler.dispatch`/`DecisionRecord`/checkpointing/breaker accounting — open question, see §8 |
-| `agents/parallel.py` | None | Reused as-is; M5 primitives are sufficient |
+| `agents/parallel.py::ParallelWorkItem` | Minor: add `runtime: str = "local"` field (unread this milestone, forward-compat only) | Otherwise reused as-is; M5's concurrency primitives are sufficient |
+| `agents/coding.py` (M19 delta-codegen path) | New: inject a per-branch thread cap into generated training code | See §8. Exact mechanism (prompt instruction vs. env-var wrapper) not yet decided |
 | `git_evolution.py` / `git/python_backend.py` | New: worktree create/teardown per branch, crash-safe | `create_branch` today mutates the single working tree; needs a worktree-based sibling, not a modification of the existing checkout path |
 | *(new)* reconciliation check | New: startup-time `git worktree prune` + orphan sweep | Closes the crash gap — see §8. A worktree whose creating process dies before teardown runs is a standard git-worktree failure mode, not something this design can assume away |
 | `hypothesis.py::mark_testing_if_proposed` | Fix: atomic claim on the JSON file (not the DB mirror) + release-on-setup-failure | See §8 |
@@ -268,6 +293,23 @@ duplicated K times — if the latter, K needs a disk-aware ceiling in addition
 to the concurrency-budget ceiling already in §3. Record the answer here before
 implementation starts.
 
+**Compute budget (CPU/threads) — real, unaddressed gap.** Nothing in the
+training path sets thread or core limits today — confirmed via a repo-wide
+search: zero hits for `n_jobs`/`num_threads`/`nthread` in `src/labpilot`.
+Generated training code gets library defaults, which for LightGBM/XGBoost/
+scikit-learn is typically "use every core." K concurrent branches under those
+defaults oversubscribe the same physical cores instead of getting K× the
+throughput — cache thrashing and context-switch overhead can make wall-clock
+*worse* than sequential, directly undermining exit criterion 1, the actual
+justification for this milestone. Unlike §5, this needs no external sign-off
+— it's fully implementable inside M11: compute a per-branch cap
+(`available_cores // K`, or a configured ceiling) before fan-out and inject it
+into the generated training code via `agents/coding.py` (M19's delta-codegen
+path). Prefer wrapping execution with `OMP_NUM_THREADS`/`MKL_NUM_THREADS`/
+`OPENBLAS_NUM_THREADS` env vars over a prompt instruction telling the LLM to
+set `n_jobs` — env vars are enforced regardless of what the generated code
+does; a prompt instruction depends on the LLM actually complying.
+
 **Budget scoping (blocked on §5).** Not implementable until M10's owner
 confirms an option. Once decided: if pre-split is chosen, allocate each
 `ParallelWorkItem`'s `cost` from a per-step `ParallelBudget` sized to K
@@ -285,6 +327,7 @@ is resolved — this paragraph is the landing spot for it.
 | Write serialization | WAL only vs. WAL + module-level writer lock | both | WAL alone permits concurrent writers to still race on read-modify-write app logic; an instance-level lock (à la `BudgetLedger`) doesn't work here since `ConductorStore`/`KnowledgeStore` are constructed fresh per call — the lock must be module-level |
 | Promotion storage | field on `Experiment` vs. `manifest.metadata` | `manifest.metadata` | `Experiment` is assembled fresh on every call, not persisted — a pydantic field has nowhere to round-trip; `manifest.metadata` already has a writer (`save_manifest`) |
 | Worktree cleanup | teardown-only vs. teardown + startup reconciliation | both | Teardown alone doesn't survive a hard crash; reconciliation is what actually closes the orphan risk already visible in this repo |
+| Compute isolation | leave library defaults vs. inject per-branch thread cap | inject cap, via env vars | Library defaults (all-cores) oversubscribe under K-way fan-out and can make wall-clock worse than sequential; env vars don't depend on the LLM cooperating the way a prompt instruction would |
 
 ## 10. Testing
 
@@ -319,3 +362,8 @@ is resolved — this paragraph is the landing spot for it.
   two have reflections filed.
 - **Promotion tie-break**: two branches with equal scores, assert the
   earlier-completed one is promoted deterministically (not random, not both).
+- **Compute contention**: run K=3 branches under a fixed, small core count
+  (e.g. 2 cores via `taskset`/cgroup in the test), assert each branch's
+  training process is capped near `cores // K` rather than the library
+  default, and that the Perf test's wall-clock bound isn't violated by
+  oversubscription.
