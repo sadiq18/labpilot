@@ -14,6 +14,10 @@ from labpilot.research_engine.execution.capabilities._helpers import (
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
+from labpilot.research_engine.execution.training.environment import (
+    child_environment,
+    training_command,
+)
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 #: How much of a failure to keep. Same budget as before; the change is *which*
@@ -68,6 +72,12 @@ class VerificationCapability(BaseCapability):
             text=True,
             check=False,
             cwd=context.workspace_root,
+            # These are the workspace's tests — written by a model, importing
+            # the same generated pipeline training runs. `TrainingRunner` strips
+            # credentials before running that code and this gate did not, so the
+            # check that runs first was the more permissive of the two. M20
+            # criterion 2.
+            env=child_environment(),
         )
         duration = time.monotonic() - started
         log_path.write_text(
@@ -147,10 +157,6 @@ class VerificationCapability(BaseCapability):
         # docstring plus comments exits 0) and then failed training, where uv
         # refused the whole script. The gate reported success for a file that
         # could not run.
-        from labpilot.research_engine.execution.training.environment import (
-            training_command,
-        )
-
         started = time.monotonic()
         proc = subprocess.run(  # noqa: S603
             training_command(train, python=sys.executable),
@@ -161,10 +167,13 @@ class VerificationCapability(BaseCapability):
             # metrics.json / submission.csv at the competition root.
             cwd=context.workspace_root,
             timeout=int(context.constraints.get("smoke_timeout_s", 120)),
-            env={
-                **dict(__import__("os").environ),
-                "LABPILOT_SMOKE": "1",
-            },
+            # The command was shared and the environment was not: this passed
+            # the operator's `os.environ` straight through, so the first thing
+            # to execute model-written code gave it the provider and Kaggle keys
+            # that `child_environment` exists to withhold. `LABPILOT_SMOKE` is
+            # the one difference this gate is entitled to — it is how a script
+            # knows to take its short path, and production must not set it.
+            env={**child_environment(), "LABPILOT_SMOKE": "1"},
         )
         duration = time.monotonic() - started
         log_path.write_text(

@@ -112,7 +112,7 @@ The rule catches the fourth instance before it is written.
 | exit criterion | state |
 |---|---|
 | 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
-| 2 — no verification path rebuilds a command production owns | not started |
+| 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not, and both verification gates ran model-written code with the operator's credentials that `child_environment` exists to withhold. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
 | 4 — a derived artifact re-derives or says it is derived | not started |
 | 5 — a broken artifact fails at the gate that owns it | not started |
@@ -138,6 +138,38 @@ figure, while the verdict lives one branch up in `if ok and not fresh:`. A
 red-then-green run against the wrong line proves nothing just as surely as a weak
 test does, which is worth saying because the sweep is the thing everything else
 here rests on.
+
+### The half of the command nobody shared
+
+Criterion 2 was named after the smoke gate building its own command instead of
+calling `training_command`. That had already been fixed — and fixing it had
+drawn attention to the argv and away from everything else `subprocess.run` takes.
+
+`TrainingRunner` runs generated code with `env=child_environment()`, which strips
+the operator's provider and Kaggle keys. Its docstring is explicit: that code
+"has no business holding the operator's provider keys or Kaggle credentials."
+Both verification gates ran the *same generated code* without it — the smoke gate
+passed `{**os.environ, "LABPILOT_SMOKE": "1"}`, and the unit-test gate passed no
+`env` at all and inherited everything.
+
+So the first thing to execute model-written code was the most permissive path in
+the system, and the one place the rule was written down was the only place it was
+applied. Both gates now build from `child_environment()`; the smoke gate layers
+`LABPILOT_SMOKE` back on, which is the single difference it is entitled to.
+
+This is criterion 2's real content, and the reason its wording says *command*
+rather than *argv* was luck rather than foresight: sharing the argv and forking
+the environment is the same defect, and it is the half that decides what a
+hostile dependency can reach.
+
+**The test for it captures what the gate passed**, rather than reading the
+capability for the right call — criterion 1 spent seven review rounds inside a
+source parser learning that. A mutation sweep then caught the fixture: the
+comparison against `training_command` was satisfied by a hand-built
+`[sys.executable, str(train)]`, because a script with no PEP 723 block produces
+that argv either way. Both script shapes are covered now, which is the rogii
+2026-08-08 failure — a declared-dependency script the gate ran under bare
+`python` — surviving one round inside the test written to catch it.
 
 ### The parser that had to go
 
