@@ -8,10 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from labpilot.research_engine.execution.capabilities._helpers import (
-    failure_excerpt,
-    stream_text,
-)
+from labpilot.research_engine.execution.capabilities._helpers import stopped_excerpt
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
@@ -155,11 +152,7 @@ class DependencyCapability(BaseCapability):
             # building when the clock ran out; without it a hung build reports
             # no package at all, while the branch below carries stderr into
             # `error` on an ordinary failure. Reported reviewing PR #124.
-            streams = [stream_text(expired.output), stream_text(expired.stderr)]
-            # Both streams: see `VerificationCapability._timed_out` — a timeout
-            # has no traceback, so stderr-or-stdout would drop the line naming
-            # the package pip was building.
-            excerpt = failure_excerpt("", "\n".join(p for p in streams if p.strip()))
+            excerpt = stopped_excerpt(expired.output, expired.stderr)
             return TaskEvidence(
                 task_id=context.task.id,
                 execution_id=context.execution.id,

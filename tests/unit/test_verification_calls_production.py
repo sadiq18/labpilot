@@ -41,6 +41,7 @@ from pathlib import Path
 import pytest
 from helpers.capability_context import capability_context
 
+from labpilot.research_engine.execution.capabilities._helpers import stopped_excerpt
 from labpilot.research_engine.execution.capabilities.dependency import (
     DependencyCapability,
 )
@@ -224,15 +225,22 @@ _PARTIAL_STDOUT = b"collected 3 items\nrunning test_alpha\n"
 _PARTIAL_STDERR = b"warning: slow fixture\n"
 
 
-def _timeout_after(monkeypatch, module, *, partial: bool = True) -> None:
+def _timeout_after(
+    monkeypatch,
+    module,
+    *,
+    partial: bool = True,
+    stdout: bytes | None = None,
+    stderr: bytes | None = None,
+) -> None:
     """Make the gate's subprocess exceed its own limit, as the real one does."""
 
     def _hangs(cmd, **kwargs):
         raise subprocess.TimeoutExpired(
             cmd,
             kwargs.get("timeout") or 0,
-            output=_PARTIAL_STDOUT if partial else None,
-            stderr=_PARTIAL_STDERR if partial else None,
+            output=(stdout or _PARTIAL_STDOUT) if partial else None,
+            stderr=(stderr or _PARTIAL_STDERR) if partial else None,
         )
 
     monkeypatch.setattr(module.subprocess, "run", _hangs)
@@ -447,3 +455,116 @@ def test_the_install_bound_can_be_overridden_by_its_constraint(tmp_path, monkeyp
     DependencyCapability(install=True).execute(context)
 
     assert _launched(seen)["timeout"] == 11
+
+
+# -- the diagnosis survives a noisy stream ------------------------------------
+
+#: Longer than `_EXCERPT_CHARS` and made of *distinct* lines, so the tqdm
+#: collapse inside `failure_excerpt` cannot fold it back under the budget.
+#: Fixtures in the previous three rounds were 39 bytes and never reached any
+#: limit they were meant to test — the code mutation went red every time and the
+#: input could not express the defect. Adversarial by construction, not by
+#: realism.
+_FLOOD = "\n".join(f"WARNING: deprecated call site {i}" for i in range(200))
+
+#: The marker sits at the *tail* of each stream, which is both where a tail-
+#: keeping excerpt should preserve it and where the real signal is: the last
+#: thing a process prints before it hangs.
+_STDOUT_MARK = "running test_alpha"
+_STDERR_MARK = "fixture acquire timed out on lock"
+
+
+def _streams(stdout_noise: str, stderr_noise: str) -> tuple[bytes, bytes]:
+    stdout = f"{stdout_noise}\n{_STDOUT_MARK}\n".encode()
+    stderr = f"{stderr_noise}\n{_STDERR_MARK}\n".encode()
+    return stdout, stderr
+
+
+_NOISE = [
+    pytest.param("", "", id="both_quiet"),
+    pytest.param("", _FLOOD, id="stderr_floods"),
+    pytest.param(_FLOOD, "", id="stdout_floods"),
+    pytest.param(_FLOOD, _FLOOD, id="both_flood"),
+]
+
+
+@pytest.mark.parametrize(("stdout_noise", "stderr_noise"), _NOISE)
+@pytest.mark.parametrize("gate", ["smoke", "unit"])
+def test_a_timeout_keeps_the_last_word_of_both_streams(
+    tmp_path, monkeypatch, gate, stdout_noise, stderr_noise
+):
+    """Reported reviewing PR #124, round 3, and the end of a pattern.
+
+    Round 2 joined the streams because `failure_excerpt` takes `stderr or
+    stdout` and dropped one. Round 3 found the join is tail-limited, so a stderr
+    longer than the budget evicted stdout again — the same eviction, one layer
+    down, inside the fix written to prevent it.
+
+    Ordering cannot solve that; whichever stream goes last wins. The invariant is
+    that **neither stream can silence the other**, so each gets its own budget.
+    Parametrised over which stream floods, because a fixture where neither does
+    is satisfied by every broken version of this.
+    """
+    context = (_smoke_context if gate == "smoke" else _unit_context)(tmp_path, monkeypatch)
+    stdout, stderr = _streams(stdout_noise, stderr_noise)
+    _timeout_after(monkeypatch, verification_module, stdout=stdout, stderr=stderr)
+
+    result = VerificationCapability().execute(context)
+
+    assert _STDOUT_MARK in (result.error or ""), "the stderr flood silenced stdout"
+    assert _STDERR_MARK in (result.error or ""), "the stdout flood silenced stderr"
+
+
+@pytest.mark.parametrize(("stdout_noise", "stderr_noise"), _NOISE)
+def test_an_install_timeout_keeps_the_last_word_of_both_streams(
+    tmp_path, monkeypatch, stdout_noise, stderr_noise
+):
+    """The installer had the identical ordering. Both handlers now call one
+    helper, so there is no second implementation to drift."""
+    context = _install_context(tmp_path, monkeypatch)
+    stdout, stderr = _streams(stdout_noise, stderr_noise)
+    _timeout_after(monkeypatch, dependency_module, stdout=stdout, stderr=stderr)
+
+    result = DependencyCapability(install=True).execute(context)
+
+    assert _STDOUT_MARK in (result.error or "")
+    assert _STDERR_MARK in (result.error or "")
+
+
+@pytest.mark.parametrize("gate", ["smoke", "unit"])
+def test_a_timeout_records_the_time_it_actually_spent(tmp_path, monkeypatch, gate):
+    """Reported reviewing PR #124, round 3.
+
+    `outcome.py` totals an execution's duration by summing `duration_s` across
+    the evidence files. The timeout verdict recorded `timeout_s` and no
+    `duration_s`, so a step that burned its whole bound contributed **zero** —
+    and because the other steps supply the key, the total does not fall back to
+    `None`, it just under-reports in silence.
+    """
+    context = (_smoke_context if gate == "smoke" else _unit_context)(tmp_path, monkeypatch)
+    _timeout_after(monkeypatch, verification_module)
+
+    result = VerificationCapability().execute(context)
+
+    assert isinstance(result.metadata.get("duration_s"), float)
+    assert result.metadata["duration_s"] >= 0
+
+
+def test_the_stopped_excerpt_spends_one_budget_across_both_streams():
+    """Splitting the budget is what makes two streams affordable.
+
+    Found by mutation: raising each stream's share from `limit // 2` to `limit`
+    left every test above green, because both markers still survive — the tests
+    asserted the streams were *kept* and never that the result stayed small.
+    `_EXCERPT_CHARS` exists because rogii's E-174 stored 1523 characters of tqdm
+    and no diagnosis; a timeout quietly spending twice that on every card is the
+    same defect with a different cause.
+    """
+    from labpilot.research_engine.execution.capabilities._helpers import _EXCERPT_CHARS
+
+    loud = ("\n".join(f"line {i} of noise that will not collapse" for i in range(500))).encode()
+
+    excerpt = stopped_excerpt(loud, loud)
+
+    assert len(excerpt) <= _EXCERPT_CHARS + 32, "two streams must not cost two budgets"
+    assert excerpt.count("line 499") == 2, "each stream still keeps its own tail"

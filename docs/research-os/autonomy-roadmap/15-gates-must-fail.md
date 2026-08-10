@@ -233,7 +233,43 @@ Two details the fix turns on, both easy to get wrong:
 - `failure_excerpt` takes `stderr or stdout`, which is right for a crash — the
   traceback is on stderr. A timeout has no traceback, and the tail of *stdout* is
   what says how far it got, so a one-line stderr warning was enough to hide the
-  test name entirely. The timeout paths pass both streams joined.
+  test name entirely.
+
+#### Three rounds, one cause: the fixture could not express the defect
+
+Joining the streams did not fix the second point — it moved it. The excerpt keeps
+the **tail** within 1500 characters, so a stderr longer than that evicted stdout
+again: the same silencing, one layer down, inside the fix written to prevent it.
+
+Ordering cannot solve that; whichever stream goes last wins. `stopped_excerpt`
+in `capabilities/_helpers.py` gives each stream half the budget instead, so
+neither can silence the other at any volume, and both capabilities call the one
+function rather than keeping a copy each — which is criterion 2 applied to the
+fix for criterion 2.
+
+**The pattern underneath is worth more than the fix.** Every round of this PR was
+verified by a mutation sweep, every sweep went red, and every round shipped the
+next defect. The sweeps mutated the *code* and never the *input*:
+
+| round | fixture | the limit it had to exceed |
+|---|---|---|
+| 1 | a `train.py` with no PEP 723 block | `training_command`'s two branches are identical for it |
+| 2 | `TimeoutExpired(output=None)` | nothing to discard, so the discard was invisible |
+| 3 | 39 bytes of output | the excerpt budget is 1500 |
+
+A mutation sweep proves an assertion is wired to the code. It says nothing about
+whether the *input* can express the failure — and a fixture chosen to look
+realistic is almost always too small to. Demonstrated directly on this branch:
+shrinking the flood below the budget and reverting the helper to the round-3
+version leaves all 39 tests green; restoring the flood fails six.
+
+So the practice, alongside the code sweep: **mutate the input too.** Shrink the
+fixture and confirm the test loses power. If it stays green, the fixture was
+decorative and the sweep was measuring nothing. For anything that truncates,
+selects, or summarises, the input has to exceed the limit by construction rather
+than by realism — and the assertion has to cover both directions, since raising
+each stream's share from `limit // 2` to `limit` also survived until a test
+asserted the *total*.
 
 ### The parser that had to go
 

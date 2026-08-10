@@ -10,6 +10,7 @@ from labpilot.research_engine.execution.capabilities._helpers import (
     evidence,
     failure_excerpt,
     is_dry_run,
+    stopped_excerpt,
     stream_text,
 )
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
@@ -44,6 +45,7 @@ class VerificationCapability(BaseCapability):
         expired: subprocess.TimeoutExpired,
         *,
         check: str,
+        started: float,
     ) -> TaskEvidence:
         """A verdict for a step that ran out of time, rather than an exception.
 
@@ -61,15 +63,12 @@ class VerificationCapability(BaseCapability):
         # thinner record, which is the asymmetry PR #121 fixed in
         # `evaluation._infer`. It is also the whole diagnosis: it names the test
         # that was running when the clock ran out. Reported reviewing PR #124.
-        stdout = stream_text(expired.output)
-        stderr = stream_text(expired.stderr)
-        log_path.write_text(f"{message}\n{stdout}\n{stderr}\n", encoding="utf-8")
-        # Both streams, not `stderr or stdout`. `failure_excerpt` prefers stderr
-        # because a crash puts its traceback there — but a timeout has no
-        # traceback, the tail of *stdout* is what says how far it got, and a
-        # one-line stderr warning would hide it completely. Passing the join
-        # keeps the tqdm collapsing and the tail budget over both.
-        excerpt = failure_excerpt("", "\n".join(p for p in (stdout, stderr) if p.strip()))
+        # The log keeps both streams whole; only the excerpt below is budgeted.
+        log_path.write_text(
+            f"{message}\n{stream_text(expired.output)}\n{stream_text(expired.stderr)}\n",
+            encoding="utf-8",
+        )
+        excerpt = stopped_excerpt(expired.output, expired.stderr)
         return evidence(
             context,
             capability=self.name,
@@ -82,7 +81,16 @@ class VerificationCapability(BaseCapability):
                 "would have passed — a run that does not finish has not been verified."
                 + (f"\nLast output before it was stopped:\n{excerpt}" if excerpt else "")
             ),
-            metadata={"timeout_s": limit, "cmd": list(expired.cmd)},
+            # `duration_s` as well as `timeout_s`: `outcome.py` totals an
+            # execution by summing this key across evidence files, and a step
+            # that burned its whole bound was contributing zero — silently, since
+            # the other steps supply the key and stop it falling back to `None`.
+            # Reported reviewing PR #124, round 3.
+            metadata={
+                "timeout_s": limit,
+                "duration_s": time.monotonic() - started,
+                "cmd": list(expired.cmd),
+            },
         )
 
     def _unit(self, context: TaskContext) -> TaskEvidence:
@@ -135,7 +143,7 @@ class VerificationCapability(BaseCapability):
                 timeout=int(context.constraints.get("unit_timeout_s", 600)),
             )
         except subprocess.TimeoutExpired as expired:
-            return self._timed_out(context, log_path, expired, check="pytest")
+            return self._timed_out(context, log_path, expired, check="pytest", started=started)
         duration = time.monotonic() - started
         log_path.write_text(
             f"returncode={proc.returncode}\n{proc.stdout}\n{proc.stderr}\n",
@@ -234,7 +242,7 @@ class VerificationCapability(BaseCapability):
                 env={**child_environment(), "LABPILOT_SMOKE": "1"},
             )
         except subprocess.TimeoutExpired as expired:
-            return self._timed_out(context, log_path, expired, check="smoke_gate")
+            return self._timed_out(context, log_path, expired, check="smoke_gate", started=started)
         duration = time.monotonic() - started
         log_path.write_text(
             f"returncode={proc.returncode}\nduration_s={duration}\n{proc.stdout}\n{proc.stderr}\n",
