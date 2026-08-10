@@ -18,6 +18,7 @@ from labpilot.research_engine.agents.git_worktree import (
     ExperimentWorktree,
     create_experiment_worktree,
     experiment_worktree,
+    experiment_worktree_root,
     list_registered_worktrees,
     reconcile_worktrees,
     remove_experiment_worktree,
@@ -132,10 +133,11 @@ def test_reconcile_removes_orphans_but_keeps_live_branches(tmp_path: Path) -> No
     live = create_experiment_worktree(root, session_id="s1", experiment_key="live")
     orphan = create_experiment_worktree(root, session_id="s1", experiment_key="orphan")
 
-    removed = reconcile_worktrees(root, live_branches={live.branch})
+    result = reconcile_worktrees(root, live_branches={live.branch})
 
-    assert orphan.path in removed
-    assert live.path not in removed
+    assert orphan.path in result.removed
+    assert live.path not in result.removed
+    assert result.ok
     assert not orphan.path.exists()
     assert live.path.is_dir()
     remove_experiment_worktree(live)
@@ -152,9 +154,9 @@ def test_reconcile_ignores_worktrees_outside_our_directory(tmp_path: Path) -> No
         capture_output=True,
     )
 
-    removed = reconcile_worktrees(root, live_branches=set())
+    result = reconcile_worktrees(root, live_branches=set())
 
-    assert removed == []
+    assert result.removed == []
     assert outside.is_dir()
     # Still registered under its own branch — reconciliation left it entirely alone.
     assert list_registered_worktrees(root)[outside.resolve()] == "my/work"
@@ -204,6 +206,54 @@ def test_traversing_ids_are_refused_before_anything_is_deleted(
     assert (victim / "knowledge.db").read_text() == "hypotheses, beliefs, claims"
 
 
+@pytest.mark.parametrize(
+    ("session_id", "experiment_key"),
+    [
+        (".", "."),  # research/./.  → resolves to .worktrees itself
+        ("a", ".."),  # research/a/.. → same place by another route
+    ],
+)
+def test_ids_resolving_to_the_worktree_root_itself_are_refused(
+    tmp_path: Path, session_id: str, experiment_key: str
+) -> None:
+    """The guard's own boundary: *on* the root, not past it.
+
+    An earlier version of the containment check tested `!= root and not
+    is_relative_to(root)`. `is_relative_to` is already True for an equal path,
+    so that first clause was dead and the root itself was permitted — and
+    rmtree on the root destroys every concurrently running branch rather than
+    one. Escaping outward was covered; landing exactly on the edge was not.
+    """
+    root = _repo(tmp_path)
+    live_a = create_experiment_worktree(root, session_id="s1", experiment_key="branch-a")
+    live_b = create_experiment_worktree(root, session_id="s1", experiment_key="branch-b")
+
+    with pytest.raises(ValueError, match="worktree root"):
+        create_experiment_worktree(
+            root, session_id=session_id, experiment_key=experiment_key
+        )
+
+    # Every sibling branch survived.
+    assert live_a.path.is_dir()
+    assert live_b.path.is_dir()
+    remove_experiment_worktree(live_a)
+    remove_experiment_worktree(live_b)
+
+
+def test_remove_refuses_a_handle_pointing_at_the_worktree_root(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    live = create_experiment_worktree(root, session_id="s1", experiment_key="branch-a")
+    forged = ExperimentWorktree(
+        path=experiment_worktree_root(root), branch="research/x/y", repo_root=root
+    )
+
+    with pytest.raises(ValueError, match="worktree root"):
+        remove_experiment_worktree(forged)
+
+    assert live.path.is_dir()
+    remove_experiment_worktree(live)
+
+
 def test_remove_refuses_a_handle_pointing_outside_the_worktree_root(
     tmp_path: Path,
 ) -> None:
@@ -232,12 +282,15 @@ def test_reconcile_does_not_report_a_removal_that_failed(tmp_path: Path) -> None
     original = gw._force_unregister
     gw._force_unregister = lambda tool, path: None
     try:
-        removed = reconcile_worktrees(root, live_branches=set())
+        result = reconcile_worktrees(root, live_branches=set())
     finally:
         gw._force_unregister = original
 
     assert wt.path.is_dir(), "precondition: the directory should still be there"
-    assert wt.path not in removed, "reported a removal that did not happen"
+    assert wt.path not in result.removed, "reported a removal that did not happen"
+    # The caller must be able to SEE the failure, not just find it in a log.
+    assert wt.path in result.failed
+    assert not result.ok
     remove_experiment_worktree(wt)
 
 

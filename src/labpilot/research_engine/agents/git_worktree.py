@@ -65,6 +65,26 @@ class ExperimentWorktree:
     repo_root: Path
 
 
+@dataclass(frozen=True)
+class ReconcileResult:
+    """What the startup sweep actually managed to clear.
+
+    Both lists are returned rather than only the successes, because the
+    caller's decision depends on the failures: a worktree that could not be
+    removed still holds its branch checked out, so the experiment keys under
+    `failed` will die inside `create_experiment_worktree` later with git's
+    "already checked out". A log line cannot be acted on by the campaign
+    startup that needs to decide whether to fan out over those keys.
+    """
+
+    removed: list[Path]
+    failed: list[Path]
+
+    @property
+    def ok(self) -> bool:
+        return not self.failed
+
+
 def experiment_worktree_root(repo_root: Path) -> Path:
     return Path(repo_root) / WORKTREE_DIRNAME
 
@@ -96,7 +116,17 @@ def _assert_contained(path: Path, root: Path) -> None:
     """
     resolved_root = root.resolve()
     resolved = path.resolve()
-    if resolved != resolved_root and not resolved.is_relative_to(resolved_root):
+    # Strictly *inside*, not merely "not outside". `.worktrees` itself is
+    # reachable from several branch names (`./.`, `a/..`), and deleting it
+    # takes out every concurrently running branch rather than one — worse
+    # than the escape this guard was added for. `is_relative_to` is True for
+    # an equal path, so equality has to be rejected on its own.
+    if resolved == resolved_root:
+        raise ValueError(
+            f"refusing to operate on {path}: resolves to the experiment "
+            f"worktree root {resolved_root} itself, which holds every branch"
+        )
+    if not resolved.is_relative_to(resolved_root):
         raise ValueError(
             f"refusing to operate on {path}: resolves to {resolved}, outside "
             f"the experiment worktree root {resolved_root}"
@@ -208,12 +238,13 @@ def reconcile_worktrees(
     *,
     live_branches: set[str],
     git: GitTool | None = None,
-) -> list[Path]:
+) -> ReconcileResult:
     """Remove experiment worktrees no live campaign step still owns.
 
-    Returns the paths removed. `live_branches` is supplied by the caller
-    rather than queried here so this module stays free of any conductor
-    dependency — the caller knows which steps are running.
+    Returns what was removed *and* what could not be — see `ReconcileResult`.
+    `live_branches` is supplied by the caller rather than queried here so this
+    module stays free of any conductor dependency — the caller knows which
+    steps are running.
 
     Only worktrees under `.worktrees/` are considered. A developer's own
     worktree elsewhere in the repo is never touched, which matters because
@@ -253,7 +284,7 @@ def reconcile_worktrees(
             len(failed),
             ", ".join(str(p) for p in failed),
         )
-    return removed
+    return ReconcileResult(removed=removed, failed=failed)
 
 
 def _force_unregister(tool: GitTool, path: Path) -> None:
