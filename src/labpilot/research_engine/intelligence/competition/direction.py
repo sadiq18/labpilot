@@ -68,9 +68,12 @@ def _from_competition_json(path: Path) -> bool | None:
     for key in ("metric", "evaluation_metric"):
         metric = data.get(key)
         if isinstance(metric, dict):
-            found = _direction_to_maximize(metric.get("direction"))
-            if found is not None:
-                return found
+            # The first block present decides, including when its answer is
+            # "unknown". Falling through on an unparseable direction would let
+            # a machine-written `evaluation_metric` override a hand-written
+            # `metric` whose direction is merely misspelled — the deliberate
+            # source losing to the generated one.
+            return _direction_to_maximize(metric.get("direction"))
     return None
 
 

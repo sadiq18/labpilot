@@ -145,22 +145,64 @@ class BudgetState(BaseModel):
         return max(0.0, (current - start).total_seconds())
 
 
-def _comparable_metric_name(name: str | None) -> str:
-    """A metric name reduced to what makes two readings comparable.
+#: How a metric was measured, as spelled in a recorded key: `cv_rmse` is
+#: cross-validated, `lb_auc` is the leaderboard. These qualify the metric; they
+#: are not part of its name.
+_MEASUREMENT_PREFIXES = ("cv_", "lb_", "val_", "test_", "train_")
 
-    The recorded key and the requested one come from different places and are
-    spelled differently on purpose: a `ScoreEvent` carries the resolver's key
-    (`cv_rmse`, cross-validated), while `--target-metric` takes the
-    competition's own metric (`rmse`, from `MetricSpec.key`). Requiring them
-    to be equal means a target the user states in the only spelling they have
-    never matches, so the stop never fires.
 
-    Dropping the `cv_` prefix compares the metric rather than the way it was
-    measured, which is the question being asked. A different metric — `lb_auc`
-    against `cv_rmse` — still does not match.
+def metric_names_match(recorded: str | None, requested: str | None) -> bool:
+    """Whether a recorded metric key answers a request for `requested`.
+
+    Lives beside `ScoreEvent` because it interprets that model's
+    `metric_name`, and is public because the conductor needs it too.
+
+    The two names come from different places and are spelled differently on
+    purpose: a `ScoreEvent` carries the resolver's key (`cv_rmse`), while
+    `--target-metric` takes the competition's own metric (`rmse`, from
+    `MetricSpec.key`) — the only spelling a user has. Requiring equality means
+    the target never matches and the stop never fires.
+
+    An unqualified request matches any measurement of that metric, because the
+    user naming `rmse` cannot be asking for a particular one. A *qualified*
+    request is taken literally: `lb_auc` is not answered by a `cv_auc`
+    reading, since local and leaderboard scores are the distinction the
+    milestone keeps separate rather than a spelling difference.
     """
-    text = str(name or "").strip().lower()
-    return text[3:] if text.startswith("cv_") else text
+    left = str(recorded or "").strip().lower()
+    right = str(requested or "").strip().lower()
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    # Only an unqualified request can widen: a request that already names a
+    # measurement can never equal `prefix + itself` unless the recorded key is
+    # doubly prefixed, so no separate guard for it is reachable.
+    return any(left == f"{prefix}{right}" for prefix in _MEASUREMENT_PREFIXES)
+
+
+def comparable_tail(events: list[ScoreEvent]) -> list[ScoreEvent]:
+    """The trailing run of events measuring the same metric as the newest one.
+
+    The series can legitimately change metric mid-campaign — `analyze` can
+    correct which key is primary. Readings either side of that change are on
+    different scales, so `plateau` must not take a max-minus-min across them.
+
+    Narrowing the *derived view* rather than deleting the events is what keeps
+    both guarantees: the comparison stays honest, and every experiment id
+    remains citable, which exit criterion 1 and the stagnation mint both
+    depend on. Truncating the series instead would break exactly the
+    citation the design doc refused to sacrifice.
+    """
+    if not events:
+        return []
+    newest = events[-1].metric_name
+    tail: list[ScoreEvent] = []
+    for event in reversed(events):
+        if not metric_names_match(event.metric_name, newest):
+            break
+        tail.append(event)
+    return list(reversed(tail))
 
 
 def _last_metric_matches_target(config: BudgetConfig, state: BudgetState) -> bool:
@@ -179,9 +221,7 @@ def _last_metric_matches_target(config: BudgetConfig, state: BudgetState) -> boo
     """
     if not state.score_events:
         return True
-    return _comparable_metric_name(state.score_events[-1].metric_name) == _comparable_metric_name(
-        config.target_metric
-    )
+    return metric_names_match(state.score_events[-1].metric_name, config.target_metric)
 
 
 def evaluate_stops(

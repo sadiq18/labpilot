@@ -37,8 +37,9 @@ from labpilot.research_engine.conductor.approvals import (
 )
 from labpilot.research_engine.conductor.budgets import (
     ScoreEvent,
-    _comparable_metric_name,
+    comparable_tail,
     evaluate_stops,
+    metric_names_match,
     submit_tools_allowed,
 )
 from labpilot.research_engine.conductor.checkpoint import (
@@ -223,13 +224,8 @@ def _direction_for(workspace: Workspace, execution_id: str, paths: Any) -> bool 
     """Whether this competition maximises its metric, or None if unknowable.
 
     Chooses *where* to look and leaves *how to read it* to `resolve_maximize`,
-    which owns that question. An earlier version of this function parsed the
-    spec itself so it could search the run directory too, and promptly
-    disagreed with the canonical reader on the same file: it took pydantic's
-    `direction` default as an answer, and matched `"minimize"` case-sensitively
-    so `"Minimize"` came back as maximize. Re-deriving logic that already
-    exists is what produced the resolver disagreement this milestone keeps
-    tripping over.
+    which owns that question — the conductor must not answer it differently
+    from the module that defines it.
 
     Two calls because `resolve_maximize` takes a nearest-first pair of
     directories, and there are three worth asking before the profile artifact.
@@ -267,12 +263,17 @@ def _techniques_for(
         hypothesis = HypothesisStore(workspace.knowledge_dir, workspace.competition).get(
             hypothesis_id
         )
+        if hypothesis is None:
+            return None, []
+        # Inside the guard with the lookup: reading the fields is as able to
+        # fail as fetching them, and an escape here does not stay local —
+        # `_record_experiment_outcome` runs inside the dispatch try block, so
+        # it would land as a dispatch error and count a *successful*
+        # experiment against the circuit breaker.
+        return hypothesis.technique, list(hypothesis.combo_techniques)
     except Exception:  # noqa: BLE001 — a missing hypothesis must not lose the score
         logger.info("cannot read hypothesis %s; recording the score without it", hypothesis_id)
         return None, []
-    if hypothesis is None:
-        return None, []
-    return hypothesis.technique, list(hypothesis.combo_techniques)
 
 
 def _record_experiment_outcome(
@@ -303,39 +304,36 @@ def _record_experiment_outcome(
     if succeeded and workspace is not None and execution_id:
         event = _score_event_for(workspace, execution_id, fallback_maximize=budget_cfg.maximize)
         if event is not None:
-            # The series becomes authoritative the moment it has an entry. A
-            # resumed session's stored readings name no metric, so keeping them
-            # alongside keyed events would rebuild the mixed-scale series this
-            # milestone exists to prevent — but dropping them changes what
-            # `plateau` sees, so say so rather than doing it quietly.
+            # A resumed session's stored readings name no metric, so they
+            # cannot be compared against a keyed one. They leave the derived
+            # view rather than being flattened into it — say so, because it
+            # changes what `plateau` sees.
             if not budget_state.score_events and budget_state.metric_history:
                 logger.info(
-                    "replacing %d stored metric readings for this session with the "
-                    "recorded series; they name no metric, so they cannot be compared "
-                    "against %s",
+                    "%d stored metric readings name no metric and are excluded from "
+                    "the comparison window now that %s is recorded",
                     len(budget_state.metric_history),
                     event.metric_name,
                 )
-            # Two readings of *different* metrics are not a series. Resolution
-            # can genuinely change mid-campaign — `analyze_competition` writing
-            # the competition profile is an ordinary policy move, and it can
-            # correct which key counts as primary. When that happens the newer,
-            # better-informed metric wins and the incomparable readings go,
-            # rather than being flattened into one list `plateau` would take a
-            # meaningless max-minus-min across.
-            elif budget_state.score_events and _comparable_metric_name(
-                budget_state.score_events[-1].metric_name
-            ) != _comparable_metric_name(event.metric_name):
-                logger.warning(
-                    "primary metric changed from %s to %s; dropping %d earlier "
-                    "reading(s) that cannot be compared against it",
-                    budget_state.score_events[-1].metric_name,
-                    event.metric_name,
-                    len(budget_state.score_events),
-                )
-                budget_state.score_events = []
+            previous = budget_state.score_events[-1] if budget_state.score_events else None
             budget_state.score_events.append(event)
-            budget_state.metric_history = [e.value for e in budget_state.score_events]
+            # Every event stays in the series — exit criterion 1 and the
+            # stagnation mint both cite experiments by id, and evicting them is
+            # exactly what the design doc refused to do. Only the *derived*
+            # window narrows, to the trailing run measuring one metric, so
+            # `plateau` never takes a max-minus-min across scales.
+            comparable = comparable_tail(budget_state.score_events)
+            if previous is not None and not metric_names_match(
+                previous.metric_name, event.metric_name
+            ):
+                logger.warning(
+                    "primary metric changed from %s to %s; %d earlier reading(s) stay "
+                    "on record but leave the comparison window",
+                    previous.metric_name,
+                    event.metric_name,
+                    len(budget_state.score_events) - len(comparable),
+                )
+            budget_state.metric_history = [e.value for e in comparable]
             budget_state.last_metric = event.value
             logger.info(
                 "recorded %s=%s for %s", event.metric_name, event.value, event.experiment_id

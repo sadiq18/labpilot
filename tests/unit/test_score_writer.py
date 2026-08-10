@@ -21,6 +21,7 @@ from labpilot.research_engine.conductor.budgets import (
     BudgetState,
     ScoreEvent,
     evaluate_stops,
+    metric_names_match,
 )
 from labpilot.research_engine.conductor.checkpoint import load_budget_pair
 from labpilot.research_engine.conductor.loop import (
@@ -253,6 +254,34 @@ def test_a_target_is_met_however_the_user_spelled_the_metric(target_metric):
     assert evaluate_stops(config, state) == "metric_target"
 
 
+@pytest.mark.parametrize(
+    ("recorded", "requested", "expected"),
+    [
+        # An unqualified request matches any measurement of that metric — the
+        # user naming `rmse` has no way to say which one.
+        ("cv_rmse", "rmse", True),
+        ("lb_auc", "auc", True),
+        ("val_loss", "loss", True),
+        ("rmse", "rmse", True),
+        ("cv_rmse", "CV_RMSE", True),
+        # A qualified request is taken literally: local and leaderboard are the
+        # distinction this milestone keeps separate, not a spelling difference.
+        ("cv_auc", "lb_auc", False),
+        ("lb_auc", "cv_auc", False),
+        # Different metrics never match.
+        ("cv_rmse", "auc", False),
+        ("cv_rmse", "lb_auc", False),
+        ("", "rmse", False),
+        ("cv_rmse", "", False),
+    ],
+)
+def test_metric_names_match_semantics(recorded, requested, expected):
+    """An earlier version stripped only `cv_`, so a recorded `lb_auc` never
+    answered a target of `auc` — the same never-matching target the prefix
+    handling was added to fix, one prefix over."""
+    assert metric_names_match(recorded, requested) is expected
+
+
 def test_a_session_without_events_keeps_the_older_looser_target_behaviour():
     """A `last_metric` that predates the series names no metric. Refusing to
     compare there would disarm a target that used to fire."""
@@ -371,13 +400,16 @@ def test_the_direction_falls_back_to_the_campaigns_own_when_unknowable(tmp_path:
     assert _score_event_for(ws, "E-001", fallback_maximize=True).maximize is True
 
 
-def test_a_changed_primary_metric_starts_a_new_series(tmp_path: Path):
-    """Two readings of different metrics are not a series.
+def test_a_changed_primary_metric_narrows_the_window_without_losing_the_record(tmp_path: Path):
+    """Two readings of different metrics are not a *comparison*, but they are
+    both still experiments that happened.
 
     `analyze_competition` can correct which key is primary mid-campaign. The
-    newer, better-informed metric wins; the incomparable earlier readings go,
-    rather than being flattened into a list `plateau` takes a meaningless
-    max-minus-min across.
+    comparison window narrows to the readings that share a metric, so
+    `plateau` never takes a max-minus-min across scales — but every event
+    stays on record, because exit criterion 1 and the stagnation mint both
+    cite experiments by id, and evicting them is what the design doc refused
+    to do.
     """
     ws = _ws(tmp_path)
     store = ConductorStore(ws.knowledge_dir, ws.competition)
@@ -396,8 +428,36 @@ def test_a_changed_primary_metric_starts_a_new_series(tmp_path: Path):
         )
 
         _, state = load_budget_pair(store.get_session(session.id))
-        assert [e.metric_name for e in state.score_events] == ["cv_rmse"]
+        # Both experiments remain citable by id...
+        assert [e.experiment_id for e in state.score_events] == ["E-001", "E-002"]
+        # ...while only the comparable reading feeds the plateau window.
         assert state.metric_history == [190.9]
+        assert state.last_metric == 190.9
+    finally:
+        store.close()
+
+
+def test_the_window_reopens_as_the_new_metric_accumulates(tmp_path: Path):
+    """After a metric change, later readings of the new metric join the window
+    rather than each one resetting it."""
+    ws = _ws(tmp_path)
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        session = store.create_session("g")
+        _write_outcome(ws, "E-001", metrics={"cv_mae": 12.0})
+        _record_experiment_outcome(
+            store, session.id, succeeded=True, workspace=ws, execution_id="E-001"
+        )
+        for eid, value in (("E-002", 190.9), ("E-003", 188.4)):
+            _write_outcome(ws, eid, metrics={"cv_rmse": value})
+            _competition_json(ws, eid, "rmse", "minimize")
+            _record_experiment_outcome(
+                store, session.id, succeeded=True, workspace=ws, execution_id=eid
+            )
+
+        _, state = load_budget_pair(store.get_session(session.id))
+        assert len(state.score_events) == 3
+        assert state.metric_history == [190.9, 188.4]
     finally:
         store.close()
 
