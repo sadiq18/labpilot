@@ -192,6 +192,51 @@ def test_no_capability_reports_a_verdict_it_cannot_withhold():
     assert not fixed, f"these can fail now — remove them from _CANNOT_FAIL: {fixed}"
 
 
+def _checks_at(call: ast.Call, scope: ast.AST | None) -> set[str] | None:
+    """The site name(s) of one verdict call, or None if it has no `checks`.
+
+    A **literal** list names one site per label: `reporting` answers four
+    different questions and each deserves its own rejection test.
+
+    A **variable** names one site, `capability:<function>`. Reading only literals
+    was the first version, and it meant any capability building its list
+    conditionally vanished from the enumeration: the whole of `workspace` had
+    never been discovered, and `evaluation:compare` left the moment a stamp had
+    to be appended to it. Both silently — a coverage test cannot miss what it
+    cannot see. Reported reviewing PR #121, and it is this file's own subject.
+
+    Resolving the variable's *labels* instead was tried and is wrong in kind:
+    `workspace` threads one list through `_ensure_data` and `_ensure_profile`
+    and ends with twelve labels on a **single** `passed=` expression. Those are
+    annotations on one gate, not twelve gates, and demanding twelve rejection
+    tests would be busywork that invites gaming. One verdict, one site.
+    """
+    argument = {k.arg: k.value for k in call.keywords}.get("checks")
+    if argument is None:
+        return None
+    if isinstance(argument, ast.List):
+        return _string_elements(argument)
+    function = getattr(scope, "name", None)
+    return {function} if function else set()
+
+
+def _string_elements(node: ast.List) -> set[str]:
+    return {
+        element.value
+        for element in node.elts
+        if isinstance(element, ast.Constant) and isinstance(element.value, str)
+    }
+
+
+def _enclosing_functions(tree: ast.Module) -> dict[int, ast.AST]:
+    owner: dict[int, ast.AST] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            for inner in ast.walk(node):
+                owner.setdefault(id(inner), node)
+    return owner
+
+
 def _declared_non_verifying() -> dict[str, set[str]]:
     """Sites that stamp `no_verification` on their own evidence.
 
@@ -209,18 +254,12 @@ def _declared_non_verifying() -> dict[str, set[str]]:
     declared: dict[str, set[str]] = {}
     for name, path in _capability_names().items():
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        owner = _enclosing_functions(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            labels = {k.arg: k.value for k in node.keywords}.get("checks")
-            if not isinstance(labels, ast.List):
-                continue
-            names = {
-                element.value
-                for element in labels.elts
-                if isinstance(element, ast.Constant) and isinstance(element.value, str)
-            }
-            if "no_verification" not in names:
+            names = _checks_at(node, owner.get(id(node)))
+            if not names or "no_verification" not in names:
                 continue
             labels = names - {"no_verification"}
             if len(labels) != 1:
@@ -240,7 +279,7 @@ def _declared_non_verifying() -> dict[str, set[str]]:
 
 
 def _verdict_sites() -> dict[str, set[str]]:
-    """Every `evidence(...)`/`TaskEvidence(...)` verdict, by capability and check.
+    """Every verdict, by capability and check label.
 
     A capability is not one gate. `reporting` answers four different questions —
     report, reflect, update belief, propose a hypothesis — and each has its own
@@ -251,24 +290,22 @@ def _verdict_sites() -> dict[str, set[str]]:
     sites: dict[str, set[str]] = {}
     for name, path in _capability_names().items():
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        owner = _enclosing_functions(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             keywords = {k.arg: k.value for k in node.keywords}
-            if "passed" not in keywords or "checks" not in keywords:
+            if "passed" not in keywords:
                 continue
-            labels = keywords["checks"]
-            if not isinstance(labels, ast.List):
+            labels = _checks_at(node, owner.get(id(node)))
+            if not labels:
                 continue
-            for element in labels.elts:
-                if not (isinstance(element, ast.Constant) and isinstance(element.value, str)):
-                    continue
-                if element.value == "no_verification":
-                    # The declaration itself, not a gate.
-                    continue
-                sites.setdefault(name, set()).add(element.value)
+            # The stamp is the declaration, not a gate.
+            sites.setdefault(name, set()).update(labels - {"no_verification"})
     return sites
 
+
+_DECLARED_NON_VERIFYING = _declared_non_verifying()
 
 #: Verdict sites with no rejection test yet, as `capability:check`.
 #:
@@ -276,18 +313,16 @@ def _verdict_sites() -> dict[str, set[str]]:
 #: site rather than the module — twenty gates nobody had shown could say no,
 #: hidden because one marker per capability had been counted as covering all of
 #: them. Eight turned out to check nothing at all and now declare it on their own
-#: evidence; twelve got a rejection test, each verified red-then-green.
+#: evidence; the rest got a rejection test, each verified red-then-green.
 #:
-#: Two real defects surfaced from writing those twelve, neither found by reading:
-#: `evaluation:compare` reported success on a card that compared nothing, and
-#: `_infer` wrote `id,prediction\n0,0` and then tested for the file it had just
-#: written — the `submission` defect again, one capability over.
+#: The count was wrong twice more before it settled. Discovery read only literal
+#: `checks=[...]` lists, so `workspace` — which threads its list through helpers
+#: — had never been enumerated at all, and `evaluation:compare` left the moment
+#: a stamp had to be appended to it. Both silently: a coverage test cannot miss
+#: what it cannot see. Reported reviewing PR #121.
 #:
 #: It only shrinks.
 _UNPROVEN_SITES: set[str] = set()
-
-
-_DECLARED_NON_VERIFYING = _declared_non_verifying()
 
 
 def test_every_verdict_site_is_named_by_a_test():

@@ -317,12 +317,20 @@ def _unverified_steps_in(payloads: list[dict]) -> list[str]:
         checks = payload.get("checks")
         if not isinstance(checks, list) or "no_verification" not in checks:
             continue
+        if (payload.get("metadata") or {}).get("dry_run"):
+            # The step says it was a dry run, so "it verified nothing" is the
+            # mode speaking rather than a fact about this experiment.
+            continue
         capability = str(payload.get("capability") or "?")
-        # Every label the site carries, not the first. `labels[0]` named an
-        # arbitrary one when a site had several, so a reader followed the note
-        # to the wrong gate. Reported reviewing PR #121.
+        # One entry per label, in `capability:check` — the form the `rejects`
+        # markers and the enumerator use. Joining them as `capability:a+b` was
+        # the first version and produced an identifier no other producer or
+        # consumer understands. Reported reviewing PR #121.
         labels = [str(c) for c in checks if c != "no_verification"]
-        steps.append(f"{capability}:{'+'.join(labels)}" if labels else capability)
+        if labels:
+            steps.extend(f"{capability}:{label}" for label in labels)
+        else:
+            steps.append(capability)
     return steps
 
 
@@ -506,8 +514,13 @@ def build_evidence_card(
     # A dry run verifies nothing *by definition*, so the note would fire on every
     # dry-run card and carry no information — and a qualifier that fires on a
     # whole mode is one readers learn to skip, which is M20's own calibration
-    # argument. Suppressed where the run itself is a placeholder.
-    unverified = [] if placeholder_treatment else _unverified_steps_in(task_evidence)
+    # argument.
+    #
+    # Keyed on what each step says about itself, not on `placeholder_treatment`:
+    # that is also true of a **real run that crashed and left a stub**, the E-147
+    # shape, and on that card the note is exactly what a reader needs. Reported
+    # reviewing PR #121.
+    unverified = _unverified_steps_in(task_evidence)
 
     card = EvidenceCard(
         competition=competition,

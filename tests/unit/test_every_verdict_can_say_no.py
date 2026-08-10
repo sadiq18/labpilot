@@ -228,8 +228,7 @@ def test_evaluation_refuses_when_inference_wrote_no_predictions(tmp_path):
     assert result.passed is False
 
 
-@pytest.mark.rejects("evaluation:compare")
-@pytest.mark.rejects("evaluation:evidence_card")
+@pytest.mark.rejects("evaluation:_compare")
 def test_a_comparison_that_compared_nothing_is_not_a_comparison(tmp_path, monkeypatch):
     """`passed=True` was unconditional, so a card built with no control — or over
     placeholder metrics — reported success, and the card is exactly what COMPARE
@@ -494,14 +493,18 @@ def test_the_inference_refusal_keeps_the_shape_of_its_siblings(tmp_path):
     assert "dry_run" in result.metadata
 
 
-def test_a_stamp_exempts_one_gate_not_everything_beside_it():
+def test_a_stamp_exempts_one_gate_not_everything_beside_it(tmp_path, monkeypatch):
     """Reported reviewing PR #121. `update(names - {"no_verification"})` treated
     every label in a stamped list as non-verifying, so stamping `evaluation`'s
     two-label site would have dropped **both** gates from the coverage
     requirement — the *"one marker stands for four gates"* defect this file was
     rewritten to fix, on the exemption path instead of the marker path.
+
+    Driven through a real capability source rather than asserted against the
+    guard's text: the first version matched the literal `"if len(labels) != 1"`,
+    which an equivalent rewrite would break and a broken rewrite would pass. The
+    same criticism this PR took two rounds ago.
     """
-    import ast
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -510,9 +513,90 @@ def test_a_stamp_exempts_one_gate_not_everything_beside_it():
     enumerator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(enumerator)
 
-    enumerator_path = Path("tests/unit/test_every_gate_rejects_something.py")
-    source = ast.unparse(ast.parse(enumerator_path.read_text()))
+    one_label = tmp_path / "one.py"
+    one_label.write_text(
+        'class C:\n    name = "one"\n\n    def go(self):\n'
+        '        return evidence(passed=True, checks=["skipped", "no_verification"])\n',
+        encoding="utf-8",
+    )
+    two_labels = tmp_path / "two.py"
+    two_labels.write_text(
+        'class C:\n    name = "two"\n\n    def go(self):\n'
+        '        return evidence(passed=True, checks=["a", "b", "no_verification"])\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        enumerator, "_capability_names", lambda: {"one": one_label, "two": two_labels}
+    )
 
-    assert "if len(labels) != 1" in source, "a multi-label stamp must exempt nothing"
-    for capability, labels in enumerator._DECLARED_NON_VERIFYING.items():
-        assert labels, f"{capability} declared an exemption naming no gate"
+    declared = enumerator._declared_non_verifying()
+
+    assert declared == {"one": {"skipped"}}, "a two-label stamp must exempt nothing"
+
+
+def test_discovery_finds_capabilities_that_build_their_checks_list():
+    """Reported reviewing PR #121, and the sharpest of that round.
+
+    `_verdict_sites` read only literal `checks=[...]` arguments, so the whole of
+    `workspace` — which threads one list through `_ensure_data` and
+    `_ensure_profile` — had never been enumerated, and `evaluation`'s compare
+    verdict left the moment a stamp had to be appended to it.
+
+    **The coverage test could not catch either**, because it cannot miss what it
+    cannot see: `_UNPROVEN_SITES` stayed empty and
+    `test_every_verdict_site_is_named_by_a_test` stayed green while two gates sat
+    outside the requirement. So the guard has to be here, on discovery itself,
+    naming the two capabilities known to build their lists dynamically.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "enumerator", "tests/unit/test_every_gate_rejects_something.py"
+    )
+    enumerator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(enumerator)
+
+    sites = enumerator._verdict_sites()
+
+    assert "workspace" in sites, "a capability passing `checks=checks` must still be enumerated"
+    assert "_compare" in sites.get("evaluation", set()), "the compare verdict must be discovered"
+
+
+def test_a_multi_label_step_names_each_gate_separately():
+    """`capability:a+b` was the first version and is an identifier no other
+    producer or consumer understands — the `rejects` markers, `_UNPROVEN_SITES`
+    and `_DECLARED_NON_VERIFYING` all use `capability:check`. Reported reviewing
+    PR #121."""
+    from labpilot.research_engine.evidence.builder import _unverified_steps_in
+
+    steps = _unverified_steps_in(
+        [{"capability": "evaluation", "checks": ["compare", "evidence_card", "no_verification"]}]
+    )
+
+    assert steps == ["evaluation:compare", "evaluation:evidence_card"]
+    assert not any("+" in step for step in steps)
+
+
+def test_a_dry_run_step_is_not_reported_as_unverified():
+    """A dry run verifies nothing by definition, so the note would fire on every
+    dry-run card and carry no information — the calibration argument this
+    milestone makes about its own flags.
+
+    Keyed on what the step says about itself, not on `placeholder_treatment`:
+    that is also true of a **real run that crashed and left a stub**, the E-147
+    shape, and on that card the note is exactly what a reader needs. Reported
+    reviewing PR #121."""
+    from labpilot.research_engine.evidence.builder import _unverified_steps_in
+
+    dry = {
+        "capability": "training",
+        "checks": ["train_stub", "no_verification"],
+        "metadata": {"dry_run": True},
+    }
+    crashed = {
+        "capability": "verification",
+        "checks": ["no_tests", "no_verification"],
+        "metadata": {"dry_run": False},
+    }
+
+    assert _unverified_steps_in([dry, crashed]) == ["verification:no_tests"]
