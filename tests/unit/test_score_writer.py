@@ -272,6 +272,102 @@ def test_a_malformed_outcome_file_records_nothing_instead_of_raising(tmp_path: P
     assert _score_event_for(ws, "E-006") is None
 
 
+def _knowledge_competition_json(ws: Workspace, key: str, direction: str) -> None:
+    """The knowledge copy of the spec — where `analyze` puts it."""
+    root = ResearchPaths(ws.knowledge_dir, ws.competition).root
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "competition.json").write_text(
+        json.dumps(
+            {
+                "slug": ws.competition,
+                "title": ws.competition,
+                "evaluation_metric": {"name": key, "key": key, "direction": direction},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_the_spec_is_found_in_the_knowledge_tree_too(tmp_path: Path):
+    """`analyze` writes the knowledge copy, and a workspace can have only that.
+
+    Searching just the run dir and the workspace root left the resolver with
+    no spec, so it fell through to the alphabetically-first metric and
+    defaulted the direction — recording `cv_mae`/maximize for a competition
+    whose spec says `rmse`/minimize.
+    """
+    ws = _ws(tmp_path)
+    _write_outcome(ws, "E-001", metrics={"cv_mae": 12.0, "cv_rmse": 194.80})
+    _knowledge_competition_json(ws, "rmse", "minimize")
+
+    event = _score_event_for(ws, "E-001")
+
+    assert event is not None
+    assert event.metric_name == "cv_rmse"
+    assert event.value == 194.80
+    assert event.maximize is False
+
+
+def test_the_direction_falls_back_to_the_campaigns_own_when_unknowable(tmp_path: Path):
+    """With no spec anywhere, the event must not invent a second opinion — it
+    takes the direction the campaign is already running under."""
+    ws = _ws(tmp_path)
+    _write_outcome(ws, "E-001", metrics={"cv_rmse": 194.80})
+
+    assert _score_event_for(ws, "E-001", fallback_maximize=False).maximize is False
+    assert _score_event_for(ws, "E-001", fallback_maximize=True).maximize is True
+
+
+def test_a_changed_primary_metric_starts_a_new_series(tmp_path: Path):
+    """Two readings of different metrics are not a series.
+
+    `analyze_competition` can correct which key is primary mid-campaign. The
+    newer, better-informed metric wins; the incomparable earlier readings go,
+    rather than being flattened into a list `plateau` takes a meaningless
+    max-minus-min across.
+    """
+    ws = _ws(tmp_path)
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        session = store.create_session("g")
+        _write_outcome(ws, "E-001", metrics={"cv_mae": 12.0})
+        _record_experiment_outcome(
+            store, session.id, succeeded=True, workspace=ws, execution_id="E-001"
+        )
+        # The spec arrives and names a different primary metric.
+        _write_outcome(ws, "E-002", metrics={"cv_mae": 11.0, "cv_rmse": 190.9})
+        _competition_json(ws, "E-002", "rmse", "minimize")
+
+        _record_experiment_outcome(
+            store, session.id, succeeded=True, workspace=ws, execution_id="E-002"
+        )
+
+        _, state = load_budget_pair(store.get_session(session.id))
+        assert [e.metric_name for e in state.score_events] == ["cv_rmse"]
+        assert state.metric_history == [190.9]
+    finally:
+        store.close()
+
+
+def test_a_consistent_metric_keeps_accumulating(tmp_path: Path):
+    """The reset must not cost the series it protects."""
+    ws = _ws(tmp_path)
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        session = store.create_session("g")
+        for eid, value in (("E-001", 194.80), ("E-002", 190.97)):
+            _write_outcome(ws, eid, metrics={"cv_rmse": value})
+            _competition_json(ws, eid, "rmse", "minimize")
+            _record_experiment_outcome(
+                store, session.id, succeeded=True, workspace=ws, execution_id=eid
+            )
+
+        _, state = load_budget_pair(store.get_session(session.id))
+        assert state.metric_history == [194.80, 190.97]
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("metrics", [["not", "a", "dict"], "a string", 7])
 def test_a_non_dict_metrics_field_records_nothing_instead_of_raising(tmp_path: Path, metrics):
     """`outcome["metrics"]` is not guaranteed to be an object either.

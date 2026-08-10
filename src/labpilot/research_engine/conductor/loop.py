@@ -35,7 +35,12 @@ from labpilot.research_engine.conductor.approvals import (
     OfflineFallbackPrompt,
     maybe_approve,
 )
-from labpilot.research_engine.conductor.budgets import evaluate_stops, submit_tools_allowed
+from labpilot.research_engine.conductor.budgets import (
+    ScoreEvent,
+    _comparable_metric_name,
+    evaluate_stops,
+    submit_tools_allowed,
+)
 from labpilot.research_engine.conductor.checkpoint import (
     load_budget_pair,
     persist_budgets,
@@ -94,7 +99,9 @@ def _experiment_outcome(result: object) -> tuple[bool, str]:
     return False, error or f"execution status={status or 'unknown'}"
 
 
-def _score_event_for(workspace: Workspace, execution_id: str) -> Any | None:
+def _score_event_for(
+    workspace: Workspace, execution_id: str, *, fallback_maximize: bool = True
+) -> ScoreEvent | None:
     """The comparable score this execution produced, or None with a reason logged.
 
     Reads `execution_outcome.json` for *this* execution id rather than the
@@ -104,11 +111,15 @@ def _score_event_for(workspace: Workspace, execution_id: str) -> Any | None:
     exactly that. Keyed by execution id, the outcome artifact cannot belong to
     a different run.
 
+    `fallback_maximize` is the direction the campaign is already running under
+    (`BudgetConfig.maximize`, resolved once at session start). It is used only
+    when the competition profile cannot answer, so the event agrees with the
+    campaign rather than inventing a second opinion.
+
     Returns None — never a partial event — when the execution produced nothing
     comparable. Each reason is logged, because a silent skip here is
     invisible from outside and leaves the series quietly short.
     """
-    from labpilot.research_engine.conductor.budgets import ScoreEvent
     from labpilot.research_engine.evidence.builder import (
         is_placeholder_metrics,
         metrics_as_experiment,
@@ -153,17 +164,38 @@ def _score_event_for(workspace: Workspace, execution_id: str) -> Any | None:
     # both sides: `shared` degenerates to this run's own metric keys, which is
     # the lookup wanted here. Using a second, ad-hoc resolver is how four of
     # them ended up disagreeing about the "primary" key.
-    metric_name, maximize = resolve_primary_metric_key_and_direction(
+    #
+    # The search has to cover everywhere a spec is kept, not just the run
+    # directory: `analyze` writes the knowledge copy under `paths.root`, and a
+    # workspace with only that copy otherwise falls through to the
+    # alphabetically-first metric — picking `cv_mae` over `cv_rmse` and
+    # calling it primary.
+    metric_name, _ = resolve_primary_metric_key_and_direction(
         experiment,
         experiment,
         competition_dirs=(
             workspace.effective_runs_dir / execution_id,
             workspace.root,
+            paths.root,
         ),
     )
     if metric_name is None:
         logger.info("no resolvable primary metric for %s; no score recorded", execution_id)
         return None
+
+    # Direction comes from the canonical resolver — the same three sources, in
+    # the same order, that `evidence/builder.py::_resolve_direction` uses,
+    # including the Analyze profile artifact that no `competition.json` search
+    # reaches. The comparator's own flag is discarded: it defaults to `True`
+    # when it finds no spec, so trusting it records "higher is better" for an
+    # error metric, and the whole reason `maximize` travels with the value is
+    # that the sign is not re-derived later.
+    #
+    # `None` is a real answer here. Rather than guess, fall back to the
+    # direction the campaign is already running under, so the event and the
+    # campaign cannot disagree.
+    resolved = _direction_for(workspace, execution_id, paths)
+    maximize = resolved if resolved is not None else fallback_maximize
 
     hypothesis_id = outcome.get("hypothesis_id") or None
     technique, combo = _techniques_for(workspace, hypothesis_id)
@@ -188,6 +220,45 @@ def _score_event_for(workspace: Workspace, execution_id: str) -> Any | None:
             metric_name,
         )
         return None
+
+
+def _direction_for(workspace: Workspace, execution_id: str, paths: Any) -> bool | None:
+    """Whether this competition maximises its metric, or None if unknowable.
+
+    Two readers of `competition.json` disagree about its shape, and each is
+    right about a different file. The parser writes a `CompetitionSpec`, whose
+    direction lives at `evaluation_metric.direction`; `resolve_maximize` reads
+    `metric.direction`, the hand-written workspace shape, and is the only
+    thing that reads the Analyze profile artifact — where rogii's `minimize`
+    actually lived. Consulting one alone leaves a real workspace unresolved,
+    so both are asked, nearest-first.
+
+    `None` is a real answer and stays one: the caller decides, rather than
+    this guessing a sign.
+    """
+    from labpilot.research_engine.intelligence.competition.direction import resolve_maximize
+    from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
+
+    for directory in (
+        workspace.effective_runs_dir / execution_id,
+        workspace.root,
+        paths.root,
+    ):
+        path = directory / "competition.json"
+        if not path.is_file():
+            continue
+        try:
+            spec = CompetitionSpec.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if spec.evaluation_metric is not None and spec.evaluation_metric.direction:
+            return spec.evaluation_metric.direction != "minimize"
+    return resolve_maximize(
+        competition=workspace.competition,
+        workspace_root=workspace.root,
+        knowledge_root=paths.root,
+        extracted_dir=paths.extracted_dir,
+    )
 
 
 def _techniques_for(
@@ -241,7 +312,7 @@ def _record_experiment_outcome(
     budget_cfg, budget_state = load_budget_pair(session)
     budget_state.record_execution(succeeded=succeeded, error=error)
     if succeeded and workspace is not None and execution_id:
-        event = _score_event_for(workspace, execution_id)
+        event = _score_event_for(workspace, execution_id, fallback_maximize=budget_cfg.maximize)
         if event is not None:
             # The series becomes authoritative the moment it has an entry. A
             # resumed session's stored readings name no metric, so keeping them
@@ -256,6 +327,24 @@ def _record_experiment_outcome(
                     len(budget_state.metric_history),
                     event.metric_name,
                 )
+            # Two readings of *different* metrics are not a series. Resolution
+            # can genuinely change mid-campaign — `analyze_competition` writing
+            # the competition profile is an ordinary policy move, and it can
+            # correct which key counts as primary. When that happens the newer,
+            # better-informed metric wins and the incomparable readings go,
+            # rather than being flattened into one list `plateau` would take a
+            # meaningless max-minus-min across.
+            elif budget_state.score_events and _comparable_metric_name(
+                budget_state.score_events[-1].metric_name
+            ) != _comparable_metric_name(event.metric_name):
+                logger.warning(
+                    "primary metric changed from %s to %s; dropping %d earlier "
+                    "reading(s) that cannot be compared against it",
+                    budget_state.score_events[-1].metric_name,
+                    event.metric_name,
+                    len(budget_state.score_events),
+                )
+                budget_state.score_events = []
             budget_state.score_events.append(event)
             budget_state.metric_history = [e.value for e in budget_state.score_events]
             budget_state.last_metric = event.value
