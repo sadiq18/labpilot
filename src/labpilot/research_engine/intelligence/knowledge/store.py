@@ -579,7 +579,19 @@ class KnowledgeStore:
         status: str = "proposed",
         metadata: dict[str, Any] | None = None,
     ) -> str:
-        """Upsert one hypothesis row (dual-write target for M2 HypothesisStore)."""
+        """Upsert one hypothesis row (dual-write target for M2 HypothesisStore).
+
+        The `ON CONFLICT ... WHERE` guard (M11) makes this safe against
+        out-of-order calls for the same id: `HypothesisStore` releases its
+        per-hypothesis lock before mirroring, so two mutations can have their
+        DB writes race in a different order than their (lock-ordered) JSON
+        writes. Comparing `metadata['file_updated_at']` — the hypothesis's own
+        logical timestamp, not this call's wall-clock time — makes whichever
+        write carries the newest hypothesis state win, regardless of which
+        DB write happens to execute last. Callers that don't set
+        `file_updated_at` (e.g. tests) always win, preserving the old
+        unconditional-overwrite behavior for them.
+        """
         now = _now()
         existing = self._conn.execute(
             "SELECT created_at FROM hypotheses WHERE id = ?", (hypothesis_id,)
@@ -601,6 +613,8 @@ class KnowledgeStore:
                 status=excluded.status,
                 metadata=excluded.metadata,
                 updated_at=excluded.updated_at
+            WHERE COALESCE(json_extract(excluded.metadata, '$.file_updated_at'), 'z') >=
+                  COALESCE(json_extract(hypotheses.metadata, '$.file_updated_at'), '')
             """,
             (
                 hypothesis_id,

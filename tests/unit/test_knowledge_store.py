@@ -187,6 +187,37 @@ def test_upsert_hypothesis_round_trip(tmp_path: Path):
         assert store.get_hypothesis("H-001")["confidence"] == pytest.approx(0.8)
 
 
+def test_upsert_hypothesis_rejects_out_of_order_write(tmp_path: Path):
+    """M11: HypothesisStore releases its lock before mirroring, so two
+    mutations' DB writes can arrive in a different order than their
+    (lock-ordered) JSON writes. The write carrying the newer
+    `file_updated_at` must win regardless of which DB write lands last.
+    """
+    with KnowledgeStore(tmp_path / "knowledge", "demo") as store:
+        store.upsert_hypothesis(
+            hypothesis_id="H-001",
+            status="confirmed",
+            metadata={"file_updated_at": "2026-01-01T00:00:10"},
+        )
+        # A delayed mirror call for an *older* mutation arrives second.
+        store.upsert_hypothesis(
+            hypothesis_id="H-001",
+            status="testing",
+            metadata={"file_updated_at": "2026-01-01T00:00:05"},
+        )
+        assert store.get_hypothesis("H-001")["status"] == "confirmed"
+
+
+def test_upsert_hypothesis_without_file_updated_at_still_overwrites(tmp_path: Path):
+    """Callers that don't set file_updated_at (e.g. non-M11 callers, or
+    these very tests above) keep the old unconditional-overwrite behavior.
+    """
+    with KnowledgeStore(tmp_path / "knowledge", "demo") as store:
+        store.upsert_hypothesis(hypothesis_id="H-002", status="proposed", metadata={})
+        store.upsert_hypothesis(hypothesis_id="H-002", status="confirmed", metadata={})
+        assert store.get_hypothesis("H-002")["status"] == "confirmed"
+
+
 def test_evidence_link_insert(tmp_path: Path):
     with KnowledgeStore(tmp_path / "knowledge", "c") as store:
         store.upsert_artifact(_artifact("paper:1", ResearchArtifactType.PAPER))

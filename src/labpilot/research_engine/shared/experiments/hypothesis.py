@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from labpilot.accessor.common import locked
+from labpilot.accessor.common import atomic_write_text, locked
 from labpilot.research_engine.shared.experiments.graph import ExperimentGraph
 from labpilot.research_engine.shared.experiments.models import (
     Experiment,
@@ -60,6 +60,14 @@ class HypothesisStore:
     def _path_for(self, hypothesis_id: str) -> Path:
         return self.hypotheses_dir / f"{hypothesis_id}.json"
 
+    def _alloc_lock_path(self) -> Path:
+        """Directory-level lock for allocating a new sequential id (M11).
+
+        Not per-id like `_lock_path_for` — the id doesn't exist yet, so there
+        is nothing to key a lock on except the allocation slot itself.
+        """
+        return self.hypotheses_dir / ".alloc.lock"
+
     def _allocate_id(self) -> str:
         self.hypotheses_dir.mkdir(parents=True, exist_ok=True)
         max_n = 0
@@ -80,35 +88,44 @@ class HypothesisStore:
 
         Id is always ``H-BASELINE`` (not sequential ``H-001``). Improvement
         hypotheses continue to allocate ``H-001``, ``H-002``, …
+
+        Locked (M11): the id is fixed, so this locks it directly, same as
+        the other mutators — two concurrent callers must not both observe
+        "missing" and both create it.
         """
-        existing = self.get(BASELINE_HYPOTHESIS_ID)
-        if existing is not None:
-            return existing
-        now = _now()
-        observation = (
-            brief_excerpt.strip()[:280]
-            or f"Establish a registry baseline floor for {self.competition}."
-        )
-        hypothesis = Hypothesis(
-            id=BASELINE_HYPOTHESIS_ID,
-            competition=self.competition,
-            observation=observation,
-            reason=(
-                "Need a reproducible reference experiment before testing improvement hypotheses."
-            ),
-            prediction=("Baseline template produces valid CV metrics and a submission artifact."),
-            confidence=0.5,
-            expected_impact=0.0,
-            tags=["baseline"],
-            source="manual",
-            created_by=HypothesisCreatedBy.MANUAL,
-            generator=HypothesisGenerator.HUMAN,
-            origin=HypothesisOrigin.COMPETITION,
-            origins=[HypothesisOrigin.COMPETITION],
-            created_at=now,
-            updated_at=now,
-        )
-        self._save(hypothesis)
+        with locked(self._lock_path_for(BASELINE_HYPOTHESIS_ID)):
+            existing = self.get(BASELINE_HYPOTHESIS_ID)
+            if existing is not None:
+                return existing
+            now = _now()
+            observation = (
+                brief_excerpt.strip()[:280]
+                or f"Establish a registry baseline floor for {self.competition}."
+            )
+            hypothesis = Hypothesis(
+                id=BASELINE_HYPOTHESIS_ID,
+                competition=self.competition,
+                observation=observation,
+                reason=(
+                    "Need a reproducible reference experiment before testing "
+                    "improvement hypotheses."
+                ),
+                prediction=(
+                    "Baseline template produces valid CV metrics and a submission artifact."
+                ),
+                confidence=0.5,
+                expected_impact=0.0,
+                tags=["baseline"],
+                source="manual",
+                created_by=HypothesisCreatedBy.MANUAL,
+                generator=HypothesisGenerator.HUMAN,
+                origin=HypothesisOrigin.COMPETITION,
+                origins=[HypothesisOrigin.COMPETITION],
+                created_at=now,
+                updated_at=now,
+            )
+            self._write_json(hypothesis)
+        self._mirror_to_db(hypothesis)
         return hypothesis
 
     def create(
@@ -154,29 +171,34 @@ class HypothesisStore:
                 stack.append(member)
         if combo and not tech:
             tech = "+".join(combo)
-        hypothesis = Hypothesis(
-            id=self._allocate_id(),
-            competition=self.competition,
-            observation=observation,
-            reason=reason,
-            prediction=prediction,
-            confidence=confidence,
-            expected_impact=expected_impact,
-            tags=list(tags),
-            source=source,
-            created_by=resolved_created_by,
-            generator=resolved_generator,
-            origin=resolved_origin,
-            origins=resolved_origins,
-            evidence=evidence_refs,
-            technique=tech,
-            parent_hypothesis_id=(parent_hypothesis_id or None),
-            technique_stack=stack,
-            combo_techniques=combo,
-            created_at=now,
-            updated_at=now,
-        )
-        self._save(hypothesis)
+        # Locked (M11): _allocate_id() globs for the current max before this
+        # id exists on disk — two concurrent create() calls must not both
+        # glob the same max and both write the same H-NNN path.
+        with locked(self._alloc_lock_path()):
+            hypothesis = Hypothesis(
+                id=self._allocate_id(),
+                competition=self.competition,
+                observation=observation,
+                reason=reason,
+                prediction=prediction,
+                confidence=confidence,
+                expected_impact=expected_impact,
+                tags=list(tags),
+                source=source,
+                created_by=resolved_created_by,
+                generator=resolved_generator,
+                origin=resolved_origin,
+                origins=resolved_origins,
+                evidence=evidence_refs,
+                technique=tech,
+                parent_hypothesis_id=(parent_hypothesis_id or None),
+                technique_stack=stack,
+                combo_techniques=combo,
+                created_at=now,
+                updated_at=now,
+            )
+            self._write_json(hypothesis)
+        self._mirror_to_db(hypothesis)
         return hypothesis
 
     def get(self, hypothesis_id: str) -> Hypothesis | None:
@@ -216,18 +238,10 @@ class HypothesisStore:
         evidence_run_id: str | None = None,
         why: str | None = None,
     ) -> Hypothesis:
-        with locked(self._lock_path_for(hypothesis_id)):
-            hypothesis = self.get(hypothesis_id)
-            if hypothesis is None:
-                raise FileNotFoundError(
-                    f"Hypothesis '{hypothesis_id}' not found for competition "
-                    f"'{self.competition}' under {self.hypotheses_dir}."
-                )
-            updated = self._apply_status(
-                hypothesis, status, evidence_run_id=evidence_run_id, why=why
-            )
-        self._mirror_to_db(updated)
-        return updated
+        return self._locked_mutate(
+            hypothesis_id,
+            lambda h: self._apply_status(h, status, evidence_run_id=evidence_run_id, why=why),
+        )
 
     def update_outcome(
         self,
@@ -247,13 +261,8 @@ class HypothesisStore:
         stale status forward — reading before a claim lands, writing after,
         clobbering it back.
         """
-        with locked(self._lock_path_for(hypothesis_id)):
-            hypothesis = self.get(hypothesis_id)
-            if hypothesis is None:
-                raise FileNotFoundError(
-                    f"Hypothesis '{hypothesis_id}' not found for competition "
-                    f"'{self.competition}' under {self.hypotheses_dir}."
-                )
+
+        def mutate(hypothesis: Hypothesis) -> Hypothesis:
             patch: dict = {"updated_at": _now()}
             if actual_outcome is not None:
                 patch["actual_outcome"] = actual_outcome
@@ -276,10 +285,9 @@ class HypothesisStore:
                 patch["status"] = status
                 patch["evidence_for"] = evidence_for
                 patch["evidence_against"] = evidence_against
-            updated = hypothesis.model_copy(update=patch)
-            self._write_json(updated)
-        self._mirror_to_db(updated)
-        return updated
+            return hypothesis.model_copy(update=patch)
+
+        return self._locked_mutate(hypothesis_id, mutate)
 
     def annotate_experiment(
         self,
@@ -294,17 +302,12 @@ class HypothesisStore:
         Locked for the same reason as `update_outcome` (M11) — a read-then-write
         on the same record other mutators also touch.
         """
-        with locked(self._lock_path_for(hypothesis_id)):
-            hypothesis = self.get(hypothesis_id)
-            if hypothesis is None:
-                raise FileNotFoundError(
-                    f"Hypothesis '{hypothesis_id}' not found for competition "
-                    f"'{self.competition}' under {self.hypotheses_dir}."
-                )
+
+        def mutate(hypothesis: Hypothesis) -> Hypothesis | None:
             marker = f"[experiment {execution_id}]"
             reason = hypothesis.reason or ""
             if marker in reason:
-                return hypothesis
+                return None
             line = f"{marker} {note.strip()}"
             reason = f"{reason}\n\n{line}".strip() if reason else line
             evidence = list(hypothesis.evidence)
@@ -317,19 +320,49 @@ class HypothesisStore:
                         note=note.strip()[:200],
                     )
                 )
-            updated = hypothesis.model_copy(
-                update={
-                    "reason": reason,
-                    "evidence": evidence,
-                    "updated_at": _now(),
-                }
+            return hypothesis.model_copy(
+                update={"reason": reason, "evidence": evidence, "updated_at": _now()}
             )
-            self._write_json(updated)
-        self._mirror_to_db(updated)
-        return updated
+
+        return self._locked_mutate(hypothesis_id, mutate)
 
     def _lock_path_for(self, hypothesis_id: str) -> Path:
         return self.hypotheses_dir / f".{hypothesis_id}.lock"
+
+    def _locked_mutate(
+        self,
+        hypothesis_id: str,
+        mutator: Callable[[Hypothesis], Hypothesis | None],
+    ) -> Hypothesis:
+        """Lock, read, apply `mutator`, write, mirror, return (M11).
+
+        Every read-then-write mutator on this class goes through here — a
+        hypothesis is only safely claimed/updated if *every* method that can
+        change it takes the same lock, not just the claim methods.
+
+        `mutator` returns the hypothesis to write, or `None` for "no change"
+        (the lock still releases cleanly, nothing is written, the original
+        hypothesis is returned) — `mark_testing_if_proposed` and
+        `annotate_experiment`'s early-outs use this.
+
+        The lock covers the JSON write only; `_mirror_to_db` runs after
+        release (the mirror is a best-effort cache, not what this lock
+        protects — see its own docstring for how it stays correct even
+        though its writes can arrive out of order across mutations).
+        """
+        with locked(self._lock_path_for(hypothesis_id)):
+            hypothesis = self.get(hypothesis_id)
+            if hypothesis is None:
+                raise FileNotFoundError(
+                    f"Hypothesis '{hypothesis_id}' not found for competition "
+                    f"'{self.competition}' under {self.hypotheses_dir}."
+                )
+            updated = mutator(hypothesis)
+            if updated is None:
+                return hypothesis
+            self._write_json(updated)
+        self._mirror_to_db(updated)
+        return updated
 
     def _apply_status(
         self,
@@ -339,15 +372,7 @@ class HypothesisStore:
         evidence_run_id: str | None = None,
         why: str | None = None,
     ) -> Hypothesis:
-        """Build and write the status transition. Caller must hold the lock.
-
-        Writes only the JSON source of truth — the `knowledge.db` mirror is
-        written by the caller after releasing the lock (see
-        `mark_testing_if_proposed`): the mirror is a best-effort dual-write
-        cache, not what this lock protects, so there is no reason to hold an
-        exclusive lock across a `KnowledgeStore` construction and a second
-        SQL write on top of the JSON write this actually guards.
-        """
+        """Build (not write) the status transition. Used from `_locked_mutate`."""
         evidence_for = list(hypothesis.evidence_for)
         evidence_against = list(hypothesis.evidence_against)
         if evidence_run_id:
@@ -363,7 +388,7 @@ class HypothesisStore:
             note = f"[reflection] {why.strip()}"
             reason = f"{reason}\n\n{note}".strip() if reason else note
 
-        updated = hypothesis.model_copy(
+        return hypothesis.model_copy(
             update={
                 "status": status,
                 "evidence_for": evidence_for,
@@ -372,8 +397,6 @@ class HypothesisStore:
                 "updated_at": _now(),
             }
         )
-        self._write_json(updated)
-        return updated
 
     def mark_testing_if_proposed(self, hypothesis_id: str) -> Hypothesis:
         """Flip `proposed` → `testing` when a run attaches this hypothesis.
@@ -385,21 +408,16 @@ class HypothesisStore:
         writes. The JSON file is the source of truth `get()`/`list()` read —
         the `knowledge.db` mirror is a best-effort dual-write cache and is not
         a valid lock target. Every other read-then-write mutator on this class
-        (`update_status`, `update_outcome`, `annotate_experiment`) takes the
-        same lock — a claim is only exclusive if nothing else can race it.
+        goes through the same `_locked_mutate` — a claim is only exclusive if
+        nothing else can race it.
         """
-        with locked(self._lock_path_for(hypothesis_id)):
-            hypothesis = self.get(hypothesis_id)
-            if hypothesis is None:
-                raise FileNotFoundError(
-                    f"Hypothesis '{hypothesis_id}' not found for competition "
-                    f"'{self.competition}' under {self.hypotheses_dir}."
-                )
+
+        def mutate(hypothesis: Hypothesis) -> Hypothesis | None:
             if hypothesis.status != HypothesisStatus.PROPOSED:
-                return hypothesis
-            updated = self._apply_status(hypothesis, HypothesisStatus.TESTING)
-        self._mirror_to_db(updated)
-        return updated
+                return None
+            return self._apply_status(hypothesis, HypothesisStatus.TESTING)
+
+        return self._locked_mutate(hypothesis_id, mutate)
 
     def release_claim(self, hypothesis_id: str) -> Hypothesis:
         """Undo `mark_testing_if_proposed` (M11): only `testing` → `proposed`.
@@ -409,23 +427,16 @@ class HypothesisStore:
         so a release racing with a legitimate confirm/reject elsewhere does
         not clobber it.
         """
-        with locked(self._lock_path_for(hypothesis_id)):
-            hypothesis = self.get(hypothesis_id)
-            if hypothesis is None:
-                raise FileNotFoundError(
-                    f"Hypothesis '{hypothesis_id}' not found for competition "
-                    f"'{self.competition}' under {self.hypotheses_dir}."
-                )
+
+        def mutate(hypothesis: Hypothesis) -> Hypothesis | None:
             if hypothesis.status != HypothesisStatus.TESTING:
-                return hypothesis
-            updated = self._apply_status(hypothesis, HypothesisStatus.PROPOSED)
-        self._mirror_to_db(updated)
-        return updated
+                return None
+            return self._apply_status(hypothesis, HypothesisStatus.PROPOSED)
+
+        return self._locked_mutate(hypothesis_id, mutate)
 
     def _write_json(self, hypothesis: Hypothesis) -> None:
-        self.hypotheses_dir.mkdir(parents=True, exist_ok=True)
-        path = self._path_for(hypothesis.id)
-        path.write_text(hypothesis.model_dump_json(indent=2))
+        atomic_write_text(self._path_for(hypothesis.id), hypothesis.model_dump_json(indent=2))
 
     def _save(self, hypothesis: Hypothesis) -> None:
         self._write_json(hypothesis)

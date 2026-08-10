@@ -10,39 +10,44 @@ connection setup never drift between pillars.
 from __future__ import annotations
 
 import sqlite3
-import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from labpilot.accessor.sqlite.migrate import run_migration
 
-_write_locks: dict[Path, threading.RLock] = {}
-_write_locks_guard = threading.Lock()
 
+@contextmanager
+def write_lock_for(db_path: str | Path) -> Iterator[None]:
+    """Cross-process lock for one database file's multi-statement writes (M11).
 
-def write_lock_for(db_path: str | Path) -> threading.RLock:
-    """Per-database-file write lock (M11), not a single global one.
-
-    An instance-level lock (`self._lock`) does not serialize anything here,
-    since `ConductorStore`/`KnowledgeStore` construct a fresh client at each
-    call site rather than sharing one long-lived object the way `BudgetLedger`
-    does. A single atomic statement (e.g. ``SET field = field + ?``) is
-    already safe under WAL + busy_timeout without any lock; this exists for
+    A single atomic statement (e.g. ``SET field = field + ?``) is already
+    safe under WAL + busy_timeout without any lock; this exists for
     multi-statement sequences — allocate-an-id-then-insert-a-row being the
     concrete case in `ConductorStore` — where two callers could otherwise
     both read the same "next id" before either writes.
 
-    Keyed by resolved `db_path` rather than one shared lock for the whole
-    process: two unrelated competitions' stores, backed by physically
-    distinct files, have zero real contention and should not serialize on
-    each other just because both happened to call this at the same moment.
+    Built on `accessor.common.file_lock.locked` (`fcntl.flock`), the same
+    primitive `HypothesisStore`/`EvidenceCardStore` use — not a
+    `threading.RLock`. M11 branches are separate git worktrees and may end up
+    as separate OS processes, not just threads; an in-process lock would
+    silently stop protecting anything the moment that happens, while this
+    keeps working either way. Not reentrant — do not nest two `with
+    write_lock_for(...)` blocks for the same `db_path` on the same thread,
+    unlike the `RLock` this replaced.
+
+    Keyed by resolved `db_path` (one lock file alongside the database, not a
+    single lock for the whole process): two unrelated competitions' stores,
+    backed by physically distinct files, have zero real contention and
+    should not serialize on each other just because both happened to call
+    this at the same moment.
     """
+    from labpilot.accessor.common.file_lock import locked
+
     resolved = Path(db_path).resolve()
-    with _write_locks_guard:
-        lock = _write_locks.get(resolved)
-        if lock is None:
-            lock = threading.RLock()
-            _write_locks[resolved] = lock
-        return lock
+    lock_path = resolved.with_name(resolved.name + ".writelock")
+    with locked(lock_path):
+        yield
 
 
 class SqliteClient:

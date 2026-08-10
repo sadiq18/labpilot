@@ -1,4 +1,16 @@
-"""Conductor run loop — campaign-aware observe → action → approve → dispatch."""
+"""Conductor run loop — campaign-aware observe → action → approve → dispatch.
+
+This file's `store.new_decision_id()` + `store.append_decision(...)` call
+sites are correct as written — they only ever run on the sequential (K=1)
+path, one decision recorded at a time. They are **not** safe under
+concurrent callers: `new_decision_id()` computes `MAX(id)+1` via an unlocked
+`SELECT`, so two callers can read the same "next id" before either commits
+(M11, verified: 6/20 unlocked concurrent attempts raised `IntegrityError`).
+K-way fan-out (M11 task 7) must record each branch's decision through
+`ConductorStore.append_new_decision(...)` instead, which holds
+`write_lock_for(db_path)` across the whole allocate-then-insert sequence —
+not by copying the two-call pattern used below.
+"""
 
 from __future__ import annotations
 

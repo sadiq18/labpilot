@@ -319,6 +319,16 @@ class ConductorStore:
     def new_feedback_id(self) -> str:
         return self._new_id(_FEEDBACK_PREFIX, "os_operator_feedback")
 
+    def append_new_feedback(self, **kwargs: object) -> OperatorFeedback:
+        """Allocate an id and append `OperatorFeedback`, as one locked step.
+
+        Same TOCTOU shape as `append_new_decision` — see its docstring.
+        `kwargs` are `OperatorFeedback`'s fields other than `id`.
+        """
+        with write_lock_for(self.paths.db_path):
+            feedback = OperatorFeedback(id=self.new_feedback_id(), **kwargs)
+            return self.append_feedback(feedback)
+
     def list_feedback(self, session_id: str, *, limit: int = 20) -> list[OperatorFeedback]:
         rows = self._conn.execute(
             """
@@ -335,6 +345,18 @@ class ConductorStore:
 
     def new_suggestion_id(self) -> str:
         return self._new_id("G", "os_suggestions")
+
+    def append_new_suggestion(self, **kwargs: object) -> Any:
+        """Allocate an id and append a `Suggestion`, as one locked step.
+
+        Same TOCTOU shape as `append_new_decision` — see its docstring.
+        `kwargs` are `Suggestion`'s fields other than `id`.
+        """
+        from labpilot.research_engine.conductor.metrics import Suggestion
+
+        with write_lock_for(self.paths.db_path):
+            suggestion = Suggestion(id=self.new_suggestion_id(), **kwargs)
+            return self.append_suggestion(suggestion)
 
     def append_suggestion(self, suggestion: Any) -> Any:
         from labpilot.research_engine.conductor.metrics import Suggestion
@@ -487,6 +509,18 @@ class ConductorStore:
 
     def new_capability_decision_id(self) -> str:
         return self._new_id("CD", "os_capability_decisions")
+
+    def append_new_capability_decision(self, **kwargs: object) -> Any:
+        """Allocate an id and append a `CapabilityDecision`, as one locked step.
+
+        Same TOCTOU shape as `append_new_decision` — see its docstring.
+        `kwargs` are `CapabilityDecision`'s fields other than `id`.
+        """
+        from labpilot.research_engine.conductor.gap_ledger import CapabilityDecision
+
+        with write_lock_for(self.paths.db_path):
+            decision = CapabilityDecision(id=self.new_capability_decision_id(), **kwargs)
+            return self.append_capability_decision(decision)
 
     def upsert_capability_gap(
         self,
@@ -664,6 +698,14 @@ class ConductorStore:
     # -- helpers -----------------------------------------------------------
 
     def _new_id(self, prefix: str, table: str) -> str:
+        # Full-table scan, now inside write_lock_for's critical section
+        # (M11) for the append_new_* methods — accepted, not fixed: a SQL
+        # MAX() can't safely replace this without also handling
+        # allocate_sequential_id's growing zero-pad width (e.g. "D-999" <
+        # "D-1000" as a plain string comparison), and per-session id volume
+        # (decisions/feedback/suggestions) is realistically in the tens to
+        # low hundreds, not enough to make this scan the bottleneck in
+        # practice.
         rows = self._conn.execute(f"SELECT id FROM {table}").fetchall()  # noqa: S608
         return allocate_sequential_id(prefix, (row["id"] for row in rows))
 

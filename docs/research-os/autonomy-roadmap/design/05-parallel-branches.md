@@ -386,10 +386,15 @@ paragraph before implementation.
 - **Write serialization stress**: implemented as
   `test_conductor_store_concurrency.py`. Two cases, not one — a single atomic
   UPDATE (`increment_metric`) needs no lock and is asserted safe under 8
-  concurrent single-connection-per-thread writers; allocate-then-insert
-  (`new_decision_id` + `append_decision`) needs `write_lock` held across the
-  sequence, verified against a real failure (6/20 unlocked concurrent
-  attempts raised `IntegrityError` before the fix).
+  concurrent single-connection-per-thread writers; allocate-then-insert is
+  fixed by routing through `append_new_decision()` (and the equivalent
+  `append_new_feedback`/`append_new_suggestion`/`append_new_capability_decision`),
+  which hold `write_lock_for(db_path)` across the whole sequence — not the raw
+  `new_decision_id()` + `append_decision()` two-call pattern, and not the
+  process-local `write_lock` this doc originally named (replaced with the
+  cross-process `write_lock_for`, since branches may end up as separate OS
+  processes, not just threads). Verified against a real failure: 6/20
+  unlocked concurrent attempts raised `IntegrityError` before the fix.
 - **Crash reconciliation**: create a worktree, simulate a crash before
   teardown runs, assert the startup reconciliation check removes it.
 - **Promotion**: three branches with distinct scores, assert exactly one

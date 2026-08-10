@@ -192,12 +192,9 @@ def apply_gap_decision(
         promoted_tool=tool,
         decision_reason=reason,
     )
-    record = CapabilityDecision(
-        id=store.new_capability_decision_id(),
+    return store.append_new_capability_decision(
         gap_key=gap_key,
         decision=decision,
         reason=reason,
         promoted_tool=tool,
     )
-    store.append_capability_decision(record)
-    return record
