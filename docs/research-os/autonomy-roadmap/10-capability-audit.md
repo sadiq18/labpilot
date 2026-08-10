@@ -1,7 +1,12 @@
 # M15 — The capability layer audit
 
-**Status:** in progress — PR #129 open · **Purpose:** stop the control plane
-outrunning the tools again
+**Status:** not started · **Purpose:** stop the control plane outrunning the
+tools again  
+**Design:** [../design/12-capability-audit.md](../design/12-capability-audit.md)
+
+> The table below is the **2026-08-02** snapshot. M19 (merged 2026-08-09)
+> deleted `implement`'s Jinja fallback — that row is stale. The design doc's
+> first deliverable is re-running this audit against current `main`.
 
 ---
 

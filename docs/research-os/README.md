@@ -413,3 +413,4 @@ One implementation branch per milestone. See [execution-plan.md](execution-plan.
 | [design/08-agents.md](design/08-agents.md) … [09-parallel-and-events.md](design/09-parallel-and-events.md) | M5 |
 | [design/10-memory-os.md](design/10-memory-os.md) | M4 ports + M6 transfer |
 | [design/11-capability-registration.md](design/11-capability-registration.md) | Capability registration (local ledger now; telemetry before public) |
+| [design/12-capability-audit.md](design/12-capability-audit.md) | M15 — contract tests + inventory for the existing catalog |
