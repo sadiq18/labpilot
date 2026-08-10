@@ -111,7 +111,7 @@ The rule catches the fourth instance before it is written.
 
 | exit criterion | state |
 |---|---|
-| 1 — every pass/fail module has a red-then-green rejection test | **done, at verdict-site granularity.** The enumerator was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 sites nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. `_UNPROVEN_SITES` is empty |
+| 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
 | 2 — no verification path rebuilds a command production owns | not started |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
 | 4 — a derived artifact re-derives or says it is derived | not started |
@@ -138,6 +138,59 @@ figure, while the verdict lives one branch up in `if ok and not fresh:`. A
 red-then-green run against the wrong line proves nothing just as surely as a weak
 test does, which is worth saying because the sweep is the thing everything else
 here rests on.
+
+### The parser that had to go
+
+`@pytest.mark.rejects("<capability>")` was, for seven review rounds, a claim
+nobody checked. Deciding which gates *existed* meant parsing the capability
+sources for `passed=` and resolving each to a name, and every round of review on
+PR #121 landed inside that parser:
+
+| round | what it missed |
+|---|---|
+| 2 | a `checks` list built as a variable, not a literal |
+| 3 | labels joined with `+`, and an `if/else` picking between two |
+| 4 | `no_verification` stamped from inside a nested block, exempting a gate that was not the one stamped |
+| 5 | `name: str = "..."` — the form `BaseCapability` declares — not matching the pattern for `name = "..."` |
+| 6 | `_by_type`, where a later `register()` for the same task type silently drops the earlier capability |
+| 7 | one file holding two capabilities; a dict keyed by name dropping a duplicate; `inspect.getfile` raising on a class with no file |
+
+Each fix was correct. Each left the next shape unhandled, and every failure was
+silent — a gate the parser could not read was a gate it did not require a test
+for. 36% of the file was AST machinery and all seven rounds were spent there.
+
+The question is behavioural — *can this gate say no?* — and the runtime answers
+it exactly. Every capability reports through `TaskEvidence`, which carries the
+capability, the checks and the verdict, so `tests/helpers/verdict_observer.py`
+records them as they happen and a marked test now has to have **caused** the
+rejection it claims. The parser and its ~370 lines of tests are gone.
+
+**Switching found two markers that had never been earned**, both previously read
+and approved, neither visible to the parser — it could see that a marker existed,
+never that the test rejected nothing:
+
+| marker | what the test actually did |
+|---|---|
+| `code_engineering:modify_config` | greps the capability module for `passed=config_path.is_file()`. No gate decides anything while it runs |
+| `dependency` | calls `strip_stdlib_dependencies` directly. A real test of a helper, not of the capability's verdict |
+
+Both markers are gone and both tests stay, each carrying a note saying what it
+does and does not prove. Neither capability lost coverage: `code_engineering` is
+covered by two `write_code` tests, `dependency` by `pip_install`.
+
+It also left a **finding against production**, not against a test:
+`_modify_config` writes `configs/baseline.yaml` and then returns
+`passed=config_path.is_file()` on the file it just wrote. No input reaches the
+`False` branch — it is a sixth gate that cannot fail, in the same shape as the
+five below, and it is not yet fixed.
+
+**The limit, stated rather than left to be found.** Observation sees the verdicts
+the suite *reaches*. A verdict no test ever exercises produces nothing and is
+invisible here — where the parser would have listed it, wrongly or otherwise.
+That is a narrower blind spot than the parser's six, and unlike them it does not
+report as coverage, but it is real: closing it needs the aggregate question
+*"which observed checks were never observed failing?"*, which needs session-wide
+collection and is not built.
 
 ### Five gates that cannot fail, found on the first day
 

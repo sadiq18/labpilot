@@ -1,20 +1,27 @@
-"""One rejection test per verdict site — M20 exit criterion 1, finished.
+"""One rejection test per verdict — M20 exit criterion 1, finished.
 
-`test_every_gate_rejects_something.py` enumerates the sites; this proves them.
-The enumerator was per-*module* for one round, so a single marker stood for four
-gates and two unfailable ones shipped inside the change written to remove them.
-Keyed on `capability:check` now, which surfaced twenty sites nobody had shown
-could say no.
+`test_every_gate_rejects_something.py` says which capabilities must be covered;
+this file feeds each of them an artifact that should fail it. The requirement was
+per-*module* for one round, so a single marker stood for four gates and two
+unfailable ones shipped inside the change written to remove them. Keyed on
+`capability:check` now, which surfaced twenty gates nobody had shown could say no.
 
 Eight of those turned out to check nothing at all — *"no requirements file;
 skipped install"*, *"runtime job already active"* — and declare it on their own
-evidence rather than pretending. The twelve here are real gates, and each is fed
-an artifact that should fail it.
+evidence rather than pretending. The twelve here are real gates.
 
 Every one was verified **red-then-green** by disabling its guard and watching the
 test go red. Where the lever is not the obvious line, the docstring names it —
 on this branch one sweep stayed green because it disabled the line that blanks a
 value rather than the branch that sets the verdict.
+
+The `rejects` markers are no longer taken at their word: `helpers/verdict_observer.py`
+records each verdict as it is made, and a marked test that never caused the
+rejection it claims fails. This file used to end with ~370 lines testing the
+parser that guessed at those gates from the capability sources; observation
+answers the same question from the run, so both the parser and its tests are
+gone. Two of the markers here did not survive the switch — see the deliberately
+unmarked tests below for what they had been claiming.
 """
 
 from __future__ import annotations
@@ -52,7 +59,7 @@ def _profile(context) -> None:
 # -- code_engineering ---------------------------------------------------------
 
 
-@pytest.mark.rejects("code_engineering:_write()")
+@pytest.mark.rejects("code_engineering:write_code")
 def test_write_code_refuses_without_a_dataset_profile(tmp_path):
     """Codegen writes a pipeline against the dataset's shape. Without a profile
     it would be writing against an imagined one, and the file it produced would
@@ -73,7 +80,7 @@ def test_write_code_refuses_without_a_dataset_profile(tmp_path):
     assert "profile" in (result.error or "").lower()
 
 
-@pytest.mark.rejects("code_engineering:_write()")
+@pytest.mark.rejects("code_engineering:write_code")
 def test_write_code_refuses_a_proposal_that_cannot_run(tmp_path, monkeypatch):
     """When `apply_proposal` refuses, the step must fail rather than carry on.
 
@@ -146,7 +153,6 @@ def test_write_code_refuses_a_proposal_that_cannot_run(tmp_path, monkeypatch):
     assert "PEP 723" in (result.error or "")
 
 
-@pytest.mark.rejects("code_engineering:modify_config")
 def test_the_override_and_config_verdicts_read_the_file_that_landed(tmp_path):
     """Both verdicts are `path.is_file()` — a fact about the tree, not about
     having reached the return. Asserted structurally because driving them needs
@@ -154,6 +160,19 @@ def test_the_override_and_config_verdicts_read_the_file_that_landed(tmp_path):
     fabricated one would be proving its own fixture.
 
     Red-then-green: pinning either to `True` leaves the assertion below failing.
+
+    **Deliberately unmarked.** This carried `rejects("code_engineering:modify_config")`
+    until the marker was checked against the run rather than read from the
+    source, and then it recorded no verdict at all: it greps a module, so no
+    gate ever decides anything while it runs. The claim was the shape M20 is
+    about — a test that mentions failure standing in for one that causes it.
+
+    `modify_config` looks unfailable rather than untested: `_modify_config`
+    writes `configs/baseline.yaml` and then returns `passed=config_path.is_file()`
+    on the file it just wrote, so no input reaches the `False` branch. That is a
+    finding against the capability, not against this test, and it is logged in
+    `15-gates-must-fail.md`. `code_engineering` keeps its coverage through the
+    two `write_code` tests above.
     """
     import inspect
 
@@ -227,7 +246,7 @@ def test_evaluation_refuses_when_inference_wrote_no_predictions(tmp_path):
     assert result.passed is False
 
 
-@pytest.mark.rejects("evaluation:_compare()")
+@pytest.mark.rejects("evaluation:compare")
 def test_a_comparison_that_compared_nothing_is_not_a_comparison(tmp_path, monkeypatch):
     """`passed=True` was unconditional, so a card built with no control — or over
     placeholder metrics — reported success, and the card is exactly what COMPARE
@@ -288,7 +307,6 @@ def test_a_baseline_has_no_control_and_that_is_not_a_failure(tmp_path, monkeypat
 # -- training -----------------------------------------------------------------
 
 
-@pytest.mark.rejects("training:execute()")
 @pytest.mark.rejects("training:train_script")
 def test_training_refuses_a_workspace_with_no_script(tmp_path):
     """Defect 14's neighbour: a `train.py` that is not there. `except OSError:
@@ -350,7 +368,7 @@ def test_a_training_run_that_exits_non_zero_fails(tmp_path, monkeypatch):
 # -- verification -------------------------------------------------------------
 
 
-@pytest.mark.rejects("verification:_smoke()")
+@pytest.mark.rejects("verification:smoke_gate")
 def test_the_smoke_gate_refuses_a_file_that_does_not_parse(tmp_path):
     """Syntax is necessary and not sufficient — but it is still necessary, and a
     file that does not parse cannot be smoke-tested.
@@ -493,200 +511,10 @@ def test_the_inference_refusal_keeps_the_shape_of_its_siblings(tmp_path):
     assert "dry_run" in result.metadata
 
 
-def test_a_stamp_exempts_exactly_one_site(tmp_path, monkeypatch):
-    """A `no_verification` stamp exempts **one** site, never several.
-
-    The first version of the rule exempted every label beside the stamp, so a
-    two-label site would have dropped two gates from the coverage requirement
-    with nothing proving either — the *"one marker stands for four gates"*
-    defect, on the exemption path. Reported reviewing PR #121.
-
-    What "one site" means settled a round later: **one verdict call**, named by
-    its label when it carries one and by its function otherwise. So a stamped
-    call with three labels still exempts one thing, because three labels on one
-    `passed=` expression are annotations on one gate.
-
-    Driven over real capability sources rather than asserted against the guard's
-    text — the first version matched a literal `"if len(labels) != 1"`, which an
-    equivalent rewrite would break and a broken rewrite would pass.
-    """
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "enumerator", "tests/unit/test_every_gate_rejects_something.py"
-    )
-    enumerator = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(enumerator)
-
-    one = tmp_path / "one.py"
-    one.write_text(
-        'class C:\n    name = "one"\n\n    def go(self):\n'
-        '        return evidence(passed=True, checks=["skipped", "no_verification"])\n',
-        encoding="utf-8",
-    )
-    many = tmp_path / "many.py"
-    many.write_text(
-        'class C:\n    name = "many"\n\n    def go(self):\n'
-        '        return evidence(passed=True, checks=["a", "b", "c", "no_verification"])\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"one": one, "many": many})
-
-    declared = enumerator._declared_non_verifying()
-
-    assert declared == {"one": {"skipped"}, "many": {"go()"}}
-    assert all(len(sites) == 1 for sites in declared.values()), "one stamp, one site"
-
-
-def _enumerator():
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "enumerator", "tests/unit/test_every_gate_rejects_something.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _capability(tmp_path, name: str, body: str):
-    path = tmp_path / f"{name}.py"
-    path.write_text(
-        f'class C:\n    name = "{name}"\n\n    def go(self):\n{body}\n', encoding="utf-8"
-    )
-    return path
-
-
-def test_discovery_finds_capabilities_that_build_their_checks_list(tmp_path, monkeypatch):
-    """Reported reviewing PR #121, and the sharpest of that round.
-
-    `_verdict_sites` read only literal `checks=[...]` arguments, so the whole of
-    `workspace` — which threads one list through `_ensure_data` and
-    `_ensure_profile` — had never been enumerated, and `evaluation`'s compare
-    verdict left the moment a stamp had to be appended to it.
-
-    **The coverage test could not catch either**, because it cannot miss what it
-    cannot see. So the guard is here, on discovery, driven over a synthetic
-    capability rather than by naming the two real ones — naming them protects
-    the instances found rather than the property, and fails spuriously the day
-    either is refactored to literals.
-    """
-    enumerator = _enumerator()
-    dynamic = _capability(
-        tmp_path,
-        "dyn",
-        '        checks = ["a"]\n        checks.append("b")\n'
-        "        return evidence(passed=False, checks=checks)",
-    )
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"dyn": dynamic})
-
-    assert enumerator._verdict_sites() == {"dyn": {"go()"}}, "a variable must still be a site"
-
-
-def test_the_real_capabilities_that_build_lists_are_enumerated():
-    """The two live instances, as a smoke check on the property above."""
-    sites = _enumerator()._verdict_sites()
-
-    assert "workspace" in sites
-    assert "_compare()" in sites.get("evaluation", set())
-
-
-def test_a_concatenated_checks_list_is_still_one_site(tmp_path, monkeypatch):
-    """`research_review` writes `["train_exists", "syntax"] + (["llm_note"] if
-    llm_notes else [])`. An `ast.BinOp` is neither a literal nor a name, so the
-    first version fell through and named the function by accident; a later one
-    resolved the labels and over-counted three annotations as three gates.
-    Reported reviewing PR #121. One verdict call, one site, either way."""
-    enumerator = _enumerator()
-    concatenated = _capability(
-        tmp_path,
-        "cat",
-        '        return evidence(passed=False, checks=["a", "b"] + (["c"] if x else []))',
-    )
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"cat": concatenated})
-
-    scan = enumerator._scan()
-
-    assert scan.sites == {"cat": {"go()"}}
-    assert not scan.unresolved, "a concatenation is readable, not unresolvable"
-
-
-def test_a_verdict_the_resolver_cannot_read_is_reported(tmp_path, monkeypatch):
-    """The single change that closes four findings at once: **unresolvable and
-    absent stop being the same answer**. Every blind spot this file has had was
-    that — each new syntax quietly shrank the requirement instead of failing.
-    Reported reviewing PR #121 across three rounds."""
-    enumerator = _enumerator()
-    unreadable = tmp_path / "odd.py"
-    unreadable.write_text(
-        'class C:\n    name = "odd"\n\n    def go(self):\n'
-        "        return evidence(passed=False, checks=make_checks())\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"odd": unreadable})
-    scan = enumerator._scan()
-
-    assert scan.sites == {}, "it could not be read, so it is not a site"
-    assert scan.unresolved, "and that has to be said out loud"
-    assert "odd.py:5" in scan.unresolved[0]
-
-
-def test_a_dynamic_verdict_can_declare_non_verification(tmp_path, monkeypatch):
-    """`_checks_at` returns the *function* name for a variable, which never
-    contains `no_verification` — so a capability building its list conditionally
-    could not declare that a branch verifies nothing, however it behaved at run
-    time. Reported reviewing PR #121."""
-    enumerator = _enumerator()
-    declares = _capability(
-        tmp_path,
-        "dec",
-        '        checks = ["skipped"]\n        checks.append("no_verification")\n'
-        "        return evidence(passed=True, checks=checks)",
-    )
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"dec": declares})
-
-    assert enumerator._declared_non_verifying() == {"dec": {"go()"}}
-
-
-def test_a_conditional_stamp_does_not_exempt(tmp_path, monkeypatch):
-    """A verdict that stamps *sometimes* still has a failing path the rest of the
-    time. `evaluation._compare` appends it under `if not had_control:` — a
-    baseline compared nothing, a run with a control that produced no gain is a
-    real failure — and exempting on the strength of the first would lose the
-    second."""
-    enumerator = _enumerator()
-    conditional = _capability(
-        tmp_path,
-        "cond",
-        '        checks = ["compare"]\n        if not control:\n'
-        '            checks.append("no_verification")\n'
-        "        return evidence(passed=False, checks=checks)",
-    )
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"cond": conditional})
-
-    assert enumerator._declared_non_verifying() == {}
-
-
-def test_an_unreadable_label_is_recorded(tmp_path, monkeypatch):
-    """One element dropped without a signal is a gate leaving the requirement
-    unnoticed. `code_engineering` has two live ones — `origin` in
-    `checks=["write_code", "apply", origin, "override"]`, which is provenance
-    rather than a gate. Reported reviewing PR #121, where it turned out to be
-    live rather than latent."""
-    enumerator = _enumerator()
-    mixed = _capability(
-        tmp_path, "mix", '        return evidence(passed=False, checks=["a", origin])'
-    )
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"mix": mixed})
-
-    assert enumerator._scan().unreadable == ["origin"]
-
-
 def test_a_multi_label_step_names_each_gate_separately():
     """`capability:a+b` was the first version and is an identifier no other
-    producer or consumer understands — the `rejects` markers, `_UNPROVEN_SITES`
-    and `_DECLARED_NON_VERIFYING` all use `capability:check`. Reported reviewing
-    PR #121."""
+    producer or consumer understands — the `rejects` markers and the observer
+    that checks them both use `capability:check`. Reported reviewing PR #121."""
     from labpilot.research_engine.evidence.builder import _unverified_steps_in
 
     steps = _unverified_steps_in(
@@ -720,185 +548,3 @@ def test_a_dry_run_step_is_not_reported_as_unverified():
     }
 
     assert _unverified_steps_in([dry, crashed]) == ["verification:no_tests"]
-
-
-def test_the_scan_is_the_same_however_often_it_runs():
-    """Reported reviewing PR #121, and live.
-
-    The diagnostics were module-level lists appended to by every collector call —
-    written once at import and again by each test — so the counts grew with the
-    number of *calls*, not the number of problems: 1 after import, 2 after one
-    scan, 4 after three. `len(...) <= 2` passed only because the suite happened
-    to call them twice, and adding one discovery test would have failed a guard
-    about labels nobody had touched. Two tests were already calling `.clear()` on
-    the shared lists to work around it, which made the guard order-dependent on
-    top.
-
-    Diagnostics added to make silence impossible, able to report a problem that
-    is not there.
-    """
-    enumerator = _enumerator()
-
-    first, second, third = enumerator._scan(), enumerator._scan(), enumerator._scan()
-
-    assert first.unreadable == second.unreadable == third.unreadable
-    assert first.unresolved == second.unresolved == third.unresolved
-    assert first.sites == second.sites == third.sites
-
-
-def test_the_declaration_is_read_only_from_verdicts(tmp_path, monkeypatch):
-    """`_declared_non_verifying` walked every call with a `checks=` argument and
-    never required `passed=`, unlike `_verdict_sites` which did. A helper
-    building evidence-shaped kwargs — or any nested call carrying the stamp —
-    registered an exemption, and since a single-label verdict is named by its
-    label, that could land on a **real gate** elsewhere in the capability and
-    drop it from the requirement. Reported reviewing PR #121."""
-    enumerator = _enumerator()
-    sneaky = _capability(
-        tmp_path,
-        "sneak",
-        '        note(checks=["gate", "no_verification"])\n'
-        '        return evidence(passed=False, checks=["gate"])',
-    )
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"sneak": sneaky})
-
-    scan = enumerator._scan()
-
-    assert scan.sites == {"sneak": {"gate"}}
-    assert scan.declared == {}, "a call that reports no verdict cannot exempt one"
-
-
-def test_a_stamp_under_any_guard_is_conditional(tmp_path, monkeypatch):
-    """Only `ast.If` counted as conditional, so a stamp inside `try:`, `with:` or
-    a loop read as unconditional and would have exempted a verdict with a real
-    failing path. The property is *"not on the function's own top level"*, and
-    the first version enumerated one construct instead. Reported reviewing
-    PR #121."""
-    enumerator = _enumerator()
-    guarded = _capability(
-        tmp_path,
-        "guard",
-        '        checks = ["gate"]\n        try:\n'
-        '            checks.append("no_verification")\n        except Exception:\n'
-        "            pass\n        return evidence(passed=False, checks=checks)",
-    )
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"guard": guarded})
-
-    assert enumerator._declared_non_verifying() == {}
-
-
-def test_a_function_name_cannot_be_mistaken_for_a_label(tmp_path, monkeypatch):
-    """Nothing kept the two namespaces apart, so a capability with a method
-    `evaluate()` holding a multi-label verdict and a `checks=["evaluate"]`
-    elsewhere would merge two gates behind one marker — the per-module
-    granularity this file replaced, arriving through a name clash. Reported
-    reviewing PR #121."""
-    enumerator = _enumerator()
-    clashing = tmp_path / "clash.py"
-    clashing.write_text(
-        'class C:\n    name = "clash"\n\n'
-        "    def evaluate(self):\n"
-        '        return evidence(passed=False, checks=["a", "b"])\n\n'
-        "    def other(self):\n"
-        '        return evidence(passed=False, checks=["evaluate"])\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"clash": clashing})
-
-    sites = enumerator._verdict_sites()
-
-    assert sites == {"clash": {"evaluate()", "evaluate"}}, "two gates, two names"
-
-
-def test_discovery_does_not_depend_on_how_a_capability_spells_its_name():
-    """Reported reviewing PR #121, fifth round, and the end of a pattern.
-
-    `_capability_names` matched `name = "..."` and not `name: str = "..."` — the
-    form `BaseCapability` itself declares — so a capability written in the style
-    it inherits from would never have been enumerated, silently.
-
-    Five rounds of this file were spent moving one silence outward: from the
-    verdict, to the resolver, to the filter deciding which files the resolver
-    sees. Syntax was the wrong tool each time. *Which capabilities run* is
-    answered by the registry that runs them, so `name` and `verifies` are read
-    from the objects and no source style can hide one.
-    """
-    enumerator = _enumerator()
-    registry = enumerator._registry()
-    verifying = {
-        capability.name
-        for capability in registry.capabilities
-        if getattr(capability, "verifies", True)
-    }
-
-    assert set(enumerator._capability_names()) == verifying
-    assert verifying, "the registry must actually register something"
-
-
-def test_a_capability_shadowed_on_every_task_type_is_still_enumerated(monkeypatch):
-    """Reported reviewing PR #121, sixth round.
-
-    `CapabilityRegistry.register` keeps two collections: `_capabilities`, which
-    is complete, and `_by_type`, where the last registration for a task type
-    wins. Iterating the dict drops any capability whose types are all claimed by
-    a later one — no sites, no coverage requirement, every guard green.
-
-    **Driven with a registry that actually shadows.** The first attempt at this
-    guard compared two sets both built from `_by_type`, so it reproduced the bug
-    rather than catching it; the second used the *real* registry, where no
-    shadowing happens, so reverting the fix left it green. A guard needs the
-    adversarial input, not the one that happens to be lying around — which is
-    the whole subject of this file, arriving in its own tests for the third
-    time.
-    """
-    from labpilot.research_engine.execution.registry import CapabilityRegistry
-    from labpilot.research_engine.planner.schemas.task_types import TaskType
-
-    class _Shadowed:
-        name = "shadowed"
-        verifies = True
-        supported_task_types = frozenset({TaskType.RUN_TRAINING})
-
-    class _Winner:
-        name = "winner"
-        verifies = True
-        supported_task_types = frozenset({TaskType.RUN_TRAINING})
-
-    registry = CapabilityRegistry()
-    registry.register(_Shadowed())
-    registry.register(_Winner())
-    assert [c.name for c in registry._by_type.values()] == ["winner"], "the dict does lose one"
-
-    enumerator = _enumerator()
-    monkeypatch.setattr(enumerator, "_registry", lambda: registry)
-
-    assert set(enumerator._capability_names()) == {"shadowed", "winner"}
-
-
-def test_a_verdict_naming_no_check_is_never_silent(tmp_path, monkeypatch):
-    """`if not labels: continue` treated *"no `checks=` argument"* as "not a
-    gate", so such a verdict vanished without reaching `unresolved` — the last
-    path where discovery could under-report in silence, which is what
-    `_Unresolvable` exists to end. Reported reviewing PR #121.
-
-    The two shapes are not the same and the fix distinguishes them: a verdict
-    with **no** `checks=` names nothing, so it is reported; one with `checks=[]`
-    is a gate that carries no label, so it is enumerated under its function.
-    Either way it is visible, which is the property — the bug was silence, not
-    the absence of a name.
-    """
-    enumerator = _enumerator()
-
-    missing = _capability(tmp_path, "bare", "        return evidence(passed=False, summary='x')")
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"bare": missing})
-    scan = enumerator._scan()
-
-    assert scan.sites == {}
-    assert scan.unresolved and "naming no check" in scan.unresolved[0]
-
-    empty = _capability(tmp_path, "empty", "        return evidence(passed=False, checks=[])")
-    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"empty": empty})
-    scan = enumerator._scan()
-
-    assert scan.sites == {"empty": {"go()"}}, "a gate with no label is still a gate"
-    assert not scan.unresolved
