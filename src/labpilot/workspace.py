@@ -40,7 +40,29 @@ _WORKSPACE_DIRS = (
     ".cache/kaggle",
 )
 
-_GITIGNORE = """\
+#: Patterns for files that are always machine-local and must never be
+#: committed, whatever else a workspace's `.gitignore` has been customised to
+#: do: SQLite sidecars, the lock files `accessor/common/file_lock.py::locked`
+#: and `accessor/sqlite/client.py::write_lock_for` create, and the temp files
+#: `accessor/common/atomic_write.py` leaves behind when a process dies between
+#: its write and its rename.
+#:
+#: Patterned by shape, not by filename, so a lock or temp file added later is
+#: covered without editing this list. Kept as the single source of truth for
+#: both `_GITIGNORE` (fresh workspaces) and `ensure_required_ignores`
+#: (existing ones) so the two cannot drift apart.
+REQUIRED_IGNORES: tuple[str, ...] = (
+    "**/knowledge.db-journal",
+    "**/knowledge.db-wal",
+    "**/knowledge.db-shm",
+    "**/*.writelock",
+    "**/.*.lock",
+    "**/.*.tmp-*",
+)
+
+_REQUIRED_IGNORE_HEADER = "# Machine-local artifacts (locks, temp files, DB sidecars)"
+
+_GITIGNORE = f"""\
 # Competition data (often huge)
 data/
 .cache/
@@ -49,22 +71,11 @@ data/
 .env
 .env.*
 
-# Local DB journals / models
-**/knowledge.db-journal
-**/knowledge.db-wal
-**/knowledge.db-shm
+# Local models
 models/
 
-# Concurrency artifacts (M11) — machine-local, never committed. Patterned by
-# shape rather than by filename so a new lock or temp file added later is
-# covered without editing this list: `*.writelock` from
-# `accessor/sqlite/client.py::write_lock_for`, dot-prefixed `*.lock` from
-# `accessor/common/file_lock.py::locked` (per-hypothesis, per-allocation-slot,
-# per-knowledge-base), and `.*.tmp-<pid>-<tid>` left behind when a process
-# dies between `accessor/common/atomic_write.py`'s write and its rename.
-**/*.writelock
-**/.*.lock
-**/.*.tmp-*
+{_REQUIRED_IGNORE_HEADER}
+{chr(10).join(REQUIRED_IGNORES)}
 
 # Python / OS
 __pycache__/
@@ -489,6 +500,45 @@ def resolve_competition_arg(
             f"directory containing {MARKER_NAME})."
         )
     return ""
+
+
+def ensure_required_ignores(root: Path) -> list[str]:
+    """Append any missing `REQUIRED_IGNORES` to an existing `.gitignore`.
+
+    Returns the patterns that were added (empty when already complete).
+
+    This exists because `scaffold_workspace` only writes `.gitignore` when the
+    file is absent, and it is reached only by `research init`, which refuses an
+    existing workspace — so a pattern added to the template never reaches any
+    workspace that was scaffolded before it. Those are precisely the
+    workspaces that have run campaigns and therefore actually accumulate the
+    lock and temp files these patterns cover, so the template alone is not a
+    fix. `Workspace.ensure_roots()` calls this on every command that opens a
+    workspace.
+
+    Appends only; never rewrites or reorders, so a user's own customisations
+    survive. Idempotent — a second call adds nothing. Patterns already present
+    anywhere in the file (commented-out lines excluded) are left alone.
+    """
+    gitignore = root / ".gitignore"
+    if not gitignore.is_file():
+        # No file to reconcile: `scaffold_workspace` owns first creation, and
+        # inventing one here would fight a user who deliberately removed it.
+        return []
+    try:
+        existing = gitignore.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    present = {line.strip() for line in existing.splitlines()}
+    missing = [pattern for pattern in REQUIRED_IGNORES if pattern not in present]
+    if not missing:
+        return []
+    block = f"\n{_REQUIRED_IGNORE_HEADER}\n" + "\n".join(missing) + "\n"
+    try:
+        gitignore.write_text(existing.rstrip("\n") + "\n" + block, encoding="utf-8")
+    except OSError:
+        return []
+    return missing
 
 
 def write_workspace_marker(workspace: CompetitionWorkspace) -> Path:

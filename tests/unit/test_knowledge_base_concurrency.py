@@ -1,13 +1,23 @@
 """M11: KnowledgeBase is a whole-file read-modify-write store.
 
 Each instance loads the entire entry dict at construction, mutates it in
-memory, and writes the whole file back. Two branches doing that concurrently
+memory, and writes the whole file back. Two writers doing that concurrently
 means the second write discards *every* entry the first added — not a
-conflict on one field, a total loss of the other branch's work.
+conflict on one field, a total loss of the other's work.
+
+**Not currently reachable from production.** `update_from_comparison` and
+`update_from_reflection` have no callers outside these tests; all four
+production construction sites (`ranking.py`, `report.py`,
+`analyzers/experiments.py`, `cli/main.py`) only read. An earlier review round
+asserted that M11's per-loser reflection made this live and was wrong — the
+claim was read off the design doc rather than traced. Guarding it anyway:
+these are public methods and the obvious wiring point when reflection-driven
+KB updates land, the atomic write protects the reads that *are* live, and a
+test is cheaper than rediscovering the bug once a writer exists.
 
 Found by enumeration (`grep -rln "_load()\\|_save()"`), not by the three
-adversarial review rounds that preceded it, and it was the only remaining
-instance of this shape in the engine.
+adversarial review rounds that preceded it, and it was the only instance of
+this shape in the engine.
 """
 
 from __future__ import annotations
