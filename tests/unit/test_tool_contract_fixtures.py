@@ -132,3 +132,86 @@ def test_search_papers_degrades_honestly(tmp_path: Path) -> None:
 
     result = registry.invoke("search_papers", fixture.workspace, **fixture.degraded_inputs)
     assert_search_papers_degraded(result.data)
+
+
+def test_query_memory_varies_by_query(tmp_path: Path) -> None:
+    fixture = build_fixture("query_memory", tmp_path)
+    registry = build_default_tool_registry()
+
+    result_a = registry.invoke("query_memory", fixture.workspace, **fixture.inputs_a)
+    result_b = registry.invoke("query_memory", fixture.workspace, **fixture.inputs_b)
+
+    names_a = {t["name"] for t in result_a.data["context"]["techniques"]}
+    names_b = {t["name"] for t in result_b.data["context"]["techniques"]}
+    assert names_a != names_b, "different queries returned identical technique sets"
+    assert "Mixup" in names_a and "Mixup" not in names_b
+    assert "SpecAugment" in names_b and "SpecAugment" not in names_a
+
+
+def test_implement_varies_by_description(tmp_path: Path) -> None:
+    from helpers.fake_codegen import FakeCodegenLLM
+
+    fixture = build_fixture("implement", tmp_path)
+    registry = build_default_tool_registry()
+    llm = FakeCodegenLLM()
+    train_py = fixture.workspace.root / "pipeline" / "train.py"
+
+    registry.invoke("implement", fixture.workspace, llm_client=llm, **fixture.inputs_a)
+    first = train_py.read_text(encoding="utf-8")
+    registry.invoke("implement", fixture.workspace, llm_client=llm, **fixture.inputs_b)
+    second = train_py.read_text(encoding="utf-8")
+
+    assert first != second, "different descriptions produced identical train.py"
+
+
+def test_implement_without_force_rewrite_is_a_silent_noop(tmp_path: Path) -> None:
+    """The prefer_patch finding, pinned as a test.
+
+    Documents current behaviour rather than asserting it is correct: the
+    second call reports success while leaving `train.py` byte-identical, even
+    though it asked for something different. Closing this is M7's job (see the
+    2026-08-11 re-audit); until then this test fails loudly if the behaviour
+    changes, in either direction.
+    """
+    from helpers.fake_codegen import FakeCodegenLLM
+
+    fixture = build_fixture("implement", tmp_path)
+    registry = build_default_tool_registry()
+    llm = FakeCodegenLLM()
+    train_py = fixture.workspace.root / "pipeline" / "train.py"
+
+    registry.invoke(
+        "implement",
+        fixture.workspace,
+        llm_client=llm,
+        description="apply mixup augmentation",
+        force_rewrite=True,
+    )
+    before = train_py.read_text(encoding="utf-8")
+
+    result = registry.invoke(
+        "implement",
+        fixture.workspace,
+        llm_client=llm,
+        description="apply SWA weight averaging",
+    )
+
+    assert train_py.read_text(encoding="utf-8") == before, (
+        "prefer_patch no longer short-circuits — update the re-audit finding"
+    )
+    assert result.refs, "the no-op still reports refs, which is what makes it silent"
+
+
+def test_submit_learn_varies_by_execution_under_dry_run(tmp_path: Path) -> None:
+    fixture = build_fixture("submit_learn", tmp_path)
+    registry = build_default_tool_registry()
+
+    result_a = registry.invoke("submit_learn", fixture.workspace, **fixture.inputs_a)
+    result_b = registry.invoke("submit_learn", fixture.workspace, **fixture.inputs_b)
+
+    summary_a = result_a.data["summary"]
+    summary_b = result_b.data["summary"]
+    assert summary_a.learning_gain != summary_b.learning_gain, (
+        "dry_run=True returned identical outcomes for different executions"
+    )
+    assert result_a.data["dry_run"] is True and result_b.data["dry_run"] is True

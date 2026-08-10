@@ -65,7 +65,7 @@ than carried forward from the stale table above.
 | `query_memory` | **real** (was "unverified") | `query` | First confirmed verdict. `build_research_context` genuinely retrieves different content for different queries when the knowledge DB has data; an empty DB returns an empty context regardless of query, but that's a fixture-vacuity concern for the contract test (§6.2.2 of the design), not evidence the tool is unreal in a populated workspace. |
 | `search_papers` | **partial** | — | Unchanged. Real via Semantic Scholar when online; honestly degrades to an empty hit list (`source="offline"` or `source="error:<Type>"`) under `offline=True` or any network failure — the degradation is visible in its own output, not disguised as success. |
 | `submit` | **fixed** (was "real") | — | **Verdict changed.** `package_execution_submission` copies `workspace.root/submission.csv` verbatim; `execution_id` only relabels the destination filename (`execution/outcome.py:159-187`). The packaged *content* never depends on the input. This is an honest `fixed` step, not a regression — `submit` doesn't read as a capability verb (`implement`/`optimise`/`tune`) the way exit criterion 3 warns about, so no rename is needed. The 2026-08-02 table's "real" verdict here was never actually checked against the code; it was carried over. |
-| `implement` | **partial** (was "hollow", M19 made it look "real") | `technique` — **conditionally** | **The significant finding this re-audit exists to make.** See below — the M19 fix is real but conditional, and the condition fails in the common case. |
+| `implement` | **partial** (was "hollow", M19 made it look "real") | `description` — **not** `technique` | **The significant findings this re-audit exists to make.** Two separate defects, both below: the M19 fix is real but conditional and the condition fails in the common case; and `technique` never reaches codegen on this path at all. |
 
 ### `implement`: a second hollow path, one layer up from the one M19 fixed
 
@@ -129,6 +129,51 @@ requested technique differs from what's on disk, or removing the
 **out of scope for M15** per its own rule (§4 of the design: this milestone
 finds and labels gaps, [M7](01-technique-to-model.md) closes them). Flagging
 it here is what the audit is for.
+
+### `implement` does not vary by `technique` at all — it varies by `description`
+
+Found while *building the contract fixture*, not while reading code — which
+is the mechanism working as designed: writing the test disproved a
+`varies_by` claim this same re-audit had written into `catalog.py` an hour
+earlier.
+
+Even with `force_rewrite=True` bypassing the `prefer_patch` shortcut above,
+the `technique` kwarg never reaches the codegen prompt. Captured the rendered
+prompt from a real `implement` invocation carrying `technique="mixup"`:
+
+```text
+Technique: —
+Goal:
+apply mixup Prefer separable layout: pipeline/train.py for training …
+```
+
+The cause is one object written and a different one read:
+
+* `implement()` puts its `**extra` (including `technique`) into
+  `AgentTask.metadata`;
+* `build_v1_task_context` (agents/coding.py) copies that onto the synthetic
+  **`ResearchTask`** — `ResearchTask(..., metadata=dict(agent_task.metadata))`
+  — and constructs the enclosing `ResearchPlan` with **no metadata at all**;
+* `CodeEngineeringCapability._write` reads `plan_meta = dict(context.plan.metadata or {})`
+  — the **plan**, never the task — so `resolve_technique` sees an empty dict
+  and returns `status="none"`, and the prompt renders `Technique: —`.
+
+This is [AGENTS.md](../../../AGENTS.md)'s rule 3 again — *"the guard exists
+and its input is wrong"* — for the tenth time in this codebase, and the first
+one caught by M15's own mechanism rather than by a failed campaign.
+
+`catalog.py` now declares `varies_by=["description"]` for `implement`, which
+is what the tool can actually vary by: `description` reaches codegen as
+`goal`/`task_description` and genuinely conditions the output (verified —
+two descriptions produce two different `train.py` files). Declaring
+`technique` would have been precisely the unverified capability claim this
+milestone exists to catch, shipped by the milestone itself.
+
+Both findings are pinned as tests in
+`tests/unit/test_tool_contract_fixtures.py` — including
+`test_implement_without_force_rewrite_is_a_silent_noop`, which documents the
+`prefer_patch` no-op rather than asserting it is correct, so it fails loudly
+if the behaviour changes in either direction.
 
 ## Approach
 

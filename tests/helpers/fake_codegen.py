@@ -53,21 +53,35 @@ INFER = (
 #: Matches the "Technique: <value>" line `code_engineer_user.j2` always
 #: renders (empty as "—" when the prompt data carries none).
 _TECHNIQUE_LINE = re.compile(r"^Technique: (.*)$", re.MULTILINE)
+#: The "Goal:" block, which carries the caller's `description` on the
+#: standalone `implement` tool path — where `Technique:` renders as "—"
+#: because the technique never reaches the plan metadata the prompt reads
+#: (M15 re-audit, 2026-08-11).
+_GOAL_BLOCK = re.compile(r"^Goal:\n(.*)$", re.MULTILINE)
 
 
 def _technique_from_prompt(user: str) -> str:
-    """Pull the requested technique back out of the rendered user prompt.
+    """Pull the distinguishing intent back out of the rendered user prompt.
 
     Parsing the rendered text rather than threading a separate parameter
     through `complete(system, user)` — the double has to match the real
     `LLMClient.complete` signature it stands in for, which only ever sees the
     two rendered strings, the same as the real codegen call does.
+
+    Falls back to the `Goal:` line when `Technique:` is empty. Both are real
+    inputs a real model would condition on, and on the standalone `implement`
+    tool path the goal is the *only* one that carries the request — see
+    `_GOAL_BLOCK`.
     """
     match = _TECHNIQUE_LINE.search(user)
-    if not match:
-        return ""
-    value = match.group(1).strip()
-    return "" if value in {"", "—"} else value
+    if match:
+        value = match.group(1).strip()
+        if value not in {"", "—"}:
+            return value
+    goal = _GOAL_BLOCK.search(user)
+    if goal:
+        return goal.group(1).strip()
+    return ""
 
 
 def _train_for(technique: str) -> str:

@@ -94,15 +94,27 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["code"],
             handler=implement,
-            # partial, not real: ImplementationSpecialist's prefer_patch
-            # shortcut skips the M19-fixed codegen path by default whenever
-            # the workspace already has code, and reports success without
-            # touching train.py. Only reaches the real path on a fresh
-            # workspace or with force_rewrite=True explicitly passed — see
+            # partial, not real, for two independent reasons — see
             # docs/research-os/autonomy-roadmap/10-capability-audit.md
-            # §"implement: a second hollow path".
+            # §"implement: a second hollow path":
+            #
+            # 1. ImplementationSpecialist's prefer_patch shortcut skips the
+            #    M19-fixed codegen path by default whenever the workspace
+            #    already has code, and reports success without touching
+            #    train.py. Only reaches the real path on a fresh workspace or
+            #    with force_rewrite=True explicitly passed.
+            # 2. `varies_by` is `description`, NOT `technique`. The
+            #    `technique` kwarg never reaches the codegen prompt on this
+            #    path: `build_v1_task_context` puts the agent task's metadata
+            #    on the synthetic *ResearchTask*, while
+            #    `CodeEngineeringCapability._write` reads `plan.metadata` —
+            #    written to one object, read from another, so the prompt
+            #    renders `Technique: —` however the caller sets it. Only
+            #    `description` (via `goal`/`task_description`) actually
+            #    conditions the output. Declaring `technique` here would be
+            #    exactly the unverified capability claim M15 exists to catch.
             capability_status="partial",
-            varies_by=["technique"],
+            varies_by=["description"],
         ),
         ToolDescriptor(
             name="run_plan",
