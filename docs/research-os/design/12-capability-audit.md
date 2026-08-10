@@ -300,6 +300,16 @@ does.
 
 ### 6.2 Contract test shape
 
+> **Shipped 2026-08-11** as `tests/unit/test_tool_contracts.py`, with
+> fixtures in `tests/unit/tool_contract_fixtures.py`. Three corrections the
+> implementation forced on the sketch below, each recorded where it applies:
+> the branch keys off `varies_by` rather than `capability_status` (`implement`
+> is `partial` *and* varies); `_digest` became a per-tool `observe()` because
+> one payload digest cannot serve ten artifact shapes (§6.2.1); and each call
+> must be **observed before the next one runs**, since tools whose artifact is
+> a file at a fixed path otherwise get read twice after the second write — a
+> false *negative* that failed on first run.
+
 One parametrized test, not ten hand-written ones — the fixtures differ, the
 assertion doesn't:
 

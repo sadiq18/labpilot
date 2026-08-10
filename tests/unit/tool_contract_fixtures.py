@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from helpers.fake_codegen import FakeCodegenLLM
+
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.workspace_facade import Workspace
 
@@ -41,16 +43,31 @@ _DEFERRED_TOOLS: frozenset[str] = frozenset()
 class ToolFixture:
     """Everything one contract-test invocation needs for one tool.
 
-    Not every field applies to every `capability_status` branch — `real`
-    tools use `inputs_a`/`inputs_b`/`digest`; `partial` tools use
-    `degraded_inputs`/`assert_degraded`; `fixed` tools use none of it (the
-    harness's fixed branch never calls the handler — see §6.2).
+    Not every field applies to every branch — tools with a non-empty
+    `varies_by` use `inputs_a`/`inputs_b`/`observe`; `partial` tools with no
+    `varies_by` use `degraded_inputs`/`assert_degraded`; `fixed` tools use
+    none of it (the harness's fixed branch never calls the handler — §6.2).
+
+    `observe` is the load-bearing field. It must return something that
+    differs *because the tool did different work*, not because an id or
+    timestamp incremented — §6.2.1, and see `run_plan`, where the whole
+    payload is id-noise and only the evidence set carries signal.
     """
 
     workspace: Workspace
     inputs_a: dict[str, Any] = field(default_factory=dict)
     inputs_b: dict[str, Any] = field(default_factory=dict)
     degraded_inputs: dict[str, Any] = field(default_factory=dict)
+    #: Applied to every invocation of this tool (test doubles, gates).
+    common_kwargs: dict[str, Any] = field(default_factory=dict)
+    #: `(dotted.target, replacement)` pairs the harness monkeypatches in.
+    patches: list[tuple[str, Any]] = field(default_factory=list)
+    #: `(workspace, ToolResult) -> comparable`, id-free. Defaults to a
+    #: digest of the payload, which is correct only for tools whose payload
+    #: carries no auto-generated id — most override it.
+    observe: Any = None
+    #: Checked by the `partial`, no-`varies_by` branch.
+    assert_degraded: Any = None
 
 
 def _base_workspace(tmp_path: Path, name: str) -> Workspace:
@@ -61,6 +78,49 @@ def _base_workspace(tmp_path: Path, name: str) -> Workspace:
     return ws
 
 
+class _FakeAnalyzer:
+    """Offline analyzer double — same shape the real registry expects.
+
+    Mirrors `test_research_intelligence.py::FakeAnalyzer`; kept here so the
+    fixture is self-contained rather than importing another test module's
+    internals.
+    """
+
+    def __init__(self, name: str, *, items: list[Any] | None = None) -> None:
+        self.name = name
+        self.default_enabled = True
+        self._items = items or []
+
+    def analyze(self, context: Any) -> Any:
+        from labpilot.research_engine.intelligence.models import ResearchArtifacts
+
+        return ResearchArtifacts(analyzer=self.name, items=self._items, notes=[])
+
+
+def _fake_analyzer_registry() -> Any:
+    """Two named analyzers, no network, no LLM — patched over
+    `tools.handlers.analyze.build_default_registry`."""
+    from labpilot.research_engine.intelligence.models import (
+        ResearchArtifact,
+        ResearchArtifactType,
+    )
+    from labpilot.research_engine.intelligence.registry import AnalyzerRegistry
+
+    def _artifact(artifact_id: str, title: str) -> Any:
+        return ResearchArtifact(
+            id=artifact_id,
+            type=ResearchArtifactType.PAPER,
+            source="fixture",
+            title=title,
+            confidence=0.9,
+        )
+
+    registry = AnalyzerRegistry()
+    registry.register(_FakeAnalyzer("competition", items=[_artifact("c:1", "competition")]))
+    registry.register(_FakeAnalyzer("dataset", items=[_artifact("d:1", "dataset")]))
+    return registry
+
+
 def _seed_analyze_competition(tmp_path: Path) -> ToolFixture:
     """Two single-analyzer selections against a FakeAnalyzer-stubbed registry.
 
@@ -69,14 +129,20 @@ def _seed_analyze_competition(tmp_path: Path) -> ToolFixture:
     handler itself imports (`tools.handlers.analyze.build_default_registry`).
     """
     ws = _base_workspace(tmp_path, "analyze")
-    # inputs_a/inputs_b just carry `only`; the caller is responsible for
-    # monkeypatching build_default_registry with a FakeAnalyzer-backed
-    # registry exposing at least "competition" and "dataset" before invoking
-    # — a monkeypatch fixture doesn't survive being returned from here.
     return ToolFixture(
         workspace=ws,
         inputs_a={"only": "competition"},
         inputs_b={"only": "dataset"},
+        common_kwargs={"verify_auto": True},
+        patches=[
+            (
+                "labpilot.research_engine.tools.handlers.analyze.build_default_registry",
+                _fake_analyzer_registry,
+            )
+        ],
+        # `path`/`brief_path` are workspace-scoped strings and `report` is a
+        # live object; the analyzer list is the id-free signal.
+        observe=lambda _ws, result: tuple(result.data["analyzers"]),
     )
 
 
@@ -109,6 +175,8 @@ def _seed_generate_plan(tmp_path: Path) -> ToolFixture:
         workspace=ws,
         inputs_a={"hypothesis_id": h1.id},
         inputs_b={"hypothesis_id": h2.id},
+        # NOT the plan id — that increments regardless of input (§6.2.1).
+        observe=lambda _ws, result: tuple(str(task.type) for task in result.data["plan"].tasks),
     )
 
 
@@ -173,13 +241,19 @@ def _seed_reflect(tmp_path: Path) -> ToolFixture:
             "plan_id": "P-fixture-b",
             "persist": False,
         },
+        # Evidence strength is the classification; the ids are noise.
+        observe=lambda _ws, result: result.data["evidence_strength"],
     )
 
 
 def _seed_search_papers(tmp_path: Path) -> ToolFixture:
     """`partial` tool — degraded path only; §6.2's `_assert_degraded` branch."""
     ws = _base_workspace(tmp_path, "papers")
-    return ToolFixture(workspace=ws, degraded_inputs={"offline": True, "query": "anything"})
+    return ToolFixture(
+        workspace=ws,
+        degraded_inputs={"offline": True, "query": "anything"},
+        assert_degraded=assert_search_papers_degraded,
+    )
 
 
 def _seed_submit(tmp_path: Path) -> ToolFixture:
@@ -227,6 +301,9 @@ def _seed_query_memory(tmp_path: Path) -> ToolFixture:
         workspace=ws,
         inputs_a={"query": "Mixup"},
         inputs_b={"query": "SpecAugment"},
+        observe=lambda _ws, result: tuple(
+            sorted(t["name"] for t in result.data["context"]["techniques"])
+        ),
     )
 
 
@@ -314,6 +391,7 @@ def _seed_submit_learn(tmp_path: Path) -> ToolFixture:
         workspace=ws,
         inputs_a={"execution_id": exec_a.id, "dry_run": True},
         inputs_b={"execution_id": exec_b.id, "dry_run": True},
+        observe=lambda _ws, result: result.data["summary"].learning_gain,
     )
 
 
@@ -344,6 +422,10 @@ def _seed_implement(tmp_path: Path) -> ToolFixture:
         workspace=ws,
         inputs_a={"description": "apply mixup augmentation", "force_rewrite": True},
         inputs_b={"description": "apply SWA weight averaging", "force_rewrite": True},
+        common_kwargs={"llm_client": FakeCodegenLLM()},
+        # The written file, not the ToolResult — `paths` are workspace-scoped
+        # and identical across both calls (same train.py path, new content).
+        observe=lambda ws, _result: (ws.root / "pipeline" / "train.py").read_text(encoding="utf-8"),
     )
 
 
@@ -424,6 +506,9 @@ def _seed_run_plan(tmp_path: Path) -> ToolFixture:
         workspace=ws,
         inputs_a={"plan_id": plan_a, "dry_run": True},
         inputs_b={"plan_id": plan_b, "dry_run": True},
+        observe=lambda ws, result: tuple(
+            execution_capability_checks(ws, result.data["execution_id"])
+        ),
     )
 
 
@@ -440,6 +525,13 @@ def _seed_run_experiment(tmp_path: Path) -> ToolFixture:
         workspace=ws,
         inputs_a={"plan_id": plan_a, "dry_run": True},
         inputs_b={"plan_id": plan_b, "dry_run": True},
+        # `run_experiment` returns no execution_id, so the evidence-set trick
+        # is unavailable; the experiment/metrics paths it does return are
+        # plan-scoped, which is the id-free signal here.
+        observe=lambda _ws, result: (
+            result.data["plan_id"],
+            bool(result.data["experiment_path"]),
+        ),
     )
 
 
