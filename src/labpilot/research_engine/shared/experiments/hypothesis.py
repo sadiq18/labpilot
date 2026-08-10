@@ -444,10 +444,6 @@ class HypothesisStore:
     def _write_json(self, hypothesis: Hypothesis) -> None:
         atomic_write_text(self._path_for(hypothesis.id), hypothesis.model_dump_json(indent=2))
 
-    def _save(self, hypothesis: Hypothesis) -> None:
-        self._write_json(hypothesis)
-        self._mirror_to_db(hypothesis)
-
     def _mirror_to_db(self, hypothesis: Hypothesis) -> None:
         """Dual-write into ``knowledge.db`` hypotheses table (M3 KnowledgeStore)."""
         self._mirror_many_to_db([hypothesis])

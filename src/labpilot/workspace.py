@@ -55,6 +55,17 @@ data/
 **/knowledge.db-shm
 models/
 
+# Concurrency artifacts (M11) — machine-local, never committed. Patterned by
+# shape rather than by filename so a new lock or temp file added later is
+# covered without editing this list: `*.writelock` from
+# `accessor/sqlite/client.py::write_lock_for`, dot-prefixed `*.lock` from
+# `accessor/common/file_lock.py::locked` (per-hypothesis, per-allocation-slot,
+# per-knowledge-base), and `.*.tmp-<pid>-<tid>` left behind when a process
+# dies between `accessor/common/atomic_write.py`'s write and its rename.
+**/*.writelock
+**/.*.lock
+**/.*.tmp-*
+
 # Python / OS
 __pycache__/
 *.py[cod]

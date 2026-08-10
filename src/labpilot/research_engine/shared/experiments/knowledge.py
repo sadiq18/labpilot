@@ -10,9 +10,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from labpilot.accessor.common import atomic_write_text, locked
 from labpilot.research_engine.shared.experiments.models import (
     ConfigChange,
     ExperimentComparison,
@@ -111,8 +114,32 @@ class KnowledgeBase:
         except (OSError, ValueError) as exc:
             logger.warning("Could not load knowledge base %s: %s", self.path, exc)
 
+    def _lock_path(self) -> Path:
+        return self.path.with_name(f".{self.path.name}.lock")
+
+    @contextmanager
+    def _locked_reload(self) -> Iterator[None]:
+        """Hold the KB lock across reload → mutate → write (M11).
+
+        Reloading *inside* the lock is the whole point, not a refinement of
+        it. `_entries` is a whole-file snapshot taken at construction, and
+        both mutators accumulate onto what they find there (sample counts,
+        confidence, evidence run ids) before writing the entire file back.
+        Without the reload, a branch that constructed its `KnowledgeBase`
+        before another branch committed would write its stale snapshot over
+        the top — silently discarding *every* entry the other branch added,
+        not merely conflicting on one field.
+
+        Reads (`get`, `list_entries`, `top_discoveries`, `known_failures`)
+        deliberately keep their existing construct-time snapshot semantics
+        and take no lock; the atomic write below is what keeps them from
+        ever observing a partial file.
+        """
+        with locked(self._lock_path()):
+            self._load()
+            yield
+
     def _save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         entries = sorted(
             self._entries.values(),
             key=lambda e: (e.technique, e.metric_key),
@@ -121,7 +148,7 @@ class KnowledgeBase:
             "competition": self.competition,
             "entries": [e.model_dump(mode="json") for e in entries],
         }
-        self.path.write_text(json.dumps(payload, indent=2, default=str) + "\n")
+        atomic_write_text(self.path, json.dumps(payload, indent=2, default=str) + "\n")
 
     def get(self, technique: str, metric_key: str) -> KnowledgeEntry | None:
         return self._entries.get((normalize_technique(technique), metric_key))
@@ -172,15 +199,16 @@ class KnowledgeBase:
 
         run_id = comparison.compare_id
         updated: list[KnowledgeEntry] = []
-        for tag in tags:
-            entry = self._update_from_delta(
-                technique=tag,
-                metric_key=metric_key,
-                delta=signed,
-                run_id=run_id,
-            )
-            updated.append(entry)
-        self._save()
+        with self._locked_reload():
+            for tag in tags:
+                entry = self._update_from_delta(
+                    technique=tag,
+                    metric_key=metric_key,
+                    delta=signed,
+                    run_id=run_id,
+                )
+                updated.append(entry)
+            self._save()
         return updated
 
     def update_from_reflection(
@@ -208,6 +236,19 @@ class KnowledgeBase:
         if not tags or not metric_key:
             return []
 
+        with self._locked_reload():
+            updated = self._apply_reflection_tags(tags, metric_key, reflection)
+            if updated:
+                self._save()
+        return updated
+
+    def _apply_reflection_tags(
+        self,
+        tags: list[str],
+        metric_key: str,
+        reflection: StructuredReflection,
+    ) -> list[KnowledgeEntry]:
+        """Mutate `_entries` for each tag. Caller must hold `_locked_reload`."""
         updated: list[KnowledgeEntry] = []
         for tag in tags:
             key = (tag, metric_key)
@@ -245,9 +286,6 @@ class KnowledgeBase:
                 )
             self._entries[key] = entry
             updated.append(entry)
-
-        if updated:
-            self._save()
         return updated
 
     def _update_from_delta(
