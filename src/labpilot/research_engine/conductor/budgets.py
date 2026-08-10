@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from labpilot.research_engine.conductor.models import _now
+
 StopReason = Literal[
     "none",
     "submission_budget",
@@ -61,6 +63,36 @@ class BudgetConfig(BaseModel):
     max_barren_steps: int | None = DEFAULT_MAX_BARREN_STEPS
 
 
+class ScoreEvent(BaseModel):
+    """One comparable score, appended once per successful experiment.
+
+    See docs/research-os/autonomy-roadmap/design/02-objective-loop.md §3 for
+    why `metric_name` is the resolved key rather than the raw one, and why
+    `maximize` travels with the value.
+    """
+
+    experiment_id: str
+    hypothesis_id: str | None = None
+    technique: str | None = None
+    #: Techniques applied together, not cumulative lineage — the `Hypothesis`
+    #: distinction is `combo_techniques` vs `technique_stack`.
+    combo_techniques: list[str] = Field(default_factory=list)
+    #: Resolved metric key (e.g. ``cv_rmse``), not the raw `metrics.json` key.
+    metric_name: str
+    #: Rejects NaN/inf. A diverged run's NaN is not a comparable score: it
+    #: serializes as a bare `NaN` token (invalid JSON) into the session blob,
+    #: and every NaN comparison is False, so it silently disables the
+    #: `plateau` and `metric_target` stops that read this series. A writer
+    #: that finds a non-finite metric must skip the event, as it already
+    #: skips a placeholder run.
+    value: float = Field(allow_inf_nan=False)
+    maximize: bool
+    #: Defaults to the same UTC-aware format every other timestamp in this
+    #: package uses, so callers cannot supply a naive one that later fails to
+    #: compare against the rest of the series.
+    timestamp: str = Field(default_factory=_now)
+
+
 class BudgetState(BaseModel):
     """Live counters persisted in session metadata / metrics table."""
 
@@ -69,6 +101,15 @@ class BudgetState(BaseModel):
     wall_started_at: str | None = None
     metric_history: list[float] = Field(default_factory=list)
     last_metric: float | None = None
+    #: The comparable score series (M8). No writer yet — the conductor loop
+    #: appends one event per successful experiment in M8-2, which also derives
+    #: `metric_history`/`last_metric` from it. Until then those two stay as
+    #: they are: read by `evaluate_stops`, written by nothing.
+    score_events: list[ScoreEvent] = Field(default_factory=list)
+    #: Set when the M8-6 stagnation mint fires for the current plateau, so a
+    #: long plateau doesn't mint a near-duplicate hypothesis every step.
+    #: Cleared on the next improvement. No reader yet.
+    stagnation_mint_fired: bool = False
     #: Reset by any execution that succeeds, so a campaign that recovers is not
     #: punished for the failures it climbed out of.
     consecutive_failures: int = 0
