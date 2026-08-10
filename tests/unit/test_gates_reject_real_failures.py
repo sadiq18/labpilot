@@ -218,17 +218,27 @@ def test_dependency_refuses_a_stdlib_module_in_the_block(tmp_path):
 
 
 @pytest.mark.rejects("runtime")
-def test_runtime_refuses_to_substitute_for_a_runtime_it_cannot_resolve(tmp_path):
+def test_runtime_refuses_an_unknown_name_when_runtimes_are_registered(tmp_path, monkeypatch):
     """A runtime that was *asked for* and could not be found is the one thing
     this step can get wrong, and it was the one thing it could not report: the
     lookup fell through to the local default and the card read "selected runtime
-    local". A campaign that asked for a GPU trained somewhere else and called it
-    a success.
+    local". A campaign that asked for a GPU trained elsewhere and called it a
+    success.
 
-    Red-then-green: restoring the bare `except Exception: runtime_id =
-    self._default` makes this pass with a fabricated runtime name.
+    **Only when the registry can answer.** The first version of this test used a
+    fabricated name and passed while every *real* name failed — `get_runtime` is
+    called with no directories, so it sees one builtin, and "not registered" was
+    true of `local` and the shipped `kaggle-gpu` alike. Reported on PR #120,
+    against the shipped config rather than an invented one.
+
+    Red-then-green, verified 2026-08-10: dropping the `unresolved` branch makes
+    this pass.
     """
     from labpilot.research_engine.execution.capabilities.runtime import RuntimeCapability
+    from labpilot.research_engine.execution.runtimes import registry
+
+    real = registry.list_runtimes()
+    monkeypatch.setattr(registry, "list_runtimes", lambda *a, **k: [*real, *real])
 
     context = capability_context(
         tmp_path,
@@ -240,6 +250,21 @@ def test_runtime_refuses_to_substitute_for_a_runtime_it_cannot_resolve(tmp_path)
 
     assert result.passed is False
     assert "a100-cluster-that-does-not-exist" in (result.error or "")
+
+
+@pytest.mark.parametrize("requested", ["local", "kaggle-gpu", "local-default"])
+def test_a_workspace_with_no_registered_runtimes_still_runs(tmp_path, requested):
+    """The carve-out, and the reviewer's repro. With nothing registered this
+    step cannot answer the question, so it says so in the log and continues —
+    refusing every name, including the shipped example config's, was the first
+    version's behaviour."""
+    from labpilot.research_engine.execution.capabilities.runtime import RuntimeCapability
+
+    context = capability_context(
+        tmp_path, task_type=TaskType.SELECT_RUNTIME, constraints={"runtime_id": requested}
+    )
+
+    assert RuntimeCapability().execute(context).passed is True
 
 
 @pytest.mark.rejects("reporting")
@@ -262,3 +287,57 @@ def test_reporting_refuses_to_report_on_a_run_that_produced_nothing(tmp_path):
 
     assert result.passed is False
     assert "metrics" in (result.error or "")
+
+
+def test_reflection_that_did_not_run_is_not_a_completed_reflection(tmp_path, monkeypatch):
+    """Reported on PR #120. `assessment` is `model_dump()`ed, so it is a dict of
+    eleven default keys and truthy even when nothing ran — the verdict read that
+    as success, which is the gate-that-cannot-fail shape surviving inside the
+    module written to remove it."""
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        ReportingCapability,
+    )
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        capability as reporting_module,
+    )
+
+    monkeypatch.setattr(
+        reporting_module,
+        "run_reflection",
+        lambda *a, **k: {"skipped": True, "reason": "verification_reject", "assessment": {}},
+    )
+    context = capability_context(tmp_path, task_type=TaskType.REFLECT)
+
+    result = ReportingCapability().execute(context)
+
+    assert result.passed is False
+    assert "verification_reject" in (result.error or "")
+
+
+def test_an_apology_is_not_a_recommendation(tmp_path, monkeypatch):
+    """With no LLM the critic fills `recommendation` with *"Re-run reflection
+    with a reachable LLM."* — an apology, not a proposal, and the first version
+    read it as success. Reported on PR #120. Asked as "did the pipeline run"
+    rather than by matching that sentence: a list of known placeholder strings is
+    the curated-set pattern this milestone keeps refusing."""
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        ReportingCapability,
+    )
+    from labpilot.research_engine.execution.capabilities.reporting import (
+        capability as reporting_module,
+    )
+
+    monkeypatch.setattr(
+        reporting_module,
+        "run_reflection",
+        lambda *a, **k: {
+            "skipped": True,
+            "reason": "no_llm",
+            "recommendation": "Re-run reflection with a reachable LLM.",
+        },
+    )
+    context = capability_context(tmp_path, task_type=TaskType.CREATE_HYPOTHESIS)
+
+    result = ReportingCapability().execute(context)
+
+    assert result.passed is False

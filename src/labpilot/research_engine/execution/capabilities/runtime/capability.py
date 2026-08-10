@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 
 from labpilot.research_engine.execution.capabilities._helpers import evidence, is_dry_run
@@ -10,6 +11,8 @@ from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
 from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimeCapability(BaseCapability):
@@ -53,15 +56,41 @@ class RuntimeCapability(BaseCapability):
         # 2026-08-09.
         unresolved = ""
         try:
-            from labpilot.research_engine.execution.runtimes.registry import get_runtime
+            from labpilot.research_engine.execution.runtimes.registry import (
+                get_runtime,
+                list_runtimes,
+            )
 
             runtime = get_runtime(str(runtime_id))
             if runtime is not None:
                 provider = getattr(runtime, "provider", "local")
                 runtime_id = runtime.id
-            elif requested:
+            elif requested and len(list_runtimes()) > 1:
+                # Only when resolution is configured here. `get_runtime` is
+                # called with no directories, so it sees the single builtin and
+                # nothing else — meaning *every* name fails to resolve on a
+                # workspace that has not registered any runtimes, including
+                # `local` and the shipped `kaggle-gpu` example. The first
+                # version refused all of them. Reported on PR #120, against the
+                # shipped config rather than the fabricated name the test used.
+                #
+                # With runtimes registered, an unknown name is a real mistake and
+                # substituting the default would run the experiment elsewhere.
+                # Without any, this step cannot answer the question and says so
+                # rather than inventing a verdict.
                 unresolved = f"runtime {requested!r} is not registered"
-        except Exception as exc:  # noqa: BLE001 — reported, not raised
+            elif requested:
+                logger.warning(
+                    "no runtimes are registered, so %r could not be checked; continuing on %s",
+                    requested,
+                    self._default,
+                )
+        except ImportError as exc:
+            # Narrowed from `except Exception`, which caught a `NameError` from
+            # this module's own missing `logger` and reported it as "the runtime
+            # is not registered" — a bug in the handler, dressed up as a finding
+            # about the user's config. The registry failing to import is the
+            # only fault this can honestly diagnose. Reported on PR #120.
             runtime_id = self._default
             if requested:
                 unresolved = f"runtime {requested!r} could not be resolved: {exc}"

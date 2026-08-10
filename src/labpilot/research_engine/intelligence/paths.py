@@ -140,6 +140,9 @@ def store_is_absent(knowledge_dir, competition: str) -> bool:
     Asked before the read, so absence returns cleanly and the handler is left
     holding only genuine faults — which are then worth logging loudly, because
     they mean something.
+    Answered without `ensure()`, because a read must not migrate anything — see
+    the nested-layout check below.
+
     A workspace with no knowledge directory at all counts as absent, which is
     what it is: nothing has been written, because there is nowhere to write it.
     Said explicitly because `Path(None)` raises, and a `TypeError` escaping here
@@ -150,7 +153,17 @@ def store_is_absent(knowledge_dir, competition: str) -> bool:
 
     if not knowledge_dir:
         return True
-    return not ResearchPaths(Path(knowledge_dir), competition).db_path.is_file()
+    paths = ResearchPaths(Path(knowledge_dir), competition)
+    if paths.db_path.is_file():
+        return False
+    # A client workspace that has not been migrated yet keeps everything under
+    # `knowledge/<slug>/`, and `ResearchPaths` only looks at the migrated
+    # location — `ensure()` is what moves it, and asking a question must not
+    # have that side effect. So the un-migrated place is checked too: without
+    # it, a live campaign reported absent and the conductor rebuilt a baseline
+    # over existing data. Reported on PR #120.
+    nested = Path(knowledge_dir) / competition
+    return not (nested / "research" / "knowledge.db").is_file()
 
 
 def hypotheses_are_absent(knowledge_dir, competition: str) -> bool:
@@ -168,4 +181,7 @@ def hypotheses_are_absent(knowledge_dir, competition: str) -> bool:
 
     if not knowledge_dir:
         return True
-    return not (competition_data_root(Path(knowledge_dir), competition) / "hypotheses").is_dir()
+    if (competition_data_root(Path(knowledge_dir), competition) / "hypotheses").is_dir():
+        return False
+    # The un-migrated layout, for the same reason as `store_is_absent`.
+    return not (Path(knowledge_dir) / competition / "hypotheses").is_dir()

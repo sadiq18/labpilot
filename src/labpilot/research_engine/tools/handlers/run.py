@@ -29,6 +29,27 @@ def _codegen_strategy(workspace: Workspace) -> str:
     return resolve_codegen_strategy(workspace_config_path(workspace))
 
 
+def _kaggle_config(workspace: Workspace):
+    """The workspace's Kaggle credentials, or None when it has no config.
+
+    Read the same way `_codegen_strategy` reads its setting, and never raising:
+    a campaign should not fail to start because a config file has a typo in an
+    unrelated section — it should fail at the step that needs the thing.
+    """
+    from labpilot.research_engine.execution.codegen_strategy import workspace_config_path
+
+    path = workspace_config_path(workspace)
+    if path is None or not path.is_file():
+        return None
+    try:
+        from labpilot.config import load_config
+
+        return load_config(path).kaggle
+    except Exception as exc:  # noqa: BLE001 — reported at the step that needs it
+        logger.debug("kaggle config unreadable, leaving it unset: %s", exc)
+        return None
+
+
 def run_plan(
     workspace: Workspace,
     *,
@@ -59,6 +80,12 @@ def run_plan(
     # caller-supplied `codegen_strategy` still wins, since it is spread after.
     merged: dict[str, Any] = {
         "codegen_strategy": _codegen_strategy(workspace),
+        # The conductor's path never forwarded these, so `prepare_workspace`
+        # reached its download step with no credentials on *every* campaign and
+        # skipped it — silently, because a skip and a success were the same
+        # answer. M20 made the skip visible, which turned an old silent gap into
+        # a loud failure and exposed the gap itself. Reported on PR #120.
+        "kaggle": _kaggle_config(workspace),
         "dry_run": dry_run,
         "allow_upload": submit,
         "smoke_syntax_only": dry_run,

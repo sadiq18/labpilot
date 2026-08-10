@@ -211,10 +211,15 @@ def _baseline_plan_exists(workspace: Workspace) -> bool:
         artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
         plans = artifacts.list()
     except Exception:
-        # A fault reads as "no baseline yet", and the conductor answers that by
-        # compiling one over the top of whatever is already there.
-        logger.exception("cannot read plans for %s; treating as no baseline", workspace.competition)
-        return False
+        # **Raised, not answered.** The other reads here degrade to a negative
+        # because the cost of being wrong is a wasted step. This one's negative
+        # means *compile a baseline*, over the top of whatever is already there
+        # — so a fault that reads as "no baseline" destroys work rather than
+        # delaying it. Reported on PR #120: moving the store construction into
+        # the guard turned a crash into exactly that. A campaign that cannot
+        # read its own plans should stop.
+        logger.exception("cannot read plans for %s", workspace.competition)
+        raise
     finally:
         if artifacts is not None:
             artifacts.close()

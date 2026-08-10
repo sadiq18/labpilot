@@ -112,7 +112,6 @@ def test_absence_needs_no_exception(tmp_path, caplog):
     ("name", "call", "negative"),
     [
         ("_latest_plan_id", "loop._latest_plan_id", None),
-        ("_baseline_plan_exists", "loop._baseline_plan_exists", False),
         ("has_runnable_plan", "policy.has_runnable_plan", False),
     ],
 )
@@ -154,6 +153,20 @@ def test_a_broken_hypothesis_store_is_logged_too(
         assert function(workspace) == negative
 
     assert any(record.exc_info for record in caplog.records), f"{name} swallowed it silently"
+
+
+def test_a_read_whose_negative_destroys_work_raises_instead(tmp_path):
+    """`_baseline_plan_exists` is the exception to the rule above, and PR #120 is
+    why. The other reads degrade to a negative because being wrong costs a step;
+    this one's negative means *compile a baseline* over whatever is already
+    there, so a fault that reads as "no baseline" destroys work rather than
+    delaying it."""
+    from labpilot.research_engine.conductor import loop
+
+    workspace = _Workspace(_with_a_store(tmp_path))
+
+    with pytest.raises(Exception, match="not a database"):
+        loop._baseline_plan_exists(workspace)
 
 
 def test_viability_reports_a_fault_rather_than_an_empty_backlog(
@@ -244,3 +257,72 @@ def test_an_unreadable_parent_does_not_become_a_baseline(tmp_path):
 
     assert result.passed is False
     assert "could not be read" in (result.error or "")
+
+
+# --- PR #120 review ----------------------------------------------------------
+
+
+def test_an_unmigrated_client_workspace_is_not_absent(tmp_path):
+    """Reported on PR #120. `ResearchPaths` reads the *migrated* location and
+    `ensure()` is what moves things there — but a read must not migrate, so a
+    client workspace still holding `knowledge/<slug>/research/knowledge.db`
+    reported absent and the conductor rebuilt a baseline over live data."""
+    from labpilot.research_engine.intelligence.paths import (
+        hypotheses_are_absent,
+        store_is_absent,
+    )
+
+    knowledge = tmp_path / "knowledge"
+    (knowledge / "demo" / "research").mkdir(parents=True)
+    (knowledge / "demo" / "research" / "knowledge.db").write_text("x", encoding="utf-8")
+    (knowledge / "demo" / "hypotheses").mkdir()
+
+    assert store_is_absent(knowledge, "demo") is False
+    assert hypotheses_are_absent(knowledge, "demo") is False
+
+
+def test_a_genuinely_empty_workspace_is_still_absent(tmp_path):
+    """The carve-out must not cost the behaviour it guards."""
+    from labpilot.research_engine.intelligence.paths import (
+        hypotheses_are_absent,
+        store_is_absent,
+    )
+
+    assert store_is_absent(tmp_path, "demo") is True
+    assert hypotheses_are_absent(tmp_path, "demo") is True
+
+
+def test_a_fault_reading_plans_stops_rather_than_rebuilding(tmp_path):
+    """Reported on PR #120. The other reads here degrade to a negative because
+    being wrong costs a step. This one's negative means *compile a baseline*,
+    over whatever is already there — so a fault that reads as "no baseline"
+    destroys work rather than delaying it, and it raises instead."""
+    from unittest import mock
+
+    from labpilot.accessor.sqlite import SqliteClient
+    from labpilot.research_engine.artifacts.plan import PlanArtifacts
+    from labpilot.research_engine.conductor import loop
+
+    knowledge = tmp_path / "knowledge"
+    paths = ResearchPaths(knowledge, "demo").ensure()
+    # A *real* database, so `store_is_absent` says the workspace is live and the
+    # only fault in play is the mocked one. `ensure()` makes directories; the
+    # file appears when a client connects.
+    SqliteClient(paths.db_path, allow_cross_thread=True).close()
+    workspace = _Workspace(knowledge)
+
+    with mock.patch.object(PlanArtifacts, "list", side_effect=OSError("plan store unreadable")):
+        with pytest.raises(OSError, match="unreadable"):
+            loop._baseline_plan_exists(workspace)
+
+
+def test_the_conductor_path_forwards_kaggle_credentials():
+    """Reported on PR #120: `run_plan` never plumbed `config.kaggle`, so
+    `prepare_workspace` reached its download step with no credentials on every
+    conductor-driven campaign and skipped it — silently, while a skip and a
+    success were the same answer."""
+    import inspect
+
+    from labpilot.research_engine.tools.handlers import run
+
+    assert '"kaggle": _kaggle_config(workspace)' in inspect.getsource(run.run_plan)

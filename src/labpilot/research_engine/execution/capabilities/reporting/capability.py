@@ -160,13 +160,16 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            # "Completed" was true of the call, not of the pipeline. A run that
-            # returns neither an assessment nor a card reflected on nothing.
-            passed=bool(result.get("assessment") or result.get("evidence")),
+            # `assessment` is `model_dump()`ed, so it is a dict of eleven
+            # default keys and truthy even when nothing ran — the first version
+            # read that as success, which is the gate-that-cannot-fail shape
+            # surviving inside the module written to remove it. Reported on
+            # PR #120. The pipeline says outright when it did not run.
+            passed=not result.get("skipped"),
             error=(
                 None
-                if (result.get("assessment") or result.get("evidence"))
-                else "the reflection pipeline returned neither an assessment nor a card"
+                if not result.get("skipped")
+                else f"reflection did not run: {result.get('reason') or 'skipped'}"
             ),
             summary="reflection pipeline completed",
             checks=["reflect"],
@@ -200,12 +203,12 @@ class ReportingCapability(BaseCapability):
         result = self._run_reflection_pipeline(context)
         path = context.workspace_root / "artifacts" / "next_hypothesis.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        assessment = result.get("assessment") or {}
-        # The fallback is a *default*, not a suggestion — it says nothing about
-        # this execution and would read identically after every run. Kept so the
-        # file is well-formed, but it no longer counts as having proposed
-        # something.
-        recommendation = assessment.get("recommendation")
+        # The pipeline's own `recommendation` — which the first version ignored
+        # in favour of the assessment's copy, so the step reported on a field
+        # nobody downstream reads. Reported on PR #120.
+        recommendation = result.get("recommendation") or (result.get("assessment") or {}).get(
+            "recommendation"
+        )
         payload = {
             "suggestion": recommendation
             or "Propose an improvement hypothesis against baseline metrics.",
@@ -218,10 +221,17 @@ class ReportingCapability(BaseCapability):
         return evidence(
             context,
             capability=self.name,
-            passed=bool(recommendation),
+            # A recommendation only counts when reflection actually ran: with no
+            # LLM the critic fills the field with *"Re-run reflection with a
+            # reachable LLM."*, which is an apology, not a proposal, and the
+            # first version read it as success. Reported on PR #120. Asked as
+            # "did the pipeline run" rather than by matching that sentence — a
+            # list of known placeholder strings is the curated-set pattern this
+            # milestone keeps refusing.
+            passed=bool(recommendation) and not result.get("skipped"),
             error=(
                 None
-                if recommendation
+                if (recommendation and not result.get("skipped"))
                 else "no recommendation was produced; the file holds the default text"
             ),
             summary="hypothesis suggestion recorded",

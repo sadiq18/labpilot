@@ -50,8 +50,13 @@ class BaseCapability:
     #: says so rather than looking like every other pass.
     #:
     #: Not a way out. `test_every_gate_rejects_something.py` accepts it in place
-    #: of a rejection test, so setting it is a claim a reviewer can see, and one
-    #: that shows up beside `passed` on the card.
+    #: of a rejection test, so setting it is a claim a reviewer can see.
+    #:
+    #: It is a *class* declaration, not a field on `TaskEvidence` — the earlier
+    #: wording said it appeared "beside `passed` on the card", which nothing
+    #: wrote. Reported on PR #120. A capability that declines to verify says so
+    #: on its evidence through `checks`, the way `StubCapability` stamps
+    #: `stub_no_verification`.
     verifies: bool = True
 
     @property
