@@ -9,8 +9,11 @@ run a campaign — which is exactly where the lock and temp files accumulate.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import (
@@ -90,6 +93,44 @@ def test_ensure_roots_reconciles_an_existing_workspace(tmp_path: Path) -> None:
     text = gitignore.read_text(encoding="utf-8")
     for pattern in REQUIRED_IGNORES:
         assert pattern in text
+
+
+def test_unreadable_gitignore_warns_instead_of_failing_silently(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`[]` also means 'already complete', so a silent failure reads as success."""
+    root = tmp_path / "titanic"
+    root.mkdir()
+    gitignore = root / ".gitignore"
+    gitignore.write_text("data/\n", encoding="utf-8")
+    gitignore.chmod(0o000)
+    try:
+        with caplog.at_level(logging.WARNING):
+            assert ensure_required_ignores(root) == []
+        assert any("Could not read" in r.getMessage() for r in caplog.records)
+    finally:
+        gitignore.chmod(0o644)
+
+
+def test_unwritable_gitignore_warns_and_names_the_patterns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The operator needs to know *which* patterns to add by hand."""
+    root = tmp_path / "titanic"
+    root.mkdir()
+    (root / ".gitignore").write_text("data/\n", encoding="utf-8")
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+    with caplog.at_level(logging.WARNING):
+        assert ensure_required_ignores(root) == []
+
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "Could not add" in logged
+    for pattern in REQUIRED_IGNORES:
+        assert pattern in logged
 
 
 def test_patterns_actually_ignore_the_real_artifact_names(tmp_path: Path) -> None:

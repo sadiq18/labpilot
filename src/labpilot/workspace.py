@@ -8,6 +8,7 @@ root instead of the LabPilot package tree.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from datetime import UTC, datetime
@@ -19,6 +20,8 @@ import yaml
 from pydantic import BaseModel, Field
 
 from labpilot.config import AppConfig, Settings, load_config
+
+logger = logging.getLogger(__name__)
 
 MARKER_NAME = "labpilot.yaml"
 SCHEMA_VERSION = 1
@@ -527,7 +530,13 @@ def ensure_required_ignores(root: Path) -> list[str]:
         return []
     try:
         existing = gitignore.read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        # Warn rather than swallow: `[]` is also the "already complete"
+        # return, so a silent failure here is indistinguishable from success
+        # while leaving lock and temp files committable — the exact outcome
+        # this function exists to prevent. Not raised, because gitignore
+        # hygiene is not worth aborting a campaign over.
+        logger.warning("Could not read %s to check ignore patterns: %s", gitignore, exc)
         return []
     present = {line.strip() for line in existing.splitlines()}
     missing = [pattern for pattern in REQUIRED_IGNORES if pattern not in present]
@@ -536,7 +545,15 @@ def ensure_required_ignores(root: Path) -> list[str]:
     block = f"\n{_REQUIRED_IGNORE_HEADER}\n" + "\n".join(missing) + "\n"
     try:
         gitignore.write_text(existing.rstrip("\n") + "\n" + block, encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        logger.warning(
+            "Could not add %d machine-local ignore pattern(s) to %s: %s. "
+            "Lock and temp files may be committed; add these manually: %s",
+            len(missing),
+            gitignore,
+            exc,
+            " ".join(missing),
+        )
         return []
     return missing
 
