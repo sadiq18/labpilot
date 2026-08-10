@@ -76,8 +76,22 @@ def _run(workspace):
     return TrainingCapability().execute(_Ctx())
 
 
+@pytest.mark.rejects("training")
 def test_a_stale_metrics_file_does_not_count_as_a_result(workspace):
-    """The exact E-227 shape: yesterday's metrics, today's green plan."""
+    """The exact E-227 shape: yesterday's metrics, today's green plan.
+
+    Carries M20's `rejects` marker because it is this capability's proof, and it
+    was already built the way the milestone asks: a runner double so the run
+    genuinely completes, leaving the freshness guard as the only thing standing
+    between a stale figure and a published result.
+
+    Red-then-green, verified 2026-08-09 by disabling `if ok and not fresh:` —
+    the stale `194.8` is then published as this run's score. Worth recording
+    that the *first* lever tried was `metrics if fresh else {}`, which left the
+    test green: that line blanks the figure, the verdict lives one branch up,
+    and picking the wrong lever proves nothing just as surely as a weak test
+    does.
+    """
     stale = workspace / "metrics.json"
     stale.write_text(json.dumps({"cv_rmse": 194.8}), encoding="utf-8")
     old = time.time() - 86_400

@@ -13,6 +13,22 @@ method was to stash the guard's condition, watch the test go red, and restore.
 Where a real 2026-08-08 artifact exists it is used, per
 `15-gates-must-fail.md`'s trap: *"do not test the guard against a synthetic bad
 input when a real one exists."*
+
+**Three of the first nine tests here proved nothing**, and the sweep is what
+found them — not review, which had passed all three:
+
+* `code_engineering` refused at an earlier precondition (*"missing dataset
+  profile"*), never reaching the branch it claimed to test;
+* `training` had a second, weaker copy of a test that already existed properly
+  elsewhere — the marker moved to the real one and the copy went;
+* `research_review` drove `force_block`, which is a test hook, so the proof was
+  nearly circular — and with the hook disabled the capability failed anyway, for
+  an unrelated reason.
+
+That is the milestone's own claim landing on itself: each read as correct, and
+each said pass. The lever matters too — `training`'s first attempt disabled the
+line that blanks the metrics rather than the branch that sets the verdict, and
+stayed green.
 """
 
 from __future__ import annotations
@@ -38,17 +54,40 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 def test_code_engineering_refuses_when_it_produced_no_code(tmp_path):
     """The 2026-08-08 shape, at the capability boundary: codegen produces
     nothing, and the step must fail rather than continue on a stub whose fake
-    metrics evaluate would dress up as a leaderboard result.
+    metrics evaluate would later dress up as a leaderboard result.
 
-    Red-then-green: with the `origin == "last_resort"` guard removed, this
-    returns `passed=True` and writes the stub.
+    **The profile is here because the first version of this test proved
+    nothing.** Without it the capability refused at an earlier precondition —
+    *"missing dataset profile"* — so the assertion held with the last-resort
+    guard disabled, and the test was green either way. Found by the
+    red-then-green sweep this milestone requires, in a test written to enforce
+    it.
+
+    Red-then-green, verified 2026-08-09: disabling the
+    `origin == "last_resort" and not is_dry_run` branch makes this pass.
     """
     context = capability_context(tmp_path, task_type=TaskType.WRITE_CODE)
+    (context.workspace_root / "profile.json").write_text(
+        json.dumps(
+            {
+                "competition": "demo",
+                "files": ["train.csv"],
+                "train_file": "train.csv",
+                "test_file": "test.csv",
+                "sample_submission_file": "sample_submission.csv",
+                "target_column": "y",
+                "id_column": "id",
+                "columns": [{"name": "id", "dtype": "int"}, {"name": "y", "dtype": "float"}],
+                "row_count": 10,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = CodeEngineeringCapability().execute(context)
 
     assert result.passed is False
-    assert "codegen" in (result.error or "").lower() or "code" in (result.summary or "").lower()
+    assert "no files" in (result.error or "").lower() or "codegen" in (result.error or "").lower()
 
 
 @pytest.mark.rejects("evaluation")
@@ -85,49 +124,28 @@ def test_verification_refuses_a_workspace_with_no_training_script(tmp_path):
 
 
 @pytest.mark.rejects("research_review")
-def test_research_review_refuses_when_the_plan_says_to_block(tmp_path):
-    """The review gate exists to stop a plan, and a gate that cannot stop one is
-    the milestone's title. Driven through the same metadata the planner writes.
+def test_research_review_rejects_a_script_with_no_entry_point(tmp_path):
+    """The real 2026-08-08 artifact: 624 bytes of docstring and half a comment,
+    which `ast.parse` accepted and `run_smoke_test` passed because a file that
+    does nothing exits 0.
 
-    Red-then-green: with the `force_block` branch removed, this passes.
+    **The first version of this test drove `force_block` and proved nothing.**
+    That is a test hook, so proving the gate through it is close to circular —
+    and with the hook disabled the capability failed anyway, on the real review
+    finding a missing `train.py`. Found by the red-then-green sweep.
+
+    Red-then-green, verified 2026-08-09: neutering `_has_standard_main_guard`
+    makes this pass.
     """
-    context = capability_context(
-        tmp_path,
-        task_type=TaskType.RESEARCH_REVIEW,
-        metadata={"force_block": True},
+    context = capability_context(tmp_path, task_type=TaskType.RESEARCH_REVIEW)
+    (context.workspace_root / "pipeline" / "train.py").write_text(
+        real_failure("truncated_train_py.txt"), encoding="utf-8"
     )
 
     result = ResearchReviewCapability().execute(context)
 
     assert result.passed is False
-
-
-@pytest.mark.rejects("training")
-def test_training_refuses_a_stale_metrics_file(tmp_path):
-    """Defect 5, exactly: E-147 died on `import catboost` and reported
-    `rmse 13.957107` — E-003's figure from six days earlier, still on disk. The
-    freshness guard is what separates "this run scored" from "a file exists".
-
-    Red-then-green: with the `mtime >= wall_started` comparison removed, the
-    stale figure is published as this run's result.
-    """
-    import os
-    import time
-
-    from labpilot.research_engine.execution.capabilities.training.capability import (
-        TrainingCapability,
-    )
-
-    context = capability_context(tmp_path, task_type=TaskType.RUN_TRAINING)
-    stale = context.workspace_root / "metrics.json"
-    stale.write_text(json.dumps({"cv_rmse": 13.957107}), encoding="utf-8")
-    old = time.time() - 86_400
-    os.utime(stale, (old, old))
-
-    result = TrainingCapability().execute(context)
-
-    assert result.passed is False
-    assert result.metadata.get("metrics") in (None, {}, {"metrics": {}})
+    assert "__main__" in (result.error or "") or "entrypoint" in (result.error or "")
 
 
 @pytest.mark.rejects("submission")
