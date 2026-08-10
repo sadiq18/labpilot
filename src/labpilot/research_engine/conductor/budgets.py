@@ -61,6 +61,30 @@ class BudgetConfig(BaseModel):
     max_barren_steps: int | None = DEFAULT_MAX_BARREN_STEPS
 
 
+class ScoreEvent(BaseModel):
+    """One comparable score, appended once per successful experiment.
+
+    `metric_name` is the resolved, normalized key (e.g. ``cv_rmse``) — not
+    whichever raw key happened to be in that run's `metrics.json`, which is
+    exactly the drift M8's design docs against (four resolvers disagreeing on
+    the "primary" key). `maximize` travels with the value so the sign is
+    never re-derived from a different source downstream. See
+    docs/research-os/autonomy-roadmap/design/02-objective-loop.md §3.
+    """
+
+    experiment_id: str
+    hypothesis_id: str | None = None
+    #: Single-technique experiments.
+    technique: str | None = None
+    #: Combo experiments (size 2-3). Distinct from `Hypothesis.technique_stack`
+    #: (cumulative lineage) — see design doc §3 for why the distinction matters.
+    combo_techniques: list[str] = Field(default_factory=list)
+    metric_name: str
+    value: float
+    maximize: bool
+    timestamp: str
+
+
 class BudgetState(BaseModel):
     """Live counters persisted in session metadata / metrics table."""
 
@@ -69,6 +93,15 @@ class BudgetState(BaseModel):
     wall_started_at: str | None = None
     metric_history: list[float] = Field(default_factory=list)
     last_metric: float | None = None
+    #: The comparable score series (M8). `metric_history`/`last_metric` above
+    #: are *derived* from this — recompute, not step — via
+    #: `recompute_metric_history`, called on every `persist_budgets`.
+    score_events: list[ScoreEvent] = Field(default_factory=list)
+    #: Edge-trigger latch for the stagnation-triggered hypothesis mint: true
+    #: while a mint has already fired for the current plateau, so a long
+    #: plateau doesn't mint a near-duplicate hypothesis every step. Cleared on
+    #: the next real improvement.
+    stagnation_mint_fired: bool = False
     #: Reset by any execution that succeeds, so a campaign that recovers is not
     #: punished for the failures it climbed out of.
     consecutive_failures: int = 0
@@ -102,6 +135,20 @@ class BudgetState(BaseModel):
         start = datetime.fromisoformat(self.wall_started_at)
         current = now or datetime.now(UTC)
         return max(0.0, (current - start).total_seconds())
+
+
+def recompute_metric_history(state: BudgetState) -> None:
+    """Derive `metric_history`/`last_metric` from `score_events`, in place.
+
+    Recompute, not step (AGENTS.md rule 2 — the `apply_card_to_beliefs`
+    lesson: a stepped counter stays wrong forever once one input turns out to
+    have been wrong). Called from `persist_budgets`
+    (conductor/checkpoint.py) immediately before every write, so the two flat
+    fields `evaluate_stops` reads can never drift from the event series they
+    summarize.
+    """
+    state.metric_history = [event.value for event in state.score_events]
+    state.last_metric = state.score_events[-1].value if state.score_events else None
 
 
 def evaluate_stops(
