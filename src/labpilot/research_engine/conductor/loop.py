@@ -14,10 +14,13 @@ not by copying the two-call pattern used below.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Callable
 from typing import Any
+
+from pydantic import ValidationError
 
 from labpilot.accessor.common.micro_agents import LLMDegradedError
 from labpilot.research_engine.conductor.actions import (
@@ -91,19 +94,151 @@ def _experiment_outcome(result: object) -> tuple[bool, str]:
     return False, error or f"execution status={status or 'unknown'}"
 
 
+def _score_event_for(workspace: Workspace, execution_id: str) -> Any | None:
+    """The comparable score this execution produced, or None with a reason logged.
+
+    Reads `execution_outcome.json` for *this* execution id rather than the
+    `metrics.json` at the workspace root. The root file survives a failed run,
+    so "is there a file?" and "did this run write one?" are different
+    questions — `run_experiment` needed an explicit freshness guard for
+    exactly that. Keyed by execution id, the outcome artifact cannot belong to
+    a different run.
+
+    Returns None — never a partial event — when the execution produced nothing
+    comparable. Each reason is logged, because a silent skip here is
+    invisible from outside and leaves the series quietly short.
+    """
+    from labpilot.research_engine.conductor.budgets import ScoreEvent
+    from labpilot.research_engine.evidence.builder import (
+        is_placeholder_metrics,
+        metrics_as_experiment,
+    )
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.shared.experiments.comparator import (
+        resolve_primary_metric_key_and_direction,
+    )
+
+    paths = ResearchPaths(workspace.knowledge_dir, workspace.competition)
+    outcome_path = paths.executions_dir / execution_id / "artifacts" / "execution_outcome.json"
+    if not outcome_path.is_file():
+        # The specialist `run_experiment` path writes no execution outcome, so
+        # this is the ordinary way a non-`run_plan` experiment lands here.
+        logger.info("no execution outcome for %s; no score recorded", execution_id)
+        return None
+    try:
+        outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("unreadable execution outcome for %s; no score recorded", execution_id)
+        return None
+
+    metrics = outcome.get("metrics") or {}
+    if is_placeholder_metrics(metrics):
+        # A run that never trained a model has no score to compare, for the
+        # same reason it must not reach an evidence card.
+        logger.info("execution %s produced placeholder metrics; no score recorded", execution_id)
+        return None
+
+    experiment = metrics_as_experiment(execution_id, workspace.competition, metrics)
+    # The one competition-aware resolver, called with the single execution on
+    # both sides: `shared` degenerates to this run's own metric keys, which is
+    # the lookup wanted here. Using a second, ad-hoc resolver is how four of
+    # them ended up disagreeing about the "primary" key.
+    metric_name, maximize = resolve_primary_metric_key_and_direction(
+        experiment,
+        experiment,
+        competition_dirs=(
+            workspace.effective_runs_dir / execution_id,
+            workspace.root,
+        ),
+    )
+    if metric_name is None:
+        logger.info("no resolvable primary metric for %s; no score recorded", execution_id)
+        return None
+
+    hypothesis_id = outcome.get("hypothesis_id") or None
+    technique, combo = _techniques_for(workspace, hypothesis_id)
+    try:
+        return ScoreEvent(
+            experiment_id=execution_id,
+            hypothesis_id=hypothesis_id,
+            technique=technique,
+            combo_techniques=combo,
+            metric_name=metric_name,
+            value=float(experiment.metrics[metric_name]),
+            maximize=maximize,
+        )
+    except ValidationError:
+        # `ScoreEvent` refuses a non-finite value: a diverged run's NaN is not
+        # a comparable score, and admitting one would silently disable the
+        # plateau and metric_target stops that read this series.
+        logger.info(
+            "execution %s scored %r on %s, which is not a comparable value; no score recorded",
+            execution_id,
+            metrics.get(metric_name),
+            metric_name,
+        )
+        return None
+
+
+def _techniques_for(
+    workspace: Workspace, hypothesis_id: str | None
+) -> tuple[str | None, list[str]]:
+    """`(technique, combo_techniques)` for the hypothesis under test.
+
+    `combo_techniques`, not `technique_stack`: the stack is cumulative
+    lineage, so a five-generation chain would name every ancestor for a change
+    that tested one thing.
+    """
+    if not hypothesis_id:
+        return None, []
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+
+    try:
+        hypothesis = HypothesisStore(workspace.knowledge_dir, workspace.competition).get(
+            hypothesis_id
+        )
+    except Exception:  # noqa: BLE001 — a missing hypothesis must not lose the score
+        logger.info("cannot read hypothesis %s; recording the score without it", hypothesis_id)
+        return None, []
+    if hypothesis is None:
+        return None, []
+    return hypothesis.technique, list(hypothesis.combo_techniques)
+
+
 def _record_experiment_outcome(
     store,
     session_id: str,
     *,
     succeeded: bool,
     error: str = "",
+    workspace: Workspace | None = None,
+    execution_id: str | None = None,
 ) -> None:
-    """Fold one experiment outcome into the breaker's counters and persist."""
+    """Fold one experiment outcome into the breaker's counters and persist.
+
+    On a success that produced a comparable score, also append it to
+    `score_events` and derive `metric_history`/`last_metric` from the series.
+
+    The derivation happens *here*, at the one place the series changes, rather
+    than as an invariant every writer must remember to re-establish. A session
+    with no events is therefore never touched — which matters, because
+    `metric_history` predates this series and a campaign resumed from an older
+    session still has values in it.
+    """
     session = store.get_session(session_id)
     if session is None:
         return
     budget_cfg, budget_state = load_budget_pair(session)
     budget_state.record_execution(succeeded=succeeded, error=error)
+    if succeeded and workspace is not None and execution_id:
+        event = _score_event_for(workspace, execution_id)
+        if event is not None:
+            budget_state.score_events.append(event)
+            budget_state.metric_history = [e.value for e in budget_state.score_events]
+            budget_state.last_metric = event.value
+            logger.info(
+                "recorded %s=%s for %s", event.metric_name, event.value, event.experiment_id
+            )
     persist_budgets(store, session_id, budget_cfg, budget_state)
 
 
@@ -680,11 +815,21 @@ def _run_until_stop_inner(
                         # 16 dispatches were `run_plan` returning normally. The
                         # breaker built to stop exactly that never reached 3.
                         outcome = _experiment_outcome(result)
+                        # `execution_id` is present on `run_plan`'s result and
+                        # absent on the specialist `run_experiment` path, which
+                        # creates no execution to cite — so the score is
+                        # recorded for the runs that have an id to record it
+                        # against, and skipped for the ones that do not.
                         _record_experiment_outcome(
                             store,
                             session_id,
                             succeeded=outcome[0],
                             error=outcome[1],
+                            workspace=workspace,
+                            execution_id=str(
+                                (getattr(result, "data", None) or {}).get("execution_id") or ""
+                            )
+                            or None,
                         )
                 except LLMDegradedError as exc:
                     # Strict mode (M14 2b) means fatal, and the generic handler

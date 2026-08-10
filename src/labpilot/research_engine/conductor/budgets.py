@@ -145,6 +145,25 @@ class BudgetState(BaseModel):
         return max(0.0, (current - start).total_seconds())
 
 
+def _last_metric_matches_target(config: BudgetConfig, state: BudgetState) -> bool:
+    """Whether `last_metric` is a reading of the metric the target names.
+
+    `last_metric` is a bare number; `target_value` is a threshold for a
+    specific metric. Comparing them without checking which metric produced the
+    number lets a `cv_rmse` of 190.97 satisfy an `lb_auc` target of 0.90 and
+    end the campaign on a metric it was never measuring.
+
+    Only enforced when the series says what the metric was. A session whose
+    `last_metric` predates `score_events` has no key to check, and refusing to
+    compare there would silently disarm a target that used to fire — so an
+    unknown metric keeps the older, looser behaviour rather than a new
+    stricter one.
+    """
+    if not state.score_events:
+        return True
+    return state.score_events[-1].metric_name == config.target_metric
+
+
 def evaluate_stops(
     config: BudgetConfig,
     state: BudgetState,
@@ -186,7 +205,12 @@ def evaluate_stops(
         return "wall_time"
     if config.max_cost_usd is not None and state.llm_cost_usd >= config.max_cost_usd:
         return "cost_budget"
-    if config.target_metric and config.target_value is not None and state.last_metric is not None:
+    if (
+        config.target_metric
+        and config.target_value is not None
+        and state.last_metric is not None
+        and _last_metric_matches_target(config, state)
+    ):
         if config.maximize and state.last_metric >= config.target_value:
             return "metric_target"
         if not config.maximize and state.last_metric <= config.target_value:
