@@ -1,0 +1,20 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "pandas",
+#   "numpy",
+#   "scikit-learn",
+#   "lightgbm>=4.0",
+#   "pyarrow",
+#   "glob",
+# ]
+# ///
+import glob
+
+
+def main():
+    return glob
+
+
+if __name__ == "__main__":
+    main()

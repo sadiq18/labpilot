@@ -1,6 +1,6 @@
 # M20 — A gate that cannot fail is not a gate
 
-**Status:** not started · **Evidence:**
+**Status:** in progress — the mechanism landed 2026-08-09 · **Evidence:**
 [evidence-log-2026-08-08.md](evidence-log-2026-08-08.md) ·
 **Generalises:** M9 (verification-first), M15's contract test ·
 **Blocked by:** nothing — every item is independent of the research loop
@@ -106,6 +106,38 @@ The rule catches the fourth instance before it is written.
 5. A deliberately broken artifact fails the campaign **at the gate that owns
    it**, not three steps downstream. This is the check that cannot be satisfied
    by accident: it requires the gate to be both present and correct.
+
+## Where this stands
+
+| exit criterion | state |
+|---|---|
+| 1 — every pass/fail module has a red-then-green rejection test | **mechanism shipped.** `test_every_gate_rejects_something.py` enumerates the capabilities and requires each to carry a `@pytest.mark.rejects("<name>")` test. 6 of 11 proven; 5 are the findings below |
+| 2 — no verification path rebuilds a command production owns | not started |
+| 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
+| 4 — a derived artifact re-derives or says it is derived | not started |
+| 5 — a broken artifact fails at the gate that owns it | not started |
+
+### Five gates that cannot fail, found on the first day
+
+The enumerator asks the question of the *code*, not of its tests: does this
+capability have any path to `passed=False`?
+
+| capability | what it reports | what it tests |
+|---|---|---|
+| `reporting` | 4 return sites, every one `passed=True` | nothing — it writes a summary and calls it verified |
+| `runtime` | 2 return sites, both `passed=True` | nothing — it provisions a runtime and cannot report that it did not |
+| `stub` | always passes | that it ran. Always passing is what a stub is *for*, and that is the point: on the card it is indistinguishable from a capability that verified something, which is how four campaigns ran with codegen silently falling back |
+| `submission` | `passed=packaged.is_file()` | that a file exists — one **it wrote itself** moments earlier. Passes on a workspace with no model, no predictions and no data |
+| `workspace` | `passed=passed` | that the directories exist. Run without Kaggle credentials it reports `passed=True` carrying `download_skipped: no_kaggle_config` and `profile_skipped: no_data` in its own metadata: it says it skipped everything, and passes |
+
+The last two are held as **strict xfails** rather than a list. They must fail
+today; when the verdict starts meaning what it promises, the test fails until
+someone removes the marker. A list needs a reader, and the whole finding is that
+nobody was reading.
+
+Worth naming what the first three have in common with the eight in the table
+above: none is a naming problem, and none would be caught by review. `reporting`
+is honestly named and does report. The claim it makes is `passed`.
 
 ## Traps
 

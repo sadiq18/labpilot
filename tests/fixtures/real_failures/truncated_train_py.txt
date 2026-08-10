@@ -1,0 +1,4 @@
+"""Partition-aware regression baseline."""
+
+# /// script
+# requires-python = \
