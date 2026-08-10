@@ -15,16 +15,34 @@ from pathlib import Path
 
 from labpilot.accessor.sqlite.migrate import run_migration
 
-#: Shared across every :class:`SqliteClient` instantiation in the process
-#: (M11) — an instance-level lock does not serialize anything here, since
-#: `ConductorStore`/`KnowledgeStore` construct a fresh client at each call
-#: site rather than sharing one long-lived object the way `BudgetLedger`
-#: does. A single atomic statement (e.g. ``SET field = field + ?``) is
-#: already safe under WAL + busy_timeout without this lock; it exists for
-#: multi-statement sequences — allocate-an-id-then-insert-a-row being the
-#: concrete case in `ConductorStore` — where two callers could otherwise
-#: both read the same "next id" before either writes.
-write_lock = threading.RLock()
+_write_locks: dict[Path, threading.RLock] = {}
+_write_locks_guard = threading.Lock()
+
+
+def write_lock_for(db_path: str | Path) -> threading.RLock:
+    """Per-database-file write lock (M11), not a single global one.
+
+    An instance-level lock (`self._lock`) does not serialize anything here,
+    since `ConductorStore`/`KnowledgeStore` construct a fresh client at each
+    call site rather than sharing one long-lived object the way `BudgetLedger`
+    does. A single atomic statement (e.g. ``SET field = field + ?``) is
+    already safe under WAL + busy_timeout without any lock; this exists for
+    multi-statement sequences — allocate-an-id-then-insert-a-row being the
+    concrete case in `ConductorStore` — where two callers could otherwise
+    both read the same "next id" before either writes.
+
+    Keyed by resolved `db_path` rather than one shared lock for the whole
+    process: two unrelated competitions' stores, backed by physically
+    distinct files, have zero real contention and should not serialize on
+    each other just because both happened to call this at the same moment.
+    """
+    resolved = Path(db_path).resolve()
+    with _write_locks_guard:
+        lock = _write_locks.get(resolved)
+        if lock is None:
+            lock = threading.RLock()
+            _write_locks[resolved] = lock
+        return lock
 
 
 class SqliteClient:
@@ -40,7 +58,7 @@ class SqliteClient:
     cross-thread use *possible* everywhere while making it *safe* nowhere —
     sqlite tolerates cross-thread use, not concurrent use. A caller that opts
     in owns the serialisation, as `BudgetLedger` and `PromptCache` already do,
-    or takes the module-level `write_lock` above for multi-statement writes.
+    or takes `write_lock_for(self.db_path)` above for multi-statement writes.
 
     WAL journal mode plus an explicit ``busy_timeout`` (M11) is for read/write
     concurrency during a parallel step, not a fix for a reproducible

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from labpilot.accessor.common import allocate_sequential_id
+from labpilot.accessor.common import allocate_sequential_id, locked
 from labpilot.research_engine.evidence.models import EvidenceCard
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 
@@ -30,12 +30,21 @@ class EvidenceCardStore:
         return allocate_sequential_id(_EV_PREFIX, existing)
 
     def save(self, card: EvidenceCard) -> EvidenceCard:
-        if not card.id:
-            card = card.model_copy(update={"id": self.new_id()})
         if not card.competition:
             card = card.model_copy(update={"competition": self.competition})
-        path = self._path(card.id)
-        path.write_text(card.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        if not card.id:
+            # Locked across allocate-then-write, not just the allocate (M11):
+            # two concurrent saves of new cards must not both glob the same
+            # max EV-NNN before either file lands on disk — the id doesn't
+            # exist yet, so this locks the directory's allocation slot, not
+            # a per-card id the way `HypothesisStore` locks a known one.
+            with locked(self.dir / ".alloc.lock"):
+                card = card.model_copy(update={"id": self.new_id()})
+                self._path(card.id).write_text(
+                    card.model_dump_json(indent=2) + "\n", encoding="utf-8"
+                )
+            return card
+        self._path(card.id).write_text(card.model_dump_json(indent=2) + "\n", encoding="utf-8")
         return card
 
     def get(self, card_id: str) -> EvidenceCard | None:

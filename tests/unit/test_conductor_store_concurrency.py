@@ -2,19 +2,23 @@
 
 Two different claims, verified differently:
 
-- ``increment_metric``'s ``SET field = field + ?`` is a single atomic SQL
-  statement — SQLite guarantees no lost updates for it regardless of an
-  application-level lock. This test asserts that guarantee holds under real
-  thread contention (each thread opens its own connection, matching M11's
-  one-branch-per-thread model), not that it fixes a reproducible bug — a
-  30-thread barrier-synchronized run against this same statement produced
-  zero `database is locked` errors even before WAL/busy_timeout were added
-  (`sqlite3.connect`'s implicit 5s timeout already covers that case here).
 - Allocating an id then inserting a row using it (``new_decision_id`` +
   ``append_decision``) is a genuine multi-statement TOCTOU race no amount of
   busy_timeout closes — two callers can both read the same "next id" before
-  either writes. This one needs the shared `write_lock` held across the whole
-  sequence, and is the actual bug this file exists to guard against.
+  either writes. `ConductorStore.append_new_decision` closes it by holding
+  `write_lock_for(db_path)` across the whole sequence; this test drives that
+  method directly (not a hand-rolled lock in the test) so it proves what
+  production code — M11 task 7's K-way fan-out — will actually call.
+- ``increment_metric`` looked like a single atomic SQL statement but wasn't,
+  on a session's first increment: it used to do
+  ``get_metrics()`` (SELECT) → conditionally ``upsert_metrics()`` (its own
+  commit) → the ``UPDATE``, three separately-committed statements. Two
+  threads' first increments could both see no row, then race the upsert's
+  ``ON CONFLICT DO UPDATE``, and whichever committed second reset every
+  field — including a sibling's already-committed increment — back to zero.
+  Fixed with a single atomic ``INSERT OR IGNORE`` ahead of the ``UPDATE``.
+  This test's setup deliberately does not pre-create the metrics row, so it
+  exercises exactly the path that used to be unsafe.
 """
 
 from __future__ import annotations
@@ -22,8 +26,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from labpilot.accessor.sqlite.client import write_lock
-from labpilot.research_engine.conductor.models import DecisionRecord
+from labpilot.accessor.sqlite.client import write_lock_for
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import scaffold_workspace
@@ -57,16 +60,7 @@ def test_concurrent_decision_ids_do_not_collide(tmp_path: Path) -> None:
     def append_one() -> None:
         store = ConductorStore(ws.knowledge_dir, ws.competition)
         try:
-            with write_lock:
-                decision_id = store.new_decision_id()
-                store.append_decision(
-                    DecisionRecord(
-                        id=decision_id,
-                        session_id=session.id,
-                        tool_name="run_experiment",
-                        rationale="branch",
-                    )
-                )
+            store.append_new_decision(session.id, "run_experiment", "branch")
         finally:
             store.close()
 
@@ -86,7 +80,8 @@ def test_concurrent_decision_ids_do_not_collide(tmp_path: Path) -> None:
 
 
 def test_concurrent_increment_metric_loses_nothing(tmp_path: Path) -> None:
-    """M11: a single atomic UPDATE is safe under WAL+busy_timeout without a lock.
+    """M11: increment_metric is safe under concurrency, including a session's
+    first increment (the INSERT OR IGNORE ahead of the UPDATE), with no lock.
 
     Each thread opens its own `ConductorStore`, same rationale as above.
     """
@@ -116,3 +111,17 @@ def test_concurrent_increment_metric_loses_nothing(tmp_path: Path) -> None:
         assert metrics.tasks_failed == _N_WRITERS
     finally:
         verify_store.close()
+
+
+def test_write_lock_for_is_scoped_per_db_path(tmp_path: Path) -> None:
+    """M11: unrelated competitions must not serialize on each other's writes."""
+    ws_a = _ws(tmp_path, "competition-a")
+    ws_b = _ws(tmp_path, "competition-b")
+    store_a = ConductorStore(ws_a.knowledge_dir, ws_a.competition)
+    store_b = ConductorStore(ws_b.knowledge_dir, ws_b.competition)
+    try:
+        assert write_lock_for(store_a.paths.db_path) is write_lock_for(store_a.paths.db_path)
+        assert write_lock_for(store_a.paths.db_path) is not write_lock_for(store_b.paths.db_path)
+    finally:
+        store_a.close()
+        store_b.close()

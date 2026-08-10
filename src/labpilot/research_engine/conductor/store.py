@@ -8,7 +8,7 @@ from typing import Any
 
 from labpilot.accessor.common import allocate_sequential_id
 from labpilot.accessor.common.json_utils import dumps, loads
-from labpilot.accessor.sqlite import SqliteClient
+from labpilot.accessor.sqlite import SqliteClient, write_lock_for
 from labpilot.research_engine.conductor.models import (
     ApprovalResult,
     ConductSession,
@@ -257,6 +257,37 @@ class ConductorStore:
     def new_decision_id(self) -> str:
         return self._new_id(_DECISION_PREFIX, "os_decisions")
 
+    def append_new_decision(
+        self,
+        session_id: str,
+        tool_name: str,
+        rationale: str,
+        **kwargs: object,
+    ) -> DecisionRecord:
+        """Allocate an id and append a `DecisionRecord`, as one locked step.
+
+        The sequential-id path (`new_decision_id()` then `append_decision()`
+        as two separate calls) is a TOCTOU race under concurrent callers —
+        `_new_id` computes `MAX(id)+1` via a `SELECT` with no lock, so two
+        callers can read the same "next id" before either commits its
+        `INSERT` (M11: verified, 6/20 unlocked concurrent attempts raised
+        `IntegrityError`). K-way fan-out (M11 task 7 — each branch appending
+        its own decision) MUST use this method, not the raw two-call
+        pattern, for exactly that reason. The existing sequential (K=1)
+        call sites elsewhere in `conductor/loop.py` stay on the two-call
+        pattern unchanged — they are not concurrent with each other, so the
+        race does not apply there.
+        """
+        with write_lock_for(self.paths.db_path):
+            record = DecisionRecord(
+                id=self.new_decision_id(),
+                session_id=session_id,
+                tool_name=tool_name,
+                rationale=rationale,
+                **kwargs,
+            )
+            return self.append_decision(record)
+
     def list_decisions(self, session_id: str) -> list[DecisionRecord]:
         rows = self._conn.execute(
             "SELECT * FROM os_decisions WHERE session_id = ? ORDER BY id",
@@ -419,11 +450,21 @@ class ConductorStore:
         }
         if field not in allowed:
             raise ValueError(f"unknown metric field: {field}")
-        if self.get_metrics(session_id) is None:
-            from labpilot.research_engine.conductor.metrics import CampaignMetrics
-
-            self.upsert_metrics(CampaignMetrics(session_id=session_id))
         now = _now()
+        # Ensure the row exists via a single atomic INSERT OR IGNORE (M11),
+        # not the old get_metrics()-then-conditionally-upsert_metrics()
+        # sequence — two concurrent first-increments could both see no row,
+        # then race upsert_metrics' own ON CONFLICT DO UPDATE, and whichever
+        # committed second reset every field (including a sibling's
+        # already-committed increment) back to CampaignMetrics' zero
+        # defaults. INSERT OR IGNORE is a no-op against an existing row
+        # (session_id is the PRIMARY KEY), so concurrent callers can't
+        # clobber each other here, and the UPDATE below is unconditionally
+        # safe once the row is known to exist.
+        self._conn.execute(
+            "INSERT OR IGNORE INTO os_campaign_metrics (session_id, updated_at) VALUES (?, ?)",
+            (session_id, now),
+        )
         self._conn.execute(
             f"UPDATE os_campaign_metrics SET {field} = {field} + ?, updated_at = ? WHERE session_id = ?",  # noqa: S608
             (amount, now, session_id),

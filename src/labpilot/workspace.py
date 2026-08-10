@@ -51,6 +51,8 @@ data/
 
 # Local DB journals / models
 **/knowledge.db-journal
+**/knowledge.db-wal
+**/knowledge.db-shm
 models/
 
 # Python / OS

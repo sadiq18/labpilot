@@ -278,11 +278,18 @@ Two different problems turned out to need two different fixes, not one:
   — an instance-level lock like `BudgetLedger`'s `threading.RLock` doesn't
   work here since `ConductorStore` is freshly constructed at each call site,
   not shared for the process's lifetime the way `BudgetLedger` is. Fixed by
-  `write_lock` (`accessor/sqlite/client.py`, module-level `threading.RLock`),
-  held across the whole allocate-then-insert sequence at each call site —
-  applied so far to `new_decision_id`/`append_decision`; any other
-  M11-introduced allocate-then-insert sequence (e.g. checkpointing in §8's
-  audit-parity work) needs the same pattern, not a fresh mechanism.
+  `write_lock_for(db_path)` (`accessor/sqlite/client.py`) — keyed per database
+  file, not one process-wide lock, so unrelated competitions don't serialize
+  on each other. Callers can't forget it: `ConductorStore.append_new_decision`
+  encapsulates the whole allocate-then-insert sequence under the lock, so K-way
+  fan-out (task 7) calls that method, not the raw two-call pattern. The same
+  fix (`write_lock_for` for SQL stores, or the equivalent file-lock helper —
+  `accessor/common/file_lock.py` — for JSON-backed ones) was applied to every
+  store sharing this exact allocate-then-insert shape that M11 actually
+  touches (`HypothesisStore`, `EvidenceCardStore`, `ExperienceStore`); stores
+  M11 doesn't touch (`PlanStore`, execution's and reflection's id-allocators)
+  were left as-is — same latent shape, genuinely out of this milestone's
+  scope, `write_lock_for`/`locked()` are there for whoever picks them up.
 
 **Promotion.** Rank the step's K results with the module-level
 `_pick_best(candidates, metric_key, maximize)` (`shared/experiments/graph.py`),
