@@ -66,6 +66,7 @@ def test_registry_lookup_and_fake_tool_invoke(tmp_path: Path) -> None:
             description="test double",
             output_artifacts=["echo"],
             handler=echo_tool,
+            capability_status="fixed",
         )
     )
     assert registry.get("echo") is not None

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from labpilot.research_engine.artifacts.base import ArtifactRef
+from labpilot.research_engine.conductor.actions import ResearchAction
 from labpilot.research_engine.conductor.gap_ledger import (
     apply_gap_decision,
     build_suggestion_context,
@@ -18,14 +20,12 @@ from labpilot.research_engine.conductor.gap_ledger import (
 )
 from labpilot.research_engine.conductor.loop import run_until_stop
 from labpilot.research_engine.conductor.metrics import record_suggestion
-from labpilot.research_engine.conductor.actions import ResearchAction
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.tools.descriptors import ToolDescriptor, ToolResult
 from labpilot.research_engine.tools.registration import register_tool
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import scaffold_workspace
-from unittest.mock import patch
 
 
 def _ws(tmp_path: Path, slug: str = "gaps") -> Workspace:
@@ -54,9 +54,7 @@ def _echo(workspace: Workspace, **kwargs: object) -> ToolResult:
 def test_normalize_gap_key_prefers_tool_then_intent() -> None:
     assert normalize_gap_key(missing_tools=["Run_EDA"]) == "tool:run_eda"
     assert (
-        normalize_gap_key(
-            message="Need capability/tool 'invent_x' for intent: teleport"
-        )
+        normalize_gap_key(message="Need capability/tool 'invent_x' for intent: teleport")
         == "tool:invent_x"
     )
     assert normalize_gap_key(intent="  Teleport Now  ").startswith("intent:teleport")
@@ -156,7 +154,9 @@ def test_register_tool_and_allowlist_refresh(tmp_path: Path) -> None:
     ws = _ws(tmp_path, "live")
     store = ConductorStore(ws.knowledge_dir, ws.competition)
     reg = ToolRegistry()
-    reg.register(ToolDescriptor(name="analyze_competition", handler=_echo))
+    reg.register(
+        ToolDescriptor(name="analyze_competition", handler=_echo, capability_status="fixed")
+    )
 
     calls = {"n": 0}
 
@@ -170,7 +170,7 @@ def test_register_tool_and_allowlist_refresh(tmp_path: Path) -> None:
         if calls["n"] == 2:
             register_tool(
                 reg,
-                ToolDescriptor(name="brand_new_tool", handler=_echo),
+                ToolDescriptor(name="brand_new_tool", handler=_echo, capability_status="fixed"),
             )
             return ResearchAction(
                 intent="use new",
@@ -199,9 +199,7 @@ def test_register_tool_and_allowlist_refresh(tmp_path: Path) -> None:
         suggestions = store.list_suggestions(session.id)
         assert suggestions
         assert suggestions[0].context.get("missing_tools") == ["brand_new_tool"]
-        completed = {
-            t.tool_name for t in store.list_tasks(session.id) if t.status == "completed"
-        }
+        completed = {t.tool_name for t in store.list_tasks(session.id) if t.status == "completed"}
         assert "brand_new_tool" in completed
         assert any(not d.stop for d in decisions)
     finally:

@@ -56,7 +56,7 @@ def _registry() -> ToolRegistry:
         "run_plan",
         "reflect",
     ):
-        reg.register(ToolDescriptor(name=name, handler=echo))
+        reg.register(ToolDescriptor(name=name, handler=echo, capability_status="fixed"))
     return reg
 
 
@@ -141,18 +141,16 @@ def test_online_campaign_llm_sees_context_bundle(tmp_path: Path) -> None:
         assert "context_summary" in observe
         assert "context_refs" in observe
         assert "mixup" in json.dumps(observe).lower()
-        assert any(
-            s and "context_refs" in s for s in llm.systems
-        ), "system prompt should mention ranked evidence"
+        assert any(s and "context_refs" in s for s in llm.systems), (
+            "system prompt should mention ranked evidence"
+        )
         tools = [d.tool_name for d in decisions if d.tool_name]
         assert "analyze_competition" in tools
     finally:
         store.close()
 
 
-def test_offline_campaign_skips_context_engine(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_offline_campaign_skips_context_engine(tmp_path: Path, monkeypatch) -> None:
     import labpilot.research_engine.context as ctx_mod
 
     calls: list[str] = []

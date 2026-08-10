@@ -51,9 +51,11 @@ def _echo_registry() -> ToolRegistry:
     def papers(workspace: Workspace, **kwargs: object) -> ToolResult:
         return search_papers(workspace, offline=True, query="demo")
 
-    reg.register(ToolDescriptor(name="analyze_competition", handler=echo))
-    reg.register(ToolDescriptor(name="search_papers", handler=papers))
-    reg.register(ToolDescriptor(name="query_memory", handler=echo))
+    reg.register(
+        ToolDescriptor(name="analyze_competition", handler=echo, capability_status="fixed")
+    )
+    reg.register(ToolDescriptor(name="search_papers", handler=papers, capability_status="fixed"))
+    reg.register(ToolDescriptor(name="query_memory", handler=echo, capability_status="fixed"))
     return reg
 
 
