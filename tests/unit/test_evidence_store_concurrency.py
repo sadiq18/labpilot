@@ -36,3 +36,38 @@ def test_concurrent_save_of_new_cards_does_not_collide(tmp_path: Path) -> None:
     assert len(set(saved_ids)) == n_writers
     on_disk = list((store.dir).glob("EV-*.json"))
     assert len(on_disk) == n_writers
+
+
+def test_save_is_atomic_no_torn_reads(tmp_path: Path) -> None:
+    """M11: a reader must never see a truncated/partial evidence card file."""
+    store = EvidenceCardStore(tmp_path / "knowledge", "titanic")
+    card = store.save(EvidenceCard(treatment_experiment="run-x"))
+    stop = threading.Event()
+    torn_reads: list[str] = []
+
+    def writer() -> None:
+        for _ in range(200):
+            store.save(card.model_copy(update={"decision_reason": "a" * 500}))
+            store.save(card.model_copy(update={"decision_reason": "b"}))
+        stop.set()
+
+    def reader() -> None:
+        path = store.dir / f"{card.id}.json"
+        while not stop.is_set():
+            try:
+                text = path.read_text()
+            except FileNotFoundError:
+                continue
+            if not text.strip().endswith("}"):
+                torn_reads.append(text)
+
+    writer_thread = threading.Thread(target=writer)
+    reader_threads = [threading.Thread(target=reader) for _ in range(4)]
+    writer_thread.start()
+    for t in reader_threads:
+        t.start()
+    writer_thread.join()
+    for t in reader_threads:
+        t.join()
+
+    assert torn_reads == []

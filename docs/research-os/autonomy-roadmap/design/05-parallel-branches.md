@@ -257,6 +257,32 @@ in `ConductorStore`), and run `git worktree prune`. This mirrors an existing
 condition already observed in this repo's own worktree list, so it is treated
 as a required path, not a nice-to-have.
 
+**Atomic writes — a second reader-vs-writer race, found by review, not
+designed for up front.** Locking the mutators (`HypothesisStore`,
+`EvidenceCardStore`) closes writer-vs-writer races, but `get()`/`list()`
+callers never took that lock — deliberately, to keep reads lock-free — which
+only works if a reader can never observe a half-written file. It could:
+`path.write_text()` truncates then writes as two separate steps, so a reader
+landing in between saw a 0-byte file. Fixed once, generically
+(`accessor/common/atomic_write.py::atomic_write_text` — write to a temp file,
+`os.replace` onto the real path, atomic on POSIX), and applied to **both**
+file-backed stores — `EvidenceCardStore.save()` got the identical fix
+`HypothesisStore._write_json` did, not just the id-allocation lock it already
+had. Verified empirically both times: reverting to the old write reliably
+produced 1000+ torn reads under a synchronized reader/writer stress test;
+the fix produces zero.
+
+**Locking one store's own methods isn't enough — audit every entry point
+into its data.** `HypothesisStore`'s five mutators are all locked, but
+`evidence/apply.py::apply_card_to_hypothesis` reached past the public API
+into `store._save()` directly for a second, unlocked read-modify-write right
+after a properly-locked `update_outcome()` call — found by review, not by
+design. Fixed by extending `update_outcome` with an optional `confidence`
+parameter so the whole mutation is one locked call, not two. The lesson this
+leaves for future stores: "every mutator is locked" isn't the same claim as
+"every write path is locked" — grep for `_save`/`_write_json`-style private
+writes from *outside* the class, not just inside it.
+
 **Write serialization — implemented, and more precise than first designed.**
 Two different problems turned out to need two different fixes, not one:
 

@@ -249,17 +249,21 @@ class HypothesisStore:
         *,
         actual_outcome: str | None = None,
         public_score: float | None = None,
+        confidence: float | None = None,
         status: HypothesisStatus | None = None,
         evidence_run_id: str | None = None,
         why: str | None = None,
     ) -> Hypothesis:
-        """Update actual_outcome / public_score and optionally status.
+        """Update actual_outcome / public_score / confidence and optionally status.
 
         Locked the same way as `update_status` (M11): this also does a
         read-then-write on the hypothesis, so without the lock it could race
         with `mark_testing_if_proposed`/`release_claim` and silently carry a
         stale status forward — reading before a claim lands, writing after,
-        clobbering it back.
+        clobbering it back. `confidence` exists so a caller that needs to
+        both record an outcome and nudge confidence (e.g. evidence apply)
+        can do it in one locked call instead of a second, unlocked
+        read-modify-write after this one releases the lock.
         """
 
         def mutate(hypothesis: Hypothesis) -> Hypothesis:
@@ -268,6 +272,8 @@ class HypothesisStore:
                 patch["actual_outcome"] = actual_outcome
             if public_score is not None:
                 patch["public_score"] = public_score
+            if confidence is not None:
+                patch["confidence"] = confidence
             if why:
                 note = f"[reflection] {why.strip()}"
                 reason = hypothesis.reason
@@ -470,7 +476,13 @@ class HypothesisStore:
                     "actual_outcome": hypothesis.actual_outcome,
                     "public_score": hypothesis.public_score,
                     "file_created_at": hypothesis.created_at.isoformat(),
-                    "file_updated_at": hypothesis.updated_at.isoformat(),
+                    # timespec="microseconds" (M11): datetime.isoformat()
+                    # omits the fractional part entirely when microsecond==0,
+                    # which would make two file_updated_at strings compare
+                    # unequal-width at the same wall-clock second — fixed
+                    # width keeps upsert_hypothesis's lexicographic ">="
+                    # ordering guard correct at that boundary too.
+                    "file_updated_at": hypothesis.updated_at.isoformat(timespec="microseconds"),
                 }
                 store.upsert_hypothesis(
                     hypothesis_id=hypothesis.id,

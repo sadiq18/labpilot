@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -257,6 +258,32 @@ class ConductorStore:
     def new_decision_id(self) -> str:
         return self._new_id(_DECISION_PREFIX, "os_decisions")
 
+    def _append_new(
+        self,
+        id_allocator: Callable[[], str],
+        model_cls: type,
+        appender: Callable[[Any], Any],
+        **kwargs: object,
+    ) -> Any:
+        """Allocate an id and append one row, as one locked step (M11).
+
+        The shared shape behind `append_new_decision`/`append_new_feedback`/
+        `append_new_suggestion`/`append_new_capability_decision`: the
+        sequential-id path (`new_X_id()` then `append_X()` as two separate
+        calls) is a TOCTOU race under concurrent callers — `_new_id`
+        computes `MAX(id)+1` via a `SELECT` with no lock, so two callers can
+        read the same "next id" before either commits its `INSERT` (M11:
+        verified, 6/20 unlocked concurrent attempts raised `IntegrityError`).
+        K-way fan-out (M11 task 7) MUST use one of the four methods above,
+        not the raw two-call pattern, for exactly that reason. The existing
+        sequential (K=1) call sites in `conductor/loop.py` stay on the raw
+        pattern unchanged — they are not concurrent with each other, so the
+        race does not apply there.
+        """
+        with write_lock_for(self.paths.db_path):
+            obj = model_cls(id=id_allocator(), **kwargs)
+            return appender(obj)
+
     def append_new_decision(
         self,
         session_id: str,
@@ -266,27 +293,18 @@ class ConductorStore:
     ) -> DecisionRecord:
         """Allocate an id and append a `DecisionRecord`, as one locked step.
 
-        The sequential-id path (`new_decision_id()` then `append_decision()`
-        as two separate calls) is a TOCTOU race under concurrent callers —
-        `_new_id` computes `MAX(id)+1` via a `SELECT` with no lock, so two
-        callers can read the same "next id" before either commits its
-        `INSERT` (M11: verified, 6/20 unlocked concurrent attempts raised
-        `IntegrityError`). K-way fan-out (M11 task 7 — each branch appending
-        its own decision) MUST use this method, not the raw two-call
-        pattern, for exactly that reason. The existing sequential (K=1)
-        call sites elsewhere in `conductor/loop.py` stay on the two-call
-        pattern unchanged — they are not concurrent with each other, so the
-        race does not apply there.
+        See `_append_new` for why this exists instead of the raw
+        `new_decision_id()` + `append_decision()` two-call pattern.
         """
-        with write_lock_for(self.paths.db_path):
-            record = DecisionRecord(
-                id=self.new_decision_id(),
-                session_id=session_id,
-                tool_name=tool_name,
-                rationale=rationale,
-                **kwargs,
-            )
-            return self.append_decision(record)
+        return self._append_new(
+            self.new_decision_id,
+            DecisionRecord,
+            self.append_decision,
+            session_id=session_id,
+            tool_name=tool_name,
+            rationale=rationale,
+            **kwargs,
+        )
 
     def list_decisions(self, session_id: str) -> list[DecisionRecord]:
         rows = self._conn.execute(
@@ -322,12 +340,12 @@ class ConductorStore:
     def append_new_feedback(self, **kwargs: object) -> OperatorFeedback:
         """Allocate an id and append `OperatorFeedback`, as one locked step.
 
-        Same TOCTOU shape as `append_new_decision` — see its docstring.
-        `kwargs` are `OperatorFeedback`'s fields other than `id`.
+        See `_append_new`. `kwargs` are `OperatorFeedback`'s fields other
+        than `id`.
         """
-        with write_lock_for(self.paths.db_path):
-            feedback = OperatorFeedback(id=self.new_feedback_id(), **kwargs)
-            return self.append_feedback(feedback)
+        return self._append_new(
+            self.new_feedback_id, OperatorFeedback, self.append_feedback, **kwargs
+        )
 
     def list_feedback(self, session_id: str, *, limit: int = 20) -> list[OperatorFeedback]:
         rows = self._conn.execute(
@@ -349,14 +367,13 @@ class ConductorStore:
     def append_new_suggestion(self, **kwargs: object) -> Any:
         """Allocate an id and append a `Suggestion`, as one locked step.
 
-        Same TOCTOU shape as `append_new_decision` — see its docstring.
-        `kwargs` are `Suggestion`'s fields other than `id`.
+        See `_append_new`. `kwargs` are `Suggestion`'s fields other than `id`.
         """
         from labpilot.research_engine.conductor.metrics import Suggestion
 
-        with write_lock_for(self.paths.db_path):
-            suggestion = Suggestion(id=self.new_suggestion_id(), **kwargs)
-            return self.append_suggestion(suggestion)
+        return self._append_new(
+            self.new_suggestion_id, Suggestion, self.append_suggestion, **kwargs
+        )
 
     def append_suggestion(self, suggestion: Any) -> Any:
         from labpilot.research_engine.conductor.metrics import Suggestion
@@ -513,14 +530,17 @@ class ConductorStore:
     def append_new_capability_decision(self, **kwargs: object) -> Any:
         """Allocate an id and append a `CapabilityDecision`, as one locked step.
 
-        Same TOCTOU shape as `append_new_decision` — see its docstring.
-        `kwargs` are `CapabilityDecision`'s fields other than `id`.
+        See `_append_new`. `kwargs` are `CapabilityDecision`'s fields other
+        than `id`.
         """
         from labpilot.research_engine.conductor.gap_ledger import CapabilityDecision
 
-        with write_lock_for(self.paths.db_path):
-            decision = CapabilityDecision(id=self.new_capability_decision_id(), **kwargs)
-            return self.append_capability_decision(decision)
+        return self._append_new(
+            self.new_capability_decision_id,
+            CapabilityDecision,
+            self.append_capability_decision,
+            **kwargs,
+        )
 
     def upsert_capability_gap(
         self,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from labpilot.accessor.common import allocate_sequential_id, locked
+from labpilot.accessor.common import allocate_sequential_id, atomic_write_text, locked
 from labpilot.research_engine.evidence.models import EvidenceCard
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 
@@ -40,12 +40,16 @@ class EvidenceCardStore:
             # a per-card id the way `HypothesisStore` locks a known one.
             with locked(self.dir / ".alloc.lock"):
                 card = card.model_copy(update={"id": self.new_id()})
-                self._path(card.id).write_text(
-                    card.model_dump_json(indent=2) + "\n", encoding="utf-8"
-                )
+                self._write(card)
             return card
-        self._path(card.id).write_text(card.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        self._write(card)
         return card
+
+    def _write(self, card: EvidenceCard) -> None:
+        # Atomic (M11), same reason as HypothesisStore._write_json: readers
+        # (get/list/get_for_execution/get_for_hypothesis) take no lock, so a
+        # truncate-then-write here is a torn-read window they'd hit directly.
+        atomic_write_text(self._path(card.id), card.model_dump_json(indent=2) + "\n")
 
     def get(self, card_id: str) -> EvidenceCard | None:
         path = self._path(card_id)
