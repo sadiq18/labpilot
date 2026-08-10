@@ -9,7 +9,6 @@ from labpilot.research_engine.conductor.budgets import (
     BudgetState,
     budgets_from_metadata,
     budgets_to_metadata,
-    recompute_metric_history,
 )
 from labpilot.research_engine.conductor.models import ConductSession
 from labpilot.research_engine.conductor.store import ConductorStore
@@ -55,7 +54,6 @@ def persist_budgets(
     session = store.get_session(session_id)
     if session is None:
         raise ValueError(f"unknown session: {session_id}")
-    recompute_metric_history(state)
     meta = budgets_to_metadata(session.metadata, config, state)
     store.update_session_metadata(session_id, meta)
 

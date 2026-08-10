@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
-logger = logging.getLogger(__name__)
 
 StopReason = Literal[
     "none",
@@ -67,21 +64,18 @@ class BudgetConfig(BaseModel):
 class ScoreEvent(BaseModel):
     """One comparable score, appended once per successful experiment.
 
-    `metric_name` is the resolved, normalized key (e.g. ``cv_rmse``) — not
-    whichever raw key happened to be in that run's `metrics.json`, which is
-    exactly the drift M8's design docs against (four resolvers disagreeing on
-    the "primary" key). `maximize` travels with the value so the sign is
-    never re-derived from a different source downstream. See
-    docs/research-os/autonomy-roadmap/design/02-objective-loop.md §3.
+    See docs/research-os/autonomy-roadmap/design/02-objective-loop.md §3 for
+    why `metric_name` is the resolved key rather than the raw one, and why
+    `maximize` travels with the value.
     """
 
     experiment_id: str
     hypothesis_id: str | None = None
-    #: Single-technique experiments.
     technique: str | None = None
-    #: Combo experiments (size 2-3). Distinct from `Hypothesis.technique_stack`
-    #: (cumulative lineage) — see design doc §3 for why the distinction matters.
+    #: Techniques applied together, not cumulative lineage — the `Hypothesis`
+    #: distinction is `combo_techniques` vs `technique_stack`.
     combo_techniques: list[str] = Field(default_factory=list)
+    #: Resolved metric key (e.g. ``cv_rmse``), not the raw `metrics.json` key.
     metric_name: str
     value: float
     maximize: bool
@@ -96,23 +90,15 @@ class BudgetState(BaseModel):
     wall_started_at: str | None = None
     metric_history: list[float] = Field(default_factory=list)
     last_metric: float | None = None
-    #: The comparable score series (M8). `metric_history`/`last_metric` above
-    #: are *derived* from this — recompute, not step — via
-    #: `recompute_metric_history`, called on every `persist_budgets`.
+    #: The comparable score series (M8). No writer yet — the conductor loop
+    #: appends one event per successful experiment in M8-2, which also derives
+    #: `metric_history`/`last_metric` from it. Until then those two stay as
+    #: they are: read by `evaluate_stops`, written by nothing.
     score_events: list[ScoreEvent] = Field(default_factory=list)
-    #: Edge-trigger latch for the stagnation-triggered hypothesis mint: true
-    #: while a mint has already fired for the current plateau, so a long
-    #: plateau doesn't mint a near-duplicate hypothesis every step. Cleared on
-    #: the next real improvement.
+    #: Set when the M8-6 stagnation mint fires for the current plateau, so a
+    #: long plateau doesn't mint a near-duplicate hypothesis every step.
+    #: Cleared on the next improvement. No reader yet.
     stagnation_mint_fired: bool = False
-    #: True once `score_events` has been warned about crossing
-    #: `_SCORE_EVENTS_WARN_THRESHOLD`. A plain latch, not inferred from list
-    #: lengths — a length-diff proxy for "already warned" was tried twice and
-    #: broke twice (skipped whenever the series grew by more than one entry
-    #: between calls, e.g. a resumed session already past the threshold).
-    #: Never cleared; the warning is a one-time notice per campaign, not a
-    #: recurring alert.
-    score_events_warned: bool = False
     #: Reset by any execution that succeeds, so a campaign that recovers is not
     #: punished for the failures it climbed out of.
     consecutive_failures: int = 0
@@ -146,39 +132,6 @@ class BudgetState(BaseModel):
         start = datetime.fromisoformat(self.wall_started_at)
         current = now or datetime.now(UTC)
         return max(0.0, (current - start).total_seconds())
-
-
-#: Above this many events, `persist_budgets` rewriting the whole series on
-#: every write (not just the steps that grow it — `steps_since_success`
-#: increments alone trigger a call) is worth watching. Not a cap: truncating
-#: would silently break citing an arbitrary prior experiment by id. A warning
-#: instead, so a runaway campaign is visible rather than only slowing down —
-#: the real fix past this point is an indexed `ScoreEvent` table (an INSERT,
-#: not a blob rewrite), per docs/research-os/autonomy-roadmap/design/02-objective-loop.md
-#: §3 "Series growth".
-_SCORE_EVENTS_WARN_THRESHOLD = 500
-
-
-def recompute_metric_history(state: BudgetState) -> None:
-    """Derive `metric_history`/`last_metric` from `score_events`, in place.
-
-    Recompute, not step (AGENTS.md rule 2 — the `apply_card_to_beliefs`
-    lesson: a stepped counter stays wrong forever once one input turns out to
-    have been wrong). Called from `persist_budgets`
-    (conductor/checkpoint.py) immediately before every write, so the two flat
-    fields `evaluate_stops` reads can never drift from the event series they
-    summarize.
-    """
-    if not state.score_events_warned and len(state.score_events) >= _SCORE_EVENTS_WARN_THRESHOLD:
-        logger.warning(
-            "score_events has reached %d entries; persist_budgets rewrites the "
-            "full series on every call. See the design doc's 'Series growth' "
-            "note for the indexed-table fix if this campaign keeps growing.",
-            _SCORE_EVENTS_WARN_THRESHOLD,
-        )
-        state.score_events_warned = True
-    state.metric_history = [event.value for event in state.score_events]
-    state.last_metric = state.score_events[-1].value if state.score_events else None
 
 
 def evaluate_stops(
@@ -250,19 +203,8 @@ def submit_tools_allowed(config: BudgetConfig) -> bool:
 
 
 def budgets_from_metadata(meta: dict[str, Any]) -> tuple[BudgetConfig, BudgetState]:
-    """Deserialize `(config, state)` from session metadata.
-
-    Recomputes `metric_history`/`last_metric` on load, not just on write —
-    every writer already recomputes before persisting, but a read-only
-    caller (e.g. `conduct_status`) never wrote anything back and would
-    otherwise trust whatever was last stored, unrecomputed. Fixing this once
-    here covers every current and future reader; patching each read call
-    site individually is the same bypass this function's writers already
-    moved past.
-    """
     cfg = BudgetConfig.model_validate(meta.get("budgets") or {})
     state = BudgetState.model_validate(meta.get("budget_state") or {})
-    recompute_metric_history(state)
     return cfg, state
 
 

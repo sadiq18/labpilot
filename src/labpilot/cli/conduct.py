@@ -17,11 +17,7 @@ from labpilot.cli.config_helpers import (
 from labpilot.llm.client import resolve_llm_client
 from labpilot.research_engine.conductor import ConductorStore, run_until_stop
 from labpilot.research_engine.conductor.approvals import ApprovalResult
-from labpilot.research_engine.conductor.budgets import (
-    BudgetConfig,
-    budgets_to_metadata,
-    recompute_metric_history,
-)
+from labpilot.research_engine.conductor.budgets import BudgetConfig, budgets_to_metadata
 from labpilot.research_engine.conductor.checkpoint import (
     latest_active_session,
     load_budget_pair,
@@ -237,11 +233,6 @@ def _budget_metadata(
     from labpilot.research_engine.conductor.budgets import BudgetState
 
     state = BudgetState.model_validate(meta.get("budget_state") or {})
-    # `persist_budgets` is not the only writer — `existing` can carry a prior
-    # session's `budget_state`, `score_events` included, and this must recompute
-    # the same as that path does or a resumed session's `metric_history` goes
-    # stale the moment this function is the one that writes it back out.
-    recompute_metric_history(state)
     return budgets_to_metadata(meta, cfg, state)
 
 
