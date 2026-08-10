@@ -155,11 +155,11 @@ new subscriber: branch comparison
    └─ file reflection for each loser (existing reflection path)
    │
    ▼
-teardown worktrees — always, including on crash (§7)
+teardown worktrees — always, including on crash (§8)
    │
    ▼
 startup reconciliation — prune any worktree from a step that never reached
-teardown (§7)
+teardown (§8)
 ```
 
 The campaign loop still decides *whether* to fan out (K > 1) or stay
@@ -224,6 +224,14 @@ common directory outside the git-tracked tree) or would otherwise be
 duplicated K times — if the latter, K needs a disk-aware ceiling in addition
 to the concurrency-budget ceiling already in §3. Record the answer here before
 implementation starts.
+
+**Budget scoping (blocked on §5).** Not implementable until M10's owner
+confirms an option. Once decided: if pre-split is chosen, allocate each
+`ParallelWorkItem`'s `cost` from a per-step `ParallelBudget` sized to K
+branches plus their reflection calls, before fan-out starts; if `BudgetLedger`
+stays the sole backstop, no code changes are needed here beyond the branches
+sharing it as they already would. Fill in the actual implementation once §5
+is resolved — this paragraph is the landing spot for it.
 
 ## 9. Tradeoffs
 
