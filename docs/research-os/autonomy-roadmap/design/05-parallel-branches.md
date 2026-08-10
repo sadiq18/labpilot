@@ -257,17 +257,32 @@ in `ConductorStore`), and run `git worktree prune`. This mirrors an existing
 condition already observed in this repo's own worktree list, so it is treated
 as a required path, not a nice-to-have.
 
-**Write serialization.** Turn on `PRAGMA journal_mode=WAL` in `SqliteClient.__init__`
-(cheap, and read concurrency during a parallel step matters). WAL alone doesn't
-serialize writers, and an instance-level lock like `BudgetLedger`'s
-`threading.RLock` only works there because one `BudgetLedger` is constructed
-once and shared for the process's lifetime. `ConductorStore` and
-`KnowledgeStore` are not used that way — both are freshly constructed at each
-call site (6 and 37 call sites respectively), so a `self._lock` added the same
-way would be a new, uncontended lock every call and serialize nothing. The
-lock has to be **module-level** — one lock object shared by every
-`ConductorStore`/`KnowledgeStore` instantiation in the process, not an
-instance attribute.
+**Write serialization — implemented, and more precise than first designed.**
+Two different problems turned out to need two different fixes, not one:
+
+- A single atomic SQL statement (`increment_metric`'s
+  `SET field = field + ?`) is safe under concurrent writers regardless of any
+  application lock — SQLite guarantees it. Verified with a 20-thread
+  barrier-synchronized run: zero lost updates, with or without WAL. `WAL` +
+  an explicit `busy_timeout` were still added to `SqliteClient.__init__` (read
+  concurrency during a parallel step matters, and WAL removes "readers block
+  behind an in-flight writer"), but **not** because the un-patched default
+  raises `database is locked` — `sqlite3.connect`'s own implicit 5s timeout
+  already covers that case here, so that specific risk this paragraph
+  originally named was not real.
+- Allocating an id then inserting a row that uses it (`new_decision_id` +
+  `append_decision`) is a genuine multi-statement TOCTOU race no `busy_timeout`
+  closes — confirmed: 6 of 20 concurrent, unlocked attempts raised
+  `IntegrityError: UNIQUE constraint failed` (two callers read the same "next
+  id" before either wrote). This is the one that needed the module-level lock
+  — an instance-level lock like `BudgetLedger`'s `threading.RLock` doesn't
+  work here since `ConductorStore` is freshly constructed at each call site,
+  not shared for the process's lifetime the way `BudgetLedger` is. Fixed by
+  `write_lock` (`accessor/sqlite/client.py`, module-level `threading.RLock`),
+  held across the whole allocate-then-insert sequence at each call site —
+  applied so far to `new_decision_id`/`append_decision`; any other
+  M11-introduced allocate-then-insert sequence (e.g. checkpointing in §8's
+  audit-parity work) needs the same pattern, not a fresh mechanism.
 
 **Promotion.** Rank the step's K results with the module-level
 `_pick_best(candidates, metric_key, maximize)` (`shared/experiments/graph.py`),
@@ -332,7 +347,7 @@ paragraph before implementation.
 |---|---|---|---|
 | Branch isolation | worktree vs. sequential checkout-lock (mutex around `create_branch`) | worktree | Checkout-lock defeats the purpose — branches would serialize on the working tree, which is what M11 exists to remove |
 | Claim mechanism | file lock vs. conditional DB update against the mirror | file lock | The mirror is a best-effort cache, not the source of truth `get()`/`list()` actually read — a DB-side conditional update wouldn't touch the real race |
-| Write serialization | WAL only vs. WAL + module-level writer lock | both | WAL alone permits concurrent writers to still race on read-modify-write app logic; an instance-level lock (à la `BudgetLedger`) doesn't work here since `ConductorStore`/`KnowledgeStore` are constructed fresh per call — the lock must be module-level |
+| Write serialization | WAL only vs. WAL + module-level writer lock | both, for different reasons | WAL is for read/write concurrency, not writer-vs-writer safety — a single atomic UPDATE is already safe without any lock (verified). The lock is for multi-statement allocate-then-insert sequences specifically (verified: 6/20 unlocked concurrent id-allocations collided); an instance-level lock (à la `BudgetLedger`) doesn't work there since `ConductorStore` is constructed fresh per call |
 | Promotion storage | field on `Experiment` vs. `manifest.metadata` | `manifest.metadata` | `Experiment` is assembled fresh on every call, not persisted — a pydantic field has nowhere to round-trip; `manifest.metadata` already has a writer (`save_manifest`) |
 | Worktree cleanup | teardown-only vs. teardown + startup reconciliation | both | Teardown alone doesn't survive a hard crash; reconciliation is what actually closes the orphan risk already visible in this repo |
 | Compute isolation | no cap vs. env-var cap vs. env-var cap + OS-level enforcement | env-var cap (leaning; OS-level not ruled out) | Generated code passing explicit `n_jobs=-1` (or worse, a hard-coded count) under K-way fan-out can make wall-clock worse than sequential; `OMP_NUM_THREADS`+`LOKY_MAX_CPU_COUNT` cover the common case cheaply but don't fully close a hard-coded explicit count — not a final decision, see §8 |
@@ -361,10 +376,13 @@ paragraph before implementation.
 - **Claim rollback**: force worktree setup to fail after a successful claim,
   assert the hypothesis returns to `proposed` rather than sticking in
   `testing`.
-- **Write serialization stress**: N threads/tasks writing to `ConductorStore`
-  and the hypothesis DB mirror concurrently under WAL + lock, assert no lost
-  writes and no corruption — as important as the claim race test since it's
-  the same class of bug across three call sites, not one.
+- **Write serialization stress**: implemented as
+  `test_conductor_store_concurrency.py`. Two cases, not one — a single atomic
+  UPDATE (`increment_metric`) needs no lock and is asserted safe under 8
+  concurrent single-connection-per-thread writers; allocate-then-insert
+  (`new_decision_id` + `append_decision`) needs `write_lock` held across the
+  sequence, verified against a real failure (6/20 unlocked concurrent
+  attempts raised `IntegrityError` before the fix).
 - **Crash reconciliation**: create a worktree, simulate a crash before
   teardown runs, assert the startup reconciliation check removes it.
 - **Promotion**: three branches with distinct scores, assert exactly one

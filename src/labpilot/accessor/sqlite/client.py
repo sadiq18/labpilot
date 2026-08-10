@@ -10,9 +10,21 @@ connection setup never drift between pillars.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 from labpilot.accessor.sqlite.migrate import run_migration
+
+#: Shared across every :class:`SqliteClient` instantiation in the process
+#: (M11) — an instance-level lock does not serialize anything here, since
+#: `ConductorStore`/`KnowledgeStore` construct a fresh client at each call
+#: site rather than sharing one long-lived object the way `BudgetLedger`
+#: does. A single atomic statement (e.g. ``SET field = field + ?``) is
+#: already safe under WAL + busy_timeout without this lock; it exists for
+#: multi-statement sequences — allocate-an-id-then-insert-a-row being the
+#: concrete case in `ConductorStore` — where two callers could otherwise
+#: both read the same "next id" before either writes.
+write_lock = threading.RLock()
 
 
 class SqliteClient:
@@ -27,7 +39,17 @@ class SqliteClient:
     `conn` without taking any lock, so flipping this on globally would make
     cross-thread use *possible* everywhere while making it *safe* nowhere —
     sqlite tolerates cross-thread use, not concurrent use. A caller that opts
-    in owns the serialisation, as `BudgetLedger` and `PromptCache` already do.
+    in owns the serialisation, as `BudgetLedger` and `PromptCache` already do,
+    or takes the module-level `write_lock` above for multi-statement writes.
+
+    WAL journal mode plus an explicit ``busy_timeout`` (M11) is for read/write
+    concurrency during a parallel step, not a fix for a reproducible
+    ``database is locked`` failure — ``sqlite3.connect`` already carries an
+    implicit 5s retry via its own ``timeout`` parameter, so that exception was
+    not actually being hit by this codebase's default rollback-journal setup.
+    WAL removes the "readers block behind an in-flight writer" behavior that
+    mode has, and setting `busy_timeout` explicitly makes the retry window a
+    stated contract instead of an implicit driver default.
     """
 
     def __init__(
@@ -42,6 +64,8 @@ class SqliteClient:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=not allow_cross_thread)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA busy_timeout = 5000")
         if migrate:
             self.migrate()
 
