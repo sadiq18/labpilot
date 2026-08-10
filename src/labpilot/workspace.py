@@ -61,6 +61,10 @@ REQUIRED_IGNORES: tuple[str, ...] = (
     "**/*.writelock",
     "**/.*.lock",
     "**/.*.tmp-*",
+    # Per-experiment git worktrees (M11) — local checkouts of branches that
+    # already live in the object store, so committing them would duplicate
+    # the tree. See `research_engine/agents/git_worktree.py`.
+    ".worktrees/",
 )
 
 _REQUIRED_IGNORE_HEADER = "# Machine-local artifacts (locks, temp files, DB sidecars)"

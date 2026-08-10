@@ -1,0 +1,183 @@
+"""M11 task 3: per-branch worktree isolation and crash-safe teardown.
+
+Drives real `git worktree` against a real repo rather than a fake GitTool —
+the whole point of the change is that git's own working-tree semantics stop
+two branches colliding, and a fake would assert the mock, not the isolation.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import threading
+from pathlib import Path
+
+import pytest
+
+from labpilot.research_engine.agents.git_worktree import (
+    create_experiment_worktree,
+    experiment_worktree,
+    list_registered_worktrees,
+    reconcile_worktrees,
+    remove_experiment_worktree,
+)
+
+
+def _repo(tmp_path: Path) -> Path:
+    root = tmp_path / "ws"
+    root.mkdir()
+    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)  # noqa: E731
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "t@example.com")
+    run("git", "config", "user.name", "t")
+    (root / "train.py").write_text("print('base')\n", encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "base")
+    return root
+
+
+def test_worktree_isolates_edits_between_branches(tmp_path: Path) -> None:
+    """The bug this exists to fix: two branches editing the same file."""
+    root = _repo(tmp_path)
+    a = create_experiment_worktree(root, session_id="s1", experiment_key="exp-a")
+    b = create_experiment_worktree(root, session_id="s1", experiment_key="exp-b")
+
+    (a.path / "train.py").write_text("print('A')\n", encoding="utf-8")
+    (b.path / "train.py").write_text("print('B')\n", encoding="utf-8")
+
+    # Each branch sees only its own edit, and the shared root is untouched.
+    assert (a.path / "train.py").read_text() == "print('A')\n"
+    assert (b.path / "train.py").read_text() == "print('B')\n"
+    assert (root / "train.py").read_text() == "print('base')\n"
+    assert a.branch != b.branch
+
+    remove_experiment_worktree(a)
+    remove_experiment_worktree(b)
+
+
+def test_concurrent_creation_gives_each_thread_its_own_tree(tmp_path: Path) -> None:
+    """K branches created in parallel, as the fan-out will do."""
+    root = _repo(tmp_path)
+    n = 6
+    barrier = threading.Barrier(n)
+    made: list[tuple[str, Path]] = []
+    lock = threading.Lock()
+
+    def branch(i: int) -> None:
+        barrier.wait()
+        wt = create_experiment_worktree(root, session_id="s1", experiment_key=f"exp-{i}")
+        (wt.path / "train.py").write_text(f"print({i})\n", encoding="utf-8")
+        with lock:
+            made.append((wt.branch, wt.path))
+
+    threads = [threading.Thread(target=branch, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(made) == n
+    assert len({b for b, _ in made}) == n
+    # Every branch kept its own content — no clobbering.
+    for i, (_, path) in enumerate(sorted(made, key=lambda m: m[0])):
+        assert (path / "train.py").read_text() == f"print({i})\n"
+
+
+def test_context_manager_removes_on_success(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    with experiment_worktree(root, session_id="s1", experiment_key="exp-a") as wt:
+        assert wt.path.is_dir()
+        held = wt.path
+    assert not held.exists()
+    assert held.resolve() not in list_registered_worktrees(root)
+
+
+def test_context_manager_removes_on_failure(tmp_path: Path) -> None:
+    """Mid-run failure must not leave the branch checked out."""
+    root = _repo(tmp_path)
+    held: Path | None = None
+    with pytest.raises(RuntimeError, match="branch blew up"):
+        with experiment_worktree(root, session_id="s1", experiment_key="exp-a") as wt:
+            held = wt.path
+            raise RuntimeError("branch blew up")
+
+    assert held is not None
+    assert not held.exists()
+    assert held.resolve() not in list_registered_worktrees(root)
+
+
+def test_failed_branch_key_can_be_reused_afterwards(tmp_path: Path) -> None:
+    """Creation is self-healing, independently of teardown having run.
+
+    Deliberately *not* a teardown test — it passes with the `finally` removed,
+    because `create` force-unregisters first. That is the belt-and-braces
+    worth pinning: even if teardown and reconciliation both failed, retrying
+    the same experiment key still works rather than dying on "already checked
+    out". The teardown itself is covered by the two context-manager tests.
+    """
+    root = _repo(tmp_path)
+    with pytest.raises(RuntimeError):
+        with experiment_worktree(root, session_id="s1", experiment_key="exp-a"):
+            raise RuntimeError("boom")
+    # Same key again must succeed, not fail with "already checked out".
+    again = create_experiment_worktree(root, session_id="s1", experiment_key="exp-a")
+    assert again.path.is_dir()
+    remove_experiment_worktree(again)
+
+
+def test_reconcile_removes_orphans_but_keeps_live_branches(tmp_path: Path) -> None:
+    """The crash path: teardown never ran, so startup must clean up."""
+    root = _repo(tmp_path)
+    live = create_experiment_worktree(root, session_id="s1", experiment_key="live")
+    orphan = create_experiment_worktree(root, session_id="s1", experiment_key="orphan")
+
+    removed = reconcile_worktrees(root, live_branches={live.branch})
+
+    assert orphan.path in removed
+    assert live.path not in removed
+    assert not orphan.path.exists()
+    assert live.path.is_dir()
+    remove_experiment_worktree(live)
+
+
+def test_reconcile_ignores_worktrees_outside_our_directory(tmp_path: Path) -> None:
+    """Runs unattended at startup — must not touch a developer's own worktree."""
+    root = _repo(tmp_path)
+    outside = tmp_path / "my-own-worktree"
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "my/work", str(outside), "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+    removed = reconcile_worktrees(root, live_branches=set())
+
+    assert removed == []
+    assert outside.is_dir()
+    # Still registered under its own branch — reconciliation left it entirely alone.
+    assert list_registered_worktrees(root)[outside.resolve()] == "my/work"
+
+
+def test_reconcile_prunes_a_directory_deleted_out_from_under_git(tmp_path: Path) -> None:
+    """Registration and directory disagree after a hard kill."""
+    import shutil
+
+    root = _repo(tmp_path)
+    wt = create_experiment_worktree(root, session_id="s1", experiment_key="exp-a")
+    shutil.rmtree(wt.path)  # directory gone, registration remains
+
+    reconcile_worktrees(root, live_branches=set())
+
+    assert wt.path.resolve() not in list_registered_worktrees(root)
+
+
+def test_create_is_idempotent_for_the_same_key(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    first = create_experiment_worktree(root, session_id="s1", experiment_key="exp-a")
+    (first.path / "scratch.txt").write_text("x", encoding="utf-8")
+    second = create_experiment_worktree(root, session_id="s1", experiment_key="exp-a")
+
+    assert second.path == first.path
+    assert second.branch == first.branch
+    assert second.path.is_dir()
+    remove_experiment_worktree(second)
