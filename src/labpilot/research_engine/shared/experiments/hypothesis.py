@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import logging
 import re
 from collections.abc import Iterable
@@ -333,20 +334,59 @@ class HypothesisStore:
         self._save(updated)
         return updated
 
+    def _lock_path_for(self, hypothesis_id: str) -> Path:
+        return self.hypotheses_dir / f".{hypothesis_id}.lock"
+
     def mark_testing_if_proposed(self, hypothesis_id: str) -> Hypothesis:
         """Flip `proposed` → `testing` when a run attaches this hypothesis.
 
         Leaves any other status untouched (already testing/confirmed/...).
+
+        Locked across the read-then-write (M11): two branches racing to claim
+        the same hypothesis must not both observe `proposed` before either
+        writes. The JSON file is the source of truth `get()`/`list()` read —
+        the `knowledge.db` mirror is a best-effort dual-write cache and is not
+        a valid lock target.
         """
-        hypothesis = self.get(hypothesis_id)
-        if hypothesis is None:
-            raise FileNotFoundError(
-                f"Hypothesis '{hypothesis_id}' not found for competition "
-                f"'{self.competition}' under {self.hypotheses_dir}."
-            )
-        if hypothesis.status != HypothesisStatus.PROPOSED:
-            return hypothesis
-        return self.update_status(hypothesis_id, HypothesisStatus.TESTING)
+        self.hypotheses_dir.mkdir(parents=True, exist_ok=True)
+        with open(self._lock_path_for(hypothesis_id), "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                hypothesis = self.get(hypothesis_id)
+                if hypothesis is None:
+                    raise FileNotFoundError(
+                        f"Hypothesis '{hypothesis_id}' not found for competition "
+                        f"'{self.competition}' under {self.hypotheses_dir}."
+                    )
+                if hypothesis.status != HypothesisStatus.PROPOSED:
+                    return hypothesis
+                return self.update_status(hypothesis_id, HypothesisStatus.TESTING)
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+    def release_claim(self, hypothesis_id: str) -> Hypothesis:
+        """Undo `mark_testing_if_proposed` (M11): only `testing` → `proposed`.
+
+        For when the claiming branch never got to run — e.g. worktree setup
+        failed after the claim succeeded. Leaves any other status untouched,
+        so a release racing with a legitimate confirm/reject elsewhere does
+        not clobber it.
+        """
+        self.hypotheses_dir.mkdir(parents=True, exist_ok=True)
+        with open(self._lock_path_for(hypothesis_id), "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                hypothesis = self.get(hypothesis_id)
+                if hypothesis is None:
+                    raise FileNotFoundError(
+                        f"Hypothesis '{hypothesis_id}' not found for competition "
+                        f"'{self.competition}' under {self.hypotheses_dir}."
+                    )
+                if hypothesis.status != HypothesisStatus.TESTING:
+                    return hypothesis
+                return self.update_status(hypothesis_id, HypothesisStatus.PROPOSED)
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
 
     def _save(self, hypothesis: Hypothesis) -> None:
         self.hypotheses_dir.mkdir(parents=True, exist_ok=True)

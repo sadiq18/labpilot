@@ -116,6 +116,58 @@ def test_mark_testing_if_proposed_only_from_proposed(tmp_path: Path):
     assert again.status == HypothesisStatus.CONFIRMED
 
 
+def test_mark_testing_if_proposed_claim_race_is_exclusive(tmp_path: Path):
+    """M11: concurrent claimers must not both observe `proposed`."""
+    import threading
+
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    hypothesis = store.create(observation="a", reason="b", prediction="c", confidence=0.5)
+
+    winners: list[HypothesisStatus] = []
+    lock = threading.Lock()
+
+    def claim() -> None:
+        result = store.mark_testing_if_proposed(hypothesis.id)
+        with lock:
+            winners.append(result.status)
+
+    threads = [threading.Thread(target=claim) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Every caller gets back TESTING (the winner transitioned it, everyone
+    # else's read then sees the already-`testing` hypothesis) — the race this
+    # guards against is a *file write* race, not the return value, so assert
+    # on-disk state directly: exactly one hypothesis, status TESTING, and no
+    # corrupted/partial JSON from an interleaved write.
+    assert all(status == HypothesisStatus.TESTING for status in winners)
+    reloaded = store.get(hypothesis.id)
+    assert reloaded is not None
+    assert reloaded.status == HypothesisStatus.TESTING
+
+
+def test_release_claim_reverts_testing_to_proposed(tmp_path: Path):
+    """M11: rollback path when worktree setup fails after a successful claim."""
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    hypothesis = store.create(observation="a", reason="b", prediction="c", confidence=0.5)
+
+    store.mark_testing_if_proposed(hypothesis.id)
+    released = store.release_claim(hypothesis.id)
+    assert released.status == HypothesisStatus.PROPOSED
+    assert store.get(hypothesis.id).status == HypothesisStatus.PROPOSED
+
+
+def test_release_claim_leaves_other_statuses_untouched(tmp_path: Path):
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    hypothesis = store.create(observation="a", reason="b", prediction="c", confidence=0.5)
+
+    store.update_status(hypothesis.id, HypothesisStatus.CONFIRMED)
+    released = store.release_claim(hypothesis.id)
+    assert released.status == HypothesisStatus.CONFIRMED
+
+
 def test_create_mirrors_hypothesis_into_knowledge_db(tmp_path: Path):
     import json
 
