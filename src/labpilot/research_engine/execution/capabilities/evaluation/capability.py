@@ -41,8 +41,28 @@ class EvaluationCapability(BaseCapability):
             submission = root / "submission.csv"
             if submission.is_file():
                 pred.write_text(submission.read_text(encoding="utf-8"), encoding="utf-8")
-            else:
+            elif is_dry_run(context):
+                # A dry run checks the wiring, and the placeholder is the wiring.
                 pred.write_text("id,prediction\n0,0\n", encoding="utf-8")
+            else:
+                # This wrote `id,prediction\n0,0` and then reported
+                # `passed=pred.is_file()` — a verdict about a file it had just
+                # fabricated, so a run that inferred nothing was indistinguishable
+                # from one that inferred correctly. The same defect as
+                # `submission`, in a different capability, found while writing a
+                # rejection test for this site rather than by reading it. M20.
+                return evidence(
+                    context,
+                    capability=self.name,
+                    passed=False,
+                    summary="nothing to infer from",
+                    checks=["inference"],
+                    error=(
+                        "no predictions.csv and no submission.csv in the workspace. "
+                        "Writing a placeholder row would produce a file that predicts "
+                        "nothing and report it as inference."
+                    ),
+                )
         return evidence(
             context,
             capability=self.name,
@@ -108,10 +128,24 @@ class EvaluationCapability(BaseCapability):
             str(root / "comparison.json"),
             str(root / "artifacts" / "comparison.json"),
         ]
+        # A comparison that compared nothing is not a comparison. `passed=True`
+        # was unconditional, so a card built with no control, or over placeholder
+        # metrics, reported success — and the card it wrote is what COMPARE
+        # exists to produce. M20: the verdict has to be about the card's
+        # substance, not about having reached the end of the function.
+        compared = card.observed.cv_gain is not None
         return evidence(
             context,
             capability=self.name,
-            passed=True,
+            passed=compared,
+            error=(
+                None
+                if compared
+                else (
+                    f"Evidence {card.id} compared nothing: no cv_gain. "
+                    f"{card.decision_reason or 'no control to compare against'}"
+                )
+            ),
             summary=(
                 f"Evidence {card.id}: {card.decision.value} "
                 f"(cv_gain={card.observed.cv_gain})"

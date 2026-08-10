@@ -192,6 +192,39 @@ def test_no_capability_reports_a_verdict_it_cannot_withhold():
     assert not fixed, f"these can fail now — remove them from _CANNOT_FAIL: {fixed}"
 
 
+def _declared_non_verifying() -> dict[str, set[str]]:
+    """Sites that stamp `no_verification` on their own evidence.
+
+    M20's second option, per verdict rather than per capability. Some branches
+    genuinely check nothing — *"no requirements file; skipped install"*, *"no
+    unit tests; skipped"*, *"runtime job already active"*. Their `passed=True`
+    is honest about the step and dishonest about the *card*, where it reads
+    identically to a gate that looked and found nothing wrong.
+
+    A rejection test cannot be written for them, so they say so instead, in the
+    `checks` list, where a reader sees it. Read from the source rather than
+    listed in this file: a curated list in a test is the pattern this milestone
+    refuses, and it would drift from the code the moment a branch changed.
+    """
+    declared: dict[str, set[str]] = {}
+    for name, path in _capability_names().items():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            labels = {k.arg: k.value for k in node.keywords}.get("checks")
+            if not isinstance(labels, ast.List):
+                continue
+            names = {
+                element.value
+                for element in labels.elts
+                if isinstance(element, ast.Constant) and isinstance(element.value, str)
+            }
+            if "no_verification" in names:
+                declared.setdefault(name, set()).update(names - {"no_verification"})
+    return declared
+
+
 def _verdict_sites() -> dict[str, set[str]]:
     """Every `evidence(...)`/`TaskEvidence(...)` verdict, by capability and check.
 
@@ -214,34 +247,33 @@ def _verdict_sites() -> dict[str, set[str]]:
             if not isinstance(labels, ast.List):
                 continue
             for element in labels.elts:
-                if isinstance(element, ast.Constant) and isinstance(element.value, str):
-                    sites.setdefault(name, set()).add(element.value)
+                if not (isinstance(element, ast.Constant) and isinstance(element.value, str)):
+                    continue
+                if element.value == "no_verification":
+                    # The declaration itself, not a gate.
+                    continue
+                sites.setdefault(name, set()).add(element.value)
     return sites
 
 
-#: Verdict sites with no rejection test yet, as `capability:check`. Only shrinks.
-_UNPROVEN_SITES: set[str] = {
-    "code_engineering:apply",
-    "code_engineering:modify_config",
-    "code_engineering:override",
-    "code_engineering:profile_required",
-    "code_engineering:read_code",
-    "dependency:already_satisfied",
-    "dependency:install_disabled",
-    "dependency:no_requirements",
-    "dependency:pip_install",
-    "evaluation:compare",
-    "evaluation:evidence_card",
-    "evaluation:inference",
-    "runtime:idempotent_skip_redispatch",
-    "training:train_runner",
-    "training:train_script",
-    "training:train_stub",
-    "verification:dry_run",
-    "verification:no_tests",
-    "verification:pytest",
-    "verification:syntax",
-}
+#: Verdict sites with no rejection test yet, as `capability:check`.
+#:
+#: **Empty.** It held twenty when the enumerator was first keyed on the verdict
+#: site rather than the module — twenty gates nobody had shown could say no,
+#: hidden because one marker per capability had been counted as covering all of
+#: them. Eight turned out to check nothing at all and now declare it on their own
+#: evidence; twelve got a rejection test, each verified red-then-green.
+#:
+#: Two real defects surfaced from writing those twelve, neither found by reading:
+#: `evaluation:compare` reported success on a card that compared nothing, and
+#: `_infer` wrote `id,prediction\n0,0` and then tested for the file it had just
+#: written — the `submission` defect again, one capability over.
+#:
+#: It only shrinks.
+_UNPROVEN_SITES: set[str] = set()
+
+
+_DECLARED_NON_VERIFYING = _declared_non_verifying()
 
 
 def test_every_verdict_site_is_named_by_a_test():
@@ -262,7 +294,9 @@ def test_every_verdict_site_is_named_by_a_test():
         f"{capability}:{check}"
         for capability, checks in sites.items()
         for check in checks
-        if f"{capability}:{check}" not in marked and not (len(checks) == 1 and capability in marked)
+        if f"{capability}:{check}" not in marked
+        and not (len(checks) == 1 and capability in marked)
+        and check not in _DECLARED_NON_VERIFYING.get(capability, set())
     )
 
     unexpected = sorted(set(missing) - _UNPROVEN_SITES)

@@ -106,7 +106,7 @@ class TrainingCapability(BaseCapability):
                 capability=self.name,
                 passed=True,
                 summary="training dry-run stub metrics written",
-                checks=["train_stub"],
+                checks=["train_stub", "no_verification"],
                 paths=[str(metrics_path)],
                 metrics=metrics,
                 metadata={"duration_s": duration, "dry_run": True},

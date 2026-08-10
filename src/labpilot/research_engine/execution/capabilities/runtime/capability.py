@@ -76,7 +76,7 @@ class RuntimeCapability(BaseCapability):
                 capability=self.name,
                 passed=True,
                 summary=f"runtime job already active: {existing_job}",
-                checks=["idempotent_skip_redispatch"],
+                checks=["idempotent_skip_redispatch", "no_verification"],
                 metadata={
                     "job_id": existing_job,
                     "runtime_id": prior.get("runtime_id", self._default),

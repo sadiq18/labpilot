@@ -111,7 +111,7 @@ The rule catches the fourth instance before it is written.
 
 | exit criterion | state |
 |---|---|
-| 1 — every pass/fail module has a red-then-green rejection test | **done.** `test_every_gate_rejects_something.py` enumerates the capabilities and requires each to carry a `@pytest.mark.rejects("<name>")` test. All 9 that verify are proven; `stub` declares `verifies = False` instead |
+| 1 — every pass/fail module has a red-then-green rejection test | **done, at verdict-site granularity.** The enumerator was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 sites nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. `_UNPROVEN_SITES` is empty |
 | 2 — no verification path rebuilds a command production owns | not started |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
 | 4 — a derived artifact re-derives or says it is derived | not started |
@@ -212,6 +212,33 @@ Three things that only appeared once the tests were written:
 * `Path(None)` raises, and a `TypeError` escaping a question this calm would
   crash the conductor, so "no knowledge directory" is an answer rather than an
   error.
+
+### What proving the twenty sites turned up
+
+Two real defects, neither found by reading the code — both surfaced by trying to
+write a test that made the gate say no:
+
+* **`evaluation:compare` reported success on a card that compared nothing.**
+  `passed=True` was unconditional, so a comparison with no control, or over
+  placeholder metrics, passed — and the card is the thing COMPARE exists to
+  produce.
+* **`_infer` fabricated the artifact it then checked for.** It wrote
+  `id,prediction\n0,0` when there was nothing to infer from, and reported
+  `passed=pred.is_file()` on the file it had just written. The same defect as
+  `submission`, one capability over, three weeks later.
+
+And three tests of mine went green for the wrong reason before landing —
+`code_engineering:apply` twice, because the proposal reached the `last_resort`
+branch and the step failed *before* apply. The red-then-green sweep caught each;
+reading them did not.
+
+**Eight sites check nothing, and now say so.** *"no requirements file; skipped
+install"*, *"no unit tests; skipped"*, *"runtime job already active"* — their
+`passed=True` is honest about the step and dishonest about the card, where it
+reads identically to a gate that looked and found nothing wrong. They stamp
+`no_verification` in their `checks`, and the enumerator reads that from the
+source rather than from a list in a test file, which would drift the moment a
+branch changed.
 
 ## Traps
 
