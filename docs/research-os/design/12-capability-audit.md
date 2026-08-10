@@ -41,11 +41,91 @@ default (see
 So `implement` moved from *hollow* toward *partial-to-real*, but nobody has
 re-run the audit against current code, and the other seven rows (`reflect`,
 `query_memory`, `search_papers`, …) are equally unverified against today's
-`main`. The 2026-08-02 table also only has 8 rows against today's 10
-descriptors — `submit_learn` and the now-independent `run_experiment` were
-never audited at all, so the re-audit is a **first baseline** for those two,
-not a correction. **The first deliverable of this design is re-running the
-audit, not trusting the 2026-08-02 table.**
+`main`. The 2026-08-02 table also has only 8 rows against today's 10
+descriptors: `run_experiment` **is** covered there — jointly with `run_plan`,
+verdict `real` — but the two now have independent handlers (`run_plan` in
+`tools/handlers/run.py`, `run_experiment` in `tools/handlers/specialists.py`),
+so that joint verdict needs re-splitting, not just re-confirming;
+`submit_learn` has zero prior mention and is a
+genuine **first baseline**. **The first deliverable of this design is
+re-running the audit, not trusting the 2026-08-02 table.**
+
+**M14 already ran this exact discipline one layer down.** M14 Phase 3
+("delete or demote", complete 2026-08-07, PR #104) retired all 20
+micro-agent `_run_rule_engine` fallbacks — LLM stand-ins were deleted
+outright; genuine deterministic logic was **promoted to a named, explicit
+step instead of disguised as a failed LLM call**
+([09-llm-required.md](../autonomy-roadmap/09-llm-required.md)). Verified
+against current code: `_render_template_fallback` no longer exists anywhere
+in the tree (`grep -rn _render_template_fallback src/` — zero hits, beyond
+the M19 Jinja deletion §1 already covers), and `planner/templates.py` — the
+deterministic path behind `generate_plan` — is exactly the "promoted"
+pattern M14's Phase 3 describes: an explicit, named, opt-in fallback under
+`llm_client=None`, not a silent stand-in. That is **why** `generate_plan`
+was already `real` in the 2026-08-02 table and stays that way here.
+
+This narrows what M15 actually needs to do. M14 covers the **micro-agent**
+layer (`intelligence/micro_agents/`, `reflection/`, `planner/planning_engine`,
+`execution/code_engineer`) and is out of scope here (§4) — already audited,
+already renamed where it needed to be. M15 is the same audit one layer up,
+at the **Conductor tool catalog** (`tools/catalog.py`'s 10 descriptors), which
+M14 never touched. Combined with M19's `implement` fix, the *known* hollow
+count in the catalog going into the re-audit is plausibly zero — but that is
+the re-audit's finding to make, not an assumption this design bakes in.
+
+### 1.1 Two questions this design does *not* answer
+
+Worth stating explicitly, because both are natural to ask and neither is what
+the contract test measures:
+
+**"What tools are we missing?"** Not this milestone. Discovering *absent*
+capability is [11-capability-registration.md](11-capability-registration.md)'s
+job — the Conductor already writes `record_suggestion("Need capability/tool
+X")` whenever it wants something the catalog doesn't have, surfaced today via
+`research tools gaps`. The plan's own Traps section is explicit that adding a
+tool to close a gap is the wrong move for *this* design: *"An eleventh named
+tool makes the control plane look richer and changes nothing."* M15 only
+audits the 10 tools that already exist.
+
+**"How well is an existing tool performing?"** Also not this milestone. The
+contract test proves one narrow thing — *does a declared `varies_by` input
+actually change the output* — which is a floor, not a quality score. It
+cannot tell you `implement` writes *good* code, only that it writes
+*different* code for a different technique. Whether a tool's output is any
+good is split across other milestones already: [M9](../autonomy-roadmap/03-verification-first.md)
+(can the result be trusted), [M20](../autonomy-roadmap/15-gates-must-fail.md)
+(do the pass/fail gates actually gate), [M7](../autonomy-roadmap/01-technique-to-model.md)/[M8](../autonomy-roadmap/02-objective-loop.md)
+(does the technique/reflection move the score). `reflect` is the clearest
+example already in the catalog: it's `real` — it produces different beliefs
+for different inputs — and simultaneously `inert`, because nothing downstream
+reads them. `varies_by` cannot see that; M8 owns it.
+
+### 1.2 Does moving to LLM-only tooling remove the need for this?
+
+No — and the premise needs a correction first. Deterministic paths were not
+removed catalog-wide; M14 Phase 3's own rule was to *keep and promote*
+genuine deterministic logic rather than delete it. `planner/templates.py`
+(795 lines) is still `generate_plan`'s live, explicitly-named deterministic
+path today. `execution/baseline/selector.py` is deterministic by design —
+problem-type/metric selection from a data profile, no LLM call, and correctly
+so. `submit`/`submit_learn` were never LLM tools at all; they package and
+upload a CSV. What M14 actually removed was the *silent, automatic* rule-engine
+fallback — not deterministic code itself.
+
+Even in a hypothetically all-LLM catalog, the risk this design targets does
+not shrink — it moves. M14's failure mode was *the wrong path ran silently*
+(a rule engine stood in for a broken LLM call and nobody could tell). The
+failure mode M15 targets is different and, if anything, more likely once
+every path is an LLM call: *the right path ran, and still produced output
+that does not actually depend on the input.* An LLM can fail silently in ways
+a rule engine can't — truncation, a rate limit, a model that ignores the
+`technique` field in its own prompt and returns boilerplate anyway — and two
+LLM outputs can differ syntactically (variable names, comments) without ever
+implementing the different technique that was asked for. That is precisely
+what `implement` did pre-M19, and it is what the contract test's digest
+check — driven by a genuinely varying fixture, not `{"x": 1}` vs `{"x": 2}`
+— exists to catch regardless of which layer (rule engine or LLM) produced the
+non-varying output.
 
 ---
 
@@ -73,9 +153,14 @@ Concretely:
 
 **Functional**
 
-- `ToolDescriptor` gains two required fields: `varies_by: list[str]` (input
-  keys the tool claims change its output) and `capability_status:
-  Literal["real", "partial", "fixed"]` (no default — see §6.1).
+- `ToolDescriptor` gains two fields: `capability_status: Literal["real",
+  "partial", "fixed"]` (required, no default — see §6.1) and
+  `varies_by: list[str]` (input keys the tool claims change its output;
+  defaults to `[]`, which is the *correct* value for a `fixed` tool — not a
+  missing-value placeholder). A validator enforces `capability_status ==
+  "real"` implies non-empty `varies_by`, so the thing a default would hide
+  (a real tool nobody bothered to declare `varies_by` for) is still caught,
+  without forcing every `fixed` tool to write out `varies_by=[]` by hand.
 - A contract-test harness, branching on `capability_status` (§6.2): `real` —
   ≥2 fixture inputs differing only in a declared `varies_by` key must produce
   different artifact digests; `fixed` — the tool's name must not read as an
@@ -112,6 +197,18 @@ Concretely:
 - Extending `research tools list` with the two new columns.
 - Renaming any tool the re-audit finds is *structurally* fixed (exit
   criterion 3) — decided per-tool by the re-audit, not pre-decided here.
+- Every non-catalog `ToolDescriptor(...)` construction, updated to set the
+  new required field. Making `capability_status` required (§6.1) is a
+  breaking change everywhere the type is constructed, not just in
+  `catalog.py` — found 16 more call sites across 8 files: `cli/conduct.py`
+  (3), `tests/helpers/campaign_harness.py` (1), and test doubles in
+  `test_conductor.py`, `test_context_m4_capstone.py`,
+  `test_tool_registry.py` (the `"echo"` fixture tool), `test_gap_ledger.py`,
+  `test_campaigns.py`, `test_conductor_single_tool_mode.py`. Test-double
+  descriptors get `capability_status="fixed"` (they're not catalog tools;
+  their status is irrelevant to the audit) — this is a one-line addition per
+  site, not new design, but it must land in the same PR as §6.1 or those 8
+  files fail to construct.
 
 **Out of scope**
 
@@ -128,6 +225,12 @@ Concretely:
 - `execution/registry.py`'s `CapabilityRegistry` (`TaskType` → executor) — the
   plan's own **Traps** section calls this out as a different vocabulary for a
   different layer; this design touches `tools/catalog.py` only.
+- The micro-agent rule-engine layer (`intelligence/micro_agents/`,
+  `reflection/`, `planner/planning_engine`, `execution/code_engineer`) — M14
+  Phase 3 already ran this design's discipline there (delete pure LLM
+  stand-ins, promote genuine deterministic logic to a named step) and shipped
+  it 2026-08-07 (PR #104, §1). Re-auditing already-audited, already-renamed
+  code would duplicate M14, not extend it.
 
 ---
 
@@ -139,7 +242,10 @@ Concretely:
 2. `research tools list` output alone (no source reading) tells an operator
    which tools are real.
 3. `git grep varies_by src/labpilot/research_engine/tools/catalog.py` returns
-   10 matches, one per descriptor — nothing shipped undeclared.
+   10 matches — every descriptor states `varies_by` explicitly (even `[]` for
+   `fixed` tools) as a documentation convention. The actual enforcement for
+   `real` tools is the §6.1 validator, not this grep — an explicit `[]` is
+   readable-by-convention, not machine-required.
 4. Re-audited table in the plan doc reflects current `main`, with the
    `implement` row corrected per §1.
 
@@ -160,18 +266,37 @@ class ToolDescriptor(BaseModel):
     # New:
     varies_by: list[str] = Field(default_factory=list)
     capability_status: Literal["real", "partial", "fixed"]  # required, no default
+
+    @model_validator(mode="after")
+    def _real_tools_declare_variance(self) -> "ToolDescriptor":
+        if self.capability_status == "real" and not self.varies_by:
+            raise ValueError(
+                f"{self.name}: capability_status='real' but varies_by=[] — "
+                "declare what input changes the output, or downgrade the status"
+            )
+        return self
 ```
 
-**No default, deliberately.** An earlier draft defaulted this to `"fixed"`
-("guilty until proven otherwise") — but Pydantic gives every field its
-default whether or not the caller set it, so nothing would ever be
-*missing*, and the "CI fails if a descriptor omits `capability_status`"
-requirement in §3/§9 would have nothing to catch: an 11th tool added without
-setting it would silently inherit `"fixed"` and pass. Making the field
-**required** turns that into a construction-time `ValidationError` — a
-`ToolDescriptor` without a declared status doesn't build, so it can't reach
-`catalog.py`, let alone `main`. The meta-test in §9 becomes a regression
-guard confirming this stays true, not the sole enforcement mechanism.
+**`capability_status` has no default, deliberately.** An earlier draft
+defaulted it to `"fixed"` ("guilty until proven otherwise") — but Pydantic
+gives every field its default whether or not the caller set it, so nothing
+would ever be *missing*, and the "CI fails if a descriptor omits
+`capability_status`" requirement in §3/§9 would have nothing to catch: an
+11th tool added without setting it would silently inherit `"fixed"` and pass.
+Making the field **required** turns that into a construction-time
+`ValidationError` — a `ToolDescriptor` without a declared status doesn't
+build, so it can't reach `catalog.py`, let alone `main`. The meta-test in §9
+becomes a regression guard confirming this stays true, not the sole
+enforcement mechanism.
+
+**`varies_by` keeps its `[]` default**, unlike `capability_status` — `[]` is
+the *correct* value for a `fixed` tool, not a stand-in for "not filled in
+yet," so making it unconditionally required would force every genuinely
+fixed tool to write `varies_by=[]` for no benefit. The gap that mattered —
+a `"real"` tool that forgot to declare what it varies by — is closed by the
+validator above instead: `capability_status="real"` with an empty
+`varies_by` fails construction, the same way a missing `capability_status`
+does.
 
 ### 6.2 Contract test shape
 
@@ -189,7 +314,12 @@ def test_tool_contract(name, tmp_path):
         )
         return
     if tool.capability_status == "partial":
-        _assert_degrades_gracefully(tool, tmp_path)  # see §6.2 discussion
+        ws = _fixture_workspace(tmp_path, tool.name)
+        degraded_kwargs = _degraded_inputs(tool.name)  # e.g. {"offline": True}
+        result = tool.handler(ws, **degraded_kwargs)
+        _assert_degraded(tool.name, result)  # per-tool: no exception raised,
+        # AND the payload honestly says "degraded" rather than looking real —
+        # see the note below on why this can't be one generic assertion
         return
     ws = _fixture_workspace(tmp_path, tool.name)
     inputs_a, inputs_b = _fixture_inputs(tool.name)  # differ only in varies_by keys
@@ -226,16 +356,34 @@ handling than the happy-path `implement` example above:
   touches Kaggle. `analyze_competition` needs a fake/offline
   `AnalyzeOrchestrator` the way other analyzer tests already stub it;
   reuse whatever fixture those tests use rather than inventing a new one.
-- **`search_papers` is `"partial"`, and neither branch of §6.2 fits it as
-  written.** It's real when authenticated, and
-  (`tools/handlers/papers.py`) writes an empty hit list under
-  `offline=True` or on a 429. Under the no-network CI constraint (§3), the
-  contract test for a `"partial"` tool doesn't assert digests differ — it
-  asserts the *offline* path degrades gracefully (empty hit list, no
-  exception) rather than raising or silently claiming a real result. That is
-  a different assertion from the `real`/`fixed` branches, so `capability_status
-  == "partial"` gets its own (small) branch in the harness, not a forced fit
-  into the other two.
+- **`search_papers` is `"partial"`, and neither of the other two branches of
+  §6.2 fits it.** It's real when authenticated, and `tools/handlers/papers.py`
+  writes an empty hit list under `offline=True`, and on any exception from
+  the network call (not specifically a 429 — the handler's `except Exception`
+  is broader than the plan doc's original wording suggested). Under the
+  no-network CI constraint (§3), the contract test for a `"partial"` tool
+  doesn't assert digests differ — it asserts the degraded path returns
+  cleanly rather than raising or silently claiming a real result. That needs
+  a third fixture function alongside `_fixture_inputs`:
+  `_degraded_inputs(name) -> dict` returns the kwargs that force the
+  degraded path per tool — `{"offline": True}` for `search_papers` today,
+  and the same lookup a future second `"partial"` tool would extend rather
+  than special-case. `capability_status == "partial"` gets its own branch in
+  the harness (shown above) built from the same `_fixture_workspace` helper
+  as the `real` branch, not a new workspace-construction path.
+
+  **`_assert_degraded` cannot be one generic assertion.** An earlier draft
+  checked `result.data.get("error")` — but `search_papers`'s
+  `ToolResult.data` never has an `"error"` key; its shape is `{"query",
+  "source", "count", "papers"}`, and the offline path sets
+  `source="offline", count=0, papers=[]` with no exception at all. A generic
+  `error`-key check would be **vacuously true** on that exact payload — it
+  would pass even if `count`/`papers` silently carried fabricated results,
+  which is the specific failure this branch exists to catch (§3). So
+  `_assert_degraded` is per-tool, keyed the same way `_degraded_inputs` and
+  `_fixture_inputs` are: for `search_papers`, assert `data["source"] ==
+  "offline"` and `data["papers"] == []`; a second `"partial"` tool declares
+  its own honest-degradation check rather than reusing this one by accident.
 
 ### 6.3 Inventory surface
 
@@ -254,14 +402,23 @@ table.add_row(desc.name, desc.description[:80], desc.capability_status,
 ### 6.4 If a rename actually happens
 
 Exit criterion 3 floats renaming a structurally-fixed tool. A rename is not
-just `catalog.py` — the Conductor hardcodes tool names outside the registry:
-`conductor/actions.py` keys its intent→tool templates and a status check on
-literal strings (`"implement"` appears in both), and `conductor/policy.py`
-keys a dict the same way. [11-capability-registration.md §4.4](11-capability-registration.md)
-makes this exact point for the opposite direction (registering a tool doesn't
-stop `no_capability` until the intent map is updated too); the same is true
-in reverse for a rename. If the re-audit renames a tool, updating those two
-files is part of the same PR, not a follow-up.
+just `catalog.py` — the Conductor hardcodes tool names outside the registry,
+in at least three places, all keyed on the literal string `"implement"`:
+
+- `conductor/actions.py`'s intent-keyword tuple (an *intent-matching* string,
+  not a tool reference — a rename must update it too, or the keyword still
+  fires and maps to a tool name that no longer exists);
+- `conductor/actions.py`'s `_default_args`, which selects default arguments
+  by tool name (a default-argument selector, not a status/precondition
+  check — corrected from an earlier draft of this doc, which mislabeled it);
+- `conductor/policy.py`'s `requires` dict in `available_tools`, which is the
+  actual gating/precondition check (`"implement": has_runnable`).
+
+[11-capability-registration.md §4.4](11-capability-registration.md) makes
+this exact point for the opposite direction (registering a tool doesn't stop
+`no_capability` until the intent map is updated too); the same is true in
+reverse for a rename. If the re-audit renames a tool, updating all three
+sites is part of the same PR, not a follow-up.
 
 ---
 
@@ -274,7 +431,8 @@ files is part of the same PR, not a follow-up.
 | `tests/helpers/fake_codegen.py` | extend `FakeCodegenLLM` to vary output by the `technique` prompt field (needed for `implement`'s contract test — see §6.2) |
 | `tests/unit/test_tool_contracts.py` (new) | parametrized contract test + meta-test for missing fields |
 | `cli/tools_cli.py` | `tools_list()` — two new columns |
-| `conductor/actions.py`, `conductor/policy.py` | update if the re-audit renames a tool — both hardcode tool names (e.g. `"implement"` in the intent-template list and a policy dict); see §6.4 |
+| `conductor/actions.py`, `conductor/policy.py` | update if the re-audit renames a tool — three hardcoded-string sites, see §6.4 |
+| `cli/conduct.py`, `tests/helpers/campaign_harness.py`, and 6 test files (§4) | add `capability_status="fixed"` to every non-catalog `ToolDescriptor(...)` construction — required by §6.1, else these fail to construct |
 | `autonomy-roadmap/10-capability-audit.md` | re-audited table, replacing the 2026-08-02 snapshot |
 
 ---
@@ -300,10 +458,12 @@ files is part of the same PR, not a follow-up.
 - `implement`'s contract test needs the extended `FakeCodegenLLM` from §6.2
   (varies its response by `technique`) fed two distinct techniques — not a
   live LLM call, and not today's fake unmodified.
-- Failure scenario the meta-test exists to catch: a future PR adds tool #11
-  without `capability_status` — CI fails on the missing-field check before
-  the tool reaches `main`, rather than the catalog silently regaining an
-  unverified row.
+- Two failure scenarios the meta-test / validator combination exists to
+  catch: (1) a future PR adds tool #11 without `capability_status` — CI fails
+  on construction before it reaches `main`; (2) a tool is marked `"real"`
+  with `varies_by=[]` — the §6.1 validator fails construction the same way,
+  instead of shipping an unaudited "real" claim the way `varies_by`'s own
+  default would otherwise let through silently.
 
 ---
 
