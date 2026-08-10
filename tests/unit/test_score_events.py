@@ -9,6 +9,11 @@ makes both testable.
 
 from __future__ import annotations
 
+from datetime import datetime
+
+import pytest
+from pydantic import ValidationError
+
 from labpilot.research_engine.conductor.budgets import (
     BudgetConfig,
     BudgetState,
@@ -78,6 +83,40 @@ def test_the_new_fields_default_empty_and_round_trip():
     meta = budgets_to_metadata({}, BudgetConfig(), BudgetState(stagnation_mint_fired=True))
     _, restored = budgets_from_metadata(meta)
     assert restored.stagnation_mint_fired is True
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_score_is_refused(bad):
+    """A diverged run's NaN is not a comparable score.
+
+    Two things go wrong if it gets in. It serializes as a bare `NaN` token —
+    invalid JSON — into the session blob. And every NaN comparison is False,
+    so `evaluate_stops` returns "none" for a fully-plateaued all-NaN window
+    and for a NaN `last_metric`: both objective stops go silently dead on a
+    campaign whose runs all diverge. The executions *succeeded*, so the
+    failure breaker does not cover it either.
+    """
+    with pytest.raises(ValidationError):
+        _event("E-001", bad)
+
+
+@pytest.mark.parametrize("good", [0.0, -3.2, 194.80, 1e308])
+def test_ordinary_scores_still_pass(good):
+    """The guard must not cost the values it exists to protect — zero and
+    negative metrics are ordinary, not sentinels."""
+    assert _event("E-001", good).value == good
+
+
+def test_the_timestamp_defaults_to_the_package_format():
+    """Every other timestamp in this package auto-populates one UTC-aware
+    format. A caller left to hand-build one supplies a naive
+    `datetime.now().isoformat()` sooner or later, and two events then fail to
+    compare with `TypeError: can't compare offset-naive and offset-aware`."""
+    first = ScoreEvent(experiment_id="E-001", metric_name="cv_rmse", value=1.0, maximize=False)
+    second = ScoreEvent(experiment_id="E-002", metric_name="cv_rmse", value=2.0, maximize=False)
+
+    assert datetime.fromisoformat(first.timestamp).tzinfo is not None
+    assert datetime.fromisoformat(first.timestamp) <= datetime.fromisoformat(second.timestamp)
 
 
 def test_adding_the_series_leaves_the_existing_metric_fields_alone():

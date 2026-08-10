@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from labpilot.research_engine.conductor.models import _now
+
 StopReason = Literal[
     "none",
     "submission_budget",
@@ -77,9 +79,18 @@ class ScoreEvent(BaseModel):
     combo_techniques: list[str] = Field(default_factory=list)
     #: Resolved metric key (e.g. ``cv_rmse``), not the raw `metrics.json` key.
     metric_name: str
-    value: float
+    #: Rejects NaN/inf. A diverged run's NaN is not a comparable score: it
+    #: serializes as a bare `NaN` token (invalid JSON) into the session blob,
+    #: and every NaN comparison is False, so it silently disables the
+    #: `plateau` and `metric_target` stops that read this series. A writer
+    #: that finds a non-finite metric must skip the event, as it already
+    #: skips a placeholder run.
+    value: float = Field(allow_inf_nan=False)
     maximize: bool
-    timestamp: str
+    #: Defaults to the same UTC-aware format every other timestamp in this
+    #: package uses, so callers cannot supply a naive one that later fails to
+    #: compare against the rest of the series.
+    timestamp: str = Field(default_factory=_now)
 
 
 class BudgetState(BaseModel):
