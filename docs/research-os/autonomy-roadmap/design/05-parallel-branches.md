@@ -77,7 +77,7 @@ are latent, not yet observed in production incidents.
 - A single branch failure does not abort the other branches in the same step
   (already true inside `run_parallel_async`; must hold end-to-end through the
   campaign loop, not just the worker layer).
-- Disk usage from K concurrent worktrees is bounded and understood — see §5.
+- Disk usage from K concurrent worktrees is bounded and understood — see §8.
 
 **Blocking pre-requisite:** the budget-scoping decision in §5 must be made
 (with M10 sign-off) before implementation starts — §7's design depends on it.
@@ -86,8 +86,8 @@ are latent, not yet observed in production incidents.
 
 **In scope**
 - Wiring `run_parallel_async` into the campaign loop for the experiment step.
-- Worktree-based branch isolation, including crash-safe teardown (§5, §7).
-- Atomic hypothesis claim, with release-on-setup-failure (§7).
+- Worktree-based branch isolation, including crash-safe teardown (§6, §8).
+- Atomic hypothesis claim, with release-on-setup-failure (§8).
 - Write serialization for the three SQLite consumers above.
 - A comparison/promotion subscriber on the existing Blinker bus.
 - Reflection filing for losing branches (reuse existing reflection code,
@@ -111,8 +111,8 @@ concurrency — the code comment notes real safety today depends on
 branches sharing one ledger means the first branch to call can exhaust the
 whole step's budget before the other two get a turn — and reflection calls for
 losers (§4) are a second, easy-to-miss consumer of the same ledger, stacking
-on top of the 3 experiment runs. This has to be settled before §7 is built,
-not discovered during it. Two options:
+on top of the 3 experiment runs. This has to be settled before implementation
+starts, not discovered during it. Two options:
 
 - Pre-split the step's budget K-ways before fan-out (each `ParallelWorkItem`
   gets `cost` pre-allocated from a per-step sub-budget), reusing M5's existing
@@ -125,6 +125,11 @@ not discovered during it. Two options:
 Leaning toward the second — it needs zero changes to `fitroute` — but this is
 **not implementable until M10's owner confirms it**, since `BudgetLedger` is
 their component.
+
+**Action:** file this as an explicit question to M10's owner before opening
+any implementation PR for this milestone; do not start the `fitroute/budget.py`
+row in §7 or the budget parts of §8 until the answer is recorded back into
+this section.
 
 ## 6. Design
 
@@ -168,7 +173,7 @@ of the sequential path.
 | `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync` | Existing single-hypothesis path stays as the K=1 case |
 | `agents/parallel.py` | None | Reused as-is; M5 primitives are sufficient |
 | `git_evolution.py` / `git/python_backend.py` | New: worktree create/teardown per branch, crash-safe | `create_branch` today mutates the single working tree; needs a worktree-based sibling, not a modification of the existing checkout path |
-| *(new)* reconciliation check | New: startup-time `git worktree prune` + orphan sweep | Closes the crash gap below — this repo already has stray worktrees today (`.claude/worktrees/code-review-pr-104-daf104`, a detached-HEAD leftover), so the failure mode is real, not speculative |
+| *(new)* reconciliation check | New: startup-time `git worktree prune` + orphan sweep | Closes the crash gap — see §8. This repo already has stray worktrees today (`.claude/worktrees/code-review-pr-104-daf104`, a detached-HEAD leftover), so the failure mode is real, not speculative |
 | `hypothesis.py::mark_testing_if_proposed` | Fix: atomic claim + release-on-setup-failure | See §8 |
 | `accessor/sqlite/client.py`, `conductor/store.py` | New: WAL + serialized writer | See §8 |
 | `agents/events.py` / `agents/subscribers.py` | New subscriber: comparison + promotion | Same pattern as the existing evidence-refresh and experience-memory subscribers on `ExperimentCompleted` |
@@ -206,14 +211,19 @@ consistent with the existing convention rather than a new one.
 `ExperimentGraph` already rebuilds from `Experiment` records on disk each call,
 so a field on the model is visible immediately with no new persistence layer.
 The comparison subscriber sets it via the existing experiment-record write path
-after ranking finishes.
+after ranking finishes. Ties on the metric are broken by earliest
+`ExperimentCompleted` timestamp — the first branch to finish wins — so
+promotion is deterministic even when scores are numerically equal.
 
-**Disk usage.** K worktrees means K full checkouts of the tracked tree. Before
-implementation, confirm whether large inputs (`.cache/`, `runs/`) are shared
-across worktrees (they can be, via a symlink into a common directory outside
-the git-tracked tree) or would otherwise be duplicated K times — if the latter,
-K needs a disk-aware ceiling in addition to the concurrency-budget ceiling
-already in §3.
+**Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
+a required pre-build check, same as §5's budget question, but it does not need
+external sign-off — it's answerable by inspecting this repo's own workspace
+layout, not a cross-team decision. Confirm whether large inputs (`.cache/`,
+`runs/`) are shared across worktrees (they can be, via a symlink into a
+common directory outside the git-tracked tree) or would otherwise be
+duplicated K times — if the latter, K needs a disk-aware ceiling in addition
+to the concurrency-budget ceiling already in §3. Record the answer here before
+implementation starts.
 
 ## 9. Tradeoffs
 
@@ -227,13 +237,20 @@ already in §3.
 
 ## 10. Testing
 
-- **Perf**: 3 concurrent hypotheses in one step, assert wall-clock < 3×
-  measured single-hypothesis baseline (exit criterion 1).
+- **Perf**: 3 concurrent hypotheses in one step, assert wall-clock < 1.5×
+  measured single-hypothesis baseline. Exit criterion 1 says "materially less
+  than three sequential runs" — a 3× bound would pass on almost no real
+  parallelism, so the test needs to be close to single-run time, not just
+  under the sequential sum.
 - **Isolation**: kill one branch's experiment mid-run (raise inside its
   `Agent.execute`), assert the other two still complete and their results land
   in the experiment graph (exit criterion 3; the worker-level isolation is
   already covered by `test_parallel_workers.py` — this test is about the
   campaign-loop layer, not the worker layer).
+- **Mid-run failure teardown**: same kill-mid-run setup as above, additionally
+  assert the failed branch's own worktree is torn down — teardown claims to
+  cover branch failure, not just setup failure or a full process crash, and
+  that path had no dedicated test before this pass.
 - **Claim race**: fire `mark_testing_if_proposed` concurrently (threads or
   `anyio` tasks) against the same hypothesis id, assert exactly one caller
   transitions it to `TESTING`.
@@ -249,3 +266,5 @@ already in §3.
 - **Promotion**: three branches with distinct scores, assert exactly one
   `Experiment.promoted == True` and it's the best-scoring one, and the other
   two have reflections filed.
+- **Promotion tie-break**: two branches with equal scores, assert the
+  earlier-completed one is promoted deterministically (not random, not both).
