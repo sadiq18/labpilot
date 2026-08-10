@@ -6,22 +6,21 @@ module answers the question the design's §6.2 discussion says costs real
 time: for each catalog tool, what genuine, non-vacuous fixture proves (or
 disproves) its declared `varies_by`.
 
-Coverage is partial, deliberately. Eight tools are built and verified here:
-`implement`, `analyze_competition`, `generate_plan`, `reflect`,
-`search_papers`, `submit`, `query_memory`, `submit_learn`. The remaining two
-(`run_plan`, `run_experiment`) need a live-enough training run to prove
-variance under `dry_run=False` — a stub run tends to short-circuit to the
-same wiring-only artifact regardless of input, the same failure shape M19
-removed for `implement` — and are left for a follow-up pass rather than
-shipped with an unverified or vacuous fixture. `build_fixture` raises
-`NotImplementedError` for those two, with the reason, so the harness fails
-loudly on them rather than silently skipping.
+All ten catalog tools are covered, each verified against the real handler in
+`test_tool_contract_fixtures.py` rather than asserted from the design doc.
 
-Building these fixtures found two real defects that reading the code had
-missed, both recorded in the 2026-08-11 re-audit
-(docs/research-os/autonomy-roadmap/10-capability-audit.md): `implement`'s
-`prefer_patch` silent no-op, and its declared `varies_by` being wrong
-(`technique` never reaches codegen; `description` does).
+Building these fixtures found three things reading the code had missed, all
+recorded in the 2026-08-11 re-audit
+(docs/research-os/autonomy-roadmap/10-capability-audit.md):
+
+* `implement`'s `prefer_patch` silent no-op;
+* `implement`'s declared `varies_by` being wrong — `technique` never reaches
+  codegen, `description` does;
+* `run_plan`/`run_experiment` needing an **evidence-set** comparison rather
+  than a payload digest, because their `ToolResult.data` differs on every
+  call purely from incrementing ids (§6.2.1's trap). The design doc's guess
+  that these two needed a real `dry_run=False` training run was wrong; two
+  different task *graphs* under a dry run already prove `plan_id` variance.
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ from typing import Any
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.workspace_facade import Workspace
 
-_DEFERRED_TOOLS = frozenset({"run_plan", "run_experiment"})
+_DEFERRED_TOOLS: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -348,8 +347,106 @@ def _seed_implement(tmp_path: Path) -> ToolFixture:
     )
 
 
+def _seed_two_plans(ws: Workspace) -> tuple[str, str]:
+    """Two plans with genuinely different task *graphs*, not just ids.
+
+    `READ_CODE` / `MODIFY_CONFIG` only — deliberately no `RUN_TRAINING`, so
+    the fixture needs no dataset and spawns no subprocess. That is honest for
+    what `varies_by=["plan_id"]` claims: a different plan must produce a
+    different execution. It does **not** claim training itself varies, which
+    is a separate question these tools' contract does not assert.
+    """
+    from datetime import UTC, datetime
+
+    from labpilot.research_engine.planner.schemas.models import ResearchPlan, ResearchTask
+    from labpilot.research_engine.planner.schemas.task_types import PlanStatus, TaskType
+    from labpilot.research_engine.planner.store import PlanStore
+
+    def _plan(plan_id: str, types: list[Any]) -> ResearchPlan:
+        now = datetime.now(UTC)
+        tasks = [
+            ResearchTask(
+                id=f"{plan_id}-T{index:02d}",
+                plan_id=plan_id,
+                type=task_type,
+                description=str(task_type),
+                order=index,
+                dependencies=[f"{plan_id}-T{index - 1:02d}"] if index else [],
+            )
+            for index, task_type in enumerate(types)
+        ]
+        return ResearchPlan(
+            id=plan_id,
+            competition=ws.competition,
+            hypothesis_id="",
+            goal="contract fixture",
+            status=PlanStatus.READY,
+            tasks=tasks,
+            created_at=now,
+            updated_at=now,
+        )
+
+    store = PlanStore(ws.knowledge_dir, ws.competition)
+    try:
+        store.upsert_plan(_plan("P-two-step", [TaskType.READ_CODE, TaskType.MODIFY_CONFIG]))
+        store.upsert_plan(_plan("P-one-step", [TaskType.READ_CODE]))
+    finally:
+        store.close()
+    return "P-two-step", "P-one-step"
+
+
+def _seed_run_plan(tmp_path: Path) -> ToolFixture:
+    """Two plans whose executions record different work.
+
+    **Corrects the design doc's §6.2.2 assumption.** That table predicted
+    `dry_run=True` would be "very likely not enough" to prove variance and
+    that this needed a real `dry_run=False` training run against a synthetic
+    dataset. Measured instead: with two genuinely different task *graphs*, a
+    dry run already writes different per-task evidence
+    (`<executions_dir>/<execution_id>/evidence/<task_id>.json`, one file per
+    task, each recording its `capability` and `checks`). The doc's concern —
+    a stub short-circuiting to the same artifact — applies to plans that
+    differ only in *technique*, which is not what `varies_by=["plan_id"]`
+    claims.
+
+    **What must be compared matters more than the inputs here.** `run_plan`'s
+    `ToolResult.data` is `{execution_id, plan_id, status, error,
+    workspace_path}` and `ResearchExecution.metadata` is empty — so a raw
+    digest differs for two calls *purely because the ids incremented*, and
+    would pass for a tool that ignored its input entirely. This is §6.2.1's
+    false-real-verdict trap in its purest form in this catalog; the harness
+    must compare the evidence set (see `execution_capability_checks`), not
+    the payload.
+    """
+    ws = _base_workspace(tmp_path, "run-plan")
+    plan_a, plan_b = _seed_two_plans(ws)
+    return ToolFixture(
+        workspace=ws,
+        inputs_a={"plan_id": plan_a, "dry_run": True},
+        inputs_b={"plan_id": plan_b, "dry_run": True},
+    )
+
+
+def _seed_run_experiment(tmp_path: Path) -> ToolFixture:
+    """Same two-plan shape as `run_plan`, through the experiment specialist.
+
+    Kept as its own fixture rather than aliased: the 2026-08-02 audit scored
+    these two jointly, and the whole point of the re-audit splitting them is
+    that they are independent handlers which could diverge.
+    """
+    ws = _base_workspace(tmp_path, "run-experiment")
+    plan_a, plan_b = _seed_two_plans(ws)
+    return ToolFixture(
+        workspace=ws,
+        inputs_a={"plan_id": plan_a, "dry_run": True},
+        inputs_b={"plan_id": plan_b, "dry_run": True},
+    )
+
+
 _BUILDERS = {
     "implement": _seed_implement,
+    "run_plan": _seed_run_plan,
+    "run_experiment": _seed_run_experiment,
     "analyze_competition": _seed_analyze_competition,
     "generate_plan": _seed_generate_plan,
     "reflect": _seed_reflect,
@@ -384,6 +481,30 @@ def assert_search_papers_degraded(data: dict[str, Any]) -> None:
     assert data.get("papers") == [], (
         f"search_papers: degraded path should return no papers, got {data.get('papers')!r}"
     )
+
+
+def execution_capability_checks(workspace: Workspace, execution_id: str) -> list[tuple[str, str]]:
+    """What an execution actually *did*, id-free — for `run_plan`-shaped tools.
+
+    Reads `<executions_dir>/<execution_id>/evidence/<task_id>.json` (one file
+    per executed task) and returns sorted `(capability, check)` pairs. The
+    task ids embed the plan id and the execution dir embeds the execution id,
+    so both are deliberately dropped: what survives is only the work done,
+    which is the thing that must differ when the plan differs (§6.2.1).
+    """
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+
+    paths = ResearchPaths(workspace.knowledge_dir, workspace.competition)
+    evidence_dir = paths.executions_dir / execution_id / "evidence"
+    if not evidence_dir.is_dir():
+        return []
+    pairs: list[tuple[str, str]] = []
+    for path in sorted(evidence_dir.glob("*.json")):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        capability = str(record.get("capability") or "")
+        for check in record.get("checks") or []:
+            pairs.append((capability, str(check)))
+    return sorted(pairs)
 
 
 def normalized_digest(payload: dict[str, Any], *, drop: tuple[str, ...]) -> str:

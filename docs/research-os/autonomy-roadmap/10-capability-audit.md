@@ -175,6 +175,42 @@ Both findings are pinned as tests in
 `prefer_patch` no-op rather than asserting it is correct, so it fails loudly
 if the behaviour changes in either direction.
 
+### `run_plan` / `run_experiment`: the payload proves nothing; the evidence does
+
+A third finding, and the clearest instance in this catalog of what the
+design's §6.2.1 warns about — a digest that lies in the *permissive*
+direction.
+
+`run_plan`'s `ToolResult.data` is `{execution_id, plan_id, status, error,
+workspace_path}`, and `ResearchExecution.metadata` comes back **empty**.
+So two calls always produce different payloads — but only because
+`execution_id` incremented (`E-001` → `E-002`) and `plan_id` was echoed
+back. Drop those id fields and the two payloads are byte-identical. A naive
+contract test digesting the payload would therefore report `run_plan` as
+proven-real **even if it had ignored its input entirely** — the exact false
+verdict M15 exists to prevent, arrived at by the mechanism M15 proposes.
+
+What actually records the work is per-task evidence, one file per executed
+task, at `<executions_dir>/<execution_id>/evidence/<task_id>.json`, each
+carrying its `capability` and `checks`. Two plans with different task graphs
+produce demonstrably different evidence sets — measured: a
+`READ_CODE`+`MODIFY_CONFIG` plan writes two files, a `READ_CODE`-only plan
+writes one. The contract test compares those sets with the ids stripped
+(`execution_capability_checks` in `tool_contract_fixtures.py`).
+
+**This also corrects the design doc's own guess.** §6.2.2 predicted these two
+tools would need a real `dry_run=False` training run against a synthetic
+dataset, because "a stub run tends to short-circuit to the same wiring-only
+artifact." Measured otherwise: a dry run already differentiates plans with
+different task *graphs*, which is precisely what `varies_by=["plan_id"]`
+claims. The doc's concern was real but applies to plans differing only in
+*technique* — a stronger claim these tools do not make. The fixture stays
+hermetic and fast (no dataset, no subprocess) as a result.
+
+`test_run_plan_payload_digest_would_falsely_pass` pins the trap itself, so
+that if the payload ever starts carrying real per-plan content, the comparison
+strategy gets revisited deliberately rather than by accident.
+
 ## Approach
 
 **1. Every tool declares what it can vary.** A tool that cannot produce a

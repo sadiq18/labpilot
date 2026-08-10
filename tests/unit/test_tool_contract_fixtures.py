@@ -1,10 +1,15 @@
 """Verify M15's per-tool contract fixtures against the real catalog tools.
 
 Not the parametrized harness (M15 task #7, test_tool_contracts.py) — this
-proves `tool_contract_fixtures.py`'s five built fixtures actually distinguish
-real variance from a vacuous fixture, per AGENTS.md's "prove your test fails
-without your fix." Each test calls the real handler through the real
+proves `tool_contract_fixtures.py`'s fixtures actually distinguish real
+variance from a vacuous one, per AGENTS.md's "prove your test fails without
+your fix." Each test calls the real handler through the real
 `build_default_tool_registry()`, not a stand-in.
+
+Two tests here pin *defects* rather than correct behaviour, so they fail
+loudly if it changes in either direction:
+`test_implement_without_force_rewrite_is_a_silent_noop` and
+`test_run_plan_payload_digest_would_falsely_pass`.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from pathlib import Path
 from tool_contract_fixtures import (
     assert_search_papers_degraded,
     build_fixture,
+    execution_capability_checks,
     normalized_digest,
 )
 
@@ -215,3 +221,65 @@ def test_submit_learn_varies_by_execution_under_dry_run(tmp_path: Path) -> None:
         "dry_run=True returned identical outcomes for different executions"
     )
     assert result_a.data["dry_run"] is True and result_b.data["dry_run"] is True
+
+
+def test_run_plan_varies_by_plan(tmp_path: Path) -> None:
+    fixture = build_fixture("run_plan", tmp_path)
+    registry = build_default_tool_registry()
+
+    result_a = registry.invoke("run_plan", fixture.workspace, **fixture.inputs_a)
+    result_b = registry.invoke("run_plan", fixture.workspace, **fixture.inputs_b)
+
+    work_a = execution_capability_checks(fixture.workspace, result_a.data["execution_id"])
+    work_b = execution_capability_checks(fixture.workspace, result_b.data["execution_id"])
+    assert work_a, "the two-step plan recorded no evidence at all"
+    assert work_a != work_b, "different plans executed identical work"
+
+
+def test_run_plan_payload_digest_would_falsely_pass(tmp_path: Path) -> None:
+    """Why `run_plan`'s contract compares evidence, not the payload (§6.2.1).
+
+    Pins the trap rather than the fix: `ToolResult.data` differs between two
+    calls *only* because `execution_id` and `plan_id` incremented. Strip
+    those two id fields and the payload is byte-identical — so a naive digest
+    over the payload would report this tool as proven-real even if it had
+    ignored its input entirely.
+    """
+    fixture = build_fixture("run_plan", tmp_path)
+    registry = build_default_tool_registry()
+
+    result_a = registry.invoke("run_plan", fixture.workspace, **fixture.inputs_a)
+    result_b = registry.invoke("run_plan", fixture.workspace, **fixture.inputs_b)
+
+    naive_a = normalized_digest(result_a.data, drop=())
+    naive_b = normalized_digest(result_b.data, drop=())
+    assert naive_a != naive_b, "sanity: the raw payloads do differ"
+
+    id_free = ("execution_id", "plan_id", "workspace_path")
+    assert normalized_digest(result_a.data, drop=id_free) == normalized_digest(
+        result_b.data, drop=id_free
+    ), "payload now carries real per-plan content — revisit the evidence-set comparison"
+
+
+def test_run_experiment_varies_by_plan(tmp_path: Path) -> None:
+    fixture = build_fixture("run_experiment", tmp_path)
+    registry = build_default_tool_registry()
+
+    result_a = registry.invoke("run_experiment", fixture.workspace, **fixture.inputs_a)
+    result_b = registry.invoke("run_experiment", fixture.workspace, **fixture.inputs_b)
+
+    assert result_a.data["plan_id"] != result_b.data["plan_id"]
+    assert result_a.data["submit"] is False and result_b.data["submit"] is False
+
+
+def test_every_catalog_tool_has_a_fixture(tmp_path: Path) -> None:
+    """No tool may silently lack a contract fixture (M15 exit criterion 1)."""
+    from labpilot.research_engine.tools.catalog import default_tool_descriptors
+
+    missing = []
+    for descriptor in default_tool_descriptors():
+        try:
+            build_fixture(descriptor.name, tmp_path / descriptor.name)
+        except (NotImplementedError, KeyError) as exc:
+            missing.append(f"{descriptor.name}: {type(exc).__name__}")
+    assert not missing, "catalog tools without a contract fixture:\n" + "\n".join(missing)
