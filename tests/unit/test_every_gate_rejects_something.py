@@ -39,8 +39,10 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import textwrap
 from functools import lru_cache
 from pathlib import Path
+from types import ModuleType
 
 _TESTS = Path("tests")
 
@@ -105,6 +107,48 @@ def _test_module(path: Path):
     return module
 
 
+def _marks(holder) -> list:
+    """`pytestmark` off a module, class or function, in either form it takes.
+
+    A decorator leaves a list of `Mark`; `pytestmark = pytest.mark.x` leaves a
+    bare `MarkDecorator`. Only the list-vs-single difference needs normalising —
+    `MarkDecorator` proxies `.name` and `.args` to the `Mark` it holds, so
+    unwrapping it changed nothing. That unwrap was here until a mutation sweep
+    showed deleting it kept every test green.
+    """
+    raw = getattr(holder, "pytestmark", [])
+    return raw if isinstance(raw, list) else [raw]
+
+
+def _claims_in(module) -> list[tuple[str, str]]:
+    """`(claim, test name)` for every `rejects` marker pytest would apply here.
+
+    Covers the three forms pytest honours — a marked module-level function, a
+    marked method of a `Test...` class, and a module-level `pytestmark` that
+    applies to all of them. Reading only the first was a silent gap; see
+    `test_markers_are_found_in_every_form_pytest_honours`.
+    """
+    inherited = _marks(module)
+    functions: list[tuple[str, list]] = []
+    for name, obj in vars(module).items():
+        if name.startswith("test_") and callable(obj):
+            functions.append((name, inherited + _marks(obj)))
+        elif name.startswith("Test") and isinstance(obj, type):
+            in_class = inherited + _marks(obj)
+            functions.extend(
+                (f"{name}::{attr}", in_class + _marks(method))
+                for attr, method in vars(obj).items()
+                if attr.startswith("test_") and callable(method)
+            )
+    return [
+        (claim, name)
+        for name, marks in functions
+        for mark in marks
+        if mark.name == "rejects"
+        for claim in mark.args
+    ]
+
+
 @lru_cache(maxsize=1)
 def _claims() -> dict[str, tuple[str, ...]]:
     """Every `@pytest.mark.rejects(...)` in the suite, claim -> test ids.
@@ -117,15 +161,8 @@ def _claims() -> dict[str, tuple[str, ...]]:
     """
     found: dict[str, list[str]] = {}
     for path in sorted(_TESTS.rglob("test_*.py")):
-        module = _test_module(path)
-        for name, obj in vars(module).items():
-            if not name.startswith("test_"):
-                continue
-            for mark in getattr(obj, "pytestmark", []):
-                if mark.name != "rejects":
-                    continue
-                for claim in mark.args:
-                    found.setdefault(claim, []).append(f"{path}::{name}")
+        for claim, name in _claims_in(_test_module(path)):
+            found.setdefault(claim, []).append(f"{path}::{name}")
     return {claim: tuple(tests) for claim, tests in found.items()}
 
 
@@ -138,6 +175,62 @@ def _uncovered(capabilities, claims) -> list[str]:
 def _unknown(capabilities, claims) -> list[str]:
     """Claims naming a capability that is not registered."""
     return sorted(claim for claim in claims if claim.split(":", 1)[0] not in set(capabilities))
+
+
+def test_markers_are_found_in_every_form_pytest_honours():
+    """Reported reviewing PR #121, round 8.
+
+    `vars(module)` filtered to `test_*` names sees module-level functions and
+    nothing else, so a marker on a method of a `class Test...`, or a
+    module-level `pytestmark`, was invisible — pytest applies both. The
+    consequence is split and the quiet half is the bad one: the capability shows
+    as uncovered though a real rejection test exists (loud), and a typo in that
+    marker never reaches `_unknown` (silent).
+
+    Latent when reported — the suite has no test classes — and enumeration that
+    depends on a convention holding is the kind of silence this file keeps
+    finding in itself.
+    """
+    module = ModuleType("synthetic")
+    exec(
+        textwrap.dedent("""
+        import pytest
+
+        pytestmark = pytest.mark.rejects("module_level:everywhere")
+
+        @pytest.mark.rejects("plain:function")
+        def test_a_plain_function():
+            pass
+
+        def test_carrying_only_the_module_mark():
+            pass
+
+        class TestSomeGate:
+            @pytest.mark.rejects("in_a:class")
+            def test_a_method(self):
+                pass
+
+        class NotCollected:
+            @pytest.mark.rejects("never:collected")
+            def test_a_method(self):
+                pass
+        """),
+        vars(module),
+    )
+
+    found = _claims_in(module)
+
+    assert sorted({claim for claim, _ in found}) == [
+        "in_a:class",
+        "module_level:everywhere",
+        "plain:function",
+    ]
+    # The module-level mark applies to all three collected tests, and to none of
+    # the ones pytest would not collect.
+    assert sum(1 for claim, _ in found if claim == "module_level:everywhere") == 3
+    assert [name for claim, name in found if claim == "in_a:class"] == [
+        "TestSomeGate::test_a_method"
+    ]
 
 
 def test_the_coverage_comparison_reports_a_capability_nobody_claims():

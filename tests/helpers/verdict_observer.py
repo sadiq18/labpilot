@@ -95,6 +95,18 @@ def recording() -> Iterator[list[Verdict]]:
 #: teardown error filed next to a test the summary still counts as passed.
 _OBSERVED = pytest.StashKey[list]()
 
+#: How much of that list belongs to setup. Everything after it is the test body.
+_CALL_START = pytest.StashKey[int]()
+
+
+def _summarise(verdicts: list[Verdict]) -> str:
+    return str(sorted({(v.capability, v.checks, v.passed) for v in verdicts})) or "none"
+
+
+def _fail(report, message: str) -> None:
+    report.outcome = "failed"
+    report.longrepr = message
+
 
 @pytest.fixture(autouse=True)
 def verdict_observer(request):
@@ -110,21 +122,72 @@ def verdict_observer(request):
 
 
 @pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    """Mark where the test body starts within this test's recording.
+
+    The recorder is autouse, so it is installed before the test's other fixtures
+    and sees the verdicts they produce during setup. Those must not earn the
+    marker — the claim is that *this test* proves a gate can say no, and a
+    fixture saying it does not make that true. Reported reviewing PR #121,
+    round 8; verified latent at the time rather than live.
+
+    Recorded as an index rather than by narrowing what is recorded, because a
+    capability driven through a fixture still has to be observable to the
+    diagnostic below when the claim goes unmet.
+    """
+    item.stash[_CALL_START] = len(item.stash.get(_OBSERVED, []))
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Hold a passing test's `rejects` markers to what the run actually saw."""
+    """Hold a passing test's `rejects` markers to what its body actually caused."""
     report = yield
     if report.when != "call" or not report.passed:
         return report
 
-    claims = [c for mark in item.iter_markers("rejects") for c in mark.args]
-    missing = unearned(claims, item.stash.get(_OBSERVED, []))
+    marks = list(item.iter_markers("rejects"))
+    if not marks:
+        return report
+
+    claims = [c for mark in marks for c in mark.args]
+    # A marker carrying nothing to check used to pass, which made writing it
+    # wrong quieter than not writing it at all. Reported reviewing PR #121,
+    # round 8.
+    if not claims or any(not str(claim).strip() for claim in claims):
+        _fail(
+            report,
+            "a `rejects` marker with no argument names no gate, so nothing can be "
+            "checked and the claim is untestable.\n"
+            'Write `@pytest.mark.rejects("<capability>")` or '
+            '`@pytest.mark.rejects("<capability>:<check>")`.',
+        )
+        return report
+
+    # Every read is `.get`. The mismatched pair here — one `.get`, one subscript,
+    # two lines apart — raised `KeyError` inside this wrapper whenever the
+    # fixture was not installed, and pytest escalates that to `INTERNALERROR`,
+    # taking the session down instead of the test. Reported reviewing PR #121,
+    # round 8. `test_the_conftest_installs_every_hook_this_module_defines`
+    # addresses the partial install that made it reachable.
+    observed = item.stash.get(_OBSERVED, [])
+    during_setup = observed[: item.stash.get(_CALL_START, 0)]
+    during_call = observed[item.stash.get(_CALL_START, 0) :]
+
+    missing = unearned(claims, during_call)
     if missing:
-        observed = sorted({(v.capability, v.checks, v.passed) for v in item.stash[_OBSERVED]})
-        report.outcome = "failed"
-        report.longrepr = (
+        note = ""
+        if not unearned(missing, during_setup):
+            note = (
+                "\n\nThose rejections did happen — during **setup**, so a fixture "
+                "caused them rather than this test. Drive the capability from the "
+                "test body, or move the marker to a test that does."
+            )
+        _fail(
+            report,
             f"unearned rejection marker(s): {missing}\n\n"
             "The marker claims this test proves a gate can say no, so the run has "
             "to show that gate reporting `passed=False`. It did not.\n"
-            f"Verdicts observed while this test ran: {observed or 'none'}"
+            f"Verdicts observed while the body ran: {_summarise(during_call)}" + note,
         )
     return report

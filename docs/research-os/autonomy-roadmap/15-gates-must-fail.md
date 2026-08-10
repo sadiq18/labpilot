@@ -184,6 +184,33 @@ It also left a **finding against production**, not against a test:
 `False` branch — it is a sixth gate that cannot fail, in the same shape as the
 five below, and it is not yet fixed.
 
+**Round 8 found four defects in the replacement**, which is worth recording
+plainly: leaving a mechanism because it kept producing defects did not stop the
+next one producing them. Three were the same silent-claim shape the observer
+exists to remove, arriving inside it.
+
+| finding | what it was |
+|---|---|
+| `KeyError` → `INTERNALERROR` | `item.stash[_OBSERVED]` subscripted a key the line above read with `.get(..., [])`. Unset stash plus an unmet claim killed the whole session, not the test — the same one-guarded-read-one-unguarded shape round 7 was about, two lines apart again |
+| a marker with no argument passed | `@pytest.mark.rejects` with nothing to check had nothing checked, so writing it wrong was quieter than not writing it |
+| a fixture could earn the marker | the recorder starts before the test's other fixtures, so a rejection during setup satisfied the claim without the body proving anything. Latent when found — 0 markers relied on it |
+| three marker forms out of four were invisible | `vars(module)` filtered to `test_*` missed methods of `Test...` classes and module-level `pytestmark`, both of which pytest honours. Latent — the suite has no test classes |
+
+All four are fixed, each with a test written from the failure first and each
+confirmed by mutation. Two of those tests were themselves vacuous on the first
+pass and the sweep caught them: asserting the phrase *"no argument"* appeared
+somewhere passed while the empty-string case was unhandled, because that case
+also fails as an unearned marker; and a `MarkDecorator` unwrap survived deletion,
+because `MarkDecorator` already proxies `.name` and `.args`. The counter-measure
+that works is not *"leave the fragile mechanism"* — it is writing the failing
+test first and mutating the fix afterwards.
+
+The partial-install that made the first one reachable is now its own guard: the
+observer is a fixture plus two hooks a conftest imports by name, any subset
+imports cleanly, and `test_the_conftest_installs_every_hook_this_module_defines`
+fails when one is missing. `pytest_plugins` would couple them properly, but
+pytest honours it only in the rootdir conftest and this suite's is in `tests/`.
+
 **The limit, stated rather than left to be found.** Observation sees the verdicts
 the suite *reaches*. A verdict no test ever exercises produces nothing and is
 invisible here — where the parser would have listed it, wrongly or otherwise.
