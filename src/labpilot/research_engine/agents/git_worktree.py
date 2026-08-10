@@ -25,6 +25,28 @@ enough:
   is what makes the crash case recoverable rather than requiring a human with
   `git worktree prune`.
 
+## The path invariant, and why it is a type
+
+Every path this module deletes is **resolved** and **strictly inside**
+`.worktrees/`. Both properties are carried by `_SafeTarget`, not by checks at
+call sites, and `_force_unregister` — the only function here that deletes
+anything — accepts nothing else.
+
+That is a deliberate response to how this module actually failed. Four review
+rounds produced four variants of one mistake, each a path property applied at
+some call sites and not others: containment missing from create and remove,
+then permitted at its own boundary, then a third hand-rolled copy inside
+`reconcile_worktrees`, then normalization used when reporting paths but not
+when returning them. Centralising each *check* fixed each instance and left
+the shape intact, so the next omission simply appeared somewhere else.
+
+If you add an operation that removes or overwrites anything here, take a
+`_SafeTarget`. Normalising an *input* at a public entry point is fine — that
+is what `Path(repo_root).resolve()` and `experiment_worktree_root` do. What
+must not reappear is a *decision* about whether a path is safe, made anywhere
+but `_SafeTarget._check`: `is_relative_to` outside that method is the bug
+returning.
+
 **Nothing in production calls this yet, and that is the intended state.** It
 is the mechanism M11 task 7 consumes: the conductor creates one worktree per
 branch before fanning out, runs each `ParallelWorkItem` against its own
@@ -86,61 +108,98 @@ class ReconcileResult:
 
 
 def experiment_worktree_root(repo_root: Path) -> Path:
-    return Path(repo_root) / WORKTREE_DIRNAME
+    """Where this module's worktrees live. Always resolved, so callers never
+    have to normalise it before comparing — that ad-hoc normalising is what
+    let `create` and `reconcile` disagree about the same directory."""
+    return (Path(repo_root) / WORKTREE_DIRNAME).resolve()
 
 
-def _worktree_path(repo_root: Path, branch: str) -> Path:
+@dataclass(frozen=True)
+class _SafeTarget:
+    """A path this module is permitted to delete. Resolved, and strictly
+    inside the experiment worktree root.
+
+    **This type exists to end a recurring class of bug, not for tidiness.**
+    Four review rounds on this module found four variants of one mistake: a
+    path property applied at some call sites and not others — containment
+    missing in create and remove, then permitted at the boundary, then a
+    third hand-rolled copy in `reconcile_worktrees`, then normalization
+    applied when reporting paths but not when returning them.
+
+    Centralising the *check* was not enough, because a check is still a
+    discipline each call site has to remember. So the property moved into the
+    type: `_force_unregister` takes a `_SafeTarget`, and the only way to
+    obtain one is `under()` / `try_under()`, which resolve and verify. A new
+    destructive operation cannot skip either property, because it cannot get
+    an argument without them.
+
+    `value` is always resolved, which also makes it the single normal form
+    every path leaving this module is in — `create` and `reconcile` used to
+    disagree, so `wt.path in result.removed` was False on any symlinked
+    workspace (macOS `/tmp`), even for a worktree that had just been removed.
+    """
+
+    value: Path
+
+    @staticmethod
+    def _check(root: Path, path: Path) -> Path | None:
+        """Resolve and verify. Returns the resolved path, or None if unsafe.
+
+        "Strictly inside" is deliberate: `Path.is_relative_to` is `True` for
+        an equal path, but the root holds *every* branch's checkout, so
+        deleting it is categorically worse than the escape this was first
+        written for — and several branch names reach it (`./.`, `a/..`).
+        """
+        resolved_root = root.resolve()
+        resolved = path.resolve()
+        if resolved == resolved_root:
+            return None
+        if not resolved.is_relative_to(resolved_root):
+            return None
+        return resolved
+
+    @classmethod
+    def under(cls, root: Path, path: Path) -> _SafeTarget:
+        """Validating constructor for callers that must fail loudly."""
+        resolved = cls._check(root, path)
+        if resolved is None:
+            resolved_root = root.resolve()
+            if path.resolve() == resolved_root:
+                raise ValueError(
+                    f"refusing to operate on {path}: resolves to the experiment "
+                    f"worktree root {resolved_root} itself, which holds every branch"
+                )
+            raise ValueError(
+                f"refusing to operate on {path}: resolves to {path.resolve()}, "
+                f"outside the experiment worktree root {resolved_root}"
+            )
+        return cls(value=resolved)
+
+    @classmethod
+    def try_under(cls, root: Path, path: Path) -> _SafeTarget | None:
+        """Non-raising form, for the unattended sweep.
+
+        `reconcile_worktrees` must *skip* rather than fail on a path it does
+        not own — a developer's own worktree elsewhere in the repo is normal
+        and must be left alone.
+        """
+        resolved = cls._check(root, path)
+        return None if resolved is None else cls(value=resolved)
+
+
+def _worktree_path(repo_root: Path, branch: str) -> _SafeTarget:
     """Map `research/<session>/<experiment>` → `.worktrees/<session>/<experiment>`.
 
-    Containment-checked, because `research_branch_name` does **not** make its
-    output path-safe: its `_SAFE` pattern permits `.` and `/`, so `..` passes
-    through intact. Without this check a branch built from `session_id=".."`
-    resolves outside `.worktrees/`, and `_force_unregister`'s `rmtree` runs on
-    that path *before* git ever rejects the refname — deleting, say, the whole
-    `knowledge/` directory and then reporting the failure git raised.
+    Returns a `_SafeTarget` rather than a `Path` because
+    `research_branch_name` does **not** make its output path-safe: its
+    `_SAFE` pattern permits `.` and `/`, so `..` passes through intact. A
+    branch built from `session_id=".."` resolves outside `.worktrees/`, and
+    the `rmtree` in `_force_unregister` would run on it *before* git ever
+    rejects the refname.
     """
     suffix = branch.removeprefix("research/")
     root = experiment_worktree_root(repo_root)
-    path = root / suffix
-    _assert_contained(path, root)
-    return path
-
-
-def _is_contained(path: Path, root: Path) -> bool:
-    """Is `path` strictly inside `root`, resolved against symlinks?
-
-    **The single containment rule for this module.** Every destructive
-    operation decides through this one predicate rather than its own
-    comparison: three call sites agreeing by inspection is what produced the
-    same boundary bug three times running, once in each hand-rolled variant.
-
-    "Strictly inside" is deliberate — `Path.is_relative_to` is `True` for an
-    equal path, but the root holds *every* branch's checkout, so deleting it
-    is categorically worse than the escape this guard was written for, and
-    several branch names reach it (`./.`, `a/..`).
-    """
-    resolved_root = root.resolve()
-    resolved = path.resolve()
-    return resolved != resolved_root and resolved.is_relative_to(resolved_root)
-
-
-def _assert_contained(path: Path, root: Path) -> None:
-    """Raising form of `_is_contained`, for callers that cannot skip.
-
-    Only formats the explanation; the rule itself lives in the predicate.
-    """
-    if _is_contained(path, root):
-        return
-    resolved_root = root.resolve()
-    if path.resolve() == resolved_root:
-        raise ValueError(
-            f"refusing to operate on {path}: resolves to the experiment "
-            f"worktree root {resolved_root} itself, which holds every branch"
-        )
-    raise ValueError(
-        f"refusing to operate on {path}: resolves to {path.resolve()}, outside "
-        f"the experiment worktree root {resolved_root}"
-    )
+    return _SafeTarget.under(root, root / suffix)
 
 
 def create_experiment_worktree(
@@ -158,15 +217,15 @@ def create_experiment_worktree(
     a stale registration from a previous crash would otherwise make `add`
     fail and take the branch down with it.
     """
-    repo_root = Path(repo_root)
+    repo_root = Path(repo_root).resolve()
     tool = git or open_git_tool(repo_root)
     branch = research_branch_name(session_id, experiment_key)
-    path = _worktree_path(repo_root, branch)
+    target = _worktree_path(repo_root, branch)
 
-    _force_unregister(tool, path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tool.execute("worktree", "add", "-B", branch, str(path), "HEAD")
-    return ExperimentWorktree(path=path, branch=branch, repo_root=repo_root)
+    _force_unregister(tool, target)
+    target.value.parent.mkdir(parents=True, exist_ok=True)
+    tool.execute("worktree", "add", "-B", branch, str(target.value), "HEAD")
+    return ExperimentWorktree(path=target.value, branch=branch, repo_root=repo_root)
 
 
 def remove_experiment_worktree(
@@ -176,13 +235,15 @@ def remove_experiment_worktree(
 ) -> None:
     """Unregister and delete one worktree. Safe to call twice.
 
-    Re-checks containment rather than trusting the handle: an
-    `ExperimentWorktree` is a plain dataclass a caller can construct directly,
-    so its `path` has not necessarily been through `_worktree_path`.
+    Re-validates rather than trusting the handle: `ExperimentWorktree` is a
+    plain dataclass a caller can construct directly, so its `path` has not
+    necessarily been through `_worktree_path`.
     """
     tool = git or open_git_tool(worktree.repo_root)
-    _assert_contained(worktree.path, experiment_worktree_root(worktree.repo_root))
-    _force_unregister(tool, worktree.path)
+    target = _SafeTarget.under(
+        experiment_worktree_root(worktree.repo_root), worktree.path
+    )
+    _force_unregister(tool, target)
 
 
 @contextmanager
@@ -260,20 +321,20 @@ def reconcile_worktrees(
     worktree elsewhere in the repo is never touched, which matters because
     this runs unattended at startup.
     """
-    repo_root = Path(repo_root)
+    repo_root = Path(repo_root).resolve()
     tool = git or open_git_tool(repo_root)
-    own_root = experiment_worktree_root(repo_root).resolve()
+    own_root = experiment_worktree_root(repo_root)
     removed: list[Path] = []
     failed: list[Path] = []
 
     for path, branch in list_registered_worktrees(repo_root, git=tool).items():
-        if not _is_contained(path, own_root):
-            # Skipping rather than raising is the point of the predicate form:
-            # a developer's own worktree elsewhere in the repo is normal and
-            # must be left alone by an unattended sweep. The root itself lands
-            # here too — it is not ours to delete — but that one is anomalous
-            # enough to say out loud, since every branch creation will fail
-            # while it is registered.
+        target = _SafeTarget.try_under(own_root, path)
+        if target is None:
+            # Not ours: a developer's own worktree elsewhere in the repo is
+            # normal and an unattended sweep must leave it alone. The root
+            # itself lands here too — also not ours to delete — but that one
+            # is anomalous enough to say out loud, since every branch creation
+            # fails while it is registered.
             if path == own_root:
                 logger.warning(
                     "%s is itself registered as a git worktree; experiment "
@@ -283,7 +344,7 @@ def reconcile_worktrees(
             continue
         if branch is not None and branch in live_branches:
             continue
-        _force_unregister(tool, path)
+        _force_unregister(tool, target)
         # Report what actually went, not what was attempted: `_force_unregister`
         # swallows its failures by design (a missing worktree is the normal
         # case), so claiming a removal without checking would let a read-only
@@ -309,14 +370,32 @@ def reconcile_worktrees(
     return ReconcileResult(removed=removed, failed=failed)
 
 
-def _force_unregister(tool: GitTool, path: Path) -> None:
+def _force_unregister(tool: GitTool, target: _SafeTarget) -> None:
     """Drop a worktree registration and its directory, tolerating absence.
+
+    Takes a `_SafeTarget`, not a `Path`, and that signature is the whole
+    point: this is the only function in the module that deletes anything, so
+    requiring the validated type here means no caller — including one added
+    later — can reach `rmtree` with a path that has not been resolved and
+    proven to sit inside the experiment worktree root. See `_SafeTarget` for
+    the four rounds of review that argued for a type over a convention.
 
     `worktree remove` fails when the path was never registered, which is the
     normal case on first creation — so its failure is expected rather than
     exceptional, and the directory is cleaned separately in case the
     registration and the directory disagree (they do, after a crash).
     """
+    if not isinstance(target, _SafeTarget):  # pragma: no cover — guards the future
+        # Not redundant with the annotation: this repo runs no static type
+        # checker, so the signature is documentation and this is the check.
+        # Turning a wrong call into a loud TypeError beats an AttributeError
+        # deep inside a delete path, and beats deleting the wrong directory.
+        raise TypeError(
+            f"_force_unregister requires a _SafeTarget, got {type(target).__name__}; "
+            "construct one with _SafeTarget.under()/try_under() so the path is "
+            "resolved and proven inside the experiment worktree root"
+        )
+    path = target.value
     try:
         tool.execute("worktree", "remove", "--force", str(path))
     except Exception:  # noqa: BLE001 — not registered, or already gone

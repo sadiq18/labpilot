@@ -38,6 +38,44 @@ def _repo(tmp_path: Path) -> Path:
     return root
 
 
+def test_every_path_leaving_the_module_is_already_resolved(tmp_path: Path) -> None:
+    """One normal form out of this module, so its own values compare equal.
+
+    `create` used to return the path it constructed while `reconcile` and
+    `list_registered_worktrees` returned resolved ones, so on any symlinked
+    workspace — macOS `/tmp` → `/private/tmp`, the default — a caller asking
+    `wt.path in result.removed` got False for a worktree that had just been
+    removed. The earlier tests hid it by calling `.resolve()` at each
+    comparison; asserting the invariant directly is what stops it returning.
+    """
+    root = _repo(tmp_path)
+    wt = create_experiment_worktree(root, session_id="s1", experiment_key="exp-a")
+
+    assert wt.path == wt.path.resolve()
+    assert wt.repo_root == wt.repo_root.resolve()
+    assert all(p == p.resolve() for p in list_registered_worktrees(root))
+
+    result = reconcile_worktrees(root, live_branches=set())
+    assert all(p == p.resolve() for p in result.removed)
+    # The correlation task 7 will actually perform, without normalising first.
+    assert wt.path in result.removed
+
+
+def test_module_values_compare_across_a_symlinked_workspace(tmp_path: Path) -> None:
+    """The same correlation, reached through a symlink rather than trusting
+    that the platform happens to give us one."""
+    (tmp_path / "real").mkdir()
+    real = _repo(tmp_path / "real")
+    link = tmp_path / "linked"
+    link.symlink_to(tmp_path / "real", target_is_directory=True)
+
+    wt = create_experiment_worktree(link / "ws", session_id="s1", experiment_key="exp-a")
+    result = reconcile_worktrees(link / "ws", live_branches=set())
+
+    assert wt.path in result.removed
+    assert real.exists()
+
+
 def test_worktree_isolates_edits_between_branches(tmp_path: Path) -> None:
     """The bug this exists to fix: two branches editing the same file."""
     root = _repo(tmp_path)
@@ -91,7 +129,7 @@ def test_context_manager_removes_on_success(tmp_path: Path) -> None:
         assert wt.path.is_dir()
         held = wt.path
     assert not held.exists()
-    assert held.resolve() not in list_registered_worktrees(root)
+    assert held not in list_registered_worktrees(root)
 
 
 def test_context_manager_removes_on_failure(tmp_path: Path) -> None:
@@ -105,7 +143,7 @@ def test_context_manager_removes_on_failure(tmp_path: Path) -> None:
 
     assert held is not None
     assert not held.exists()
-    assert held.resolve() not in list_registered_worktrees(root)
+    assert held not in list_registered_worktrees(root)
 
 
 def test_failed_branch_key_can_be_reused_afterwards(tmp_path: Path) -> None:
@@ -197,7 +235,7 @@ def test_reconcile_prunes_a_directory_deleted_out_from_under_git(tmp_path: Path)
 
     reconcile_worktrees(root, live_branches=set())
 
-    assert wt.path.resolve() not in list_registered_worktrees(root)
+    assert wt.path not in list_registered_worktrees(root)
 
 
 @pytest.mark.parametrize(
