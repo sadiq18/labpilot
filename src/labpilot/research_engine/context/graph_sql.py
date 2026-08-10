@@ -83,6 +83,10 @@ class SqlGraphPort:
         seen: set[str] = {node_id}
         frontier = [node_id]
 
+        # mode=ro against a WAL-mode db (SqliteClient sets WAL — M11) still
+        # needs the -shm file readable/writable to read the shared-memory
+        # index; fine on this codebase's actual single-user local-machine
+        # deployment, would need revisiting under a read-only mount.
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
             conn.row_factory = sqlite3.Row
             for _hop in range(depth):

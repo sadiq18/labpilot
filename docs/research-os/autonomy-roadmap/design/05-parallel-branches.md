@@ -1,0 +1,443 @@
+# Design — M11: parallel research branches
+
+**Plan:** [../05-parallel-branches.md](../05-parallel-branches.md) · **Status:** design ·
+**Owner:** unassigned · **Builds on:** M5 thin parallel workers (shipped, unused) ·
+**Backlog it resolves:** [../../backlog/parallel-research-branches.md](../../backlog/parallel-research-branches.md)
+
+---
+
+## 1. Background
+
+M5 shipped `run_parallel_async`/`run_parallel_sync` in
+[`agents/parallel.py`](../../../../src/labpilot/research_engine/agents/parallel.py) —
+max-workers via `anyio.CapacityLimiter`, a shared `ParallelBudget` guarded by an
+`anyio.Lock`, per-item failure isolation (each `_run_one` catches its own
+exception into a `ParallelResult`, never escaping the task group). It has never
+been called from the campaign loop. `conductor/loop.py`'s `run_until_stop` picks
+exactly one hypothesis per step (`_next_hypothesis_id`) and dispatches one
+`OsTask` through `Scheduler.dispatch` — "does not chain tools," per its own
+docstring. M11 is wiring the two together, not building new concurrency
+primitives.
+
+## 2. Problem
+
+Four things are missing between "M5's workers exist" and "a campaign step
+tests three hypotheses at once safely":
+
+1. **No branch isolation.** `git_evolution.py` knows experiment branch *naming*
+   (`research/<session>/<experiment>`) but `GitTool.create_branch` does an
+   in-place `repo.create_head` + `branch.checkout()` — a real checkout on the
+   single working tree. Two concurrent branches today clobber each other's
+   checked-out state. The plan doc's assumption that "worktrees are already the
+   isolation boundary" is not true of the current code; there is no `worktree`
+   call anywhere under `research_engine/git/`.
+2. **No safe concurrent writes.** `SqliteClient` (used by `knowledge.db`, the
+   hypothesis-store DB mirror, and `ConductorStore`) opens
+   `sqlite3.connect(..., check_same_thread=not allow_cross_thread)` with no
+   `PRAGMA journal_mode=WAL` anywhere in `src/`, and its own docstring says the
+   client "punts serialisation to callers" — a contract only `BudgetLedger`
+   (`fitroute/budget.py`, `threading.RLock`) currently honors. Concurrent
+   branches writing experiment results would hit this unlocked.
+3. **No claim, comparison, or promotion.** `mark_testing_if_proposed` is a
+   read-then-write (`get()` → `update_status()`) with no lock or transaction —
+   a TOCTOU race that lets two branches claim the same hypothesis. And once
+   branches finish, nothing picks a winner: `ExperimentGraph.best_path()` can
+   *identify* the best-scoring path by a metric, but no field marks an
+   `Experiment` promoted, and no code sets one.
+4. **No compute isolation.** Nothing in the training path sets thread or core
+   limits — a repo-wide search for `n_jobs`/`num_threads`/`nthread` in
+   `src/labpilot` returns zero hits. LightGBM/XGBoost default to using every
+   core, and generated code reaching for the common `n_jobs=-1` idiom does the
+   same on scikit-learn. K concurrent branches under that oversubscribe the
+   same physical cores instead of getting K× the throughput — the parallelism
+   this milestone builds toward can end up *slower* than sequential, not
+   faster (see §8 for exactly what does and doesn't fix this).
+
+None of this is exercised today because the loop is sequential, so these gaps
+are latent, not yet observed in production incidents.
+
+## 3. Requirements
+
+**Functional**
+- Conductor selects the top K untested hypotheses in one step (K bounded by
+  the concurrency budget, not a constant).
+- Each hypothesis's experiment runs in its own git worktree, so concurrent
+  branches don't share a working tree.
+- A hypothesis can be claimed by exactly one branch (fix the TOCTOU race in
+  `mark_testing_if_proposed`), and a claim that fails to reach a running
+  branch (setup failure after claim) is released rather than left stuck.
+- Writes to `knowledge.db`, the hypothesis DB mirror, and `ConductorStore`
+  during a parallel step are serialized (WAL + single-writer lock, or
+  equivalent) so concurrent branches don't corrupt or silently drop rows.
+- After all branches finish (or fail, or the process crashes), every worktree
+  created for the step is torn down — no orphaned worktrees left on disk.
+- After all branches finish, a comparison step ranks results by the
+  competition's metric, promotes the winner, and every result (including
+  losers) is visible in the experiment graph with a reflection filed for each
+  loser.
+- The shared LLM budget (M10's `BudgetLedger`) is respected across concurrent
+  branches, including the reflection calls losers trigger — already true via
+  the gateway's existing pace-and-retry behavior (§5); no new code needed.
+- Each branch's generated training code respects a per-branch compute budget
+  (thread/core cap = available cores ÷ K) instead of the library defaults
+  that assume sole use of the machine — nothing sets this today (§2 item 4).
+
+**Non-functional**
+- Three hypotheses tested in one campaign step, wall-clock materially less
+  than three sequential runs (plan exit criterion 1).
+- A single branch failure does not abort the other branches in the same step
+  (plan exit criterion 3; already true inside `run_parallel_async`; must hold
+  end-to-end through the campaign loop, not just the worker layer).
+- Disk usage from K concurrent worktrees is bounded and understood — see §8
+  (this design's own addition, not one of the plan's three exit criteria).
+- Each branch's execution is fully auditable: its own `DecisionRecord`, its
+  own checkpoint, and its own contribution to the consecutive-failure circuit
+  breaker — full parity with sequential dispatch, decided below (see §8).
+
+**Both design decisions below are now resolved** — §5 (budget scoping) needed
+no new code once the existing gateway behavior was checked against the
+threading model; §8 (auditability) is decided as full parity, not deferred.
+
+## 4. Scope
+
+**In scope**
+- Wiring `run_parallel_async` into the campaign loop for the experiment step.
+- Worktree-based branch isolation, including crash-safe teardown (§6, §8).
+- Atomic hypothesis claim, with release-on-setup-failure (§8).
+- Write serialization for the three SQLite consumers above.
+- A comparison/promotion subscriber on the existing Blinker bus.
+- Reflection filing for losing branches (reuse existing reflection code,
+  triggered per loser).
+- Per-branch compute (CPU thread/core) budgeting for generated training code,
+  so K-way fan-out doesn't oversubscribe the same cores (§8).
+
+**Out of scope** (per the backlog doc this plan resolves, and M5's own
+docstring — do not redo)
+- Max-workers enforcement, shared budget accounting primitive, and
+  `asyncio.gather`-style fan-out — M5 already ships these in
+  `agents/parallel.py`.
+- Distributed / multi-machine orchestration, including remote execution
+  backends (Kaggle, Colab, cloud). The Runtime abstraction for this already
+  shipped
+  ([research-engineer/plan-7-runtime.md](../../../research-pipeline/milestones/research-engineer/plan-7-runtime.md),
+  `execution/runtimes/`, `execution/capabilities/runtime/`); actual dispatch/
+  poll/artifact-sync execution against remote backends is a separately
+  tracked, already-deferred item
+  ([TODO.md](../../../research-pipeline/milestones/TODO.md), "P2 remote
+  execution"), not part of this milestone. `ParallelWorkItem` still gets a
+  `runtime` field defaulting to `"local"` (§7) so that work can build on this
+  fan-out later without retrofitting it.
+- Arbitrary branch-merge policy or conflict resolution beyond "pick one
+  winner, keep the losers as evidence."
+
+## 5. Budget scoping — resolved, no `fitroute` changes
+
+Original concern: K branches sharing one `BudgetLedger` could starve each
+other, and a hard K-way pre-split (`ParallelBudget` sized per branch) looked
+like the fix. That was wrong on its own terms before it was wrong on
+mechanism — forks don't need equal LLM budget, so pre-allocating equal shares
+either starves a branch that needs more or wastes budget reserved for one
+that needs less.
+
+**The pacing mechanism this needs already exists.**
+`RoleBoundClient.complete(..., allow_wait=True)` — the default —
+(`src/fitroute/gateway.py`) does not fail on exhaustion; when `select_route`
+reports no provider available, it sleeps `decision.wait_seconds` (bounded by
+`spec.max_wait_seconds`, 900s default — `fitroute/catalog.py`) and retries,
+rather than raising. `wait_seconds` comes from `BudgetLedger.availability()`,
+which is already `threading.RLock`-guarded for concurrent callers
+(`fitroute/budget.py`).
+
+Each of the K branches runs on its own OS thread today
+(`ExperimentAgent.execute` via `anyio.to_thread.run_sync` — confirmed in §1's
+background research). A branch that hits a rate limit sleeps on **its own**
+thread — it does not block the other branches, which keep making calls
+against the same, correctly-locked ledger. That is exactly the "wait for the
+next-retry time and resume" behavior the budget question needed, and it costs
+M11 nothing — `ExperimentSpecialist` already calls through this gateway.
+
+**No pre-split, no `fitroute` change, no M10 sign-off needed.** The only
+residual property worth naming, not fixing: if K branches simultaneously
+exhaust the *same* provider, each independently waits and retries — correct,
+bounded by `max_wait_seconds`, but not perfectly efficient (a small
+thundering-herd retry burst when the cooldown lifts). Not a defect in this
+milestone's scope.
+
+## 6. Design
+
+```text
+Conductor step
+   │
+   ├─ select top K untested hypotheses (K = min(desired fan-out, max_workers)
+   │     — K and max_workers must agree, or the compute-budget math below is
+   │     wrong, see §8)
+   ├─ atomically claim each (fixed mark_testing_if_proposed)
+   │     └─ on setup failure below: release the claim, do not leave it stuck
+   │
+   ├─ per hypothesis: create git worktree on research/<session>/<experiment>
+   ├─ per hypothesis: allocate compute budget (cores ÷ K), injected into
+   │     the generated training code — not left to library defaults (§8)
+   │
+   ▼
+run_parallel_async([ParallelWorkItem(id=hyp_id, agent=ExperimentAgent, task=..., cost=...)])
+   │  (existing M5 code — max_workers, shared ParallelBudget, per-item isolation)
+   ▼
+list[ParallelResult]  →  each ok branch publishes ExperimentCompleted (existing bus)
+   │
+   ▼
+new subscriber: branch comparison
+   ├─ rank by competition metric (`_pick_best`, not `best_path` — see §8)
+   ├─ mark winner promoted
+   └─ file reflection for each loser (existing reflection path)
+   │
+   ▼
+teardown worktrees — always, including on crash (§8)
+   │
+   ▼
+startup reconciliation — prune any worktree from a step that never reached
+teardown (§8)
+```
+
+The campaign loop still decides *whether* to fan out (K > 1) or stay
+single-step (K = 1, current behavior) — this is additive, not a replacement
+of the sequential path.
+
+## 7. Components & Responsibility
+
+| Component | Change | Notes |
+|---|---|---|
+| `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync`; emit a `DecisionRecord`/checkpoint per branch and feed each branch's outcome to the circuit breaker | Existing single-hypothesis path stays as the K=1 case; full audit parity with sequential dispatch, decided in §8 |
+| `agents/parallel.py::ParallelWorkItem` | Minor: add `runtime: str = "local"` field (unread this milestone, forward-compat only) | Otherwise reused as-is; M5's concurrency primitives are sufficient |
+| `execution/training/environment.py::child_environment` | New: inject a per-branch thread-cap env vars into the training subprocess's environment | See §8. **Not** `agents/coding.py` — that only generates code, it never executes it; `execution/training/runner.py::TrainingRunner.run()` is the actual `subprocess.run(...)` call, and `child_environment()` already builds the env dict it uses |
+| `git_evolution.py` / `git/python_backend.py` | New: worktree create/teardown per branch, crash-safe | `create_branch` today mutates the single working tree; needs a worktree-based sibling, not a modification of the existing checkout path |
+| *(new)* reconciliation check | New: startup-time `git worktree prune` + orphan sweep | Closes the crash gap — see §8. A worktree whose creating process dies before teardown runs is a standard git-worktree failure mode, not something this design can assume away |
+| `hypothesis.py::mark_testing_if_proposed` | Fix: atomic claim on the JSON file (not the DB mirror) + release-on-setup-failure | See §8 |
+| `accessor/sqlite/client.py`, `conductor/store.py` | New: WAL + module-level serialized writer | See §8 |
+| `agents/events.py` / `agents/subscribers.py` | New subscriber: comparison + promotion | Same pattern as the existing evidence-refresh and experience-memory subscribers on `ExperimentCompleted` |
+| `agents/experiment.py::event_payload` | New: `completed_at` field | Needed for deterministic tie-break, see §8 |
+| `shared/experiments/graph.py::assemble_experiment` + manifest write path | New: read/write a `promoted` flag via `manifest.metadata`, not a new `Experiment` field | See §8 |
+| `fitroute/budget.py` | None | Resolved in §5 — the existing gateway pacing already covers K concurrent callers, no change needed |
+
+## 8. Implementation notes
+
+**Auditability & breaker accounting — decided: full parity.**
+`run_parallel_async` calls `item.agent.execute(...)` directly; it does not go
+through `Scheduler.dispatch`, `store.enqueue`/`OsTask`, `DecisionRecord`, or
+`_record_experiment_outcome`'s consecutive-failure circuit breaker
+(`conductor/loop.py`) — all of which wrap every other tool dispatch today.
+That file's own comments describe past silent-degradation bugs this machinery
+exists to catch, so K-way fan-out gets the same treatment, not a lighter one:
+each of the K branches produces its own `DecisionRecord` and checkpoint after
+its `ParallelResult` comes back, and each branch's outcome (ok/failed) feeds
+`_record_experiment_outcome`'s breaker the same way a sequential failure
+would — a step with 2 of 3 branches failing counts as 2 failures toward the
+breaker, not 1 step. This is more wiring in `conductor/loop.py` than a
+step-level shortcut would be, but it doesn't reopen the silent-degradation
+class of bug `_record_experiment_outcome`'s comments describe.
+
+**Atomic claim, with rollback.** The hypothesis DB mirror is not a valid claim
+target — it's a best-effort dual-write cache (`_mirror_many_to_db`'s own
+comment calls it a backfill for file-only hypotheses); `get()`, `list()`, and
+`rank_hypotheses()` all read the **JSON file**, which is where the actual
+TOCTOU race from §2 lives. A conditional `UPDATE` against the mirror would
+leave that race exactly as it is today. The claim has to lock the JSON file
+itself — a per-hypothesis file lock (`fcntl`/`filelock`) held across the
+existing `get()` → `update_status()` sequence, so two callers can't both
+observe `proposed` before either writes. If worktree setup then fails for a
+claimed hypothesis (disk full, name collision), release the claim back to
+`proposed` before surfacing the failure — a hypothesis must never end a step
+stuck in `testing` with no branch behind it.
+
+**Crash-safe worktree teardown.** Teardown runs in a `finally`-equivalent
+around the fan-out, so it executes on branch failure as well as success. That
+still doesn't cover a hard process crash (killed process, host restart) — for
+that, reconciliation is a startup check: `git worktree list`, drop any entry
+whose branch is not referenced by a currently-running campaign step (tracked
+in `ConductorStore`), and run `git worktree prune`. This mirrors an existing
+condition already observed in this repo's own worktree list, so it is treated
+as a required path, not a nice-to-have.
+
+**Atomic writes — a second reader-vs-writer race, found by review, not
+designed for up front.** Locking the mutators (`HypothesisStore`,
+`EvidenceCardStore`) closes writer-vs-writer races, but `get()`/`list()`
+callers never took that lock — deliberately, to keep reads lock-free — which
+only works if a reader can never observe a half-written file. It could:
+`path.write_text()` truncates then writes as two separate steps, so a reader
+landing in between saw a 0-byte file. Fixed once, generically
+(`accessor/common/atomic_write.py::atomic_write_text` — write to a temp file,
+`os.replace` onto the real path, atomic on POSIX), and applied to **both**
+file-backed stores — `EvidenceCardStore.save()` got the identical fix
+`HypothesisStore._write_json` did, not just the id-allocation lock it already
+had. Verified empirically both times: reverting to the old write reliably
+produced 1000+ torn reads under a synchronized reader/writer stress test;
+the fix produces zero.
+
+**Locking one store's own methods isn't enough — audit every entry point
+into its data.** `HypothesisStore`'s five mutators are all locked, but
+`evidence/apply.py::apply_card_to_hypothesis` reached past the public API
+into `store._save()` directly for a second, unlocked read-modify-write right
+after a properly-locked `update_outcome()` call — found by review, not by
+design. Fixed by extending `update_outcome` with an optional `confidence`
+parameter so the whole mutation is one locked call, not two. The lesson this
+leaves for future stores: "every mutator is locked" isn't the same claim as
+"every write path is locked" — grep for `_save`/`_write_json`-style private
+writes from *outside* the class, not just inside it.
+
+**Write serialization — implemented, and more precise than first designed.**
+Two different problems turned out to need two different fixes, not one:
+
+- A single atomic SQL statement (`increment_metric`'s
+  `SET field = field + ?`) is safe under concurrent writers regardless of any
+  application lock — SQLite guarantees it. Verified with a 20-thread
+  barrier-synchronized run: zero lost updates, with or without WAL. `WAL` +
+  an explicit `busy_timeout` were still added to `SqliteClient.__init__` (read
+  concurrency during a parallel step matters, and WAL removes "readers block
+  behind an in-flight writer"), but **not** because the un-patched default
+  raises `database is locked` — `sqlite3.connect`'s own implicit 5s timeout
+  already covers that case here, so that specific risk this paragraph
+  originally named was not real.
+- Allocating an id then inserting a row that uses it (`new_decision_id` +
+  `append_decision`) is a genuine multi-statement TOCTOU race no `busy_timeout`
+  closes — confirmed: 6 of 20 concurrent, unlocked attempts raised
+  `IntegrityError: UNIQUE constraint failed` (two callers read the same "next
+  id" before either wrote). This is the one that needed the module-level lock
+  — an instance-level lock like `BudgetLedger`'s `threading.RLock` doesn't
+  work here since `ConductorStore` is freshly constructed at each call site,
+  not shared for the process's lifetime the way `BudgetLedger` is. Fixed by
+  `write_lock_for(db_path)` (`accessor/sqlite/client.py`) — keyed per database
+  file, not one process-wide lock, so unrelated competitions don't serialize
+  on each other. Callers can't forget it: `ConductorStore.append_new_decision`
+  encapsulates the whole allocate-then-insert sequence under the lock, so K-way
+  fan-out (task 7) calls that method, not the raw two-call pattern. The same
+  fix (`write_lock_for` for SQL stores, or the equivalent file-lock helper —
+  `accessor/common/file_lock.py` — for JSON-backed ones) was applied to every
+  store sharing this exact allocate-then-insert shape that M11 actually
+  touches (`HypothesisStore`, `EvidenceCardStore`, `ExperienceStore`); stores
+  M11 doesn't touch (`PlanStore`, execution's and reflection's id-allocators)
+  were left as-is — same latent shape, genuinely out of this milestone's
+  scope, `write_lock_for`/`locked()` are there for whoever picks them up.
+
+**Promotion.** Rank the step's K results with the module-level
+`_pick_best(candidates, metric_key, maximize)` (`shared/experiments/graph.py`),
+not `ExperimentGraph.best_path()` — `best_path()` walks a single lineage
+starting from `self.roots`, descending only through the child it already
+picked as best, so it never compares K siblings hanging off one shared parent
+that may not sit on the overall best-scoring path. `_pick_best` is the actual
+all-candidates comparison and is already what `best_path()` calls internally.
+
+`Experiment` is explicitly a read-side aggregate, not a persisted record — its
+own docstring: "Not a new file written to `runs/<id>/`... there is exactly one
+writer per field elsewhere in the pipeline." A `promoted` field on the
+pydantic model has nowhere to round-trip to. Write it into `manifest.metadata`
+instead (`save_manifest` already has a writer for that file) and add a
+corresponding read in `assemble_experiment()` so it survives the next
+`build_graph()` call.
+
+**Tie-break.** `ExperimentCompleted`'s payload (`agents/experiment.py`) has no
+timestamp field today — add a `completed_at` field to `event_payload` at
+publish time. Ties on the metric are then broken by earliest `completed_at`,
+the first branch to finish wins, and promotion stays deterministic.
+
+**Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
+a required pre-build check, same as §5's budget question, but it does not need
+external sign-off — it's answerable by inspecting this repo's own workspace
+layout, not a cross-team decision. Confirm whether large inputs (`.cache/`,
+`runs/`) are shared across worktrees (they can be, via a symlink into a
+common directory outside the git-tracked tree) or would otherwise be
+duplicated K times — if the latter, K needs a disk-aware ceiling in addition
+to the concurrency-budget ceiling already in §3. Record the answer here before
+implementation starts.
+
+**Compute budget (CPU/threads) — real, unaddressed gap.** Nothing sets thread
+or core limits today — confirmed via a repo-wide search: zero hits for
+`n_jobs`/`num_threads`/`nthread` in `src/labpilot`. Note scikit-learn
+estimators default to `n_jobs=None` (serial) — the actual risk isn't "library
+defaults use every core," it's **generated code explicitly passing
+`n_jobs=-1`** (a common LightGBM/XGBoost/sklearn idiom the LLM is likely to
+reach for), which spawns joblib/loky workers sized off `loky.cpu_count()`.
+`OMP_NUM_THREADS`/`MKL_NUM_THREADS`/`OPENBLAS_NUM_THREADS` don't govern
+joblib/loky — `LOKY_MAX_CPU_COUNT` does, and needs to be set alongside them.
+Even then, a hard-coded explicit count (`n_jobs=8`, not `-1`) in generated
+code is a residual risk env vars don't fully close — flagging this as
+accepted, not solved, pending an OS-level fallback (cgroup/`taskset` around
+the `TrainingRunner.run()` subprocess) if it proves necessary in practice.
+
+The injection point is `execution/training/environment.py::child_environment()`
+(consumed by `execution/training/runner.py::TrainingRunner.run()`'s
+`subprocess.run(..., env=child_environment())`) — **not** `agents/coding.py`,
+which only generates `train.py` and never executes it. Compute the cap as
+`max(1, available_cores // K)` before fan-out (`// K` alone can truncate to 0
+on small/CI machines, which most of these env vars treat as "unset," silently
+reintroducing the oversubscription this exists to prevent). This is
+implementable entirely inside M11, no external sign-off needed, but the
+mechanism above (env vars only, vs. env vars + OS-level enforcement) is a
+leaning, not a final decision — record whichever is chosen back into this
+paragraph before implementation.
+
+## 9. Tradeoffs
+
+| Decision | Options | Choice | Why |
+|---|---|---|---|
+| Branch isolation | worktree vs. sequential checkout-lock (mutex around `create_branch`) | worktree | Checkout-lock defeats the purpose — branches would serialize on the working tree, which is what M11 exists to remove |
+| Claim mechanism | file lock vs. conditional DB update against the mirror | file lock | The mirror is a best-effort cache, not the source of truth `get()`/`list()` actually read — a DB-side conditional update wouldn't touch the real race |
+| Write serialization | WAL only vs. WAL + module-level writer lock | both, for different reasons | WAL is for read/write concurrency, not writer-vs-writer safety — a single atomic UPDATE is already safe without any lock (verified). The lock is for multi-statement allocate-then-insert sequences specifically (verified: 6/20 unlocked concurrent id-allocations collided); an instance-level lock (à la `BudgetLedger`) doesn't work there since `ConductorStore` is constructed fresh per call |
+| Promotion storage | field on `Experiment` vs. `manifest.metadata` | `manifest.metadata` | `Experiment` is assembled fresh on every call, not persisted — a pydantic field has nowhere to round-trip; `manifest.metadata` already has a writer (`save_manifest`) |
+| Worktree cleanup | teardown-only vs. teardown + startup reconciliation | both | Teardown alone doesn't survive a hard crash; reconciliation is what actually closes the orphan risk already visible in this repo |
+| Compute isolation | no cap vs. env-var cap vs. env-var cap + OS-level enforcement | env-var cap (leaning; OS-level not ruled out) | Generated code passing explicit `n_jobs=-1` (or worse, a hard-coded count) under K-way fan-out can make wall-clock worse than sequential; `OMP_NUM_THREADS`+`LOKY_MAX_CPU_COUNT` cover the common case cheaply but don't fully close a hard-coded explicit count — not a final decision, see §8 |
+| LLM budget under fan-out | pre-split `ParallelBudget` K-ways vs. reuse the gateway's existing pace-and-retry | reuse existing gateway behavior | A fixed split is wrong on its own terms (forks need unequal budget); `RoleBoundClient.complete(allow_wait=True)` already sleeps-and-retries per caller thread, which is sufficient once each branch runs on its own thread — zero new code, see §5 |
+| Auditability under fan-out | step-level `DecisionRecord`/breaker vs. per-branch parity | per-branch parity | A step-level shortcut is less code but a branch failing wouldn't show up in the audit trail the way a sequential failure does today — explicitly rejected in favor of not reopening the silent-degradation bug class `conductor/loop.py` already guards against |
+
+## 10. Testing
+
+- **Perf**: 3 concurrent hypotheses in one step, assert wall-clock < 1.5×
+  measured single-hypothesis baseline. Exit criterion 1 says "materially less
+  than three sequential runs" — a 3× bound would pass on almost no real
+  parallelism, so the test needs to be close to single-run time, not just
+  under the sequential sum.
+- **Isolation**: kill one branch's experiment mid-run (raise inside its
+  `Agent.execute`), assert the other two still complete and their results land
+  in the experiment graph (exit criterion 3; the worker-level isolation is
+  already covered by `test_parallel_workers.py` — this test is about the
+  campaign-loop layer, not the worker layer).
+- **Mid-run failure teardown**: same kill-mid-run setup as above, additionally
+  assert the failed branch's own worktree is torn down — teardown claims to
+  cover branch failure, not just setup failure or a full process crash, and
+  that path had no dedicated test before this pass.
+- **Claim race**: fire `mark_testing_if_proposed` concurrently (threads or
+  `anyio` tasks) against the same hypothesis id, assert exactly one caller
+  transitions it to `TESTING`.
+- **Claim rollback**: force worktree setup to fail after a successful claim,
+  assert the hypothesis returns to `proposed` rather than sticking in
+  `testing`.
+- **Write serialization stress**: implemented as
+  `test_conductor_store_concurrency.py`. Two cases, not one — a single atomic
+  UPDATE (`increment_metric`) needs no lock and is asserted safe under 8
+  concurrent single-connection-per-thread writers; allocate-then-insert is
+  fixed by routing through `append_new_decision()` (and the equivalent
+  `append_new_feedback`/`append_new_suggestion`/`append_new_capability_decision`),
+  which hold `write_lock_for(db_path)` across the whole sequence — not the raw
+  `new_decision_id()` + `append_decision()` two-call pattern, and not the
+  process-local `write_lock` this doc originally named (replaced with the
+  cross-process `write_lock_for`, since branches may end up as separate OS
+  processes, not just threads). Verified against a real failure: 6/20
+  unlocked concurrent attempts raised `IntegrityError` before the fix.
+- **Crash reconciliation**: create a worktree, simulate a crash before
+  teardown runs, assert the startup reconciliation check removes it.
+- **Promotion**: three branches with distinct scores, assert exactly one
+  `Experiment.promoted == True` and it's the best-scoring one, and the other
+  two have reflections filed.
+- **Promotion tie-break**: two branches with equal scores, assert the
+  earlier-completed one is promoted deterministically (not random, not both).
+- **Compute contention**: run K=3 branches under a fixed, small core count
+  (e.g. 2 cores via `taskset`/cgroup in the test), assert each branch's
+  training process is capped near `cores // K` rather than the library
+  default, and that the Perf test's wall-clock bound isn't violated by
+  oversubscription.
+- **Budget pacing across branches**: force two branches to exhaust the same
+  provider's rate limit concurrently, assert both sleep-and-retry
+  independently (one branch's wait does not block or fail the other) and
+  both eventually complete rather than raising `RoleUnavailable` — the
+  regression guard for §5's resolution.
+- **Breaker parity**: run a step where 2 of 3 branches fail, assert the
+  circuit breaker's consecutive-failure count increments by 2, not 1 — the
+  regression guard for §8's full-parity decision.

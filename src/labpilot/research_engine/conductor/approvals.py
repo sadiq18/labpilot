@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal
 
-from labpilot.research_engine.conductor.models import ApprovalResult, OperatorFeedback
+from labpilot.research_engine.conductor.models import ApprovalResult
 from labpilot.research_engine.conductor.store import ConductorStore
 
 SUBMIT_TOOLS = frozenset({"submit", "submit_learn"})
@@ -67,16 +67,13 @@ def maybe_approve(
     result = fn(tool_name)
     result.decision_id = decision_id
     result.task_id = task_id
-    store.append_feedback(
-        OperatorFeedback(
-            id=store.new_feedback_id(),
-            session_id=session_id,
-            gated_tool=tool_name,
-            decision=result.decision,
-            comment=result.comment,
-            decision_id=decision_id,
-            task_id=task_id,
-        )
+    store.append_new_feedback(
+        session_id=session_id,
+        gated_tool=tool_name,
+        decision=result.decision,
+        comment=result.comment,
+        decision_id=decision_id,
+        task_id=task_id,
     )
     store.increment_metric(session_id, "human_interventions")
     return result

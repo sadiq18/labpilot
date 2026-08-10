@@ -53,6 +53,12 @@ class PlanStore:
     # -- id allocation -----------------------------------------------------
 
     def new_plan_id(self) -> str:
+        # Unlocked allocate-then-insert (M11): the same SELECT-then-write race
+        # `ConductorStore.new_decision_id` had, fixed there via
+        # `write_lock_for(db_path)` around the whole sequence. Not fixed here
+        # — PlanStore has no concurrent caller yet — but the fix, if this
+        # class gets one, is that primitive, not a new one. See
+        # docs/research-os/autonomy-roadmap/design/05-parallel-branches.md §8.
         rows = self._conn.execute("SELECT id FROM research_plans").fetchall()
         return allocate_sequential_id(_PLAN_ID_PREFIX, (row["id"] for row in rows))
 

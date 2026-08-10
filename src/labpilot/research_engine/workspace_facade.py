@@ -17,6 +17,7 @@ from labpilot.workspace import (
     CompetitionWorkspace,
     competition_workspace_path,
     discover_workspace,
+    ensure_required_ignores,
     load_workspace,
 )
 
@@ -202,7 +203,13 @@ class Workspace(BaseModel):
         return (self.knowledge_dir.parent / "runs").resolve()
 
     def ensure_roots(self) -> Workspace:
-        """Create common workspace directories if missing; return self."""
+        """Create common workspace directories if missing; return self.
+
+        Also reconciles the machine-local ignore patterns (M11) — this is the
+        only path that runs against an *existing* workspace, so it is where a
+        newly-added lock/temp pattern can actually reach the workspaces that
+        generate those files. `scaffold_workspace` only covers fresh ones.
+        """
         self.research_paths.ensure()
         for path in (
             self.root,
@@ -213,4 +220,5 @@ class Workspace(BaseModel):
             self.effective_runs_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
+        ensure_required_ignores(self.root)
         return self

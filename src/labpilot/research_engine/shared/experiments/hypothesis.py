@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from labpilot.accessor.common import atomic_write_text, locked
 from labpilot.research_engine.shared.experiments.graph import ExperimentGraph
 from labpilot.research_engine.shared.experiments.models import (
     Experiment,
@@ -59,6 +60,14 @@ class HypothesisStore:
     def _path_for(self, hypothesis_id: str) -> Path:
         return self.hypotheses_dir / f"{hypothesis_id}.json"
 
+    def _alloc_lock_path(self) -> Path:
+        """Directory-level lock for allocating a new sequential id (M11).
+
+        Not per-id like `_lock_path_for` — the id doesn't exist yet, so there
+        is nothing to key a lock on except the allocation slot itself.
+        """
+        return self.hypotheses_dir / ".alloc.lock"
+
     def _allocate_id(self) -> str:
         self.hypotheses_dir.mkdir(parents=True, exist_ok=True)
         max_n = 0
@@ -79,35 +88,44 @@ class HypothesisStore:
 
         Id is always ``H-BASELINE`` (not sequential ``H-001``). Improvement
         hypotheses continue to allocate ``H-001``, ``H-002``, …
+
+        Locked (M11): the id is fixed, so this locks it directly, same as
+        the other mutators — two concurrent callers must not both observe
+        "missing" and both create it.
         """
-        existing = self.get(BASELINE_HYPOTHESIS_ID)
-        if existing is not None:
-            return existing
-        now = _now()
-        observation = (
-            brief_excerpt.strip()[:280]
-            or f"Establish a registry baseline floor for {self.competition}."
-        )
-        hypothesis = Hypothesis(
-            id=BASELINE_HYPOTHESIS_ID,
-            competition=self.competition,
-            observation=observation,
-            reason=(
-                "Need a reproducible reference experiment before testing improvement hypotheses."
-            ),
-            prediction=("Baseline template produces valid CV metrics and a submission artifact."),
-            confidence=0.5,
-            expected_impact=0.0,
-            tags=["baseline"],
-            source="manual",
-            created_by=HypothesisCreatedBy.MANUAL,
-            generator=HypothesisGenerator.HUMAN,
-            origin=HypothesisOrigin.COMPETITION,
-            origins=[HypothesisOrigin.COMPETITION],
-            created_at=now,
-            updated_at=now,
-        )
-        self._save(hypothesis)
+        with locked(self._lock_path_for(BASELINE_HYPOTHESIS_ID)):
+            existing = self.get(BASELINE_HYPOTHESIS_ID)
+            if existing is not None:
+                return existing
+            now = _now()
+            observation = (
+                brief_excerpt.strip()[:280]
+                or f"Establish a registry baseline floor for {self.competition}."
+            )
+            hypothesis = Hypothesis(
+                id=BASELINE_HYPOTHESIS_ID,
+                competition=self.competition,
+                observation=observation,
+                reason=(
+                    "Need a reproducible reference experiment before testing "
+                    "improvement hypotheses."
+                ),
+                prediction=(
+                    "Baseline template produces valid CV metrics and a submission artifact."
+                ),
+                confidence=0.5,
+                expected_impact=0.0,
+                tags=["baseline"],
+                source="manual",
+                created_by=HypothesisCreatedBy.MANUAL,
+                generator=HypothesisGenerator.HUMAN,
+                origin=HypothesisOrigin.COMPETITION,
+                origins=[HypothesisOrigin.COMPETITION],
+                created_at=now,
+                updated_at=now,
+            )
+            self._write_json(hypothesis)
+        self._mirror_to_db(hypothesis)
         return hypothesis
 
     def create(
@@ -153,29 +171,34 @@ class HypothesisStore:
                 stack.append(member)
         if combo and not tech:
             tech = "+".join(combo)
-        hypothesis = Hypothesis(
-            id=self._allocate_id(),
-            competition=self.competition,
-            observation=observation,
-            reason=reason,
-            prediction=prediction,
-            confidence=confidence,
-            expected_impact=expected_impact,
-            tags=list(tags),
-            source=source,
-            created_by=resolved_created_by,
-            generator=resolved_generator,
-            origin=resolved_origin,
-            origins=resolved_origins,
-            evidence=evidence_refs,
-            technique=tech,
-            parent_hypothesis_id=(parent_hypothesis_id or None),
-            technique_stack=stack,
-            combo_techniques=combo,
-            created_at=now,
-            updated_at=now,
-        )
-        self._save(hypothesis)
+        # Locked (M11): _allocate_id() globs for the current max before this
+        # id exists on disk — two concurrent create() calls must not both
+        # glob the same max and both write the same H-NNN path.
+        with locked(self._alloc_lock_path()):
+            hypothesis = Hypothesis(
+                id=self._allocate_id(),
+                competition=self.competition,
+                observation=observation,
+                reason=reason,
+                prediction=prediction,
+                confidence=confidence,
+                expected_impact=expected_impact,
+                tags=list(tags),
+                source=source,
+                created_by=resolved_created_by,
+                generator=resolved_generator,
+                origin=resolved_origin,
+                origins=resolved_origins,
+                evidence=evidence_refs,
+                technique=tech,
+                parent_hypothesis_id=(parent_hypothesis_id or None),
+                technique_stack=stack,
+                combo_techniques=combo,
+                created_at=now,
+                updated_at=now,
+            )
+            self._write_json(hypothesis)
+        self._mirror_to_db(hypothesis)
         return hypothesis
 
     def get(self, hypothesis_id: str) -> Hypothesis | None:
@@ -215,13 +238,147 @@ class HypothesisStore:
         evidence_run_id: str | None = None,
         why: str | None = None,
     ) -> Hypothesis:
-        hypothesis = self.get(hypothesis_id)
-        if hypothesis is None:
-            raise FileNotFoundError(
-                f"Hypothesis '{hypothesis_id}' not found for competition "
-                f"'{self.competition}' under {self.hypotheses_dir}."
+        return self._locked_mutate(
+            hypothesis_id,
+            lambda h: self._apply_status(h, status, evidence_run_id=evidence_run_id, why=why),
+        )
+
+    def update_outcome(
+        self,
+        hypothesis_id: str,
+        *,
+        actual_outcome: str | None = None,
+        public_score: float | None = None,
+        confidence: float | None = None,
+        status: HypothesisStatus | None = None,
+        evidence_run_id: str | None = None,
+        why: str | None = None,
+    ) -> Hypothesis:
+        """Update actual_outcome / public_score / confidence and optionally status.
+
+        Locked the same way as `update_status` (M11): this also does a
+        read-then-write on the hypothesis, so without the lock it could race
+        with `mark_testing_if_proposed`/`release_claim` and silently carry a
+        stale status forward — reading before a claim lands, writing after,
+        clobbering it back. `confidence` exists so a caller that needs to
+        both record an outcome and nudge confidence (e.g. evidence apply)
+        can do it in one locked call instead of a second, unlocked
+        read-modify-write after this one releases the lock.
+        """
+
+        def mutate(hypothesis: Hypothesis) -> Hypothesis:
+            patch: dict = {"updated_at": _now()}
+            if actual_outcome is not None:
+                patch["actual_outcome"] = actual_outcome
+            if public_score is not None:
+                patch["public_score"] = public_score
+            if confidence is not None:
+                patch["confidence"] = confidence
+            if why:
+                note = f"[reflection] {why.strip()}"
+                reason = hypothesis.reason
+                patch["reason"] = f"{reason}\n\n{note}".strip() if reason else note
+            if status is not None:
+                evidence_for = list(hypothesis.evidence_for)
+                evidence_against = list(hypothesis.evidence_against)
+                if evidence_run_id:
+                    if status == HypothesisStatus.CONFIRMED:
+                        if evidence_run_id not in evidence_for:
+                            evidence_for.append(evidence_run_id)
+                    elif status == HypothesisStatus.REJECTED:
+                        if evidence_run_id not in evidence_against:
+                            evidence_against.append(evidence_run_id)
+                patch["status"] = status
+                patch["evidence_for"] = evidence_for
+                patch["evidence_against"] = evidence_against
+            return hypothesis.model_copy(update=patch)
+
+        return self._locked_mutate(hypothesis_id, mutate)
+
+    def annotate_experiment(
+        self,
+        hypothesis_id: str,
+        *,
+        execution_id: str,
+        note: str,
+        artifact_id: str | None = None,
+    ) -> Hypothesis:
+        """Append experiment awareness to a hypothesis without changing status.
+
+        Locked for the same reason as `update_outcome` (M11) — a read-then-write
+        on the same record other mutators also touch.
+        """
+
+        def mutate(hypothesis: Hypothesis) -> Hypothesis | None:
+            marker = f"[experiment {execution_id}]"
+            reason = hypothesis.reason or ""
+            if marker in reason:
+                return None
+            line = f"{marker} {note.strip()}"
+            reason = f"{reason}\n\n{line}".strip() if reason else line
+            evidence = list(hypothesis.evidence)
+            ref = artifact_id or execution_id
+            if not any(e.ref == ref or e.ref == execution_id for e in evidence):
+                evidence.append(
+                    HypothesisEvidenceRef(
+                        kind=HypothesisOrigin.EXPERIMENT,
+                        ref=ref,
+                        note=note.strip()[:200],
+                    )
+                )
+            return hypothesis.model_copy(
+                update={"reason": reason, "evidence": evidence, "updated_at": _now()}
             )
 
+        return self._locked_mutate(hypothesis_id, mutate)
+
+    def _lock_path_for(self, hypothesis_id: str) -> Path:
+        return self.hypotheses_dir / f".{hypothesis_id}.lock"
+
+    def _locked_mutate(
+        self,
+        hypothesis_id: str,
+        mutator: Callable[[Hypothesis], Hypothesis | None],
+    ) -> Hypothesis:
+        """Lock, read, apply `mutator`, write, mirror, return (M11).
+
+        Every read-then-write mutator on this class goes through here — a
+        hypothesis is only safely claimed/updated if *every* method that can
+        change it takes the same lock, not just the claim methods.
+
+        `mutator` returns the hypothesis to write, or `None` for "no change"
+        (the lock still releases cleanly, nothing is written, the original
+        hypothesis is returned) — `mark_testing_if_proposed` and
+        `annotate_experiment`'s early-outs use this.
+
+        The lock covers the JSON write only; `_mirror_to_db` runs after
+        release (the mirror is a best-effort cache, not what this lock
+        protects — see its own docstring for how it stays correct even
+        though its writes can arrive out of order across mutations).
+        """
+        with locked(self._lock_path_for(hypothesis_id)):
+            hypothesis = self.get(hypothesis_id)
+            if hypothesis is None:
+                raise FileNotFoundError(
+                    f"Hypothesis '{hypothesis_id}' not found for competition "
+                    f"'{self.competition}' under {self.hypotheses_dir}."
+                )
+            updated = mutator(hypothesis)
+            if updated is None:
+                return hypothesis
+            self._write_json(updated)
+        self._mirror_to_db(updated)
+        return updated
+
+    def _apply_status(
+        self,
+        hypothesis: Hypothesis,
+        status: HypothesisStatus,
+        *,
+        evidence_run_id: str | None = None,
+        why: str | None = None,
+    ) -> Hypothesis:
+        """Build (not write) the status transition. Used from `_locked_mutate`."""
         evidence_for = list(hypothesis.evidence_for)
         evidence_against = list(hypothesis.evidence_against)
         if evidence_run_id:
@@ -237,7 +394,7 @@ class HypothesisStore:
             note = f"[reflection] {why.strip()}"
             reason = f"{reason}\n\n{note}".strip() if reason else note
 
-        updated = hypothesis.model_copy(
+        return hypothesis.model_copy(
             update={
                 "status": status,
                 "evidence_for": evidence_for,
@@ -246,113 +403,46 @@ class HypothesisStore:
                 "updated_at": _now(),
             }
         )
-        self._save(updated)
-        return updated
-
-    def update_outcome(
-        self,
-        hypothesis_id: str,
-        *,
-        actual_outcome: str | None = None,
-        public_score: float | None = None,
-        status: HypothesisStatus | None = None,
-        evidence_run_id: str | None = None,
-        why: str | None = None,
-    ) -> Hypothesis:
-        """Update actual_outcome / public_score and optionally status."""
-        hypothesis = self.get(hypothesis_id)
-        if hypothesis is None:
-            raise FileNotFoundError(
-                f"Hypothesis '{hypothesis_id}' not found for competition "
-                f"'{self.competition}' under {self.hypotheses_dir}."
-            )
-        patch: dict = {"updated_at": _now()}
-        if actual_outcome is not None:
-            patch["actual_outcome"] = actual_outcome
-        if public_score is not None:
-            patch["public_score"] = public_score
-        if why:
-            note = f"[reflection] {why.strip()}"
-            reason = hypothesis.reason
-            patch["reason"] = f"{reason}\n\n{note}".strip() if reason else note
-        if status is not None:
-            evidence_for = list(hypothesis.evidence_for)
-            evidence_against = list(hypothesis.evidence_against)
-            if evidence_run_id:
-                if status == HypothesisStatus.CONFIRMED:
-                    if evidence_run_id not in evidence_for:
-                        evidence_for.append(evidence_run_id)
-                elif status == HypothesisStatus.REJECTED:
-                    if evidence_run_id not in evidence_against:
-                        evidence_against.append(evidence_run_id)
-            patch["status"] = status
-            patch["evidence_for"] = evidence_for
-            patch["evidence_against"] = evidence_against
-        updated = hypothesis.model_copy(update=patch)
-        self._save(updated)
-        return updated
-
-    def annotate_experiment(
-        self,
-        hypothesis_id: str,
-        *,
-        execution_id: str,
-        note: str,
-        artifact_id: str | None = None,
-    ) -> Hypothesis:
-        """Append experiment awareness to a hypothesis without changing status."""
-        hypothesis = self.get(hypothesis_id)
-        if hypothesis is None:
-            raise FileNotFoundError(
-                f"Hypothesis '{hypothesis_id}' not found for competition "
-                f"'{self.competition}' under {self.hypotheses_dir}."
-            )
-        marker = f"[experiment {execution_id}]"
-        reason = hypothesis.reason or ""
-        if marker in reason:
-            return hypothesis
-        line = f"{marker} {note.strip()}"
-        reason = f"{reason}\n\n{line}".strip() if reason else line
-        evidence = list(hypothesis.evidence)
-        ref = artifact_id or execution_id
-        if not any(e.ref == ref or e.ref == execution_id for e in evidence):
-            evidence.append(
-                HypothesisEvidenceRef(
-                    kind=HypothesisOrigin.EXPERIMENT,
-                    ref=ref,
-                    note=note.strip()[:200],
-                )
-            )
-        updated = hypothesis.model_copy(
-            update={
-                "reason": reason,
-                "evidence": evidence,
-                "updated_at": _now(),
-            }
-        )
-        self._save(updated)
-        return updated
 
     def mark_testing_if_proposed(self, hypothesis_id: str) -> Hypothesis:
         """Flip `proposed` → `testing` when a run attaches this hypothesis.
 
         Leaves any other status untouched (already testing/confirmed/...).
-        """
-        hypothesis = self.get(hypothesis_id)
-        if hypothesis is None:
-            raise FileNotFoundError(
-                f"Hypothesis '{hypothesis_id}' not found for competition "
-                f"'{self.competition}' under {self.hypotheses_dir}."
-            )
-        if hypothesis.status != HypothesisStatus.PROPOSED:
-            return hypothesis
-        return self.update_status(hypothesis_id, HypothesisStatus.TESTING)
 
-    def _save(self, hypothesis: Hypothesis) -> None:
-        self.hypotheses_dir.mkdir(parents=True, exist_ok=True)
-        path = self._path_for(hypothesis.id)
-        path.write_text(hypothesis.model_dump_json(indent=2))
-        self._mirror_to_db(hypothesis)
+        Locked across the read-then-write (M11): two branches racing to claim
+        the same hypothesis must not both observe `proposed` before either
+        writes. The JSON file is the source of truth `get()`/`list()` read —
+        the `knowledge.db` mirror is a best-effort dual-write cache and is not
+        a valid lock target. Every other read-then-write mutator on this class
+        goes through the same `_locked_mutate` — a claim is only exclusive if
+        nothing else can race it.
+        """
+
+        def mutate(hypothesis: Hypothesis) -> Hypothesis | None:
+            if hypothesis.status != HypothesisStatus.PROPOSED:
+                return None
+            return self._apply_status(hypothesis, HypothesisStatus.TESTING)
+
+        return self._locked_mutate(hypothesis_id, mutate)
+
+    def release_claim(self, hypothesis_id: str) -> Hypothesis:
+        """Undo `mark_testing_if_proposed` (M11): only `testing` → `proposed`.
+
+        For when the claiming branch never got to run — e.g. worktree setup
+        failed after the claim succeeded. Leaves any other status untouched,
+        so a release racing with a legitimate confirm/reject elsewhere does
+        not clobber it.
+        """
+
+        def mutate(hypothesis: Hypothesis) -> Hypothesis | None:
+            if hypothesis.status != HypothesisStatus.TESTING:
+                return None
+            return self._apply_status(hypothesis, HypothesisStatus.PROPOSED)
+
+        return self._locked_mutate(hypothesis_id, mutate)
+
+    def _write_json(self, hypothesis: Hypothesis) -> None:
+        atomic_write_text(self._path_for(hypothesis.id), hypothesis.model_dump_json(indent=2))
 
     def _mirror_to_db(self, hypothesis: Hypothesis) -> None:
         """Dual-write into ``knowledge.db`` hypotheses table (M3 KnowledgeStore)."""
@@ -382,7 +472,13 @@ class HypothesisStore:
                     "actual_outcome": hypothesis.actual_outcome,
                     "public_score": hypothesis.public_score,
                     "file_created_at": hypothesis.created_at.isoformat(),
-                    "file_updated_at": hypothesis.updated_at.isoformat(),
+                    # timespec="microseconds" (M11): datetime.isoformat()
+                    # omits the fractional part entirely when microsecond==0,
+                    # which would make two file_updated_at strings compare
+                    # unequal-width at the same wall-clock second — fixed
+                    # width keeps upsert_hypothesis's lexicographic ">="
+                    # ordering guard correct at that boundary too.
+                    "file_updated_at": hypothesis.updated_at.isoformat(timespec="microseconds"),
                 }
                 store.upsert_hypothesis(
                     hypothesis_id=hypothesis.id,

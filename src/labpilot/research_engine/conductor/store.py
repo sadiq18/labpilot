@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from labpilot.accessor.common import allocate_sequential_id
 from labpilot.accessor.common.json_utils import dumps, loads
-from labpilot.accessor.sqlite import SqliteClient
+from labpilot.accessor.sqlite import SqliteClient, write_lock_for
 from labpilot.research_engine.conductor.models import (
     ApprovalResult,
     ConductSession,
@@ -257,6 +258,54 @@ class ConductorStore:
     def new_decision_id(self) -> str:
         return self._new_id(_DECISION_PREFIX, "os_decisions")
 
+    def _append_new(
+        self,
+        id_allocator: Callable[[], str],
+        model_cls: type,
+        appender: Callable[[Any], Any],
+        **kwargs: object,
+    ) -> Any:
+        """Allocate an id and append one row, as one locked step (M11).
+
+        The shared shape behind `append_new_decision`/`append_new_feedback`/
+        `append_new_suggestion`/`append_new_capability_decision`: the
+        sequential-id path (`new_X_id()` then `append_X()` as two separate
+        calls) is a TOCTOU race under concurrent callers — `_new_id`
+        computes `MAX(id)+1` via a `SELECT` with no lock, so two callers can
+        read the same "next id" before either commits its `INSERT` (M11:
+        verified, 6/20 unlocked concurrent attempts raised `IntegrityError`).
+        K-way fan-out (M11 task 7) MUST use one of the four methods above,
+        not the raw two-call pattern, for exactly that reason. The existing
+        sequential (K=1) call sites in `conductor/loop.py` stay on the raw
+        pattern unchanged — they are not concurrent with each other, so the
+        race does not apply there.
+        """
+        with write_lock_for(self.paths.db_path):
+            obj = model_cls(id=id_allocator(), **kwargs)
+            return appender(obj)
+
+    def append_new_decision(
+        self,
+        session_id: str,
+        tool_name: str,
+        rationale: str,
+        **kwargs: object,
+    ) -> DecisionRecord:
+        """Allocate an id and append a `DecisionRecord`, as one locked step.
+
+        See `_append_new` for why this exists instead of the raw
+        `new_decision_id()` + `append_decision()` two-call pattern.
+        """
+        return self._append_new(
+            self.new_decision_id,
+            DecisionRecord,
+            self.append_decision,
+            session_id=session_id,
+            tool_name=tool_name,
+            rationale=rationale,
+            **kwargs,
+        )
+
     def list_decisions(self, session_id: str) -> list[DecisionRecord]:
         rows = self._conn.execute(
             "SELECT * FROM os_decisions WHERE session_id = ? ORDER BY id",
@@ -288,6 +337,16 @@ class ConductorStore:
     def new_feedback_id(self) -> str:
         return self._new_id(_FEEDBACK_PREFIX, "os_operator_feedback")
 
+    def append_new_feedback(self, **kwargs: object) -> OperatorFeedback:
+        """Allocate an id and append `OperatorFeedback`, as one locked step.
+
+        See `_append_new`. `kwargs` are `OperatorFeedback`'s fields other
+        than `id`.
+        """
+        return self._append_new(
+            self.new_feedback_id, OperatorFeedback, self.append_feedback, **kwargs
+        )
+
     def list_feedback(self, session_id: str, *, limit: int = 20) -> list[OperatorFeedback]:
         rows = self._conn.execute(
             """
@@ -304,6 +363,17 @@ class ConductorStore:
 
     def new_suggestion_id(self) -> str:
         return self._new_id("G", "os_suggestions")
+
+    def append_new_suggestion(self, **kwargs: object) -> Any:
+        """Allocate an id and append a `Suggestion`, as one locked step.
+
+        See `_append_new`. `kwargs` are `Suggestion`'s fields other than `id`.
+        """
+        from labpilot.research_engine.conductor.metrics import Suggestion
+
+        return self._append_new(
+            self.new_suggestion_id, Suggestion, self.append_suggestion, **kwargs
+        )
 
     def append_suggestion(self, suggestion: Any) -> Any:
         from labpilot.research_engine.conductor.metrics import Suggestion
@@ -419,11 +489,21 @@ class ConductorStore:
         }
         if field not in allowed:
             raise ValueError(f"unknown metric field: {field}")
-        if self.get_metrics(session_id) is None:
-            from labpilot.research_engine.conductor.metrics import CampaignMetrics
-
-            self.upsert_metrics(CampaignMetrics(session_id=session_id))
         now = _now()
+        # Ensure the row exists via a single atomic INSERT OR IGNORE (M11),
+        # not the old get_metrics()-then-conditionally-upsert_metrics()
+        # sequence — two concurrent first-increments could both see no row,
+        # then race upsert_metrics' own ON CONFLICT DO UPDATE, and whichever
+        # committed second reset every field (including a sibling's
+        # already-committed increment) back to CampaignMetrics' zero
+        # defaults. INSERT OR IGNORE is a no-op against an existing row
+        # (session_id is the PRIMARY KEY), so concurrent callers can't
+        # clobber each other here, and the UPDATE below is unconditionally
+        # safe once the row is known to exist.
+        self._conn.execute(
+            "INSERT OR IGNORE INTO os_campaign_metrics (session_id, updated_at) VALUES (?, ?)",
+            (session_id, now),
+        )
         self._conn.execute(
             f"UPDATE os_campaign_metrics SET {field} = {field} + ?, updated_at = ? WHERE session_id = ?",  # noqa: S608
             (amount, now, session_id),
@@ -446,6 +526,21 @@ class ConductorStore:
 
     def new_capability_decision_id(self) -> str:
         return self._new_id("CD", "os_capability_decisions")
+
+    def append_new_capability_decision(self, **kwargs: object) -> Any:
+        """Allocate an id and append a `CapabilityDecision`, as one locked step.
+
+        See `_append_new`. `kwargs` are `CapabilityDecision`'s fields other
+        than `id`.
+        """
+        from labpilot.research_engine.conductor.gap_ledger import CapabilityDecision
+
+        return self._append_new(
+            self.new_capability_decision_id,
+            CapabilityDecision,
+            self.append_capability_decision,
+            **kwargs,
+        )
 
     def upsert_capability_gap(
         self,
@@ -623,6 +718,14 @@ class ConductorStore:
     # -- helpers -----------------------------------------------------------
 
     def _new_id(self, prefix: str, table: str) -> str:
+        # Full-table scan, now inside write_lock_for's critical section
+        # (M11) for the append_new_* methods — accepted, not fixed: a SQL
+        # MAX() can't safely replace this without also handling
+        # allocate_sequential_id's growing zero-pad width (e.g. "D-999" <
+        # "D-1000" as a plain string comparison), and per-session id volume
+        # (decisions/feedback/suggestions) is realistically in the tens to
+        # low hundreds, not enough to make this scan the bottleneck in
+        # practice.
         rows = self._conn.execute(f"SELECT id FROM {table}").fetchall()  # noqa: S608
         return allocate_sequential_id(prefix, (row["id"] for row in rows))
 

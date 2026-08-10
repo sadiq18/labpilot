@@ -125,11 +125,26 @@ def apply_card_to_hypothesis(
     actual_bits.append(f"decision={card.decision.value}")
     if card.impact_error is not None:
         actual_bits.append(f"impact_error={card.impact_error:+.6g}")
+    # Light confidence nudge from decision + |impact_error|, computed off the
+    # hypothesis already read above — folded into the single update_outcome
+    # call below (M11) instead of a second, unlocked read-modify-write after
+    # it: that second write raced everything else this file locks against.
+    conf = float(hyp.confidence)
+    if card.decision == EvidenceDecision.ACCEPTED:
+        conf = min(0.99, conf + 0.05)
+    elif card.decision == EvidenceDecision.REJECTED:
+        conf = max(0.05, conf - 0.05)
+    if card.impact_error is not None and abs(card.impact_error) > 0.01:
+        # Overestimated → shrink confidence slightly.
+        if card.expected.cv_gain and card.observed.cv_gain is not None:
+            if abs(card.observed.cv_gain) < abs(card.expected.cv_gain):
+                conf = max(0.05, conf - 0.03)
     try:
         store.update_outcome(
             card.hypothesis_id,
             actual_outcome="; ".join(actual_bits),
             public_score=None,
+            confidence=conf,
             status=status,
             evidence_run_id=card.treatment_experiment,
             why=(
@@ -137,27 +152,6 @@ def apply_card_to_hypothesis(
                 f"attribution={card.technique_attribution}"
             ),
         )
-        # Light confidence nudge from decision + |impact_error|.
-        updated = store.get(card.hypothesis_id)
-        if updated is not None:
-            conf = float(updated.confidence)
-            if card.decision == EvidenceDecision.ACCEPTED:
-                conf = min(0.99, conf + 0.05)
-            elif card.decision == EvidenceDecision.REJECTED:
-                conf = max(0.05, conf - 0.05)
-            if card.impact_error is not None and abs(card.impact_error) > 0.01:
-                # Overestimated → shrink confidence slightly.
-                if card.expected.cv_gain and card.observed.cv_gain is not None:
-                    if abs(card.observed.cv_gain) < abs(card.expected.cv_gain):
-                        conf = max(0.05, conf - 0.03)
-            # Persist via model_copy + save path used by store internals
-            path = store._path_for(updated.id)  # noqa: SLF001
-            bumped = updated.model_copy(update={"confidence": conf})
-            # Prefer public API if available
-            if hasattr(store, "_save"):
-                store._save(bumped)  # noqa: SLF001
-            else:
-                path.write_text(bumped.model_dump_json(indent=2) + "\n")
     except FileNotFoundError:
         logger.warning("Hypothesis %s missing for evidence card apply", card.hypothesis_id)
 

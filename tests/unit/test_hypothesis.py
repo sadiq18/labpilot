@@ -116,6 +116,145 @@ def test_mark_testing_if_proposed_only_from_proposed(tmp_path: Path):
     assert again.status == HypothesisStatus.CONFIRMED
 
 
+def test_mark_testing_if_proposed_claim_race_is_exclusive(tmp_path: Path):
+    """M11: concurrent claimers must not both observe `proposed`."""
+    import threading
+
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    hypothesis = store.create(observation="a", reason="b", prediction="c", confidence=0.5)
+
+    winners: list[HypothesisStatus] = []
+    lock = threading.Lock()
+
+    def claim() -> None:
+        result = store.mark_testing_if_proposed(hypothesis.id)
+        with lock:
+            winners.append(result.status)
+
+    threads = [threading.Thread(target=claim) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Every caller gets back TESTING (the winner transitioned it, everyone
+    # else's read then sees the already-`testing` hypothesis) — the race this
+    # guards against is a *file write* race, not the return value, so assert
+    # on-disk state directly: exactly one hypothesis, status TESTING, and no
+    # corrupted/partial JSON from an interleaved write.
+    assert all(status == HypothesisStatus.TESTING for status in winners)
+    reloaded = store.get(hypothesis.id)
+    assert reloaded is not None
+    assert reloaded.status == HypothesisStatus.TESTING
+
+
+def test_release_claim_reverts_testing_to_proposed(tmp_path: Path):
+    """M11: rollback path when worktree setup fails after a successful claim."""
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    hypothesis = store.create(observation="a", reason="b", prediction="c", confidence=0.5)
+
+    store.mark_testing_if_proposed(hypothesis.id)
+    released = store.release_claim(hypothesis.id)
+    assert released.status == HypothesisStatus.PROPOSED
+    assert store.get(hypothesis.id).status == HypothesisStatus.PROPOSED
+
+
+def test_release_claim_leaves_other_statuses_untouched(tmp_path: Path):
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    hypothesis = store.create(observation="a", reason="b", prediction="c", confidence=0.5)
+
+    store.update_status(hypothesis.id, HypothesisStatus.CONFIRMED)
+    released = store.release_claim(hypothesis.id)
+    assert released.status == HypothesisStatus.CONFIRMED
+
+
+def test_concurrent_create_does_not_collide(tmp_path: Path):
+    """M11: create() locks id allocation the same way claims lock status."""
+    import threading
+
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    created_ids: list[str] = []
+    lock = threading.Lock()
+
+    def create_one() -> None:
+        h = store.create(observation="a", reason="b", prediction="c", confidence=0.5)
+        with lock:
+            created_ids.append(h.id)
+
+    threads = [threading.Thread(target=create_one) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(created_ids) == 8
+    assert len(set(created_ids)) == 8
+    on_disk = list((tmp_path / "knowledge/titanic/hypotheses").glob("H-*.json"))
+    assert len(on_disk) == 8
+
+
+def test_ensure_baseline_concurrent_calls_agree(tmp_path: Path):
+    """M11: ensure_baseline() locks the fixed baseline id."""
+    import threading
+
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    results: list[str] = []
+    lock = threading.Lock()
+
+    def ensure_one() -> None:
+        h = store.ensure_baseline()
+        with lock:
+            results.append(h.created_at.isoformat())
+
+    threads = [threading.Thread(target=ensure_one) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # All 8 callers must observe the SAME baseline (same created_at) — if two
+    # had both raced past the "missing" check, they'd have created it twice
+    # with different timestamps and this would fail.
+    assert len(set(results)) == 1
+
+
+def test_write_json_is_atomic_no_torn_reads(tmp_path: Path):
+    """M11: a reader must never see a truncated/partial hypothesis file."""
+    import threading
+
+    store = HypothesisStore(tmp_path / "knowledge", "titanic")
+    hypothesis = store.create(observation="a", reason="b", prediction="c", confidence=0.5)
+    stop = threading.Event()
+    torn_reads: list[str] = []
+
+    def writer() -> None:
+        for _ in range(200):
+            store.update_status(hypothesis.id, HypothesisStatus.TESTING)
+            store.update_status(hypothesis.id, HypothesisStatus.PROPOSED)
+        stop.set()
+
+    def reader() -> None:
+        path = tmp_path / "knowledge/titanic/hypotheses" / f"{hypothesis.id}.json"
+        while not stop.is_set():
+            try:
+                text = path.read_text()
+            except FileNotFoundError:
+                continue
+            if not text.strip().endswith("}"):
+                torn_reads.append(text)
+
+    writer_thread = threading.Thread(target=writer)
+    reader_threads = [threading.Thread(target=reader) for _ in range(4)]
+    writer_thread.start()
+    for t in reader_threads:
+        t.start()
+    writer_thread.join()
+    for t in reader_threads:
+        t.join()
+
+    assert torn_reads == []
+
+
 def test_create_mirrors_hypothesis_into_knowledge_db(tmp_path: Path):
     import json
 

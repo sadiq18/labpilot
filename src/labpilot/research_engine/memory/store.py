@@ -8,7 +8,7 @@ from typing import Any
 
 from labpilot.accessor.common import allocate_sequential_id
 from labpilot.accessor.common.json_utils import dumps, loads
-from labpilot.accessor.sqlite import SqliteClient
+from labpilot.accessor.sqlite import SqliteClient, write_lock_for
 from labpilot.research_engine.memory.models import (
     ExperienceArtifacts,
     ExperienceFacet,
@@ -82,57 +82,65 @@ class ExperienceStore:
         return self._row_to_record(row) if row else None
 
     def upsert(self, record: ExperienceRecord) -> ExperienceRecord:
-        """Insert or update by ``idempotency_key``; preserve ``id`` / ``created_at``."""
-        now = _now()
-        existing = self._conn.execute(
-            "SELECT id, created_at FROM experience_records WHERE idempotency_key = ?",
-            (record.idempotency_key,),
-        ).fetchone()
-        if existing is not None:
-            experience_id = existing["id"]
-            created_at = existing["created_at"]
-        else:
-            experience_id = record.id or self.new_experience_id()
-            created_at = (
-                record.created_at.isoformat() if record.created_at else now
-            )
+        """Insert or update by ``idempotency_key``; preserve ``id`` / ``created_at``.
 
-        self._conn.execute(
-            """
-            INSERT INTO experience_records (
-                id, source_competition, goal, hypothesis, hypothesis_id,
-                action, result, outcome, artifacts, tags, idempotency_key,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(idempotency_key) DO UPDATE SET
-                source_competition=excluded.source_competition,
-                goal=excluded.goal,
-                hypothesis=excluded.hypothesis,
-                hypothesis_id=excluded.hypothesis_id,
-                action=excluded.action,
-                result=excluded.result,
-                outcome=excluded.outcome,
-                artifacts=excluded.artifacts,
-                tags=excluded.tags,
-                updated_at=excluded.updated_at
-            """,
-            (
-                experience_id,
-                record.source_competition,
-                record.goal,
-                record.hypothesis,
-                record.hypothesis_id,
-                record.action,
-                record.result,
-                record.outcome,
-                dumps(record.artifacts.model_dump(mode="json")),
-                dumps([f.model_dump(mode="json") for f in record.facets]),
-                record.idempotency_key,
-                created_at,
-                now,
-            ),
-        )
-        self._conn.commit()
+        Locked (M11): two concurrent upserts for different new
+        idempotency_keys can both miss the existing-row lookup and both call
+        `new_experience_id()`, reading the same `MAX(id)+1` before either
+        INSERTs — the same allocate-then-insert race `ConductorStore` has,
+        same fix (`write_lock_for`, keyed by this store's own db_path).
+        """
+        with write_lock_for(self.db_path):
+            now = _now()
+            existing = self._conn.execute(
+                "SELECT id, created_at FROM experience_records WHERE idempotency_key = ?",
+                (record.idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                experience_id = existing["id"]
+                created_at = existing["created_at"]
+            else:
+                experience_id = record.id or self.new_experience_id()
+                created_at = (
+                    record.created_at.isoformat() if record.created_at else now
+                )
+
+            self._conn.execute(
+                """
+                INSERT INTO experience_records (
+                    id, source_competition, goal, hypothesis, hypothesis_id,
+                    action, result, outcome, artifacts, tags, idempotency_key,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(idempotency_key) DO UPDATE SET
+                    source_competition=excluded.source_competition,
+                    goal=excluded.goal,
+                    hypothesis=excluded.hypothesis,
+                    hypothesis_id=excluded.hypothesis_id,
+                    action=excluded.action,
+                    result=excluded.result,
+                    outcome=excluded.outcome,
+                    artifacts=excluded.artifacts,
+                    tags=excluded.tags,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    experience_id,
+                    record.source_competition,
+                    record.goal,
+                    record.hypothesis,
+                    record.hypothesis_id,
+                    record.action,
+                    record.result,
+                    record.outcome,
+                    dumps(record.artifacts.model_dump(mode="json")),
+                    dumps([f.model_dump(mode="json") for f in record.facets]),
+                    record.idempotency_key,
+                    created_at,
+                    now,
+                ),
+            )
+            self._conn.commit()
         fetched = self.get(experience_id)
         assert fetched is not None
         return fetched

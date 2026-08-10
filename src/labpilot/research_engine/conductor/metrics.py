@@ -50,14 +50,12 @@ def record_suggestion(
 ) -> Suggestion:
     ensure_metrics(store, session_id)
     store.increment_metric(session_id, "no_capability")
-    suggestion = Suggestion(
-        id=store.new_suggestion_id(),
+    suggestion = store.append_new_suggestion(
         session_id=session_id,
         kind=kind,
         message=message,
         context=context or {},
     )
-    store.append_suggestion(suggestion)
     from labpilot.research_engine.conductor.gap_ledger import note_suggestion
 
     note_suggestion(store, suggestion)

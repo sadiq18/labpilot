@@ -42,6 +42,13 @@ class ReflectionStore:
     # --- experiment_evidence -------------------------------------------------
 
     def new_evidence_id(self) -> str:
+        # Unlocked allocate-then-insert (M11), same shape/risk as the other
+        # two id-allocators below (new_lesson_id, new_claim_id): the
+        # SELECT-then-write race `ConductorStore.new_decision_id` had, fixed
+        # there via `write_lock_for(db_path)` around the whole sequence. Not
+        # fixed here — this class has no concurrent caller yet — but the
+        # fix, if it gets one, is that primitive, not a new one. See
+        # docs/research-os/autonomy-roadmap/design/05-parallel-branches.md §8.
         rows = self._conn.execute("SELECT id FROM experiment_evidence").fetchall()
         return allocate_sequential_id(_EVIDENCE_PREFIX, (row["id"] for row in rows))
 
@@ -217,6 +224,7 @@ class ReflectionStore:
     # --- lessons -------------------------------------------------------------
 
     def new_lesson_id(self) -> str:
+        # Unlocked allocate-then-insert (M11) — see new_evidence_id's comment.
         rows = self._conn.execute("SELECT id FROM lessons").fetchall()
         return allocate_sequential_id(_LESSON_PREFIX, (row["id"] for row in rows))
 
@@ -280,6 +288,7 @@ class ReflectionStore:
     # --- research_claims -----------------------------------------------------
 
     def new_claim_id(self) -> str:
+        # Unlocked allocate-then-insert (M11) — see new_evidence_id's comment.
         rows = self._conn.execute("SELECT id FROM research_claims").fetchall()
         return allocate_sequential_id(_CLAIM_PREFIX, (row["id"] for row in rows))
 
