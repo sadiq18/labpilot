@@ -105,6 +105,14 @@ class BudgetState(BaseModel):
     #: plateau doesn't mint a near-duplicate hypothesis every step. Cleared on
     #: the next real improvement.
     stagnation_mint_fired: bool = False
+    #: True once `score_events` has been warned about crossing
+    #: `_SCORE_EVENTS_WARN_THRESHOLD`. A plain latch, not inferred from list
+    #: lengths — a length-diff proxy for "already warned" was tried twice and
+    #: broke twice (skipped whenever the series grew by more than one entry
+    #: between calls, e.g. a resumed session already past the threshold).
+    #: Never cleared; the warning is a one-time notice per campaign, not a
+    #: recurring alert.
+    score_events_warned: bool = False
     #: Reset by any execution that succeeds, so a campaign that recovers is not
     #: punished for the failures it climbed out of.
     consecutive_failures: int = 0
@@ -161,19 +169,14 @@ def recompute_metric_history(state: BudgetState) -> None:
     fields `evaluate_stops` reads can never drift from the event series they
     summarize.
     """
-    # `persist_budgets` is called far more often than `score_events` actually
-    # grows (e.g. every `steps_since_success` increment) — gating on a length
-    # change too, not just the threshold, is what keeps this to one warning
-    # total instead of one per no-op call while the series sits at exactly
-    # the threshold.
-    grew = len(state.score_events) != len(state.metric_history)
-    if grew and len(state.score_events) == _SCORE_EVENTS_WARN_THRESHOLD:
+    if not state.score_events_warned and len(state.score_events) >= _SCORE_EVENTS_WARN_THRESHOLD:
         logger.warning(
             "score_events has reached %d entries; persist_budgets rewrites the "
             "full series on every call. See the design doc's 'Series growth' "
             "note for the indexed-table fix if this campaign keeps growing.",
             _SCORE_EVENTS_WARN_THRESHOLD,
         )
+        state.score_events_warned = True
     state.metric_history = [event.value for event in state.score_events]
     state.last_metric = state.score_events[-1].value if state.score_events else None
 
@@ -247,8 +250,19 @@ def submit_tools_allowed(config: BudgetConfig) -> bool:
 
 
 def budgets_from_metadata(meta: dict[str, Any]) -> tuple[BudgetConfig, BudgetState]:
+    """Deserialize `(config, state)` from session metadata.
+
+    Recomputes `metric_history`/`last_metric` on load, not just on write —
+    every writer already recomputes before persisting, but a read-only
+    caller (e.g. `conduct_status`) never wrote anything back and would
+    otherwise trust whatever was last stored, unrecomputed. Fixing this once
+    here covers every current and future reader; patching each read call
+    site individually is the same bypass this function's writers already
+    moved past.
+    """
     cfg = BudgetConfig.model_validate(meta.get("budgets") or {})
     state = BudgetState.model_validate(meta.get("budget_state") or {})
+    recompute_metric_history(state)
     return cfg, state
 
 

@@ -403,9 +403,7 @@ def _continue_session(
 
 @conduct_app.command("continue")
 def conduct_continue(
-    session: str | None = typer.Option(
-        None, "--session", help="Session id (default: latest active)"
-    ),
+    session: str | None = typer.Option(None, "--session", help="Session id (default: latest active)"),
     competition: str | None = typer.Option(None, "--competition", "-c"),
     max_steps: int = typer.Option(8, "--max-steps"),
     yes: bool = typer.Option(False, "--yes", "-y"),
@@ -552,7 +550,8 @@ def conduct_status(
                 console.print(f"    by kind: {rate.by_kind}")
         if cp:
             console.print(
-                f"  checkpoint: tools={cp.get('completed_tools')} last={cp.get('last_decision_id')}"
+                f"  checkpoint: tools={cp.get('completed_tools')} "
+                f"last={cp.get('last_decision_id')}"
             )
         console.print(
             f"  budgets: max_submissions={cfg.max_submissions} "

@@ -149,7 +149,11 @@ def test_stagnation_mint_fired_defaults_false_and_round_trips():
     assert restored.stagnation_mint_fired is True
 
 
-def test_score_events_past_the_warn_threshold_log_once(caplog):
+def _warnings(caplog) -> list:
+    return [r for r in caplog.records if "score_events" in r.message]
+
+
+def test_score_events_past_the_warn_threshold_logs_once(caplog):
     """A runaway campaign must be visible, not just slower.
 
     `score_events` is deliberately not capped (truncating it would break
@@ -165,9 +169,68 @@ def test_score_events_past_the_warn_threshold_log_once(caplog):
     with caplog.at_level("WARNING", logger="labpilot.research_engine.conductor.budgets"):
         recompute_metric_history(state)
         recompute_metric_history(state)
+        recompute_metric_history(state)
 
-    warnings = [r for r in caplog.records if "score_events" in r.message]
-    assert len(warnings) == 1
+    assert len(_warnings(caplog)) == 1
+    assert state.score_events_warned is True
+
+
+def test_the_warning_is_not_skipped_when_the_series_jumps_past_the_threshold(caplog):
+    """The two prior attempts at this both broke here.
+
+    A length-diff proxy for "already warned" (`grew and len(...) == threshold`)
+    fires only if the series passes through the threshold one entry at a
+    time. A resumed session that already starts above it, or several
+    experiments logged before the next `persist_budgets` call, jumps straight
+    past 500 without ever landing on it exactly — and both prior versions of
+    this check silently never warned for the rest of that campaign. A plain
+    latch (`score_events_warned`) has no "landed exactly on N" requirement to
+    miss.
+    """
+    state = BudgetState(
+        score_events=[
+            _event(f"E-{i:03d}", float(i)) for i in range(_SCORE_EVENTS_WARN_THRESHOLD + 100)
+        ]
+    )
+
+    with caplog.at_level("WARNING", logger="labpilot.research_engine.conductor.budgets"):
+        recompute_metric_history(state)
+
+    assert len(_warnings(caplog)) == 1
+
+
+def test_the_warning_never_refires_once_the_latch_is_set(caplog):
+    """Growing further past the threshold, or shrinking and regrowing through
+    it, must not refire — the latch is a one-time notice, not a re-armable
+    trigger keyed on the current length."""
+    state = BudgetState(score_events=[], score_events_warned=True)
+
+    with caplog.at_level("WARNING", logger="labpilot.research_engine.conductor.budgets"):
+        state.score_events = [
+            _event(f"E-{i:03d}", float(i)) for i in range(_SCORE_EVENTS_WARN_THRESHOLD)
+        ]
+        recompute_metric_history(state)
+
+    assert _warnings(caplog) == []
+
+
+def test_budgets_from_metadata_recomputes_on_load():
+    """A read-only caller (`conduct_status`) must not trust a stale stored
+    value just because nothing has written it back yet — the load path needs
+    the same guarantee the write paths already have."""
+    stale_meta = {
+        "budgets": BudgetConfig().model_dump(),
+        "budget_state": BudgetState(
+            score_events=[_event("E-001", 194.80), _event("E-002", 190.97)],
+            metric_history=[1.0],
+            last_metric=1.0,
+        ).model_dump(),
+    }
+
+    _, state = budgets_from_metadata(stale_meta)
+
+    assert state.metric_history == [194.80, 190.97]
+    assert state.last_metric == 190.97
 
 
 def test_budget_metadata_recomputes_from_an_existing_session():
