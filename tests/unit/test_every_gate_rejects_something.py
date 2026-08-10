@@ -23,7 +23,7 @@ marker's docstring is where the author says they did it.
 from __future__ import annotations
 
 import ast
-import re
+import inspect
 from pathlib import Path
 
 _CAPABILITIES = Path("src/labpilot/research_engine/execution/capabilities")
@@ -64,19 +64,34 @@ _CANNOT_FAIL: dict[str, str] = {}
 def _capability_names() -> dict[str, Path]:
     """Capabilities that *claim to verify*, by their registered name.
 
-    A capability declaring `verifies = False` is excluded from both checks
-    below. That is not a loophole — it is M20's other option, taken in the open:
+    **Read from the registry production uses, not from the source text.** The
+    first version matched `^\\s{4}name\\s*=\\s*"..."`, which does not match
+    `name: str = "..."` — the exact form `BaseCapability` declares — so a
+    capability written in the style it inherits from would never have been
+    enumerated: no sites, no coverage requirement, and every guard in this file
+    green. The `verifies` opt-out had the mirror gap. Reported reviewing PR #121,
+    fifth round, and it is the same defect as `checks=checks` two layers up.
+
+    Five rounds of this file were spent moving one silence outward — from the
+    verdict, to the resolver, to the filter deciding which files the resolver
+    sees. Syntax was the wrong tool for the question every time: *which
+    capabilities run?* is answered by the thing that runs them. A name is an
+    attribute on an object, so it is read from the object; a capability absent
+    from the registry is not running, so not enumerating it is correct rather
+    than a gap.
+
+    `verifies = False` is excluded here — M20's other option, taken in the open:
     the verdict says the step ran, the card says nothing was checked, and a
     reviewer can see the claim being declined.
     """
+    from labpilot.research_engine.execution.engineer import default_capability_registry
+
+    registry = default_capability_registry(install_packages=False)
     found: dict[str, Path] = {}
-    for path in sorted(_CAPABILITIES.rglob("*.py")):
-        source = path.read_text(encoding="utf-8")
-        if "passed=" not in source or re.search(r"^\s{4}verifies\s*=\s*False", source, re.M):
+    for capability in registry._by_type.values():
+        if not getattr(capability, "verifies", True):
             continue
-        match = re.search(r'^\s{4}name\s*=\s*"([a-z_]+)"', source, re.M)
-        if match:
-            found[match.group(1)] = path
+        found[capability.name] = Path(inspect.getfile(type(capability)))
     return found
 
 
@@ -401,11 +416,24 @@ def _scan() -> _Scan:
                 # understand fails loudly instead of shrinking the requirement.
                 scan.unresolved.append(f"{path}:{node.lineno} — {why}")
                 continue
-            if not labels:
+            gates = (labels or set()) - {"no_verification"}
+            if not gates:
+                # A `passed=` call is a verdict by definition, so one that names
+                # no check is reported rather than assumed harmless. `if not
+                # labels: continue` treated *"no `checks=` argument"* and
+                # *"`checks=[]`"* as "not a gate" — the last path where discovery
+                # could under-report in silence, which is what `_Unresolvable`
+                # exists to end. Reported reviewing PR #121.
+                scan.unresolved.append(f"{path}:{node.lineno} — a verdict naming no check")
                 continue
-            gates = labels - {"no_verification"}
             scan.sites.setdefault(name, set()).update(gates)
-            if "no_verification" in labels and len(gates) == 1:
+            # #3: no `len(gates) == 1` guard here. `_checks_at` returns exactly
+            # one site name plus an optional stamp, so the condition could never
+            # be false — it was the remains of a rule the one-call-one-site model
+            # made structural, and left in place it read as a live guard over a
+            # property already guaranteed. `test_a_stamp_exempts_exactly_one_site`
+            # asserts it where it belongs. Reported reviewing PR #121.
+            if "no_verification" in (labels or set()):
                 scan.declared.setdefault(name, set()).update(gates)
     return scan
 

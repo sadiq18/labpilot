@@ -808,3 +808,60 @@ def test_a_function_name_cannot_be_mistaken_for_a_label(tmp_path, monkeypatch):
     sites = enumerator._verdict_sites()
 
     assert sites == {"clash": {"evaluate()", "evaluate"}}, "two gates, two names"
+
+
+def test_discovery_does_not_depend_on_how_a_capability_spells_its_name():
+    """Reported reviewing PR #121, fifth round, and the end of a pattern.
+
+    `_capability_names` matched `name = "..."` and not `name: str = "..."` — the
+    form `BaseCapability` itself declares — so a capability written in the style
+    it inherits from would never have been enumerated, silently. The `verifies`
+    opt-out had the mirror gap.
+
+    Five rounds of this file were spent moving one silence outward: from the
+    verdict, to the resolver, to the filter deciding which files the resolver
+    sees. Syntax was the wrong tool each time. *Which capabilities run* is
+    answered by the registry that runs them, so `name` and `verifies` are read
+    from the objects and no source style can hide one.
+    """
+    from labpilot.research_engine.execution.engineer import default_capability_registry
+
+    enumerator = _enumerator()
+    registry = default_capability_registry(install_packages=False)
+    verifying = {
+        capability.name
+        for capability in registry._by_type.values()
+        if getattr(capability, "verifies", True)
+    }
+
+    assert set(enumerator._capability_names()) == verifying
+    assert verifying, "the registry must actually register something"
+
+
+def test_a_verdict_naming_no_check_is_never_silent(tmp_path, monkeypatch):
+    """`if not labels: continue` treated *"no `checks=` argument"* as "not a
+    gate", so such a verdict vanished without reaching `unresolved` — the last
+    path where discovery could under-report in silence, which is what
+    `_Unresolvable` exists to end. Reported reviewing PR #121.
+
+    The two shapes are not the same and the fix distinguishes them: a verdict
+    with **no** `checks=` names nothing, so it is reported; one with `checks=[]`
+    is a gate that carries no label, so it is enumerated under its function.
+    Either way it is visible, which is the property — the bug was silence, not
+    the absence of a name.
+    """
+    enumerator = _enumerator()
+
+    missing = _capability(tmp_path, "bare", "        return evidence(passed=False, summary='x')")
+    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"bare": missing})
+    scan = enumerator._scan()
+
+    assert scan.sites == {}
+    assert scan.unresolved and "naming no check" in scan.unresolved[0]
+
+    empty = _capability(tmp_path, "empty", "        return evidence(passed=False, checks=[])")
+    monkeypatch.setattr(enumerator, "_capability_names", lambda: {"empty": empty})
+    scan = enumerator._scan()
+
+    assert scan.sites == {"empty": {"go()"}}, "a gate with no label is still a gate"
+    assert not scan.unresolved
