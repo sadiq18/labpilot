@@ -112,7 +112,7 @@ The rule catches the fourth instance before it is written.
 | exit criterion | state |
 |---|---|
 | 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
-| 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not, and both verification gates ran model-written code with the operator's credentials that `child_environment` exists to withhold. See *The half of the command nobody shared*, below |
+| 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
 | 4 — a derived artifact re-derives or says it is derived | not started |
 | 5 — a broken artifact fails at the gate that owns it | not started |
@@ -170,6 +170,43 @@ comparison against `training_command` was satisfied by a hand-built
 that argv either way. Both script shapes are covered now, which is the rogii
 2026-08-08 failure — a declared-dependency script the gate ran under bare
 `python` — surviving one round inside the test written to catch it.
+
+#### Two of three is not done
+
+Reviewing the above found the third place, and it was the worst: `pip install -r
+requirements.txt` passed no environment at all. Installing a package **runs** it
+— `setup.py` or a PEP 517 backend executes during the build — the requirements
+file is written into the workspace where codegen chooses its own paths, and
+`install=True` is the production default. A typo-squatted name was enough to run
+arbitrary code holding every key the other two paths had just been taught to
+withhold.
+
+The instructive part is not the miss but the framing that produced it. The
+criterion says *verification path*, the installer is production, so it was
+filed as out of scope and the row was marked **done** — while the argument used
+to justify the change ("unreviewed code must not hold the operator's keys")
+plainly covered it. A scope that excludes the worst instance of the thing being
+fixed is the wrong scope, and "done" on a criterion is read as covering the idea,
+not the wording.
+
+#### A bound is half a fix
+
+The same review found the unit-test gate had no `timeout` while its sibling smoke
+gate had one, so a generated `while True:` blocked the campaign with no verdict,
+no evidence and no failure — the same file under the smoke gate returned in two
+minutes. The installer had no bound either.
+
+Adding `timeout=` alone would have been the wrong fix. `subprocess.run` raises
+`TimeoutExpired`, and `engineer.py:227` calls `capability.execute` unwrapped, so
+the exception escapes and no evidence is written — trading a hang for a vanish,
+which is worse and is exactly what this milestone is named after. All three sites
+now catch it and return `passed=False` with a `timeout` check, so running out of
+time is a decision the card records rather than an absence.
+
+Bounds: smoke 120s (unchanged), unit **600s** — a real generated suite may
+legitimately take minutes and the bound is for hangs, not slowness — and install
+**900s**, because a source build of a large wheel is slow and being killed
+mid-build is a worse failure than waiting.
 
 ### The parser that had to go
 

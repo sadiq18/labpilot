@@ -18,6 +18,18 @@ Asserted by capturing what the gate actually passes to `subprocess.run`, not by
 reading the capability's source for the right call. M20's first criterion spent
 seven review rounds inside a source parser before that lesson landed; a check on
 what a run *did* cannot be fooled by a spelling nobody anticipated.
+
+**Three places execute model-written code, not two.** Reviewing this change
+found the third: `pip install -r requirements.txt` builds packages a model
+named, running their `setup.py` with the operator's keys. Covering two of three
+and calling the criterion done was the mistake — so the installer is here too.
+
+And all three needed a *bound*, not only a stripped environment. The unit gate
+had no `timeout` at all while its sibling smoke gate had one; the installer had
+neither. A timeout alone would have been the wrong fix: `subprocess.run` raises
+`TimeoutExpired`, `capability.execute` is not wrapped by the engine, and an
+exception produces no evidence file and no verdict — the silent failure this
+milestone exists to remove, arriving through the fix for a hang.
 """
 
 from __future__ import annotations
@@ -28,6 +40,12 @@ import sys
 import pytest
 from helpers.capability_context import capability_context
 
+from labpilot.research_engine.execution.capabilities.dependency import (
+    DependencyCapability,
+)
+from labpilot.research_engine.execution.capabilities.dependency import (
+    capability as dependency_module,
+)
 from labpilot.research_engine.execution.capabilities.verification import (
     VerificationCapability,
 )
@@ -56,17 +74,32 @@ _RUNNABLE = "print('ok')\n"
 _DECLARING = '# /// script\n# dependencies = ["pandas"]\n# ///\nprint("ok")\n'
 
 
-def _capture(monkeypatch) -> dict:
-    """Record the argv and environment the gate hands its subprocess."""
+def _capture(monkeypatch, module=None) -> dict:
+    """Record the argv, environment and bound the gate hands its subprocess."""
     seen: dict = {}
 
     def _fake_run(cmd, **kwargs):
         seen["cmd"] = list(cmd)
         seen["env"] = kwargs.get("env")
         seen["cwd"] = kwargs.get("cwd")
+        seen["timeout"] = kwargs.get("timeout")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr(verification_module.subprocess, "run", _fake_run)
+    monkeypatch.setattr((module or verification_module).subprocess, "run", _fake_run)
+    return seen
+
+
+def _launched(seen: dict) -> dict:
+    """The captured call, or a legible failure if the gate never made one.
+
+    Every assertion below reads a key this dict only has once the gate reached
+    `subprocess.run`, and `_smoke` has three earlier returns — no `train.py`, a
+    syntax error, and dry-run/`smoke_syntax_only`. Subscripting straight into it
+    turned "the gate stopped early" into `KeyError: 'cmd'`, which says nothing
+    about what broke. Reported reviewing PR #124, and the same unguarded-subscript
+    shape as PR #121's round-8 finding.
+    """
+    assert seen, "the gate returned before launching anything; there is no call to inspect"
     return seen
 
 
@@ -110,7 +143,7 @@ def test_the_smoke_gate_runs_the_command_production_runs(tmp_path, monkeypatch, 
     VerificationCapability().execute(context)
 
     train = context.workspace_root / "pipeline" / "train.py"
-    assert seen["cmd"] == training_command(train, python=sys.executable)
+    assert _launched(seen)["cmd"] == training_command(train, python=sys.executable)
 
 
 @pytest.mark.parametrize("gate", ["smoke", "unit"])
@@ -128,8 +161,8 @@ def test_neither_gate_hands_the_operator_credentials_to_generated_code(tmp_path,
 
     VerificationCapability().execute(context)
 
-    assert seen["env"] is not None, "inheriting the parent environment is the defect"
-    leaked = sorted(name for name in _CREDENTIALS if name in seen["env"])
+    assert _launched(seen)["env"] is not None, "inheriting the parent environment is the defect"
+    leaked = sorted(name for name in _CREDENTIALS if name in _launched(seen)["env"])
     assert not leaked, f"{gate} gate handed generated code: {leaked}"
 
 
@@ -152,7 +185,7 @@ def test_each_gate_builds_its_environment_from_the_one_production_uses(tmp_path,
     if gate == "smoke":
         expected = {**expected, "LABPILOT_SMOKE": "1"}
 
-    assert seen["env"] == expected
+    assert _launched(seen)["env"] == expected
 
 
 def test_the_smoke_gate_still_tells_the_script_it_is_a_smoke_run(tmp_path, monkeypatch):
@@ -165,7 +198,7 @@ def test_the_smoke_gate_still_tells_the_script_it_is_a_smoke_run(tmp_path, monke
 
     VerificationCapability().execute(context)
 
-    assert seen["env"]["LABPILOT_SMOKE"] == "1"
+    assert _launched(seen)["env"]["LABPILOT_SMOKE"] == "1"
 
 
 def test_the_unit_gate_is_not_told_it_is_a_smoke_run(tmp_path, monkeypatch):
@@ -176,4 +209,125 @@ def test_the_unit_gate_is_not_told_it_is_a_smoke_run(tmp_path, monkeypatch):
 
     VerificationCapability().execute(context)
 
-    assert "LABPILOT_SMOKE" not in seen["env"]
+    assert "LABPILOT_SMOKE" not in _launched(seen)["env"]
+
+
+# -- bounds: every gate that runs model-written code says when to stop ---------
+
+
+def _timeout_after(monkeypatch, module) -> None:
+    """Make the gate's subprocess exceed its own limit."""
+
+    def _hangs(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout") or 0)
+
+    monkeypatch.setattr(module.subprocess, "run", _hangs)
+
+
+@pytest.mark.parametrize(
+    ("gate", "default"), [("smoke", 120), ("unit", 600)], ids=["smoke", "unit"]
+)
+def test_each_gate_bounds_how_long_it_waits(tmp_path, monkeypatch, gate, default):
+    """The unit gate had no `timeout` and its sibling smoke gate did, so a
+    generated `while True:` blocked the campaign with no verdict, no evidence
+    and no failure — while the same file under the smoke gate returned in two
+    minutes. Reported reviewing PR #124.
+
+    600s for unit rather than smoke's 120: a real generated suite legitimately
+    runs longer than a smoke check, and the bound is there to catch a hang, not
+    to police slowness.
+    """
+    context = (_smoke_context if gate == "smoke" else _unit_context)(tmp_path, monkeypatch)
+    seen = _capture(monkeypatch)
+
+    VerificationCapability().execute(context)
+
+    assert _launched(seen)["timeout"] == default
+
+
+@pytest.mark.rejects("verification:timeout")
+@pytest.mark.parametrize("gate", ["smoke", "unit"])
+def test_a_gate_that_times_out_returns_a_verdict_rather_than_raising(tmp_path, monkeypatch, gate):
+    """A bound with no handler trades a hang for a vanish.
+
+    `subprocess.run` raises `TimeoutExpired`, and `capability.execute` is called
+    unwrapped at `engineer.py:227` — so the exception escapes, no evidence file
+    is written, and the step leaves no record of having decided anything. That
+    is worse than the hang it replaces, and exactly what M20 is about: the gate
+    has to *say no*, not disappear.
+
+    The smoke gate has carried a `timeout` and no handler since before this
+    branch, so this covers a live gap as well as the new one.
+    """
+    context = (_smoke_context if gate == "smoke" else _unit_context)(tmp_path, monkeypatch)
+    _timeout_after(monkeypatch, verification_module)
+
+    result = VerificationCapability().execute(context)
+
+    assert result.passed is False
+    assert "timeout" in result.checks
+    assert "timed out" in (result.error or "").lower()
+
+
+# -- the third place model-written code runs: the installer --------------------
+
+
+def _install_context(tmp_path, monkeypatch):
+    """A workspace whose requirements name a package that is not installed, so
+    the gate reaches `pip install` rather than the already-satisfied return."""
+    for name, value in _CREDENTIALS.items():
+        monkeypatch.setenv(name, value)
+    context = capability_context(tmp_path, task_type=TaskType.INSTALL_PACKAGE)
+    (context.workspace_root / "requirements.txt").write_text(
+        "labpilot-not-a-real-package==1.0\n", encoding="utf-8"
+    )
+    return context
+
+
+def test_the_installer_does_not_hand_credentials_to_the_packages_it_builds(tmp_path, monkeypatch):
+    """Reported reviewing PR #124: two of the three places that execute
+    model-written code were fixed, and the criterion marked done.
+
+    Installing a package **runs** it — `setup.py` or a PEP 517 backend executes
+    during the build. The requirements file is model-writable, codegen chooses
+    the paths it writes, and `install=True` is the production default, so a
+    typo-squatted name is enough to run arbitrary code holding every key
+    `child_environment` exists to withhold. This was the worst of the three and
+    the one left out.
+    """
+    context = _install_context(tmp_path, monkeypatch)
+    seen = _capture(monkeypatch, dependency_module)
+
+    DependencyCapability(install=True).execute(context)
+
+    assert _launched(seen)["env"] is not None, "inheriting the parent environment is the defect"
+    leaked = sorted(name for name in _CREDENTIALS if name in _launched(seen)["env"])
+    assert not leaked, f"pip install handed the packages it builds: {leaked}"
+    assert _launched(seen)["env"] == child_environment()
+
+
+def test_the_installer_bounds_how_long_a_build_may_take(tmp_path, monkeypatch):
+    """Longer than either gate, because a source build of a large wheel is slow
+    and being killed mid-build is a worse failure than waiting. The bound exists
+    so a package that hangs on a prompt or a dead index cannot stall the
+    campaign for good."""
+    context = _install_context(tmp_path, monkeypatch)
+    seen = _capture(monkeypatch, dependency_module)
+
+    DependencyCapability(install=True).execute(context)
+
+    assert _launched(seen)["timeout"] == 900
+
+
+@pytest.mark.rejects("dependency:timeout")
+def test_an_install_that_times_out_returns_a_verdict_rather_than_raising(tmp_path, monkeypatch):
+    """Same reason as the gates: an exception out of `execute` writes no
+    evidence and records no decision."""
+    context = _install_context(tmp_path, monkeypatch)
+    _timeout_after(monkeypatch, dependency_module)
+
+    result = DependencyCapability(install=True).execute(context)
+
+    assert result.passed is False
+    assert "timeout" in result.checks
+    assert "timed out" in (result.error or "").lower()

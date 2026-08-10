@@ -11,6 +11,7 @@ from pathlib import Path
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
+from labpilot.research_engine.execution.training.environment import child_environment
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 
@@ -123,12 +124,44 @@ class DependencyCapability(BaseCapability):
             )
 
         cmd = [sys.executable, "-m", "pip", "install", "-r", str(primary)]
-        proc = subprocess.run(  # noqa: S603 - intentional pip install
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(  # noqa: S603 - intentional pip install
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                # Installing a package *runs* it: `setup.py` or a PEP 517 backend
+                # executes during the build. The requirements file is written into
+                # the workspace, where codegen chooses the paths it writes, so the
+                # package names here are model-chosen — and this inherited the
+                # operator's whole environment. Of the three places that execute
+                # model-written code this was the most exposed and the last to be
+                # fixed; the other two are the verification gates. M20 criterion 2,
+                # reported reviewing PR #124.
+                env=child_environment(),
+                # Longer than either gate: a source build of a large wheel is
+                # legitimately slow, and being killed mid-build is a worse failure
+                # than waiting. The bound is for a build that hangs on a prompt or
+                # a dead index, which otherwise stalls the campaign for good.
+                timeout=int(context.constraints.get("install_timeout_s", 900)),
+            )
+        except subprocess.TimeoutExpired as expired:
+            message = f"pip install timed out after {expired.timeout:.0f}s"
+            return TaskEvidence(
+                task_id=context.task.id,
+                execution_id=context.execution.id,
+                capability=self.name,
+                passed=False,
+                summary=message,
+                checks=["pip_install", "timeout"],
+                paths=[str(primary)],
+                error=(
+                    f"{message}. Nothing was verified about these dependencies — "
+                    "an install that did not finish leaves the environment in an "
+                    "unknown state rather than a satisfied one."
+                ),
+                metadata={"digest": digest, "timeout_s": expired.timeout, "cmd": cmd},
+            )
         ok = proc.returncode == 0
         return TaskEvidence(
             task_id=context.task.id,
