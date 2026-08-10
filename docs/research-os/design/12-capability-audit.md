@@ -330,10 +330,11 @@ def test_tool_contract(name, tmp_path):
     )
 ```
 
-`_digest` reuses `file_digest` from
+For `implement` — a file artifact — `_digest` reuses `file_digest` from
 [`execution/capabilities/_helpers.py`](../../../src/labpilot/research_engine/execution/capabilities/_helpers.py)
-rather than a new hashing helper — same function M7's differ-table already
-validated for `implement`'s output (evidence-log-2026-08-07.md).
+directly, the same function M7's differ-table already validated
+(evidence-log-2026-08-07.md). Tools whose artifact is a metadata record
+rather than a file need a normalized variant instead — see §6.2.1.
 
 `_fixture_inputs` is the part that costs real time: each tool's two fixture
 input sets have to be genuine (a real second technique, a real second query),
@@ -385,6 +386,54 @@ handling than the happy-path `implement` example above:
   "offline"` and `data["papers"] == []`; a second `"partial"` tool declares
   its own honest-degradation check rather than reusing this one by accident.
 
+### 6.2.1 A second failure direction: the digest can lie the other way
+
+Everything above guards against a **false pass** — a tool that doesn't vary
+looking like it does (`FakeCodegenLLM`'s flat response). There is a mirror
+risk the harness must also guard against: a **false real-verdict** from
+hashing the wrong thing. Several tools' primary artifact is a JSON record
+carrying an ID assigned fresh on every call — `generate_plan`'s `plan.id`
+(`P-001`, `P-002`, …), `run_plan`/`run_experiment`'s `execution.id`, and
+`reflect`'s `evidence_id` / `belief_update_id`. If `_digest` hashes the raw artifact
+including that ID, **two calls with the identical `varies_by` input** still
+hash differently, because the ID incremented — the contract test would pass
+for a tool that ignores its input entirely, which is a worse failure than a
+vacuous fixture: it reports a hollow tool as audited-real.
+
+`file_digest` on `train.py` (`implement`'s case) doesn't have this problem —
+the file *is* the content, no wrapper ID. Tools whose artifact is a metadata
+record need a **normalized digest**: strip the auto-generated id/timestamp
+fields before hashing, so what's compared is the content that should
+actually trace back to the varying input (task types/descriptions for a
+plan, metric values and written-file paths for an execution, evidence/claim
+content for a reflection). This is per-artifact-shape, not generic — budget
+it alongside `_fixture_inputs`, not as a detail inside `_digest` itself.
+
+### 6.2.2 Per-tool fixture scope
+
+Concrete enough to start from, not a full spec — each row is what the
+contract test needs to *not* be vacuous in either direction (§6.2, §6.2.1):
+
+| Tool | `capability_status` (re-audit to confirm) | `varies_by` (proposed) | Fixture strategy | Known risk |
+|---|---|---|---|---|
+| `analyze_competition` | real | `only` | Offline (`llm_client=None`, no `kaggle_config`) — reuse the analyzer-stub fixture already in `test_research_intelligence.py` / `test_competition_analyzer.py`; vary `only="competition"` vs `only="dataset"` (`build_default_registry()`'s actual registered names — `"competition"`, `"experiments"`, `"dataset"`, `"papers"`, `"repositories"`; an earlier draft of this row cited `"overview"`/`"data"`, which don't exist and would raise `UnknownAnalyzerError`) | **Normalized digest required, not just likely**: `AnalysisReport.generated_at` (`intelligence/models.py:129`) defaults to `datetime.now(UTC).isoformat()` — it always differs, every call, unconditionally |
+| `search_papers` | partial | — | `_degraded_inputs`/`_assert_degraded`, §6.2 | Already scoped |
+| `generate_plan` | real | `hypothesis_id` (or `baseline`) | Seed two `Hypothesis` rows with genuinely different `technique`/`observation` fields via `HypothesisStore`; compile a plan from each | **Normalized digest required** (§6.2.1) — `plan.id` differs on every call regardless of input |
+| `implement` | partial→real (re-audit) | `technique` | Extended `FakeCodegenLLM` (§6.2) | Already scoped |
+| `run_plan` | real | `plan_id` | Two plan fixtures with **different task graphs** (not just different ids), `dry_run=False`, wired to one of `tests/conftest.py`'s synthetic dataset fixtures (`titanic_data_dir`, `generic_regression_data_dir`, `multiclass_data_dir`) | **This is new work, not reuse — corrected from an earlier draft.** `test_engineer_capabilities.py` never actually uses those `conftest.py` fixtures (checked: zero references); every test there runs `dry_run=True`/`train_stub`/stub scaffolding, no real CSV touched. `dry_run=True` is very likely **not enough** to prove variance on its own: a stub/smoke run tends to short-circuit to the same wiring-only artifact regardless of plan content, the same failure shape M19 removed for `implement`. This tool needs the slower real-but-tiny path — the datasets exist, the wiring to a real `run_plan` call under `dry_run=False` does not, and should be budgeted as such. |
+| `run_experiment` | real (re-audit: was jointly-scored with `run_plan`, needs its own verdict) | `plan_id` | Same as `run_plan` — same dataset fixture, independent handler | Same dry-run risk as `run_plan` |
+| `reflect` | real but inert | `execution_id` | Two prior executions with different metrics/evidence already on disk (via `ExecutionArtifacts` fixtures) | Normalized digest (§6.2.1) — but be precise about *which* id: `evidence_id` (`ReflectionStore.new_evidence_id()`) and `belief_update_id` are genuinely fresh every call and must be stripped; `belief_id` itself is **not** — it's a stable upsert key, `f"belief:{competition}:{slug(technique_name)}"` (`reflection/beliefs/updater.py:41`), and stays the same across calls for the same technique. Stripping the wrong field leaves the digest still contaminated by the fields that actually change. |
+| `submit` | **re-audit should question this row**, not `real` by default | — | — | `package_execution_submission` copies `workspace.root/submission.csv` verbatim and only relabels it by `execution_id` — the packaged *content* does not depend on the input in any research sense. This may turn out to be a legitimate `fixed` step (deterministic packaging), which is fine — `submit` doesn't read as a capability verb the way `implement`/`optimise` do, so a `fixed` verdict here needs no rename. Flagging so the re-audit doesn't default it to `real` on the strength of the 2026-08-02 table alone. |
+| `submit_learn` | real | `execution_id`, `dry_run=True` | Two prior executions with different stored outcomes/metrics (`load_execution_outcome`) | **Verified, not vacuous**: read `execution/submit_learn.py:440-465` — under `dry_run=True` the handler still calls `build_execution_outcome`/`load_execution_outcome` and returns real per-execution metrics/plan tags, not a canned dry-run stub. The `dry_run` escape hatch genuinely proves variance without touching Kaggle. **Also needs the §6.2.1 normalized digest** — an earlier draft of this row omitted it: `ExecutionOutcomeSummary` and `SubmissionRecord` (`execution/outcome.py`, `artifacts/submission.py`) both carry fresh `created_at`/`updated_at` timestamp fields, the same pattern flagged for every other `real` row in this table. Raw-digesting this artifact has the identical false-real-verdict risk §6.2.1 exists to catch. |
+| `query_memory` | unverified | `query` | **Must seed the knowledge DB with ≥2 distinct evidence/claim rows first** | An empty knowledge DB returns an empty context regardless of query — the same vacuous-fixture risk as `FakeCodegenLLM`, just with data instead of a fake LLM |
+
+The two hardest rows are `run_plan`/`run_experiment` (dry-run may not prove
+anything, and the honest fixture is slower) and `submit` (the re-audit may
+find `real` was never the right verdict). Both are flagged rather than
+resolved here — resolving them is the re-audit's job (§1), and this table
+exists so the re-audit isn't rediscovering the same fixture problems this
+design already hit while scoping `implement`.
+
 ### 6.3 Inventory surface
 
 Extend the existing table in `tools_list()`
@@ -430,6 +479,7 @@ sites is part of the same PR, not a follow-up.
 | `tools/catalog.py` | populate both fields on all 10 descriptors, per re-audit |
 | `tests/helpers/fake_codegen.py` | extend `FakeCodegenLLM` to vary output by the `technique` prompt field (needed for `implement`'s contract test — see §6.2) |
 | `tests/unit/test_tool_contracts.py` (new) | parametrized contract test + meta-test for missing fields |
+| `tests/unit/tool_contract_fixtures.py` (new) | `_fixture_workspace`, `_fixture_inputs`, `_degraded_inputs`, `_digest`/normalized-digest, one entry per tool — the per-tool detail §6.2.2 scopes but doesn't write |
 | `cli/tools_cli.py` | `tools_list()` — two new columns |
 | `conductor/actions.py`, `conductor/policy.py` | update if the re-audit renames a tool — three hardcoded-string sites, see §6.4 |
 | `cli/conduct.py`, `tests/helpers/campaign_harness.py`, and 6 test files (§4) | add `capability_status="fixed"` to every non-catalog `ToolDescriptor(...)` construction — required by §6.1, else these fail to construct |
