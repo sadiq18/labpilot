@@ -10,10 +10,16 @@ from labpilot.research_engine.execution.capabilities._helpers import (
     evidence,
     failure_excerpt,
     is_dry_run,
+    stopped_excerpt,
+    stream_text,
 )
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.schemas import TaskEvidence
+from labpilot.research_engine.execution.training.environment import (
+    child_environment,
+    training_command,
+)
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 #: How much of a failure to keep. Same budget as before; the change is *which*
@@ -31,6 +37,61 @@ class VerificationCapability(BaseCapability):
         if context.task.type == TaskType.RUN_UNIT_TEST:
             return self._unit(context)
         return self._smoke(context)
+
+    def _timed_out(
+        self,
+        context: TaskContext,
+        log_path,
+        expired: subprocess.TimeoutExpired,
+        *,
+        check: str,
+        started: float,
+    ) -> TaskEvidence:
+        """A verdict for a step that ran out of time, rather than an exception.
+
+        `subprocess.run` raises `TimeoutExpired`, and `engineer.py` calls
+        `capability.execute` unwrapped — so without this the bound would trade a
+        hang for a vanish: no evidence file, no verdict, nothing recorded as
+        having decided anything. A gate that disappears is the failure this
+        milestone is named after. Reported reviewing PR #124.
+        """
+        limit = expired.timeout
+        message = f"{check} timed out after {limit:.0f}s"
+        # Everything the process printed before it was killed. Dropping it left
+        # the log holding one line while the *success* path wrote returncode,
+        # stdout and stderr to the same file — the harder failure producing the
+        # thinner record, which is the asymmetry PR #121 fixed in
+        # `evaluation._infer`. It is also the whole diagnosis: it names the test
+        # that was running when the clock ran out. Reported reviewing PR #124.
+        # The log keeps both streams whole; only the excerpt below is budgeted.
+        log_path.write_text(
+            f"{message}\n{stream_text(expired.output)}\n{stream_text(expired.stderr)}\n",
+            encoding="utf-8",
+        )
+        excerpt = stopped_excerpt(expired.output, expired.stderr)
+        return evidence(
+            context,
+            capability=self.name,
+            passed=False,
+            summary=message,
+            checks=[check, "timeout"],
+            paths=[str(log_path)],
+            error=(
+                f"{message}. The step was stopped, so nothing here says whether it "
+                "would have passed — a run that does not finish has not been verified."
+                + (f"\nLast output before it was stopped:\n{excerpt}" if excerpt else "")
+            ),
+            # `duration_s` as well as `timeout_s`: `outcome.py` totals an
+            # execution by summing this key across evidence files, and a step
+            # that burned its whole bound was contributing zero — silently, since
+            # the other steps supply the key and stop it falling back to `None`.
+            # Reported reviewing PR #124, round 3.
+            metadata={
+                "timeout_s": limit,
+                "duration_s": time.monotonic() - started,
+                "cmd": list(expired.cmd),
+            },
+        )
 
     def _unit(self, context: TaskContext) -> TaskEvidence:
         tests_dir = context.workspace_root / "tests"
@@ -62,13 +123,27 @@ class VerificationCapability(BaseCapability):
             )
 
         started = time.monotonic()
-        proc = subprocess.run(  # noqa: S603
-            [sys.executable, "-m", "pytest", str(tests_dir), "-q"],
-            capture_output=True,
-            text=True,
-            check=False,
-            cwd=context.workspace_root,
-        )
+        try:
+            proc = subprocess.run(  # noqa: S603
+                [sys.executable, "-m", "pytest", str(tests_dir), "-q"],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=context.workspace_root,
+                # These are the workspace's tests — written by a model, importing
+                # the same generated pipeline training runs. `TrainingRunner` strips
+                # credentials before running that code and this gate did not, so the
+                # check that runs first was the more permissive of the two. M20
+                # criterion 2.
+                env=child_environment(),
+                # Longer than the smoke gate's 120s: a real generated suite may
+                # legitimately take minutes, and this bound is here to catch a
+                # `while True:` that would otherwise block the campaign forever
+                # with no verdict at all — not to police slowness.
+                timeout=int(context.constraints.get("unit_timeout_s", 600)),
+            )
+        except subprocess.TimeoutExpired as expired:
+            return self._timed_out(context, log_path, expired, check="pytest", started=started)
         duration = time.monotonic() - started
         log_path.write_text(
             f"returncode={proc.returncode}\n{proc.stdout}\n{proc.stderr}\n",
@@ -147,25 +222,27 @@ class VerificationCapability(BaseCapability):
         # docstring plus comments exits 0) and then failed training, where uv
         # refused the whole script. The gate reported success for a file that
         # could not run.
-        from labpilot.research_engine.execution.training.environment import (
-            training_command,
-        )
-
         started = time.monotonic()
-        proc = subprocess.run(  # noqa: S603
-            training_command(train, python=sys.executable),
-            capture_output=True,
-            text=True,
-            check=False,
-            # Workspace root so scripts can open pipeline/config.yaml and write
-            # metrics.json / submission.csv at the competition root.
-            cwd=context.workspace_root,
-            timeout=int(context.constraints.get("smoke_timeout_s", 120)),
-            env={
-                **dict(__import__("os").environ),
-                "LABPILOT_SMOKE": "1",
-            },
-        )
+        try:
+            proc = subprocess.run(  # noqa: S603
+                training_command(train, python=sys.executable),
+                capture_output=True,
+                text=True,
+                check=False,
+                # Workspace root so scripts can open pipeline/config.yaml and write
+                # metrics.json / submission.csv at the competition root.
+                cwd=context.workspace_root,
+                timeout=int(context.constraints.get("smoke_timeout_s", 120)),
+                # The command was shared and the environment was not: this passed
+                # the operator's `os.environ` straight through, so the first thing
+                # to execute model-written code gave it the provider and Kaggle keys
+                # that `child_environment` exists to withhold. `LABPILOT_SMOKE` is
+                # the one difference this gate is entitled to — it is how a script
+                # knows to take its short path, and production must not set it.
+                env={**child_environment(), "LABPILOT_SMOKE": "1"},
+            )
+        except subprocess.TimeoutExpired as expired:
+            return self._timed_out(context, log_path, expired, check="smoke_gate", started=started)
         duration = time.monotonic() - started
         log_path.write_text(
             f"returncode={proc.returncode}\nduration_s={duration}\n{proc.stdout}\n{proc.stderr}\n",

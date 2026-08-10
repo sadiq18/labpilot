@@ -99,6 +99,59 @@ def _bar_total(line: str, start: int = 0) -> str:
     return match.group(1) if match else ""
 
 
+def stream_text(stream: str | bytes | None) -> str:
+    """A captured stream as text, whichever form it arrived in.
+
+    `subprocess.run(text=True)` decodes what it returns, but a `TimeoutExpired`
+    it raises carries **bytes** on POSIX: the exception comes from the inner
+    `communicate()`, before the decoding step. A caller that interpolates it
+    writes a literal ``b'collected 3 items\\n'`` into the log — which looks like a
+    record and reads like an escape sequence.
+
+    `errors="replace"` because this is diagnostic output from a process that was
+    killed mid-write, so a truncated multi-byte character is expected and losing
+    the whole excerpt to it would defeat the purpose. Reported reviewing PR #124.
+    """
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", errors="replace")
+    return stream
+
+
+def stopped_excerpt(
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    *,
+    limit: int = _EXCERPT_CHARS,
+) -> str:
+    """What a process managed to say before it was stopped, from **both** streams.
+
+    `failure_excerpt` takes `stderr or stdout`, which is right for a crash: the
+    traceback is on stderr and stdout is noise. A process killed by a timeout has
+    no traceback. The tail of stdout says how far it got — which test, which
+    epoch, which package — and the tail of stderr says what it was complaining
+    about, and either can be the diagnosis.
+
+    Joining the two and excerpting once does not work, because the excerpt keeps
+    the *tail*: whichever stream is written last wins, and a stream longer than
+    the budget silences the other completely. Two rounds of PR #124 went into
+    moving that eviction from one stream to the other. Ordering cannot fix it —
+    so each stream gets its own budget and neither can silence the other,
+    whatever the volume.
+
+    One function rather than a copy in each capability, because two
+    implementations of one idea drifting apart is the defect M20 criterion 2 is
+    named after.
+    """
+    parts = []
+    for label, raw in (("stdout", stdout), ("stderr", stderr)):
+        text = failure_excerpt(stream_text(raw), "", limit=limit // 2)
+        if text:
+            parts.append(f"{label}: {text}")
+    return "\n".join(parts)
+
+
 def failure_excerpt(stderr: str, stdout: str, *, limit: int = _EXCERPT_CHARS) -> str:
     """The part of a failed run worth reading: the end, minus progress bars.
 
