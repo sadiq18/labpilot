@@ -107,7 +107,7 @@ def test_evaluation_refuses_a_run_that_wrote_no_metrics(tmp_path):
     assert "metrics" in (result.error or "")
 
 
-@pytest.mark.rejects("verification:_smoke")
+@pytest.mark.rejects("verification:_smoke()")
 @pytest.mark.rejects("verification:smoke_gate")
 def test_verification_refuses_a_workspace_with_no_training_script(tmp_path):
     """Defect 14 by another door: a `train.py` that is not there used to answer
@@ -124,7 +124,7 @@ def test_verification_refuses_a_workspace_with_no_training_script(tmp_path):
     assert result.passed is False
 
 
-@pytest.mark.rejects("research_review:execute")
+@pytest.mark.rejects("research_review:execute()")
 def test_research_review_rejects_a_script_with_no_entry_point(tmp_path):
     """The real 2026-08-08 artifact: 624 bytes of docstring and half a comment,
     which `ast.parse` accepted and `run_smoke_test` passed because a file that
