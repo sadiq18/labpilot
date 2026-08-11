@@ -173,7 +173,7 @@ def test_experiment_produces_metrics_artifact(tmp_path: Path) -> None:
         _bundle("exp"),
     )
     assert any(r.kind == "experiment" for r in refs)
-    record = ws.root / "experiment" / "record.json"
+    record = ws.effective_runs_dir / "experiment" / "record.json"
     assert record.is_file()
     payload = json.loads(record.read_text(encoding="utf-8"))
     assert "metrics" in payload

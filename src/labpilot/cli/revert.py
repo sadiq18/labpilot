@@ -35,7 +35,7 @@ def revert_command(
     slug = resolve_competition(competition, client, required=True)
     ws = resolve_os_workspace(competition=slug, config=config, client=client)
 
-    record = find_experiment_record(ws.root, experiment_id)
+    record = find_experiment_record(ws.effective_runs_dir, experiment_id)
     if record is None:
         console.print(f"[red]No experiment record for[/red] {experiment_id!r}")
         raise typer.Exit(code=1)

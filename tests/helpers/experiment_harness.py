@@ -26,8 +26,10 @@ def bundle() -> ContextBundle:
     return ContextBundle(request=ContextRequest(competition=COMPETITION, goal="test"))
 
 
-def training_task() -> AgentTask:
-    return AgentTask(id="T-1", capability="run_training", description="train")
+def training_task(**metadata: Any) -> AgentTask:
+    return AgentTask(
+        id="T-1", capability="run_training", description="train", metadata=metadata
+    )
 
 
 def stub_git_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:

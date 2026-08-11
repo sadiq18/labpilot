@@ -122,7 +122,7 @@ def test_snapshot_and_experiment_record_via_git_tool(tmp_path: Path) -> None:
         ws,
         ContextBundle(request=ContextRequest(competition=ws.competition, goal="g")),
     )
-    record = find_experiment_record(ws.root, "E-042")
+    record = find_experiment_record(ws.effective_runs_dir, "E-042")
     assert record is not None
     assert record.get("git_commit")
     assert record.get("git_branch") == "research/S-009/E-042"

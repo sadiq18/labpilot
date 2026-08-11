@@ -68,11 +68,20 @@ class ExperienceExtractor:
         reflection: StructuredReflection | dict[str, Any] | None = None,
         comparison: dict[str, Any] | None = None,
         workspace_path: Path | str | None = None,
+        runs_dir: Path | str | None = None,
         persist: bool = True,
     ) -> ExperienceRecord:
         """Build an Experience Record; upsert when ``persist`` is True.
 
         Idempotency key prefers ``experiment_id``, then ``execution_id``.
+
+        ``workspace_path`` and ``runs_dir`` serve different lookups and are
+        not interchangeable once a caller's ``workspace_path`` is a per-branch
+        worktree (M11): ``workspace_path`` is where facet extraction reads
+        code from (correctly branch-private), ``runs_dir`` is where the
+        experiment record lives (shared — see `agents/experiment.py`'s
+        `effective_runs_dir`). Omit ``runs_dir`` to fall back to
+        ``workspace_path``, matching every caller that predates the split.
         """
         payload = self._normalize_experiment(
             competition=competition,
@@ -82,6 +91,7 @@ class ExperienceExtractor:
             plan_id=plan_id,
             hypothesis_id=hypothesis_id,
             workspace_path=workspace_path,
+            runs_dir=runs_dir,
         )
         reflection_payload = self._normalize_reflection(
             reflection, experiment=payload.get("_experiment_model")
@@ -162,6 +172,7 @@ class ExperienceExtractor:
         plan_id: str | None,
         hypothesis_id: str | None,
         workspace_path: Path | str | None,
+        runs_dir: Path | str | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "competition": competition,
@@ -207,13 +218,18 @@ class ExperienceExtractor:
             if workspace_path
             else competition_workspace_path(self.knowledge_dir, competition)
         )
+        # Separate from `workspace`: that's the code root (facet extraction
+        # reads it below), this is where the record actually lives. Falls
+        # back to `workspace` so a caller that predates the split — anything
+        # not routing `payload["runs_dir"]` through — keeps today's behavior.
+        record_root = Path(runs_dir) if runs_dir else workspace
         lookup_id = payload.get("experiment_id") or payload.get("execution_id")
-        if lookup_id and workspace is not None:
+        if lookup_id and record_root is not None:
             from labpilot.research_engine.agents.git_evolution import (
                 find_experiment_record,
             )
 
-            disk = find_experiment_record(workspace, str(lookup_id))
+            disk = find_experiment_record(record_root, str(lookup_id))
             if isinstance(disk, dict):
                 for key in (
                     "experiment_id",

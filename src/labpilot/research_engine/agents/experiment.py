@@ -120,6 +120,7 @@ class ExperimentSpecialist:
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
         status = str(result.data.get("status") or "unknown")
         experiment_id = f"exp_{workspace.competition}_{execution_id}"
+        cohort_id = str(meta["cohort_id"]) if meta.get("cohort_id") else None
         record_payload = {
             "experiment_id": experiment_id,
             "task_id": agent_task.id,
@@ -134,8 +135,17 @@ class ExperimentSpecialist:
             "files_changed": files_changed,
             "aliases": [experiment_key],
         }
+        if cohort_id:
+            record_payload["cohort_id"] = cohort_id
+        # `effective_runs_dir`, not `workspace.root`: once K-way fan-out (M11)
+        # roots each branch's `workspace.root` at its own worktree, a record
+        # written there is private to that worktree and gone at teardown —
+        # invisible to siblings and to the promotion subscriber that needs to
+        # compare them. `effective_runs_dir` is the shared path every branch
+        # of one campaign agrees on regardless of `root`. Design doc §8,
+        # "Promotion".
         record_path = await anyio.to_thread.run_sync(
-            write_experiment_git_record, workspace.root, record_payload
+            write_experiment_git_record, workspace.effective_runs_dir, record_payload
         )
 
         refs = list(result.refs)
@@ -170,6 +180,13 @@ class ExperimentSpecialist:
             "plan_id": plan_id,
             "competition": workspace.competition,
             "knowledge_dir": str(workspace.knowledge_dir),
+            # The shared record location (see above), named separately from
+            # `workspace_root`: once that becomes a per-branch worktree, a
+            # consumer reconstructing paths from it alone would derive a
+            # branch-private location that is wrong for anything meant to
+            # outlive the branch. Anyone reading this event back into a
+            # record lookup should use this field, not `workspace_root`.
+            "runs_dir": str(workspace.effective_runs_dir),
             "workspace_root": str(workspace.root),
             "metrics": metrics,
             "status": status,
@@ -179,6 +196,8 @@ class ExperimentSpecialist:
             "paths": [r.path for r in refs if r.path],
             "refs": ref_payload,
         }
+        if cohort_id:
+            event_payload["cohort_id"] = cohort_id
         if status == "failed" or result.data.get("error"):
             event_payload["error"] = result.data.get("error")
             self._emit(MODEL_FAILED, event_payload)
