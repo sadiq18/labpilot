@@ -158,6 +158,11 @@ def repair_skill_overlays(
         # criterion 4's options forever.
         unstamped = raw == original
         if not original.strip():
+            # Including the empty file the previous version of this function
+            # wrote when every lesson was dropped.
+            if unstamped:
+                path.write_text(stamped_overlay(original), encoding="utf-8")
+                changed.append(path.name)
             continue
 
         kept: list[str] = []

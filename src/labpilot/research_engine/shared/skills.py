@@ -45,7 +45,10 @@ def overlay_path(workspace_root: Path | str | None, agent_key: str) -> Path | No
 #: Overlays are rebuilt from the cards only in part — `Try:` and `Note:` lines
 #: are prose the repair pass deliberately preserves — so they carry a stamp.
 OVERLAY_NOTE = derived_note(
-    source_of_record="research/evidence/ (the evidence cards)",
+    # Not a path relative to this file: overlays live under the competition
+    # workspace and the cards under the knowledge directory, so a bare
+    # `research/evidence/` resolves to nothing from here.
+    source_of_record="the evidence cards, under <knowledge>/<competition>/research/evidence/",
     warning="Lessons here are rewritten when their card is repaired; the notes are not.",
 )
 

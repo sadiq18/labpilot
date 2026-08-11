@@ -156,3 +156,43 @@ def test_an_overlay_written_before_stamping_is_migrated_by_the_repair(tmp_path):
     assert is_stamped(text)
     assert "- Keep: SWA" in text
     assert unexplained_views(tmp_path) == []
+
+
+def test_an_emptied_overlay_is_migrated_too(tmp_path):
+    """The previous repair wrote an empty file when every lesson was dropped, so
+    pre-branch workspaces carry zero-byte overlays. The migration skipped them:
+    the empty check ran before it."""
+    competition = "demo"
+    knowledge = tmp_path / "knowledge"
+    overlays = overlay_dir(tmp_path)
+    overlays.mkdir(parents=True)
+    emptied = overlays / "code_engineer.md"
+    emptied.write_text("", encoding="utf-8")
+    EvidenceCardStore(knowledge, competition).save(
+        EvidenceCard(
+            competition=competition,
+            treatment_experiment="E-001",
+            decision=EvidenceDecision.ACCEPTED,
+        )
+    )
+
+    repair_skill_overlays(tmp_path, knowledge, competition)
+
+    assert is_stamped(emptied.read_text(encoding="utf-8"))
+    assert unexplained_views(tmp_path) == []
+
+
+def test_the_overlay_stamp_does_not_point_at_a_sibling_that_is_not_there(tmp_path):
+    """Overlays live under the competition workspace and the cards under the
+    knowledge directory, so a bare `research/evidence/` resolves to nothing from
+    where the file sits — the third stamp on this milestone to name the wrong
+    place."""
+    overlays = overlay_dir(tmp_path)
+    overlays.mkdir(parents=True)
+    written = overlays / "code_engineer.md"
+    written.write_text(stamped_overlay("- Keep: SWA\n"), encoding="utf-8")
+
+    note = written.read_text(encoding="utf-8").splitlines()[0]
+
+    assert "<knowledge>" in note, "the stamp must say which tree the cards are in"
+    assert not (tmp_path / "research" / "evidence").exists()

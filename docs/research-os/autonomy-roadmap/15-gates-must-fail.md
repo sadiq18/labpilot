@@ -114,7 +114,7 @@ The rule catches the fourth instance before it is written.
 | 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
-| 4 — a derived artifact re-derives or says it is derived | **mostly done.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites**. Enforcement is by **discovery** for the markdown a baseline campaign leaves, with no exemption list; the hand list still carries two off-path writers and the JSON views — see *Finding the views instead of listing them*, below, which states both gaps |
+| 4 — a derived artifact re-derives or says it is derived | **mostly done.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at every **write site** that persists a view. Enforcement is by **discovery** for the markdown a baseline campaign leaves, with no exemption list; the hand list still carries two off-path writers and the JSON views — see *Finding the views instead of listing them*, below, which states both gaps |
 | 5 — a broken artifact fails at the gate that owns it | **done.** Five broken artifacts driven through the real sixteen-task baseline plan, each entering as the proposal a codegen agent returns, each asserted to stop at the task that owns it **for that task's own reason** — with every task before it passed and every task after it never run. Plus a healthy control and a repaired case — see *Where each defect stops*, below |
 
 ### Three of the first nine rejection tests proved nothing
@@ -184,6 +184,16 @@ rather than by reading:
   overlay wiring deleted — and with it deleted, the rule guarded six files that
   were no longer there.
 
+A fourth round then found the overlay's own stamp naming `research/evidence/`,
+which resolves to nothing from a file under the competition workspace while the
+cards sit under the knowledge tree. That is the **third** stamp on this milestone
+to name the wrong place, after `comparison.md` and the execution report. The
+recurring lesson is narrow and worth stating: a stamp's source of record is a
+claim about a *path*, and a path claim is only true relative to where the file
+sits. It now says which tree to look in. The same round found the legacy
+migration unable to reach the empty overlay the previous repair wrote, because
+the empty check ran first.
+
 **Two gaps, stated rather than implied.**
 
 * **Markdown only.** A campaign leaves ~30 JSON files and nearly all are sources
@@ -193,8 +203,9 @@ rather than by reading:
   `test_projections_announce_they_are_derived.py`, not by discovery.
 * **Baseline-plan path only.** `write_brief` and `write_comparison` are not
   reached by a baseline campaign, so discovery does not see them; unstamping
-  either is caught by `test_derived_views_say_so.py` alone. That file is still
-  load-bearing for two of the five writers.
+  either is caught by the hand list in `test_derived_views_say_so.py` (and, for
+  the comparison, `test_comparator.py`). Those files are still load-bearing for
+  two of the writers.
 
 A tree walk rather than a patched `Path.write_text`: both see exactly the same
 ten files, and the walk needs no monkeypatching and is immune to how a file was
