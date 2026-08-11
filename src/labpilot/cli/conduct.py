@@ -87,7 +87,12 @@ def _test_registry_subset() -> object:
             name="query_memory",
             description="query memory",
             handler=query_memory,
-            capability_status="fixed",
+            # The real catalog handler, unwrapped — unlike the two above
+            # (a local stub, and search_papers pinned to offline=True), this
+            # one genuinely varies by query, so `fixed` would be a false
+            # declaration in the field that exists to prevent them.
+            capability_status="real",
+            varies_by=["query"],
         )
     )
     return reg

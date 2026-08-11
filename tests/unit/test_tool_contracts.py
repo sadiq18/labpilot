@@ -249,3 +249,42 @@ def test_a_descriptor_cannot_contradict_itself() -> None:
     ToolDescriptor(name="t", handler=_handler, capability_status="fixed")
     ToolDescriptor(name="t", handler=_handler, capability_status="partial")
     ToolDescriptor(name="t", handler=_handler, capability_status="real", varies_by=["q"])
+
+
+#: The re-audited verdict per tool (2026-08-11). Pinned because the contract
+#: harness cannot check a status directly: it branches on `varies_by`, so a
+#: tool that varies satisfies the same assertions whether it is labelled
+#: `real` or `partial`. Without this, flipping `implement` to `real` would
+#: pass the whole suite and start advertising a capability the `prefer_patch`
+#: no-op does not deliver.
+_EXPECTED_STATUS = {
+    "analyze_competition": "real",
+    "generate_plan": "real",
+    "implement": "partial",
+    "query_memory": "real",
+    "reflect": "real",
+    "run_experiment": "real",
+    "run_plan": "real",
+    "search_papers": "partial",
+    "submit": "fixed",
+    "submit_learn": "real",
+}
+
+
+def test_declared_statuses_match_the_re_audit() -> None:
+    """A status is a claim; changing one must be a deliberate act.
+
+    `implement` is the reason this exists. It is `partial` because
+    `ImplementationSpecialist`'s `prefer_patch` shortcut makes it a silent
+    no-op on any workspace that already has code — pinned separately by
+    `test_tool_contract_fixtures.py::test_implement_without_force_rewrite_is_a_silent_noop`.
+    That test proves the defect; this one keeps the *label* honest about it.
+    Promote `implement` only when that test is deleted because the no-op is
+    gone.
+    """
+    actual = {d.name: d.capability_status for d in default_tool_descriptors()}
+    assert actual == _EXPECTED_STATUS, (
+        "a tool's capability_status changed — confirm the code earns the new "
+        "verdict, update docs/research-os/autonomy-roadmap/10-capability-audit.md, "
+        "then update _EXPECTED_STATUS"
+    )

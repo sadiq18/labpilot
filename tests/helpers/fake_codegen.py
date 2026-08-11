@@ -9,11 +9,16 @@ They are about applying, overriding and smoke-checking generated code. This
 supplies the code so each keeps testing its own subject.
 
 `FakeCodegenLLM` also varies `pipeline/train.py`'s content by the prompt's
-`Technique:` line (see `code_engineer_user.j2:7`), so M15's contract test for
-`implement` — different technique in, different `train.py` out — can run
-without a live LLM call. Existing callers that never set a technique still get
-the original fixed `TRAIN` unchanged, so this is additive, not a behaviour
-change for them.
+`Technique:` line (`code_engineer_user.j2:7`), falling back to the `Goal:`
+block when that line is empty — which on the standalone `implement` tool path
+is *always*, since `technique` never reaches the prompt there (see
+`catalog.py`'s note on `implement`). So the fallback, not the `Technique:`
+line, is what actually makes M15's `implement` contract test work; passing
+`technique=` to that tool changes nothing.
+
+Existing callers that set neither a technique nor a goal still get the
+original fixed `TRAIN` unchanged, so this is additive, not a behaviour change
+for them.
 """
 
 from __future__ import annotations
