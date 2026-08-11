@@ -322,8 +322,12 @@ the hypothesis pool. Add, computed from the same series read once:
 
 - `best_so_far` — max/min over the series per the stored `maximize` flag
 - `last_3_scores` — tail of the series, most recent last
-- `delta_vs_best` — `last_metric - best_so_far`, signed so "improved" is
-  always positive regardless of minimize/maximize
+- `delta_vs_best` — how far the latest reading sits behind the record, read
+  the same way whichever direction the metric runs. Since `best_so_far`
+  includes the latest, it is `0.0` at a record and negative behind one, and
+  **never positive** — an earlier draft of this line promised the opposite,
+  which the implementation cannot produce. "Did the latest run improve" is
+  `steps_since_improvement == 0`
 - `steps_since_improvement` — **count of `ScoreEvent` entries** (completed
   experiments), not conductor steps, since the last one whose `delta_vs_best`
   exceeded `plateau_epsilon`. Named to sit next to `BudgetState.steps_since_success`,

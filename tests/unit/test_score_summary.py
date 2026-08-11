@@ -174,12 +174,34 @@ def test_best_is_read_in_the_series_own_direction():
         ((0.86, 0.80), True, -0.06000000000000005),
     ],
 )
-def test_delta_vs_best_is_signed_so_improvement_is_positive(values, maximize, expected):
+def test_delta_vs_best_reads_the_same_way_in_both_directions(values, maximize, expected):
     """The caller must not re-derive the sign from the metric — that
     re-derivation is what `ScoreEvent.maximize` exists to prevent."""
     summary = score_summary(_state(*values, maximize=maximize), BudgetConfig())
 
     assert summary.delta_vs_best == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("values", "maximize"),
+    [
+        ((194.8, 190.9), False),  # new record, minimised
+        ((194.8, 100.0), False),  # large new record
+        ((0.80, 0.95), True),  # new record, maximised
+        ((190.9, 194.8), False),  # behind the record
+    ],
+)
+def test_delta_vs_best_is_never_positive(values, maximize):
+    """`best_so_far` includes the latest reading, so the latest can at most
+    tie it: 0.0 at a record, negative behind one.
+
+    Pinned because an earlier comment promised the opposite — "improvement is
+    always positive" — and a consumer written against that (`if delta > 0:
+    improved`) would read every campaign as never improving, including one
+    setting a record every run. "Did the latest improve" is
+    `steps_since_improvement == 0`.
+    """
+    assert score_summary(_state(*values, maximize=maximize), BudgetConfig()).delta_vs_best <= 0.0
 
 
 def test_last_three_scores_read_in_the_order_they_happened():

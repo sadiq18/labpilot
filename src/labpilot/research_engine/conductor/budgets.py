@@ -217,8 +217,11 @@ class ScoreSummary(BaseModel):
     best_so_far: float | None = None
     #: Most recent last, so the tail reads in the order it happened.
     last_3_scores: list[float] = Field(default_factory=list)
-    #: Signed so improvement is always positive, whichever way the metric runs.
-    #: `0.0` when the latest reading *is* the best.
+    #: How far the latest reading sits from the best, in the metric's own
+    #: direction: `0.0` at a record, negative behind one, never positive —
+    #: `best_so_far` includes the latest, so it can at most tie. Whether the
+    #: latest run *improved* is `steps_since_improvement == 0`, which is why
+    #: this measures distance instead of repeating that.
     delta_vs_best: float | None = None
     #: Completed experiments since one last improved on everything before it —
     #: not conductor steps. A campaign that spends ten steps reflecting between
@@ -260,8 +263,8 @@ def score_summary(state: BudgetState, config: BudgetConfig) -> ScoreSummary:
     best = max(values) if maximize else min(values)
     latest = values[-1]
 
-    # Positive means better, both directions. A consumer asking "did this
-    # improve?" must not have to re-derive the sign from the metric — that
+    # Distance behind the record, expressed the same way in both directions so
+    # a consumer never re-derives the sign from the metric — that
     # re-derivation is exactly what `ScoreEvent.maximize` exists to prevent.
     delta = latest - best if maximize else best - latest
 
