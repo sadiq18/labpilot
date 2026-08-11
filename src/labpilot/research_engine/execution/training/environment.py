@@ -43,6 +43,8 @@ import re
 import shutil
 from pathlib import Path
 
+from labpilot.research_engine.execution.training.compute_budget import thread_limit_env
+
 logger = logging.getLogger(__name__)
 
 #: PEP 723 opening fence. The block must start at the beginning of a line.
@@ -136,13 +138,26 @@ def is_secret_env(name: str) -> bool:
 
 
 def child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
-    """Environment for the training subprocess, with credentials removed.
+    """Environment for the training subprocess, with credentials removed and
+    any per-branch CPU cap applied.
 
     Generated code is untrusted: it was written by a model, may pull packages
     nobody has reviewed, and has no business holding the operator's provider
     keys or Kaggle credentials. Stripping them costs nothing — a training script
     needs data on disk, not API access — and bounds what a hostile dependency
     can exfiltrate even though it cannot stop it reaching the network.
+
+    The thread caps are applied here rather than at each `subprocess.run`
+    because this is the one function every path that launches generated code
+    already goes through — training, dependency resolution and both
+    verification paths. Adding them at the call sites instead would be four
+    places that have to agree, and a fifth launcher added later would silently
+    miss the cap. They deliberately override any inherited value: under
+    fan-out the operator's own `OMP_NUM_THREADS` is a machine-wide setting,
+    and each branch is entitled to a share of the machine, not all of it.
+    `thread_limit_env()` is empty unless a fan-out installed a share, so the
+    sequential path is unchanged.
     """
     source = dict(os.environ if base is None else base)
-    return {k: v for k, v in source.items() if not is_secret_env(k)}
+    kept = {k: v for k, v in source.items() if not is_secret_env(k)}
+    return {**kept, **thread_limit_env()}

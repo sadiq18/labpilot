@@ -1,0 +1,141 @@
+"""Per-branch CPU budget for generated training code (M11 task 4).
+
+Nothing in this system caps threads today — a repo-wide search for
+``n_jobs``/``num_threads``/``nthread`` finds no producer. Generated training
+code therefore gets library defaults, and LightGBM and XGBoost default to
+using every core. K branches under that arrangement do not get K times the
+throughput: they oversubscribe the same cores, and cache thrashing plus
+context-switch overhead can make the wall-clock *worse* than running the
+experiments one after another — which would defeat the only exit criterion
+M11 has.
+
+## Why environment variables, and what they do not cover
+
+The alternative considered in the design was OS-level enforcement — a cgroup
+or ``taskset`` around the training subprocess. That cannot be the primary
+mechanism here: ``taskset``, ``cgexec`` and ``systemd-run`` are all Linux-only
+and absent on macOS, which is where this is developed and run. An enforcement
+layer that does not exist on the development platform is not enforcement.
+
+So the cap is a set of environment variables, injected into the subprocess
+that runs `train.py`. Two things are worth being precise about:
+
+* ``OMP_NUM_THREADS`` alone is **not** enough. The realistic failure is
+  generated code that writes ``n_jobs=-1`` — a common idiom the model reaches
+  for — which routes through joblib/loky and is governed by
+  ``LOKY_MAX_CPU_COUNT``, not by the OpenMP variable. Both are set, along with
+  the BLAS families that back numpy/scipy, including Apple's Accelerate
+  (``VECLIB_MAXIMUM_THREADS``) since macOS is the common dev platform.
+* A **hard-coded** count — ``n_jobs=8`` rather than ``-1`` — is not covered by
+  any of them. That residual risk is accepted rather than solved: closing it
+  needs the OS-level layer above, and the honest position is to name the gap
+  instead of implying the cap is total.
+
+## Not wired yet, deliberately
+
+`set_branch_cpu_share` has no production caller. M11 task 7 owns that: the
+conductor computes the share once for a fan-out step and installs it around
+`run_parallel_sync`, so the K worker threads inherit it through the context.
+Until then `thread_limit_env()` returns nothing and the sequential (K=1) path
+runs exactly as it does today.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from contextvars import ContextVar, Token
+
+logger = logging.getLogger(__name__)
+
+#: Every variable that bounds a thread pool the generated code might reach.
+#: Set together because they govern different layers and a script can use any
+#: of them: OpenMP backs LightGBM and XGBoost, the three BLAS families back
+#: numpy/scipy depending on the wheel, numexpr backs `pandas.eval`, and loky
+#: is what scikit-learn's `n_jobs=-1` actually consults.
+THREAD_LIMIT_VARS: tuple[str, ...] = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "LOKY_MAX_CPU_COUNT",
+)
+
+#: The share for the branch running in this context. A `ContextVar` rather
+#: than a module global because M11's branches are concurrent threads in one
+#: process — `os.environ` is shared between them and could not differ per
+#: branch, while a context value propagates into `anyio.to_thread.run_sync`
+#: and stays per-task. Same idiom as `accessor/common/provenance.py`.
+_branch_cpu_share: ContextVar[int | None] = ContextVar(
+    "_branch_cpu_share", default=None
+)
+
+
+def available_cpus() -> int | None:
+    """CPUs this process may actually use, or None if undiscoverable.
+
+    Prefers `os.process_cpu_count()` (3.13+) and `sched_getaffinity`, both of
+    which respect CPU affinity and cgroup limits. `os.cpu_count()` does not:
+    in a CI container pinned to 2 cores it reports the host's count, so a
+    share computed from it would license every branch to oversubscribe the
+    very limit the container imposed. The project floor is 3.11, so the newer
+    API is probed rather than assumed.
+    """
+    process_cpu_count = getattr(os, "process_cpu_count", None)
+    if process_cpu_count is not None:
+        return process_cpu_count()
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count()
+
+
+def cpu_share(branches: int, *, total: int | None = None) -> int | None:
+    """CPUs each of `branches` concurrent branches may use, or None to not cap.
+
+    Never returns 0: integer division floors, so `2 // 3` is 0, and 0 does not
+    mean "one thread" to these variables — it typically means "unset, use the
+    default", which would hand every branch the whole machine at exactly the
+    moment it is most contended. `None` is the explicit "do not cap" answer so
+    that meaning is never carried by a number.
+    """
+    if branches < 1:
+        raise ValueError(f"branches must be at least 1, got {branches}")
+    cpus = available_cpus() if total is None else total
+    if cpus is None or cpus < 1:
+        # Undiscoverable: capping to 1 would serialise the fan-out on a
+        # machine that may be large, so prefer the library default and say so.
+        logger.warning(
+            "could not determine available CPUs; leaving thread limits unset, "
+            "so %d concurrent branches may oversubscribe this machine",
+            branches,
+        )
+        return None
+    return max(1, cpus // branches)
+
+
+def set_branch_cpu_share(cpus: int | None) -> Token[int | None]:
+    """Install the share for this context; returns a restoring token.
+
+    `None` or `0` clears the cap, which is how the sequential path stays
+    byte-for-byte identical to its behaviour before this module existed.
+    """
+    return _branch_cpu_share.set(cpus if cpus else None)
+
+
+def reset_branch_cpu_share(token: Token[int | None]) -> None:
+    """Restore whatever share was installed before the matching set."""
+    _branch_cpu_share.reset(token)
+
+
+def thread_limit_env() -> dict[str, str]:
+    """Thread-cap variables for the current context, or `{}` when uncapped.
+
+    Empty by default and empty on the sequential path, so the environment a
+    training run receives is unchanged until a fan-out actually installs a
+    share.
+    """
+    share = _branch_cpu_share.get()
+    if not share:
+        return {}
+    return {name: str(share) for name in THREAD_LIMIT_VARS}
