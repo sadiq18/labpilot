@@ -5,7 +5,7 @@ Exit criterion 1: *every catalog tool has a contract test proving different
 inputs yield different artifacts, or is renamed to admit it is fixed.*
 
 The assertion is uniform; only the fixtures differ, and those live in
-`tool_contract_fixtures.py`. Three branches, chosen by what the descriptor
+`helpers/tool_contract_fixtures.py`. Three branches, chosen by what the descriptor
 declares about itself:
 
 * **declares `varies_by`** — two inputs differing only in a declared key must
@@ -28,7 +28,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tool_contract_fixtures import build_fixture
+from helpers.tool_contract_fixtures import build_fixture
 
 from labpilot.research_engine.tools.catalog import (
     build_default_tool_registry,

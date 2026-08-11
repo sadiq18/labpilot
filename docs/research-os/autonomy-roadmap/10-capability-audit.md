@@ -251,7 +251,7 @@ the hollow layer without reading source.
    different artifacts, or is renamed to admit it is fixed.
    — **met 2026-08-11.** `tests/unit/test_tool_contracts.py`, parametrized
    over `default_tool_descriptors()` so an eleventh tool cannot slip in
-   uncovered; fixtures in `tests/unit/tool_contract_fixtures.py`.
+   uncovered; fixtures in `tests/helpers/tool_contract_fixtures.py`.
 2. `research tools` prints the inventory with capability status.
    — **met 2026-08-11.** `research tools list` now prints `status` and
    `varies by` per tool, with a legend; covered by

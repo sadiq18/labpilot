@@ -1,7 +1,7 @@
 """Verify M15's per-tool contract fixtures against the real catalog tools.
 
 Not the parametrized harness (M15 task #7, test_tool_contracts.py) — this
-proves `tool_contract_fixtures.py`'s fixtures actually distinguish real
+proves `helpers/tool_contract_fixtures.py`'s fixtures actually distinguish real
 variance from a vacuous one, per AGENTS.md's "prove your test fails without
 your fix." Each test calls the real handler through the real
 `build_default_tool_registry()`, not a stand-in.
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tool_contract_fixtures import (
+from helpers.tool_contract_fixtures import (
     _execution_id_from,
     assert_search_papers_degraded,
     build_fixture,

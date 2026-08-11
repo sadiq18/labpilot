@@ -301,7 +301,7 @@ does.
 ### 6.2 Contract test shape
 
 > **Shipped 2026-08-11** as `tests/unit/test_tool_contracts.py`, with
-> fixtures in `tests/unit/tool_contract_fixtures.py`. Three corrections the
+> fixtures in `tests/helpers/tool_contract_fixtures.py`. Three corrections the
 > implementation forced on the sketch below, each recorded where it applies:
 > the branch keys off `varies_by` rather than `capability_status` (`implement`
 > is `partial` *and* varies); `_digest` became a per-tool `observe()` because
@@ -519,7 +519,7 @@ part of the same PR, not a follow-up.
 | `tools/catalog.py` | populate both fields on all 10 descriptors, per re-audit |
 | `tests/helpers/fake_codegen.py` | extend `FakeCodegenLLM` to vary output by the `technique` prompt field (needed for `implement`'s contract test — see §6.2) |
 | `tests/unit/test_tool_contracts.py` (new) | parametrized contract test + meta-test for missing fields |
-| `tests/unit/tool_contract_fixtures.py` (new) | `_fixture_workspace`, `_fixture_inputs`, `_degraded_inputs`, `_digest`/normalized-digest, one entry per tool — the per-tool detail §6.2.2 scopes but doesn't write |
+| `tests/helpers/tool_contract_fixtures.py` (new) | `_fixture_workspace`, `_fixture_inputs`, `_degraded_inputs`, `_digest`/normalized-digest, one entry per tool — the per-tool detail §6.2.2 scopes but doesn't write |
 | `cli/tools_cli.py` | `tools_list()` — two new columns |
 | `conductor/actions.py`, `conductor/policy.py` | update if the re-audit renames a tool — five hardcoded-string sites in four roles, see §6.4 |
 | `cli/conduct.py`, `tests/helpers/campaign_harness.py`, and 6 test files (§4) | add `capability_status="fixed"` to every non-catalog `ToolDescriptor(...)` construction — required by §6.1, else these fail to construct |

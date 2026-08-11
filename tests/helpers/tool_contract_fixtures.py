@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import Any
 
 from helpers.fake_codegen import FakeCodegenLLM
-
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.workspace_facade import Workspace
 
