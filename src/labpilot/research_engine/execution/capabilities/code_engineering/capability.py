@@ -507,9 +507,8 @@ class CodeEngineeringCapability(BaseCapability):
         brief = ""
         brief_path = context.paths.brief_path
         if brief_path.is_file():
-            # The provenance block is ~250 characters of "distrust this" at the
-            # head of the codegen prompt's research context. Reported reviewing
-            # this branch: two other readers stripped and this one did not.
+            # Stripped: the block would head this prompt's research context
+            # with ~250 characters telling the model to distrust it.
             brief = read_derived(brief_path)[:3000]
 
         hyp_fields = self._hypothesis_fields(context)

@@ -87,6 +87,34 @@ def test_the_markdown_note_carries_the_same_three_facts():
     assert "not authoritative" in note.lower()
 
 
+def test_the_markdown_note_renders_from_the_stamp_not_beside_it():
+    """One definition of the fact set, checked by moving it.
+
+    The note used to re-state the stamp's three facts in its own literals, so a
+    field added to `derived_stamp` reached the JSON views and silently never
+    reached the five markdown ones. Patching the stamp is how that is observable:
+    if the note reads from it, the substituted values appear in the prose.
+    """
+    import labpilot.accessor.common.derived as module
+
+    real = module.derived_stamp
+    try:
+        module.derived_stamp = lambda **_: {
+            "authoritative": False,
+            "source_of_record": "SUBSTITUTED-SOURCE",
+            "generated_at": "SUBSTITUTED-TIME",
+            "warning": "SUBSTITUTED-WARNING",
+        }
+        note = module.derived_note(source_of_record="ignored", warning="ignored", dated=True)
+    finally:
+        module.derived_stamp = real
+
+    assert "SUBSTITUTED-SOURCE" in note
+    assert "SUBSTITUTED-TIME" in note
+    assert "SUBSTITUTED-WARNING" in note
+    assert "ignored" not in note
+
+
 def test_the_plan_projection_stamp_is_built_from_the_shared_one():
     """`projection_stamp` predates the helper and keeps its own `_projection`
     key, which is already on disk in every workspace and asserted elsewhere. What
@@ -140,12 +168,15 @@ def test_a_comparison_markdown_says_it_is_a_view_of_the_json_beside_it(tmp_path)
     assert "comparison.json" in first, "the view must name the source beside it"
     assert "not authoritative" in first.lower()
     # The source of truth is not a view and must not claim to be one. Asserted
-    # by round-tripping it, because a pydantic dump of a fixed model can never
-    # contain a stray key — the first version checked exactly that and could not
-    # fail.
+    # on what the *writer* controls: the second version of this checked
+    # `verdict_reason`, a value the fixture sets four lines up, so it could only
+    # fail if the test edited itself.
     source = (tmp_path / "comparison.json").read_text(encoding="utf-8")
-    assert not source.lstrip().startswith(">")
-    assert "not authoritative" not in json.loads(source).get("verdict_reason", "")
+    payload = json.loads(source)
+    assert not source.lstrip().startswith(">"), "the source must not carry a note"
+    assert not [key for key in payload if key.startswith("_")], (
+        f"the source must not carry a provenance block: {sorted(payload)}"
+    )
 
 
 def test_a_dataset_profile_markdown_says_it_is_a_view(tmp_path):
@@ -241,6 +272,11 @@ def _persisted_views(root) -> list[tuple[str, str]]:
     result = ReportingCapability().execute(context)
     report = next(p for p in result.paths if p.endswith("_report.md"))
     written.append(("execution report", pathlib.Path(report).read_text(encoding="utf-8")))
+    # The workspace copy of that report is itself a view, and the rule has to
+    # reach it: enumerating only the `reports_dir` original let a change that
+    # copied without a stamp pass.
+    copy = context.workspace_root / "artifacts" / "report.md"
+    written.append(("execution report copy", copy.read_text(encoding="utf-8")))
 
     return written
 

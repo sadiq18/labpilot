@@ -53,12 +53,9 @@ def render_brief_markdown(brief: ResearchBrief) -> str:
 def write_brief(brief: ResearchBrief, path: Path) -> Path:
     """Write ``research_brief.md`` (creating parent dirs) and return the path.
 
-    Stamped: `analyze.json` is the source of record and this is rendered from it,
-    but the two are not written together — `research analyze --skip-hypothesize`
-    rewrites the JSON and skips the brief, leaving the previous run's file in
-    place. Unlike the other views this one is also read back as *machine* input
-    by the planner, which is why `strip_derived_note` exists. M20 criterion 4,
-    found reviewing the branch that added the other three.
+    Stamped: `analyze.json` is the source of record, and the two are not written
+    together — `research analyze --skip-hypothesize` updates the JSON and skips
+    this file.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     note = derived_note(
@@ -69,7 +66,7 @@ def write_brief(brief: ResearchBrief, path: Path) -> Path:
             "this file."
         ),
     )
-    # Explicit encoding: the stamp's em dash is the first non-ASCII byte these
-    # files have ever carried, and every reader already specifies utf-8.
+    # Explicit encoding: the stamp's em dash is the first non-ASCII byte this
+    # file carries, and every reader specifies utf-8.
     path.write_text(note + "\n\n" + render_brief_markdown(brief) + "\n", encoding="utf-8")
     return path

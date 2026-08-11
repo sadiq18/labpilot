@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from labpilot.accessor.common.derived import derived_note
+from labpilot.accessor.common.derived import derived_note, strip_derived_note
 from labpilot.research_engine.execution.capabilities._helpers import evidence
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
@@ -97,17 +97,9 @@ class ReportingCapability(BaseCapability):
         reports_dir.mkdir(parents=True, exist_ok=True)
         report_path = reports_dir / f"{context.execution.id}_report.md"
         lines = [
-            # Fifth of the persisted views, and the one that reaches an LLM most
-            # directly: `reports_dir` is what `WorkspaceProvider` rglobs into
-            # context. Written once from `metrics.json` and never re-derived.
-            # M20 criterion 4, found reviewing this branch.
+            # Not `metrics.json`: that file is shared by every execution and the
+            # next run overwrites it, so it cannot confirm these numbers.
             derived_note(
-                # Not `metrics.json`: that file lives in the *workspace*, is
-                # shared by every execution, and the next run overwrites it — so
-                # a reader following it to check these numbers finds a different
-                # execution's. The per-execution durable record is this
-                # execution's own evidence. Reported reviewing this branch, and
-                # the third time a stamp named the wrong thing.
                 source_of_record=f"research/executions/{context.execution.id}/evidence/",
                 warning=(
                     "A snapshot of the workspace's metrics.json when this report "
@@ -135,9 +127,22 @@ class ReportingCapability(BaseCapability):
             "",
         ]
         report_path.write_text("\n".join(lines), encoding="utf-8")
+        # A copy of a view is a view of the copy's source, not of its source's
+        # source: this one is derived from `report_path`, and inheriting that
+        # file's stamp verbatim pointed a reader at a knowledge-dir path that
+        # does not resolve from the workspace it now sits in.
         local = root / "artifacts" / "report.md"
         local.parent.mkdir(parents=True, exist_ok=True)
-        local.write_text(report_path.read_text(encoding="utf-8"), encoding="utf-8")
+        local.write_text(
+            derived_note(
+                source_of_record=str(report_path),
+                warning="A copy taken when the report was written; that file is the one kept.",
+                dated=True,
+            )
+            + "\n\n"
+            + strip_derived_note(report_path.read_text(encoding="utf-8")),
+            encoding="utf-8",
+        )
         return evidence(
             context,
             capability=self.name,

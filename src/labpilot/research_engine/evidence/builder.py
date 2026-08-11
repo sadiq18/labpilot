@@ -583,10 +583,8 @@ def write_comparison_files(workspace_root: Path, card: EvidenceCard) -> None:
         # still showed EV-012 (the one real improvement) as `rejected` long
         # after the store had been repaired to `accepted`. Stamped so the next
         # reader is told rather than fooled.
-        # Built by `derived_stamp` rather than inline: this was the fourth copy
-        # of one block, and a field added to one and not the others is the drift
-        # M20 criterion 2 is named after. The `_snapshot` key stays — it is
-        # already on disk in every workspace. Reported reviewing this branch.
+        # `_snapshot` stays as the key — it is already on disk in every
+        # workspace — but the block itself comes from the shared helper.
         snapshot = {
             "_snapshot": derived_stamp(
                 source_of_record=f"EvidenceCardStore — research/evidence/{card.id}.json",

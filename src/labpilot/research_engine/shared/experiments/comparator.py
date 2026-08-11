@@ -209,17 +209,9 @@ def render_markdown(comparison: ExperimentComparison) -> str:
 def write_comparison(run_dir: Path, comparison: ExperimentComparison) -> None:
     """Persist comparison.json (source of truth) and comparison.md (view)."""
     (run_dir / "comparison.json").write_text(comparison.model_dump_json(indent=2) + "\n")
-    # Stamped here rather than in `render_markdown`, because the stamp is a fact
-    # about the *file* and not about the rendering: `experiments compare --format
-    # markdown` renders live, and a stamp inside the renderer told that reader to
-    # "read the JSON" for a file that may not exist.
-    #
-    # The warning says what is true of *this* pair — one write, one object, no
-    # divergence — rather than the staleness claim it carried for one round.
-    # `repair_card_directions` rewrites evidence cards under `research/evidence/`
-    # and never touches this file, and the production `comparison.json` is
-    # written by `evidence/builder.py` under a different schema entirely.
-    # Reported reviewing this branch. M20 criterion 4.
+    # Stamped here and not in `render_markdown`: that renderer also serves
+    # `experiments compare --format markdown`, which renders live, and a stamp
+    # there would point that reader at a JSON which may not exist.
     (run_dir / "comparison.md").write_text(
         derived_note(
             source_of_record="comparison.json",

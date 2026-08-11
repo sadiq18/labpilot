@@ -9,7 +9,7 @@ def write_profile(run_dir: Path, profile: DatasetProfile) -> tuple[Path, Path]:
     json_path = run_dir / "profile.json"
     md_path = run_dir / "profile.md"
 
-    json_path.write_text(profile.model_dump_json(indent=2))
+    json_path.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
     md_path.write_text(
         derived_note(
             source_of_record="profile.json",
@@ -27,12 +27,7 @@ def write_profile(run_dir: Path, profile: DatasetProfile) -> tuple[Path, Path]:
 
 
 def render_markdown(profile: DatasetProfile) -> str:
-    """Markdown view over a DatasetProfile.
-
-    Stamped: `profile.json` is written from the same call and is what every
-    consumer reads, while this is regenerated only when profiling reruns. M20
-    criterion 4.
-    """
+    """Markdown view over a DatasetProfile. `write_profile` stamps it."""
     lines = [
         f"# Dataset Profile: {profile.competition}",
         "",
