@@ -472,6 +472,16 @@ now go through `anyio.to_thread.run_sync`, matching the two calls that already
 did. This had to land before the budget-pacing test, which measures whether
 fan-out beats sequential and would otherwise have measured this instead.
 
+Two consequences worth naming. **The per-branch worktree is now load-bearing
+for write safety, not just for checkout isolation.** `write_experiment_git_record`
+writes one `experiment/record.json` per workspace root under no lock; while it
+ran on the loop, two branches could never be inside it at once, so distinct
+roots were a convenience. In threads they genuinely overlap, and two branches
+sharing a root would tear that file. **Both reads are ordered before the
+write** so that no `await`, and therefore no cancellation point, separates the
+record landing on disk from the `ExperimentCompleted` that announces it —
+otherwise a cancelled branch could leave a record no subscriber ever saw.
+
 **Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
 a required pre-build check, same as §5's budget question, but it does not need
 external sign-off — it's answerable by inspecting this repo's own workspace

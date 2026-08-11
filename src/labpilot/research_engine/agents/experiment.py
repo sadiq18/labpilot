@@ -114,7 +114,12 @@ class ExperimentSpecialist:
         # docs/research-os/autonomy-roadmap/design/05-parallel-branches.md §8,
         # "Tie-break".
         run_finished_at = datetime.now(UTC).isoformat()
+        # Both reads happen before the write so that no `await` — and so no
+        # cancellation point — sits between the record landing on disk and the
+        # event that announces it.
         metrics = await anyio.to_thread.run_sync(_load_metrics, workspace.root)
+        metrics_path = workspace.root / "metrics.json"
+        has_metrics_file = await anyio.to_thread.run_sync(metrics_path.is_file)
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
         status = str(result.data.get("status") or "unknown")
         experiment_id = f"exp_{workspace.competition}_{execution_id}"
@@ -146,8 +151,7 @@ class ExperimentSpecialist:
                 competition=workspace.competition,
             )
         )
-        metrics_path = workspace.root / "metrics.json"
-        if await anyio.to_thread.run_sync(metrics_path.is_file):
+        if has_metrics_file:
             refs.append(
                 ArtifactRef(
                     kind="metrics",
