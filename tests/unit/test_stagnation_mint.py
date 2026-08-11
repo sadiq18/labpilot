@@ -148,6 +148,38 @@ def test_the_mint_cites_every_experiment_in_the_window(tmp_path: Path):
     assert hypothesis.technique == "gradient_boosting_dart"
 
 
+def test_a_long_window_still_names_every_shown_id_whole(tmp_path: Path):
+    """`reason` used to be built by joining every citation and then hard-
+    truncating the whole string to a length cap. For a window long enough to
+    push the joined string past that cap, the cut landed mid-citation and
+    silently dropped whichever ids came after it -- the prose no longer
+    matched the exit criterion that a reader can resolve every cited id.
+
+    Citing by count instead of by character keeps every printed id whole;
+    the tail is named by number, and `evidence` (never truncated) is still
+    where all of them are actually resolvable.
+    """
+    ws = _with_vocabulary(_ws(tmp_path), "gradient_boosting_dart")
+    # 40 events, each cited as "E-NNN (tNN)" -- long enough to have blown past
+    # the old 1000-char cap mid-citation. Monotonically worsening, so the
+    # window is every event after the first (the best-so-far): E-001..E-039.
+    events = [_event(f"E-{i:03d}", 200.0 + i, technique=f"t{i}") for i in range(40)]
+    state = BudgetState(score_events=events)
+
+    minted_id = mint_stagnation_hypothesis(ws, state, BudgetConfig(plateau_window=3))
+
+    assert minted_id is not None
+    hypothesis = HypothesisStore(ws.knowledge_dir, ws.competition).get(minted_id)
+    # Every experiment is still resolvable structurally, never truncated.
+    assert {ref.ref for ref in hypothesis.evidence} == {e.experiment_id for e in events[1:]}
+    # The first 12 of the window are cited whole and intact in the prose.
+    for i in range(1, 13):
+        assert f"E-{i:03d} (t{i})" in hypothesis.reason
+    # The rest are named by count, not silently dropped mid-string.
+    assert "and 27 more (see evidence)" in hypothesis.reason
+    assert "E-039" not in hypothesis.reason
+
+
 def test_the_proposal_avoids_everything_the_window_spent(tmp_path: Path):
     """Re-proposing a technique the stagnant window already ran is the one
     thing this must not do.
@@ -292,6 +324,28 @@ def test_an_improvement_rearms_the_latch(tmp_path: Path):
         _mint_hook(ws, state, config)
 
     assert len(store.list()) == 2
+
+
+def test_a_broken_mint_does_not_escape_the_hook(tmp_path: Path, monkeypatch):
+    """`_maybe_mint_on_stagnation` runs inside `_record_experiment_outcome`,
+    which runs inside the dispatch loop's outer try/except -- an escape here
+    would not stay local, it would land as a dispatch error and re-record the
+    just-succeeded experiment as failed. A broken mint must not do that."""
+    import labpilot.research_engine.conductor.loop as loop_mod
+
+    ws = _with_vocabulary(_ws(tmp_path), "gradient_boosting_dart")
+    state = _stagnant()
+    config = BudgetConfig(plateau_window=3)
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("ledger is unreadable")
+
+    monkeypatch.setattr(loop_mod, "mint_stagnation_hypothesis", _boom)
+
+    loop_mod._maybe_mint_on_stagnation(ws, state, config)  # noqa: SLF001 — testing the guard
+
+    assert state.stagnation_mint_fired is False
+    assert HypothesisStore(ws.knowledge_dir, ws.competition).list() == []
 
 
 def test_a_plateau_that_had_nothing_to_propose_retries_when_something_appears(tmp_path: Path):

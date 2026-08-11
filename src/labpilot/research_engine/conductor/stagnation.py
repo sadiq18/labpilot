@@ -71,14 +71,18 @@ def _untried_technique(workspace: Workspace, exclude: list[str]) -> str | None:
     does take one. The ledger answers the narrower question actually being
     asked here, from `knowledge_dir` and `competition` alone.
 
-    Filtered by the vocabulary's own planner-visible statuses. The ledger
-    calls `list_techniques()` unfiltered and its `TechniqueRecord.status` is a
-    different axis — worked/failed/untried, derived from hypotheses — so
-    without this a proposal could name `the`, which is exactly the junk M18
-    exists to keep away from the planner.
+    Filtered by the vocabulary's own planner-visible statuses, via the same
+    `is_planner_visible` predicate `filter_by_technique_status` uses — that
+    one takes `list[HypothesisCandidate]` rather than bare names, so it can't
+    be called directly here, but the default-status policy underneath it
+    should still live in one place. The ledger calls `list_techniques()`
+    unfiltered and its `TechniqueRecord.status` is a different axis —
+    worked/failed/untried, derived from hypotheses — so without this a
+    proposal could name `the`, which is exactly the junk M18 exists to keep
+    away from the planner.
     """
     from labpilot.research_engine.execution.technique.status_constants import (
-        PLANNER_VISIBLE_STATUSES,
+        is_planner_visible,
     )
     from labpilot.research_engine.intelligence.hypothesis.ledger import build_experiment_ledger
     from labpilot.research_engine.intelligence.hypothesis.persist import load_open_hypothesis_tags
@@ -107,9 +111,7 @@ def _untried_technique(workspace: Workspace, exclude: list[str]) -> str | None:
         label = normalize_label(name)
         if label in spent or is_record_reference(name):
             continue
-        # Unknown names default to candidate so the vocabulary can still grow —
-        # the same default `filter_by_technique_status` applies.
-        if statuses.get(label, "candidate") in PLANNER_VISIBLE_STATUSES:
+        if is_planner_visible(statuses.get(label)):
             return name
     return None
 
@@ -126,6 +128,25 @@ def _cite(event: ScoreEvent) -> str:
     if event.technique:
         return f"{event.experiment_id} ({event.technique})"
     return event.experiment_id
+
+
+def _cite_list(events: list[ScoreEvent], *, limit: int = 12) -> str:
+    """Every experiment named, unless there are too many to fit in prose.
+
+    `reason`/`observation` used to be built by joining every citation and
+    then hard-truncating the whole string to a length cap — for a plateau
+    long enough to push the joined string past that cap, the cut landed
+    mid-citation and silently dropped whichever ids came after it. Capping by
+    *count* instead keeps every printed id whole; the ones left out are named
+    by number, and the structured `evidence` list (never truncated) is still
+    where a reader resolves every id, which is the guarantee that actually
+    matters.
+    """
+    cites = [_cite(event) for event in events]
+    if len(cites) <= limit:
+        return ", ".join(cites)
+    shown = ", ".join(cites[:limit])
+    return f"{shown}, and {len(cites) - limit} more (see evidence)"
 
 
 def mint_stagnation_hypothesis(
@@ -165,7 +186,7 @@ def mint_stagnation_hypothesis(
         )
         return None
 
-    cited = ", ".join(_cite(event) for event in window)
+    cited = _cite_list(window)
     best = summary.best_so_far
     metric = summary.metric_name or "the primary metric"
     observation = (
