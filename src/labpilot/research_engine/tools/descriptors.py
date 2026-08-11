@@ -52,10 +52,22 @@ class ToolDescriptor(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     @model_validator(mode="after")
-    def _real_tools_declare_variance(self) -> ToolDescriptor:
+    def _status_and_variance_agree(self) -> ToolDescriptor:
         if self.capability_status == "real" and not self.varies_by:
             raise ValueError(
                 f"{self.name}: capability_status='real' but varies_by=[] — "
                 "declare what input changes the output, or downgrade the status"
+            )
+        if self.capability_status == "fixed" and self.varies_by:
+            # The two halves contradict each other: "same output whatever the
+            # input" and "these inputs change the output". Left unchecked, the
+            # contract harness would branch on `varies_by` and try to prove
+            # variance for a tool the catalog calls fixed, and
+            # `research tools list` would print `fixed` beside a varies-by
+            # column — an operator cannot act on that.
+            raise ValueError(
+                f"{self.name}: capability_status='fixed' but varies_by="
+                f"{self.varies_by} — a fixed step varies by nothing; use "
+                "'partial' or 'real' if it does"
             )
         return self

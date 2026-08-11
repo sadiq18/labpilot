@@ -222,3 +222,30 @@ def test_every_catalog_tool_is_parametrized() -> None:
         f"catalog size changed to {len(_TOOL_NAMES)} — confirm the new tool has a "
         "fixture in tool_contract_fixtures.py, then update this count"
     )
+
+
+def test_a_descriptor_cannot_contradict_itself() -> None:
+    """`capability_status` and `varies_by` must agree at construction.
+
+    Both directions are incoherent and both used to be accepted:
+    `real` with nothing declared is an unproven capability claim, and `fixed`
+    with a declared input says "nothing changes my output" and "these inputs
+    change my output" in the same breath.
+    """
+    import pytest as _pytest
+
+    from labpilot.research_engine.tools.descriptors import ToolDescriptor, ToolResult
+
+    def _handler(_workspace: object, **_kwargs: object) -> ToolResult:
+        return ToolResult()
+
+    with _pytest.raises(ValueError, match="varies_by=\\[\\]"):
+        ToolDescriptor(name="t", handler=_handler, capability_status="real")
+
+    with _pytest.raises(ValueError, match="varies by nothing"):
+        ToolDescriptor(name="t", handler=_handler, capability_status="fixed", varies_by=["q"])
+
+    # The coherent combinations still build.
+    ToolDescriptor(name="t", handler=_handler, capability_status="fixed")
+    ToolDescriptor(name="t", handler=_handler, capability_status="partial")
+    ToolDescriptor(name="t", handler=_handler, capability_status="real", varies_by=["q"])
