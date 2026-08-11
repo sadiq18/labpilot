@@ -81,12 +81,19 @@ def _untried_technique(workspace: Workspace, exclude: list[str]) -> str | None:
         PLANNER_VISIBLE_STATUSES,
     )
     from labpilot.research_engine.intelligence.hypothesis.ledger import build_experiment_ledger
+    from labpilot.research_engine.intelligence.hypothesis.persist import load_open_hypothesis_tags
     from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
     from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_label
 
     spent = {normalize_label(name) for name in exclude}
     try:
         ledger = build_experiment_ledger(workspace.knowledge_dir, workspace.competition)
+        # A technique named by an open hypothesis is not untried — it is
+        # queued. `techniques_untried` only excludes what a CONFIRMED or
+        # REJECTED hypothesis marked worked or failed, so without this every
+        # plateau in a campaign re-proposes the same name and grows the
+        # backlog M21 exists because of.
+        spent |= load_open_hypothesis_tags(workspace.knowledge_dir, workspace.competition)
         with KnowledgeStore(workspace.knowledge_dir, workspace.competition) as store:
             statuses = {
                 normalize_label(str(row.get("name") or "")): str(row.get("status") or "candidate")

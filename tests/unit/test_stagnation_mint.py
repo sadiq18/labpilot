@@ -200,6 +200,36 @@ def test_no_untried_technique_means_no_hypothesis(tmp_path: Path):
     assert HypothesisStore(ws.knowledge_dir, ws.competition).list() == []
 
 
+def test_a_later_plateau_does_not_re_propose_what_an_earlier_one_queued(tmp_path: Path):
+    """A PROPOSED hypothesis leaves its technique untried in the ledger — that
+    axis is derived from CONFIRMED/REJECTED ones only. So without subtracting
+    the open backlog, every plateau in a campaign proposes the same name again
+    and grows the pile of stale proposed rows M21 exists because of."""
+    ws = _with_vocabulary(_ws(tmp_path), "gradient_boosting_dart")
+    config = BudgetConfig(plateau_window=3)
+    state = _stagnant()
+    store = HypothesisStore(ws.knowledge_dir, ws.competition)
+
+    first = mint_stagnation_hypothesis(ws, state, config)
+    assert store.get(first).technique == "gradient_boosting_dart"
+    assert store.get(first).status == HypothesisStatus.PROPOSED
+
+    # A record, then a second plateau — stagnant again, and nobody has run the
+    # proposal yet. The only thing that should stop a mint here is the backlog.
+    state.score_events.extend(
+        [
+            _event("E-005", 100.0, "win"),
+            _event("E-006", 101.0, "swa"),
+            _event("E-007", 102.0, "cutmix"),
+            _event("E-008", 103.0, "ema"),
+        ]
+    )
+    assert len(stagnation_window(state, config)) == 3
+
+    assert mint_stagnation_hypothesis(ws, state, config) is None
+    assert [h.id for h in store.list()] == [first]
+
+
 def test_a_campaign_that_is_not_stagnant_mints_nothing(tmp_path: Path):
     ws = _with_vocabulary(_ws(tmp_path), "gradient_boosting_dart")
     improving = BudgetState(
