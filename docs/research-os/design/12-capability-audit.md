@@ -309,6 +309,16 @@ does.
 > must be **observed before the next one runs**, since tools whose artifact is
 > a file at a fixed path otherwise get read twice after the second write — a
 > false *negative* that failed on first run.
+>
+> **A fourth, found in review rather than by the tests:** an `observe()` must
+> never read back a field the handler *echoes from its own input*.
+> `run_experiment`'s first version returned `data["plan_id"]`, which the
+> handler copies straight from its argument — so the contract compared the
+> two fixture inputs to each other and passed regardless of what the tool
+> did. Demonstrated with two plans carrying identical task graphs under
+> different ids: the old observation differed (wrongly green), the
+> evidence-set one collapsed (correctly red). When choosing what to observe,
+> prefer state the tool *wrote* over anything it returns.
 
 One parametrized test, not ten hand-written ones — the fixtures differ, the
 assertion doesn't:
