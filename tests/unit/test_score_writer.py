@@ -24,11 +24,8 @@ from labpilot.research_engine.conductor.budgets import (
     metric_names_match,
 )
 from labpilot.research_engine.conductor.checkpoint import load_budget_pair
-from labpilot.research_engine.conductor.loop import (
-    _direction_for,
-    _record_experiment_outcome,
-    _score_event_for,
-)
+from labpilot.research_engine.conductor.loop import _record_experiment_outcome
+from labpilot.research_engine.conductor.scoring import _direction_for, score_event_for
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.intelligence.competition.direction import _direction_to_maximize
 from labpilot.research_engine.intelligence.paths import ResearchPaths
@@ -79,7 +76,7 @@ def test_a_finished_experiment_produces_a_score_event(tmp_path: Path):
     _write_outcome(ws, "E-001", hypothesis_id="H-001")
     _competition_json(ws, "E-001", "rmse", "minimize")
 
-    event = _score_event_for(ws, "E-001")
+    event = score_event_for(ws, "E-001")
 
     assert event is not None
     assert event.experiment_id == "E-001"
@@ -98,7 +95,7 @@ def test_the_score_comes_from_this_executions_own_outcome(tmp_path: Path):
     _write_outcome(ws, "E-002", metrics={"cv_rmse": 190.97})
     _competition_json(ws, "E-002", "rmse", "minimize")
 
-    event = _score_event_for(ws, "E-002")
+    event = score_event_for(ws, "E-002")
 
     assert event is not None
     assert event.value == 190.97
@@ -109,7 +106,7 @@ def test_an_execution_with_no_outcome_records_nothing(tmp_path: Path):
     not inventing a score."""
     ws = _ws(tmp_path)
 
-    assert _score_event_for(ws, "E-404") is None
+    assert score_event_for(ws, "E-404") is None
 
 
 def test_a_placeholder_run_records_nothing(tmp_path: Path):
@@ -120,7 +117,7 @@ def test_a_placeholder_run_records_nothing(tmp_path: Path):
     # exactly what fooled every check that only asked whether a score existed.
     _write_outcome(ws, "E-003", metrics={"status": "dry_run_stub", "cv_rmse": 0.5})
 
-    assert _score_event_for(ws, "E-003") is None
+    assert score_event_for(ws, "E-003") is None
 
 
 def test_a_diverged_run_records_nothing(tmp_path: Path):
@@ -134,14 +131,14 @@ def test_a_diverged_run_records_nothing(tmp_path: Path):
     )
     _competition_json(ws, "E-004", "rmse", "minimize")
 
-    assert _score_event_for(ws, "E-004") is None
+    assert score_event_for(ws, "E-004") is None
 
 
 def test_an_unresolvable_metric_records_nothing(tmp_path: Path):
     ws = _ws(tmp_path)
     _write_outcome(ws, "E-005", metrics={"notes": "no numbers here"})
 
-    assert _score_event_for(ws, "E-005") is None
+    assert score_event_for(ws, "E-005") is None
 
 
 def test_the_writer_appends_and_derives_on_the_real_persist_path(tmp_path: Path):
@@ -303,7 +300,7 @@ def test_a_malformed_outcome_file_records_nothing_instead_of_raising(tmp_path: P
     out = _write_outcome(ws, "E-006")
     out.write_text(body, encoding="utf-8")
 
-    assert _score_event_for(ws, "E-006") is None
+    assert score_event_for(ws, "E-006") is None
 
 
 def _knowledge_competition_json(ws: Workspace, key: str, direction: str) -> None:
@@ -334,7 +331,7 @@ def test_the_spec_is_found_in_the_knowledge_tree_too(tmp_path: Path):
     _write_outcome(ws, "E-001", metrics={"cv_mae": 12.0, "cv_rmse": 194.80})
     _knowledge_competition_json(ws, "rmse", "minimize")
 
-    event = _score_event_for(ws, "E-001")
+    event = score_event_for(ws, "E-001")
 
     assert event is not None
     assert event.metric_name == "cv_rmse"
@@ -396,8 +393,8 @@ def test_the_direction_falls_back_to_the_campaigns_own_when_unknowable(tmp_path:
     ws = _ws(tmp_path)
     _write_outcome(ws, "E-001", metrics={"cv_rmse": 194.80})
 
-    assert _score_event_for(ws, "E-001", fallback_maximize=False).maximize is False
-    assert _score_event_for(ws, "E-001", fallback_maximize=True).maximize is True
+    assert score_event_for(ws, "E-001", fallback_maximize=False).maximize is False
+    assert score_event_for(ws, "E-001", fallback_maximize=True).maximize is True
 
 
 def test_a_changed_primary_metric_narrows_the_window_without_losing_the_record(tmp_path: Path):
@@ -493,7 +490,7 @@ def test_a_non_dict_metrics_field_records_nothing_instead_of_raising(tmp_path: P
     ws = _ws(tmp_path)
     _write_outcome(ws, "E-007", metrics=metrics)
 
-    assert _score_event_for(ws, "E-007") is None
+    assert score_event_for(ws, "E-007") is None
 
 
 def test_the_first_recorded_score_replaces_a_legacy_history(tmp_path: Path):
