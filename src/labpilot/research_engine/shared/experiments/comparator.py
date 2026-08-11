@@ -154,14 +154,6 @@ def render_markdown(comparison: ExperimentComparison) -> str:
     reading that repair exists to correct. M20 criterion 4.
     """
     lines: list[str] = [
-        derived_note(
-            source_of_record="comparison.json",
-            warning=(
-                "The verdict below is the verdict at render time. Evidence-card "
-                "directions are repaired every campaign; read the JSON."
-            ),
-        ),
-        "",
         f"# Comparison: {comparison.base_id} → {comparison.compare_id}",
         "",
         "## Changes",
@@ -219,7 +211,24 @@ def render_markdown(comparison: ExperimentComparison) -> str:
 def write_comparison(run_dir: Path, comparison: ExperimentComparison) -> None:
     """Persist comparison.json (source of truth) and comparison.md (view)."""
     (run_dir / "comparison.json").write_text(comparison.model_dump_json(indent=2) + "\n")
-    (run_dir / "comparison.md").write_text(render_markdown(comparison))
+    # Stamped here rather than in `render_markdown`, because the stamp is a fact
+    # about the *file* and not about the rendering. `labpilot experiments compare
+    # --format markdown` renders live and recomputes whenever the stored JSON
+    # records a different pair — a stamp inside the renderer told that reader to
+    # "read the JSON" for a file that may not exist or may describe a different
+    # comparison, which is the misdirection a stamp exists to prevent. Reported
+    # reviewing this branch. M20 criterion 4.
+    (run_dir / "comparison.md").write_text(
+        derived_note(
+            source_of_record="comparison.json",
+            warning=(
+                "The verdict below is the verdict at render time. Evidence-card "
+                "directions are repaired every campaign; read the JSON."
+            ),
+        )
+        + "\n\n"
+        + render_markdown(comparison)
+    )
 
 
 def load_comparison(run_dir: Path) -> ExperimentComparison | None:

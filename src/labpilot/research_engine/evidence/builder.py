@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from labpilot.accessor.common.derived import derived_stamp
 from labpilot.research_engine.evidence.attribution import attribute_techniques
 from labpilot.research_engine.evidence.models import (
     ClaimEvidenceKind,
@@ -582,17 +583,19 @@ def write_comparison_files(workspace_root: Path, card: EvidenceCard) -> None:
         # still showed EV-012 (the one real improvement) as `rejected` long
         # after the store had been repaired to `accepted`. Stamped so the next
         # reader is told rather than fooled.
+        # Built by `derived_stamp` rather than inline: this was the fourth copy
+        # of one block, and a field added to one and not the others is the drift
+        # M20 criterion 2 is named after. The `_snapshot` key stays — it is
+        # already on disk in every workspace. Reported reviewing this branch.
         snapshot = {
-            "_snapshot": {
-                "authoritative": False,
-                "source_of_record": (f"EvidenceCardStore — research/evidence/{card.id}.json"),
-                "generated_at": datetime.now(UTC).isoformat(),
-                "warning": (
+            "_snapshot": derived_stamp(
+                source_of_record=f"EvidenceCardStore — research/evidence/{card.id}.json",
+                warning=(
                     "Written once when this card was built and never updated. "
                     "`decision` and `maximize` here predate any direction "
                     "repair. Read the store copy instead."
                 ),
-            }
+            )
         }
         snapshot.update(json.loads(card.model_dump_json()))
         (arts / f"evidence_card_{card.id}.json").write_text(

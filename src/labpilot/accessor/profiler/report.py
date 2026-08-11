@@ -10,7 +10,14 @@ def write_profile(run_dir: Path, profile: DatasetProfile) -> tuple[Path, Path]:
     md_path = run_dir / "profile.md"
 
     json_path.write_text(profile.model_dump_json(indent=2))
-    md_path.write_text(render_markdown(profile))
+    md_path.write_text(
+        derived_note(
+            source_of_record="profile.json",
+            warning="Regenerated only when profiling reruns; the data may have changed.",
+        )
+        + "\n\n"
+        + render_markdown(profile)
+    )
 
     return json_path, md_path
 
@@ -23,11 +30,6 @@ def render_markdown(profile: DatasetProfile) -> str:
     criterion 4.
     """
     lines = [
-        derived_note(
-            source_of_record="profile.json",
-            warning="Regenerated only when profiling reruns; the data may have changed.",
-        ),
-        "",
         f"# Dataset Profile: {profile.competition}",
         "",
         f"- **Rows:** {profile.row_count:,}",

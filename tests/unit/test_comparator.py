@@ -188,7 +188,13 @@ def test_render_markdown_sections_and_persistence(tmp_path: Path):
     run_dir.mkdir()
     write_comparison(run_dir, comparison)
     assert (run_dir / "comparison.json").is_file()
-    assert (run_dir / "comparison.md").read_text() == md
+    # The file carries a provenance stamp the renderer does not: `render_markdown`
+    # stays a pure function of the comparison (asserted below), and
+    # `write_comparison` prepends the note because the stamp is a fact about the
+    # file rather than about the rendering.
+    written = (run_dir / "comparison.md").read_text()
+    assert written.endswith(md)
+    assert written.startswith("> **Derived view")
     loaded = load_comparison(run_dir)
     assert loaded is not None
     assert loaded.verdict == comparison.verdict

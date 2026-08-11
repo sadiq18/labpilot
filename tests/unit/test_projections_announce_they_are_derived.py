@@ -82,13 +82,36 @@ def test_the_stamp_sorts_before_the_plan_fields():
     assert first_key == PROJECTION_KEY
 
 
-def test_the_markdown_warns_above_the_status_line():
-    """Markdown is what a human actually opens, so order matters here too."""
-    text = render_markdown(_plan())
+def test_the_markdown_warns_above_the_status_line(tmp_path):
+    """Markdown is what a human actually opens, so order matters here too.
+
+    Asserted on the **written file**, not on `render_markdown`. The stamp moved
+    to `write_projections` because the renderer is also used by `plan show
+    --format markdown`, which reads the plan live from the DB — there the
+    warning that the status is stale is simply false. The guarantee this test
+    exists for is about the file that persists, and it still holds.
+    """
+    from labpilot.research_engine.planner.serializer import write_projections
+
+    _, md_path = write_projections(
+        _plan(), knowledge_dir=tmp_path / "knowledge", competition="demo"
+    )
+    text = md_path.read_text(encoding="utf-8")
 
     warning_at = text.index("source of record")
     status_at = text.index("**Status (at creation):**")
     assert warning_at < status_at
+
+
+def test_a_plan_rendered_live_is_not_told_it_is_stale():
+    """`plan show --format markdown` renders straight from `PlanStore`, so the
+    reading is current. Announcing "not refreshed since" on a live read trains a
+    reader to discount a fact that is true — the opposite of what the stamp is
+    for, and the reason it belongs to the writer rather than the renderer."""
+    text = render_markdown(_plan())
+
+    assert "not authoritative" not in text.lower()
+    assert "source of record" not in text
 
 
 def test_the_markdown_does_not_present_status_as_current():

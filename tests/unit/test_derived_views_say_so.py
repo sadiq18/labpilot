@@ -14,11 +14,25 @@ Each of those four got its own answer — `repair_card_directions`,
 projections — and each got its own test. What none of them got was a rule, so the
 criterion asks for one enforced over the *writers*.
 
-Enforcing it found two more, already shipped and both unstamped:
+Enforcing it found three more, already shipped and all unstamped:
 
 * `comparison.md`, beside `comparison.json` — the writer's own docstring calls
   that *"(source of truth)"* and this one *"(view)"*.
 * `profile.md`, beside the `profile.json` the same call writes.
+* `research_brief.md`, rendered from `analyze.json` and *not written with it*:
+  `research analyze --skip-hypothesize` rewrites the JSON and skips the brief.
+  The only one of the four read back as **machine** input, by the planner under a
+  2000-character budget — hence `strip_derived_note`.
+
+**The stamp belongs to the writer, not the renderer.** The first version put it
+in `render_markdown`, and two callers render *live* rather than persisting:
+`experiments compare --format markdown` recomputes whenever the stored JSON
+records a different pair, and `plan show --format markdown` reads the DB
+directly. Both were then told to "read the JSON" — for a file that may not exist,
+or that describes a different comparison. A stamp that misdirects is worse than
+none, and it is the exact failure the stamp exists to prevent. Moving it to the
+write sites also fixed that for plan projections, where the stale warning had
+been printed on live reads since before this branch.
 
 `comparison.md` is the one that matters most: evidence-card directions are
 repaired by a pass that runs every campaign, and a verdict rendered into markdown
@@ -38,9 +52,11 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
-from labpilot.accessor.common.derived import DERIVED_KEY, derived_note, derived_stamp
+from labpilot.accessor.common.derived import (
+    derived_note,
+    derived_stamp,
+    strip_derived_note,
+)
 
 
 def test_a_stamp_states_it_is_not_authoritative_and_names_its_source():
@@ -120,9 +136,13 @@ def test_a_comparison_markdown_says_it_is_a_view_of_the_json_beside_it(tmp_path)
     assert first.startswith(">"), "the stamp must be the first thing read"
     assert "comparison.json" in first, "the view must name the source beside it"
     assert "not authoritative" in first.lower()
-    # The source of truth is not a view and must not claim to be one.
-    source = json.loads((tmp_path / "comparison.json").read_text(encoding="utf-8"))
-    assert DERIVED_KEY not in source
+    # The source of truth is not a view and must not claim to be one. Asserted
+    # by round-tripping it, because a pydantic dump of a fixed model can never
+    # contain a stray key — the first version checked exactly that and could not
+    # fail.
+    source = (tmp_path / "comparison.json").read_text(encoding="utf-8")
+    assert not source.lstrip().startswith(">")
+    assert "not authoritative" not in json.loads(source).get("verdict_reason", "")
 
 
 def test_a_dataset_profile_markdown_says_it_is_a_view(tmp_path):
@@ -155,22 +175,20 @@ def _plan():
     )
 
 
-def _rendered_views() -> list[tuple[str, str]]:
-    """Every markdown view renderer, called for real, with its output.
+def _persisted_views(root) -> list[tuple[str, str]]:
+    """Every markdown view the system *writes*, named and read back off disk.
 
-    Called rather than read. Criterion 1 spent seven review rounds inside a
-    parser that decided things about capabilities by reading their source, and
-    the lesson was that a check on what a run *did* cannot be fooled by a
-    spelling nobody anticipated. `inspect.getsource(...)` searching for
-    `derived_note` would pass on a renderer that imported it and never called it,
-    and fail on one that wrote the same words another way.
+    Written, not rendered. The rule is about a file that outlives its source, so
+    the check has to be on the file — and putting it on the renderer got this
+    wrong in both directions: it stamped two callers that render live and would
+    have missed a stamp applied at the write site.
     """
-    from labpilot.accessor.profiler.report import render_markdown as render_profile
+    from labpilot.accessor.profiler.report import write_profile
     from labpilot.accessor.profiler.tabular import DatasetProfile
-    from labpilot.research_engine.planner.serializer import render_markdown as render_plan
-    from labpilot.research_engine.shared.experiments.comparator import (
-        render_markdown as render_comparison,
-    )
+    from labpilot.research_engine.intelligence.brief.models import ResearchBrief
+    from labpilot.research_engine.intelligence.renderers.markdown import write_brief
+    from labpilot.research_engine.planner.serializer import write_projections
+    from labpilot.research_engine.shared.experiments.comparator import write_comparison
     from labpilot.research_engine.shared.experiments.models import (
         ExperimentComparison,
         Verdict,
@@ -187,31 +205,70 @@ def _rendered_views() -> list[tuple[str, str]]:
         verdict=Verdict.WORTH_KEEPING,
         verdict_reason="cv 0.80 -> 0.84",
     )
-    return [
-        ("plan projection", render_plan(_plan())),
-        ("comparison", render_comparison(comparison)),
-        ("dataset profile", render_profile(DatasetProfile(competition="demo"))),
-    ]
+
+    written: list[tuple[str, str]] = []
+
+    comparison_dir = root / "run"
+    comparison_dir.mkdir(parents=True, exist_ok=True)
+    write_comparison(comparison_dir, comparison)
+    written.append(("comparison.md", (comparison_dir / "comparison.md").read_text()))
+
+    profile_dir = root / "profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    write_profile(profile_dir, DatasetProfile(competition="demo"))
+    written.append(("profile.md", (profile_dir / "profile.md").read_text()))
+
+    _, plan_md = write_projections(_plan(), knowledge_dir=root / "knowledge", competition="demo")
+    written.append(("plan projection", plan_md.read_text()))
+
+    brief_path = write_brief(ResearchBrief(competition="demo"), root / "research_brief.md")
+    written.append(("research_brief.md", brief_path.read_text()))
+
+    return written
 
 
-@pytest.mark.parametrize("index", range(3))
-def test_every_markdown_view_says_it_is_a_view(index):
-    """The rule, over the writers rather than over whichever files one test
-    happened to write. A renderer that stops stamping fails here even when no
-    test exercises the path that puts it on disk.
+def test_every_persisted_markdown_view_says_it_is_one(tmp_path):
+    """The rule. Each view is written by its real writer and read back, so a
+    stamp that is never applied at the write site cannot satisfy it.
 
-    Parametrised by index so each renderer is its own test id and a single
-    regression does not read as three."""
-    name, rendered = _rendered_views()[index]
+    The count is not restated anywhere: an earlier version parametrised over
+    `range(3)` *and* asserted `len(...) == 3` separately, so adding a fourth
+    renderer failed only the count, and the natural fix left the new one
+    unchecked.
+    """
+    views = _persisted_views(tmp_path)
 
-    assert "not authoritative" in rendered.lower(), f"{name} does not say it is a view"
-    assert rendered.lstrip().startswith(">"), f"{name}'s stamp is not the first thing read"
+    assert views, "no views were produced — has a writer moved?"
+    for name, text in views:
+        first = text.lstrip().splitlines()[0]
+        # The first line, not merely somewhere in the file: setting a view's own
+        # content to "not authoritative; read comparison.json" and deleting the
+        # stamp turned the substring version of this green.
+        assert first.startswith(">"), f"{name}: the stamp is not the first thing read"
+        assert "not authoritative" in first.lower(), f"{name} does not say it is a view"
 
 
-def test_the_view_renderers_are_all_enumerated():
-    """A guard on the list above: three renderers were found by following
-    `render_markdown` across the codebase, and a fourth added later is invisible
-    to a hand-written list. This does not solve that — it states the count so a
-    reader who adds one has something to update, and `15-gates-must-fail.md`
-    records auto-discovery as the part not built."""
-    assert len(_rendered_views()) == 3
+def test_a_machine_reader_can_drop_the_block_it_does_not_need(tmp_path):
+    """`research_brief.md` is read by the planner under a 2000-character budget,
+    where the stamp is 200 characters that displace the brief. Stripping is what
+    lets the file carry one at all."""
+    views = dict(_persisted_views(tmp_path))
+    stamped = views["research_brief.md"]
+
+    stripped = strip_derived_note(stamped)
+
+    assert not stripped.lstrip().startswith(">")
+    assert "not authoritative" not in stripped.lower()
+    assert stripped.strip(), "stripping must not empty the file"
+    # Idempotent, and inert on text that was never stamped.
+    assert strip_derived_note(stripped) == stripped
+
+
+def test_stripping_keeps_a_quote_that_belongs_to_the_content():
+    """Only the leading provenance block goes. A view whose own body opens with a
+    blockquote after the stamp keeps it."""
+    body = "# Title\n\n> a quotation the author wrote\n"
+    stamped = derived_note(source_of_record="x.json", warning="w") + "\n\n" + body
+
+    assert strip_derived_note(stamped) == body.rstrip("\n")
+    assert strip_derived_note(body) == body

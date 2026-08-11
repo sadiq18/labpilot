@@ -23,9 +23,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-#: Key under which a JSON view carries its stamp. Plan projections predate this
-#: and keep `_projection`, which is already on disk in every workspace.
-DERIVED_KEY = "_derived"
+#: How a stamped markdown view begins, so a machine reader can drop it again.
+_NOTE_OPENER = "> **Derived view — not authoritative.**"
 
 
 def derived_stamp(*, source_of_record: str, warning: str) -> dict[str, object]:
@@ -65,3 +64,26 @@ def derived_note(*, source_of_record: str, warning: str, dated: bool = False) ->
         f"`{source_of_record}`, which is the source of record and may have "
         f"changed since.\n>\n> {warning}"
     )
+
+
+def strip_derived_note(text: str) -> str:
+    """The content without its provenance block.
+
+    A stamp is for a human deciding whether to trust the file. Two readers of
+    `research_brief.md` are not human — `planner.py` feeds it to an LLM under a
+    2000-character budget — and for them the block is 200 characters of overhead
+    that displaces the brief it is attached to. Stripping costs nothing and keeps
+    the stamp free.
+
+    Only a *leading* block, and only the blockquote plus the blank line after it,
+    so a view whose own content contains a quote keeps it.
+    """
+    if not text.lstrip().startswith(_NOTE_OPENER):
+        return text
+    lines = text.lstrip().splitlines()
+    index = 0
+    while index < len(lines) and lines[index].startswith(">"):
+        index += 1
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    return "\n".join(lines[index:])

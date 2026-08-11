@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from labpilot.accessor.common.derived import derived_note
 from labpilot.research_engine.intelligence.brief.models import ResearchBrief
 
 _SECTIONS: tuple[tuple[str, str], ...] = (
@@ -50,7 +51,23 @@ def render_brief_markdown(brief: ResearchBrief) -> str:
 
 
 def write_brief(brief: ResearchBrief, path: Path) -> Path:
-    """Write ``research_brief.md`` (creating parent dirs) and return the path."""
+    """Write ``research_brief.md`` (creating parent dirs) and return the path.
+
+    Stamped: `analyze.json` is the source of record and this is rendered from it,
+    but the two are not written together — `research analyze --skip-hypothesize`
+    rewrites the JSON and skips the brief, leaving the previous run's file in
+    place. Unlike the other views this one is also read back as *machine* input
+    by the planner, which is why `strip_derived_note` exists. M20 criterion 4,
+    found reviewing the branch that added the other three.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_brief_markdown(brief) + "\n")
+    note = derived_note(
+        source_of_record="analyze.json",
+        warning=(
+            "Rendered when the analysis last ran with hypothesis generation. "
+            "`research analyze --skip-hypothesize` updates analyze.json and not "
+            "this file."
+        ),
+    )
+    path.write_text(note + "\n\n" + render_brief_markdown(brief) + "\n")
     return path

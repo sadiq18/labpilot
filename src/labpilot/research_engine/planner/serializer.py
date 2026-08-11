@@ -64,17 +64,6 @@ def plan_to_json(plan: ResearchPlan) -> str:
 
 def render_markdown(plan: ResearchPlan) -> str:
     lines: list[str] = [
-        # Before the heading, not after it: a provenance line below the title is
-        # one a reader scrolls past, and the reader who was misled by these files
-        # was reading markdown.
-        derived_note(
-            source_of_record="research_plans table in knowledge.db",
-            warning=_STALE_WARNING,
-            # Dated: the DB moves under this file and nothing rewrites it, so
-            # *how old* the reading is is the fact a reader needs.
-            dated=True,
-        ),
-        "",
         f"# Research Plan {plan.id}",
         "",
         f"- **Hypothesis:** {plan.hypothesis_id or '—'}",
@@ -135,5 +124,15 @@ def write_projections(
     json_path = plans_dir / f"{plan.id}.json"
     md_path = plans_dir / f"{plan.id}.md"
     json_path.write_text(plan_to_json(plan) + "\n")
-    md_path.write_text(render_markdown(plan))
+    md_path.write_text(
+        derived_note(
+            source_of_record="research_plans table in knowledge.db",
+            warning=_STALE_WARNING,
+            # Dated: the DB moves under this file and nothing rewrites it, so
+            # how old the reading is is the fact a reader needs.
+            dated=True,
+        )
+        + "\n\n"
+        + render_markdown(plan)
+    )
     return json_path, md_path
