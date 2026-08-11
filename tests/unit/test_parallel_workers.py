@@ -266,7 +266,7 @@ def test_a_none_runtime_is_refused_not_a_type_error(tmp_path: Path) -> None:
     """Dataclasses do not enforce annotations, so `None` is constructible.
 
     Collecting the offenders as (id, runtime) pairs rather than sorting a set
-    of the values is what keeps this a ValueError: sorting `{None, "kaggle"}`
+    of the values is what keeps this a ValueError: sorting `{None, "kaggle_kernel"}`
     raises TypeError from the comparison, burying the real problem under an
     error about `<` that the caller never wrote.
     """
@@ -277,7 +277,7 @@ def test_a_none_runtime_is_refused_not_a_type_error(tmp_path: Path) -> None:
             id="none-runtime",
             agent=agent,
             task=AgentTask(id="T0", capability="fake"),
-            runtime=None,  # type: ignore[arg-type]
+            runtime=None,
         ),
         ParallelWorkItem(
             id="str-runtime",

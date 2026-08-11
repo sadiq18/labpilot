@@ -2,6 +2,10 @@
 
 Runs independent specialist tasks with a worker cap and shared budget.
 No research branch trees or merge policy — that stays backlog.
+
+Everything here runs in this process. An item declaring any other runtime is
+refused before the batch starts rather than run locally anyway (§8 of the
+M11 design doc, `LOCAL_RUNTIME` below).
 """
 
 from __future__ import annotations
@@ -16,20 +20,11 @@ from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.context.models import ContextBundle
 from labpilot.research_engine.workspace_facade import Workspace
 
-#: The only runtime this module can actually execute.
-#:
-#: This is the `provider` discriminator from `execution/runtimes/models.py`,
-#: not a vocabulary of its own — `LocalRuntime.provider` is `"local"`, and the
-#: siblings that exist there are `"kaggle_kernel"`, `"google_colab"` and
-#: `"other"`. Kept as a literal rather than imported so `parallel.py` does not
-#: pull the runtime models in for one string; `test_parallel_workers.py`
-#: asserts the two stay equal, so the copy cannot drift unnoticed.
-#:
-#: Remote dispatch is separately tracked (TODO.md "P2 remote execution").
-#: Until it lands anything else is refused rather than run here, because
-#: running it here is silent: the item would finish, report a metric, and
-#: leave nothing downstream able to tell the answer came from the wrong
-#: machine.
+#: The only runtime this module can execute. Copy of `LocalRuntime.provider`
+#: in `execution/runtimes/models.py`, not a vocabulary of its own;
+#: `test_parallel_workers.py` pins the two equal. Why it is copied rather
+#: than imported, and why anything else is refused rather than run here:
+#: `docs/research-os/autonomy-roadmap/design/05-parallel-branches.md` §8.
 LOCAL_RUNTIME = "local"
 
 

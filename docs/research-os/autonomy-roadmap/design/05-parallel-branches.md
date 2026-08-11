@@ -125,8 +125,10 @@ docstring — do not redo)
   tracked, already-deferred item
   ([TODO.md](../../../research-pipeline/milestones/TODO.md), "P2 remote
   execution"), not part of this milestone. `ParallelWorkItem` still gets a
-  `runtime` field defaulting to `"local"` (§7) so that work can build on this
-  fan-out later without retrofitting it.
+  `runtime` field defaulting to `"local"` (§7, §8) so that work can build on
+  this fan-out later without retrofitting it — and, until it does, so a
+  remote-bound item is refused rather than run locally under a label nobody
+  reads.
 - Arbitrary branch-merge policy or conflict resolution beyond "pick one
   winner, keep the losers as evidence."
 
@@ -207,7 +209,7 @@ of the sequential path.
 | Component | Change | Notes |
 |---|---|---|
 | `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync`; emit a `DecisionRecord`/checkpoint per branch and feed each branch's outcome to the circuit breaker | Existing single-hypothesis path stays as the K=1 case; full audit parity with sequential dispatch, decided in §8 |
-| `agents/parallel.py::ParallelWorkItem` | Minor: add `runtime: str = "local"` field (unread this milestone, forward-compat only) | Otherwise reused as-is; M5's concurrency primitives are sufficient |
+| `agents/parallel.py::ParallelWorkItem` | Minor: add `runtime: str = LOCAL_RUNTIME` field, validated before the batch starts (not unread — see §8) | Otherwise reused as-is; M5's concurrency primitives are sufficient |
 | `execution/training/environment.py::child_environment` | New: inject a per-branch thread-cap env vars into the training subprocess's environment | See §8. **Not** `agents/coding.py` — that only generates code, it never executes it; `execution/training/runner.py::TrainingRunner.run()` is the actual `subprocess.run(...)` call, and `child_environment()` already builds the env dict it uses |
 | `git_evolution.py` / `git/python_backend.py` | New: worktree create/teardown per branch, crash-safe | `create_branch` today mutates the single working tree; needs a worktree-based sibling, not a modification of the existing checkout path |
 | *(new)* reconciliation check | New: startup-time `git worktree prune` + orphan sweep | Closes the crash gap — see §8. A worktree whose creating process dies before teardown runs is a standard git-worktree failure mode, not something this design can assume away |
@@ -439,6 +441,26 @@ returns, and attached to the payload only on the success path: the same dict
 is the `ModelFailed` payload, and a `completed_at` on a run that died would
 assert the completion that `ExperimentSpecialist.execute`'s early return —
 and `tests/unit/test_failed_run_is_not_completed.py` — exist to deny.
+
+**The `runtime` field (task 5).** `ParallelWorkItem` gains `runtime`, and it
+is *validated* rather than carried unread as this document originally
+proposed. An unread field would have been dead code by definition, and worse
+than absent: an item asking for Kaggle would run locally, finish, report a
+metric, and leave nothing downstream able to tell the answer came from the
+wrong machine. `run_parallel_async` therefore refuses any non-local runtime
+before the batch starts — up front, because the mistake is knowable without
+running anything and refusing late means having already spent budget and
+compute on siblings that were never going to add up to the fan-out asked for.
+
+The value is not a new vocabulary. It is the `provider` discriminator from
+`execution/runtimes/models.py`, where `LocalRuntime.provider` is `"local"`
+and the siblings are `"kaggle_kernel"`, `"google_colab"` and `"other"` — the
+Runtime abstraction this document's non-goals already point at.
+`parallel.py` keeps `LOCAL_RUNTIME` as a literal rather than importing those
+models: `execution.runtimes` is *not* otherwise imported by the agents
+package (checked, not assumed), so importing it would add a dependency for
+one string. `test_parallel_workers.py` asserts the copy equals
+`LocalRuntime().provider`, so the two cannot drift unnoticed.
 
 **Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
 a required pre-build check, same as §5's budget question, but it does not need
