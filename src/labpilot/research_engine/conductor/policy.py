@@ -58,12 +58,21 @@ def build_observe_bundle(
     include_context: bool = True,
     max_context_items: int = 16,
     max_context_chars: int = 4000,
+    budget_state: BudgetState | None = None,
+    budget_config: BudgetConfig | None = None,
 ) -> dict[str, Any]:
     """Gather durable state for policy input.
 
     When ``include_context`` is true (online path), attach a best-effort
     Context Engine summary and ranked refs. Failures never raise — observe
     always remains usable for offline / LLM policy.
+
+    ``budget_state``/``budget_config`` are the campaign state the caller is
+    already acting on. `decide_next` passes what it hands the gathering gate,
+    so the numbers the model reads and the allowlist it chooses from come from
+    one source; deriving them separately from the session would let the prompt
+    and the allowlist describe different campaigns. Falls back to the session
+    when not given, for callers that have no state in hand.
     """
     session = store.get_session(session_id)
     tasks = store.list_tasks(session_id)
@@ -119,7 +128,7 @@ def build_observe_bundle(
     observe["viable_hypotheses"] = viable
     observe["untested_hypotheses"] = proposed_total
     observe["hours_since_last_artifact"] = hours_since_last_artifact(workspace)
-    _attach_score_progress(observe, session)
+    _attach_score_progress(observe, session, budget_state, budget_config)
     _attach_evidence_refresh(observe, workspace)
     if include_context:
         _attach_context(
@@ -132,7 +141,12 @@ def build_observe_bundle(
     return observe
 
 
-def _attach_score_progress(observe: dict[str, Any], session: Any) -> None:
+def _attach_score_progress(
+    observe: dict[str, Any],
+    session: Any,
+    budget_state: BudgetState | None = None,
+    budget_config: BudgetConfig | None = None,
+) -> None:
     """Surface what the score series says about progress.
 
     The policy already sees how much work is queued and how old the evidence
@@ -145,11 +159,15 @@ def _attach_score_progress(observe: dict[str, Any], session: Any) -> None:
     trust. `score_metric` travels with them so the model cannot compare a
     reading against a threshold for a different metric.
     """
-    # A missing session means "no readings", not "no such fields". Every
-    # sibling here degrades to a value rather than disappearing, and a
-    # consumer that subscripts a key present on every real session would
-    # otherwise raise only on the rare path.
-    if session is None:
+    # Prefer what the caller is acting on, so the prompt and the allowlist
+    # cannot describe different campaigns.
+    if budget_state is not None:
+        summary = score_summary(budget_state, budget_config or BudgetConfig())
+    elif session is None:
+        # A missing session means "no readings", not "no such fields". Every
+        # sibling here degrades to a value rather than disappearing, and a
+        # consumer that subscripts a key present on every real session would
+        # otherwise raise only on the rare path.
         summary = ScoreSummary()
     else:
         config, state = budgets_from_metadata(session.metadata)
@@ -836,6 +854,8 @@ def decide_next(
         workspace,
         session_id,
         include_context=not prefer_offline,
+        budget_state=budget_state,
+        budget_config=budget_config,
     )
     action = llm_next_action(
         observe,

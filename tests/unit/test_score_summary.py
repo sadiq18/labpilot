@@ -262,6 +262,33 @@ def test_the_observe_bundle_carries_the_progress_numbers(tmp_path: Path):
         store.close()
 
 
+def test_the_bundle_reflects_the_state_the_caller_is_acting_on(tmp_path: Path):
+    """`decide_next` hands the same pair to the gate and to this bundle.
+
+    If the bundle re-derived from the session instead, the model would read
+    one campaign's numbers while the allowlist was built from another's —
+    two sources for one number, which is the shape this milestone has already
+    been bitten by three times.
+    """
+    ws = _ws(tmp_path)
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        persisted = _state(197.0, 196.0, 195.0, 194.0)  # improving
+        session = store.create_session(
+            "g", metadata={"budget_state": persisted.model_dump(mode="json")}
+        )
+        in_hand = _state(194.8, 195.0, 196.0, 197.0)  # stagnant
+
+        observe = build_observe_bundle(
+            store, ws, session.id, include_context=False, budget_state=in_hand
+        )
+
+        assert observe["steps_since_improvement"] == 3
+        assert observe["best_so_far"] == 194.8
+    finally:
+        store.close()
+
+
 def test_the_bundle_keeps_its_shape_when_the_session_is_missing(tmp_path: Path):
     """Every other field here degrades to a value rather than disappearing.
     A consumer that subscripts a key present on every real session would
