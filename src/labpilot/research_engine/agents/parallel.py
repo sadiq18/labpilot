@@ -80,10 +80,10 @@ async def run_parallel_async(
 
     Raises ``ValueError`` — before any item starts, so nothing runs — for
     ``max_workers < 1`` or an item whose ``runtime`` is not `LOCAL_RUNTIME`.
-    Both are the caller's mistake rather than a worker fault, which is why
-    they abort the batch instead of being reported per item: a runtime this
-    process cannot honour is not something the other branches' results can be
-    trusted alongside.
+    Both are the caller's mistake rather than a worker fault, and both are
+    knowable without running anything, so the batch is refused up front rather
+    than after it has spent budget and compute on siblings that were never
+    going to add up to the fan-out that was asked for.
     """
     if max_workers < 1:
         raise ValueError("max_workers must be >= 1")
@@ -92,7 +92,7 @@ async def run_parallel_async(
     # error actionable when a fan-out builds a dozen of these, and it avoids
     # sorting a heterogeneous set — a `None` runtime among strings raises
     # TypeError from the sort rather than the ValueError intended here.
-    offenders = [(i.id, i.runtime) for i in items if i.runtime != LOCAL_RUNTIME]
+    offenders = [(item.id, item.runtime) for item in items if item.runtime != LOCAL_RUNTIME]
     if offenders:
         detail = ", ".join(f"{item_id}={runtime!r}" for item_id, runtime in offenders)
         raise ValueError(f"unsupported runtime(s): {detail}; only {LOCAL_RUNTIME!r} runs today")

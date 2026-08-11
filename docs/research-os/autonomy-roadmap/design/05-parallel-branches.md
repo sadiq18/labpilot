@@ -437,7 +437,8 @@ lose a tie-break to one that finished later and wrote less — the ranking would
 partly measure record size. The stamp is therefore taken as soon as `run_plan`
 returns, and attached to the payload only on the success path: the same dict
 is the `ModelFailed` payload, and a `completed_at` on a run that died would
-assert the completion §8's failure carve-out exists to deny.
+assert the completion that `ExperimentSpecialist.execute`'s early return —
+and `tests/unit/test_failed_run_is_not_completed.py` — exist to deny.
 
 **Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
 a required pre-build check, same as §5's budget question, but it does not need

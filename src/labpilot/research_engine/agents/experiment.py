@@ -108,12 +108,13 @@ class ExperimentSpecialist:
             )
         )
 
-        # Read here, not at publish: everything below is bookkeeping — loading
-        # metrics, writing the git record — and its cost scales with
+        # Taken here, not at publish: everything below is bookkeeping —
+        # loading metrics, writing the git record — and its cost scales with
         # `files_changed`. Stamping after it would time the record write as
         # well as the run, so a branch that finished first but wrote a large
-        # record could lose a tie-break to one that finished later.
-        finished_at = datetime.now(UTC).isoformat()
+        # record could lose a tie-break to one that finished later. The name
+        # says which moment it must capture; it is read once, at the emit.
+        run_finished_at = datetime.now(UTC).isoformat()
         metrics = _load_metrics(workspace.root)
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
         status = str(result.data.get("status") or "unknown")
@@ -197,6 +198,6 @@ class ExperimentSpecialist:
         # asserts the completion the block above exists to deny. M11's
         # promotion breaks a tie on the metric by earliest finisher, so this
         # is read as a result, and a crash has no finish time.
-        event_payload["completed_at"] = finished_at
+        event_payload["completed_at"] = run_finished_at
         self._emit(EXPERIMENT_COMPLETED, event_payload)
         return refs

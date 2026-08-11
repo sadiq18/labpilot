@@ -153,6 +153,37 @@ def test_runtime_defaults_to_local() -> None:
     assert item.runtime == LOCAL_RUNTIME
 
 
+def test_an_equal_but_distinct_local_runtime_is_allowed(tmp_path: Path) -> None:
+    """The guard's own boundary, exercised with a value it cannot shortcut.
+
+    Every other passing item leans on the dataclass default, which *is* the
+    module constant — so `!= LOCAL_RUNTIME` and `is not LOCAL_RUNTIME` behave
+    identically and the comparison is never really tested. Building the string
+    at runtime is what separates them: this is what a runtime value arriving
+    from config or a JSON payload looks like, and an identity check would
+    refuse it while accepting the constant. A containment guard in
+    `git_worktree.py` shipped with a clause that never fired on equality for
+    want of exactly this test.
+    """
+    from_config = "".join(["loc", "al"])
+    assert from_config == LOCAL_RUNTIME
+    assert from_config is not LOCAL_RUNTIME, "the test needs a non-identical equal string"
+
+    ws = _ws(tmp_path)
+    agent = _FakeAgent(hold_s=0.0)
+    items = [
+        ParallelWorkItem(
+            id="explicit",
+            agent=agent,
+            task=AgentTask(id="T0", capability="fake"),
+            runtime=from_config,
+        ),
+    ]
+    results = run_parallel_sync(items, ws, _bundle(), max_workers=1)
+    assert results[0].ok
+    assert [r.id for r in results[0].refs] == ["echo:T0"]
+
+
 def test_a_runtime_that_cannot_run_here_is_refused(tmp_path: Path) -> None:
     """Refused, not silently run locally.
 
