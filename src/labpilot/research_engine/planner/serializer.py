@@ -29,9 +29,9 @@ The stamp is what makes the next such read self-announcing.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
+from labpilot.accessor.common.derived import derived_note, derived_stamp
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.planner.schemas.models import ResearchPlan
 
@@ -50,12 +50,10 @@ _STALE_WARNING = (
 
 def projection_stamp() -> dict[str, object]:
     """Provenance block marking this file as derived, not authoritative."""
-    return {
-        "authoritative": False,
-        "source_of_record": "research_plans table in knowledge.db",
-        "generated_at": datetime.now(UTC).isoformat(),
-        "warning": _STALE_WARNING,
-    }
+    return derived_stamp(
+        source_of_record="research_plans table in knowledge.db",
+        warning=_STALE_WARNING,
+    )
 
 
 def plan_to_json(plan: ResearchPlan) -> str:
@@ -66,11 +64,18 @@ def plan_to_json(plan: ResearchPlan) -> str:
 
 def render_markdown(plan: ResearchPlan) -> str:
     lines: list[str] = [
-        f"# Research Plan {plan.id}",
+        # Before the heading, not after it: a provenance line below the title is
+        # one a reader scrolls past, and the reader who was misled by these files
+        # was reading markdown.
+        derived_note(
+            source_of_record="research_plans table in knowledge.db",
+            warning=_STALE_WARNING,
+            # Dated: the DB moves under this file and nothing rewrites it, so
+            # *how old* the reading is is the fact a reader needs.
+            dated=True,
+        ),
         "",
-        f"> Derived view, generated {datetime.now(UTC).isoformat()} and not",
-        "> refreshed since. The `research_plans` table is the source of record;",
-        "> **the status below is the status at creation time.**",
+        f"# Research Plan {plan.id}",
         "",
         f"- **Hypothesis:** {plan.hypothesis_id or '—'}",
         f"- **Competition:** {plan.competition or '—'}",

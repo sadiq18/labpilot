@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from labpilot.accessor.common.derived import derived_note
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.research_engine.shared.experiments.models import (
     ChangeCategory,
@@ -145,8 +146,22 @@ def resolve_primary_metric_key_and_direction(
 
 
 def render_markdown(comparison: ExperimentComparison) -> str:
-    """Deterministic markdown view over an ExperimentComparison (no LLM)."""
+    """Deterministic markdown view over an ExperimentComparison (no LLM).
+
+    Stamped because `comparison.json` beside it is the source of record and is
+    *actively repaired*: `repair_card_directions` re-orients evidence-card
+    verdicts on every campaign, and a verdict already rendered here keeps the
+    reading that repair exists to correct. M20 criterion 4.
+    """
     lines: list[str] = [
+        derived_note(
+            source_of_record="comparison.json",
+            warning=(
+                "The verdict below is the verdict at render time. Evidence-card "
+                "directions are repaired every campaign; read the JSON."
+            ),
+        ),
+        "",
         f"# Comparison: {comparison.base_id} → {comparison.compare_id}",
         "",
         "## Changes",

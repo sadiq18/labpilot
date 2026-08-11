@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from labpilot.accessor.common.derived import derived_note
 from labpilot.accessor.profiler.tabular import DatasetProfile
 
 
@@ -15,7 +16,18 @@ def write_profile(run_dir: Path, profile: DatasetProfile) -> tuple[Path, Path]:
 
 
 def render_markdown(profile: DatasetProfile) -> str:
+    """Markdown view over a DatasetProfile.
+
+    Stamped: `profile.json` is written from the same call and is what every
+    consumer reads, while this is regenerated only when profiling reruns. M20
+    criterion 4.
+    """
     lines = [
+        derived_note(
+            source_of_record="profile.json",
+            warning="Regenerated only when profiling reruns; the data may have changed.",
+        ),
+        "",
         f"# Dataset Profile: {profile.competition}",
         "",
         f"- **Rows:** {profile.row_count:,}",
