@@ -114,7 +114,7 @@ The rule catches the fourth instance before it is written.
 | 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
-| 4 — a derived artifact re-derives or says it is derived | **in progress.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites** and enforced by reading the files back. Enforcing it found **four more unstamped views already shipped** — see *Four more of the same shape*, below. Auto-discovery of a future writer is not built |
+| 4 — a derived artifact re-derives or says it is derived | **done.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites**. Enforcement is now by **discovery**: a campaign runs, and every markdown it leaves must carry a stamp or name what rebuilds it — see *Finding the views instead of listing them*, below |
 | 5 — a broken artifact fails at the gate that owns it | **done.** Five broken artifacts driven through the real sixteen-task baseline plan, each entering as the proposal a codegen agent returns, each asserted to stop at the task that owns it **for that task's own reason** — with every task before it passed and every task after it never run. Plus a healthy control and a repaired case — see *Where each defect stops*, below |
 
 ### Three of the first nine rejection tests proved nothing
@@ -138,6 +138,37 @@ figure, while the verdict lives one branch up in `if ok and not fresh:`. A
 red-then-green run against the wrong line proves nothing just as surely as a weak
 test does, which is worth saying because the sweep is the thing everything else
 here rests on.
+
+### Finding the views instead of listing them
+
+The first version of this criterion enumerated five writers by hand, and the
+fifth was found by a reviewer rather than by the rule. A hand-written list is
+review with a test's name on it: it cannot see the writer nobody thought of,
+which is the only one that matters.
+
+So the rule now runs a campaign and walks what it leaves behind. Every `.md`
+under the tree must either carry a provenance stamp or sit in a directory that
+names what rebuilds it — criterion 4's two options, asked of the filesystem
+rather than of a list.
+
+Measured on a real campaign: ten markdown files, four stamped (`profile.md`, the
+plan projection, the execution report and its workspace copy) and six skill
+overlays, which take the other option — `repair_skill_overlays` rebuilds them
+from the current cards on every run.
+
+Two things this buys that the list did not:
+
+* **A new writer fails closed.** Removing the stamp from any of the three
+  writers turns the rule red, including the execution report — the view review
+  had to find by hand.
+* **An exemption cannot outlive its justification.** The re-derived set stores
+  the *name* of the rebuilder, and a test asserts that function still exists.
+  Renaming `repair_skill_overlays` without updating the exemption fails, instead
+  of leaving a directory permanently excused.
+
+A tree walk rather than a patched `Path.write_text`: both see exactly the same
+ten files, and the walk needs no monkeypatching and is immune to how a file was
+written. The campaign harness is shared with criterion 5.
 
 ### Where each defect stops
 
