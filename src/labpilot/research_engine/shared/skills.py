@@ -42,25 +42,21 @@ def overlay_path(workspace_root: Path | str | None, agent_key: str) -> Path | No
     return root / f"{safe}.md"
 
 
-#: Overlays are rebuilt from the cards only in part — `Try:` and `Note:` lines
-#: are prose the repair pass deliberately preserves — so they carry a stamp.
-OVERLAY_NOTE = derived_note(
-    # Not a path relative to this file: overlays live under the competition
-    # workspace and the cards under the knowledge directory, so a bare
-    # `research/evidence/` resolves to nothing from here.
-    source_of_record="the evidence cards, under <knowledge>/<competition>/research/evidence/",
-    warning="Lessons here are rewritten when their card is repaired; the notes are not.",
-)
-
-
-def overlay_body(text: str) -> str:
-    """Overlay content without its provenance note."""
-    return strip_derived_note(text)
+#: Named absolutely: overlays live under the competition workspace and the cards
+#: under the knowledge tree, so a relative path resolves to nothing from here.
+_OVERLAY_SOURCE = "the evidence cards, under <knowledge>/<competition>/research/evidence/"
+_OVERLAY_WARNING = "Lessons here are rewritten when their card is repaired; the notes are not."
 
 
 def stamped_overlay(body: str) -> str:
     """Overlay content with its provenance note."""
-    return OVERLAY_NOTE + "\n\n" + body.lstrip("\n")
+    note = derived_note(source_of_record=_OVERLAY_SOURCE, warning=_OVERLAY_WARNING)
+    return note + "\n\n" + body.lstrip("\n")
+
+
+def overlay_note_cost() -> int:
+    """Characters `stamped_overlay` adds, so a budget can allow for them."""
+    return len(stamped_overlay(""))
 
 
 def load_skill_overlay(
@@ -73,7 +69,7 @@ def load_skill_overlay(
     path = overlay_path(workspace_root, agent_key)
     if path is None or not path.is_file():
         return ""
-    text = overlay_body(path.read_text(encoding="utf-8", errors="replace")).strip()
+    text = strip_derived_note(path.read_text(encoding="utf-8", errors="replace")).strip()
     if len(text) <= max_chars:
         return text
     return summarize_skill_text(text, max_chars=max_chars)
@@ -95,7 +91,9 @@ def upsert_skill_overlay(
     assert path is not None
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = (
-        overlay_body(path.read_text(encoding="utf-8", errors="replace")) if path.is_file() else ""
+        strip_derived_note(path.read_text(encoding="utf-8", errors="replace"))
+        if path.is_file()
+        else ""
     )
     marker = f"<!-- lesson:{lesson_id} -->"
     if marker in existing:
@@ -117,9 +115,11 @@ def upsert_skill_overlay(
     updated = (existing.rstrip() + "\n\n" if existing.strip() else "") + "\n".join(
         block_lines
     )
-    if len(updated) > on_disk_budget:
-        updated = summarize_skill_text(updated, max_chars=on_disk_budget)
-    # Stamped after summarising, so the note is never what gets truncated.
+    # The budget bounds the file, so the note's cost comes out of it — and it is
+    # applied before stamping, so the note is never what gets truncated.
+    room = max(1, on_disk_budget - overlay_note_cost())
+    if len(updated) > room:
+        updated = summarize_skill_text(updated, max_chars=room)
     path.write_text(stamped_overlay(updated.rstrip() + "\n"), encoding="utf-8")
     return path
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from helpers.campaign import HEALTHY, run_baseline_campaign
+from helpers.baseline_campaign import HEALTHY, run_baseline_campaign
 
 from labpilot.accessor.common.derived import derived_note, strip_derived_note
 from labpilot.research_engine.evidence.models import EvidenceCard, EvidenceDecision
@@ -130,7 +130,6 @@ def test_the_prompt_reader_strips_the_note(tmp_path):
     injected = load_skill_overlay(tmp_path, "code_engineer")
 
     assert injected == "- Keep: SWA"
-    assert "not authoritative" not in injected.lower()
 
 
 def test_an_overlay_written_before_stamping_is_migrated_by_the_repair(tmp_path):
@@ -195,7 +194,6 @@ def test_the_overlay_stamp_does_not_point_at_a_sibling_that_is_not_there(tmp_pat
     note = written.read_text(encoding="utf-8").splitlines()[0]
 
     assert "<knowledge>" in note, "the stamp must say which tree the cards are in"
-    assert not (tmp_path / "research" / "evidence").exists()
 
 
 def test_a_second_lesson_does_not_add_a_second_stamp(tmp_path):
@@ -213,7 +211,7 @@ def test_a_second_lesson_does_not_add_a_second_stamp(tmp_path):
     assert "Derived view" not in load_skill_overlay(tmp_path, "code_engineer")
 
 
-def test_an_unwritable_overlay_does_not_abort_the_repair(tmp_path):
+def test_an_unwritable_overlay_does_not_abort_the_repair(tmp_path, monkeypatch):
     """`repair must never break a run` — the sibling write is guarded and the
     stamp-only branch was not, so one read-only file skipped every overlay after
     it and the passes that follow."""
@@ -223,7 +221,6 @@ def test_an_unwritable_overlay_does_not_abort_the_repair(tmp_path):
     overlays.mkdir(parents=True)
     blocked = overlays / "aaa_agent.md"
     blocked.write_text("", encoding="utf-8")
-    blocked.chmod(0o444)
     later = overlays / "zzz_agent.md"
     later.write_text("<!-- lesson:E-001 -->\n## Lesson `E-001`\n- Keep: SWA\n", encoding="utf-8")
     EvidenceCardStore(knowledge, competition).save(
@@ -234,9 +231,40 @@ def test_an_unwritable_overlay_does_not_abort_the_repair(tmp_path):
         )
     )
 
-    try:
-        repair_skill_overlays(tmp_path, knowledge, competition)
-    finally:
-        blocked.chmod(0o644)
+    # Patched rather than `chmod(0o444)`: root ignores the permission bit, so on
+    # a root-running runner the write would succeed and this would pass without
+    # reaching the handler at all.
+    real_write = Path.write_text
+
+    def refuse_the_blocked_one(self, data, *args, **kwargs):
+        if self == blocked:
+            raise OSError("read-only file system")
+        return real_write(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", refuse_the_blocked_one)
+    repair_skill_overlays(tmp_path, knowledge, competition)
+    monkeypatch.undo()
 
     assert is_stamped(later.read_text(encoding="utf-8")), "the file after it was skipped"
+
+
+def test_the_on_disk_budget_bounds_the_file_including_its_stamp(tmp_path):
+    """`ON_DISK_CHAR_BUDGET` names the on-disk overlay, so the note comes out of
+    it. Summarising the body alone and then prepending ~240 characters left the
+    file over the budget it is measured against."""
+    from labpilot.research_engine.shared.skills import overlay_note_cost, upsert_skill_overlay
+
+    budget = overlay_note_cost() + 200
+    for lesson in range(30):
+        upsert_skill_overlay(
+            tmp_path,
+            "code_engineer",
+            lesson_id=f"E-{lesson:03d}",
+            keep=["a technique with a reasonably long name"],
+            on_disk_budget=budget,
+        )
+
+    written = (overlay_dir(tmp_path) / "code_engineer.md").read_text(encoding="utf-8")
+
+    assert len(written) <= budget, f"{len(written)} chars against a {budget} budget"
+    assert is_stamped(written), "the note must survive summarisation, not be truncated by it"

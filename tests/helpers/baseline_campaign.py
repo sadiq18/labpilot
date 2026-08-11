@@ -1,5 +1,8 @@
 """Run the real baseline plan end to end, with a chosen `pipeline/train.py`.
 
+Not `campaign_harness`, which drives the conductor with scripted echo tools.
+This one uses the real registry, so a capability can genuinely fail.
+
 Shared by M20 criteria 4 and 5. Why the constraints are what they are is in
 `docs/research-os/autonomy-roadmap/15-gates-must-fail.md`.
 """

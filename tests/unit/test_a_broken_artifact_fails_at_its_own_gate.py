@@ -46,7 +46,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from helpers.campaign import GUARD, HEALTHY, SMOKE_SHORT_PATH, run_baseline_campaign
+from helpers.baseline_campaign import GUARD, HEALTHY, SMOKE_SHORT_PATH, run_baseline_campaign
 from helpers.real_failures import real_failure
 
 from labpilot.research_engine.planner.schemas.task_types import TaskStatus, TaskType

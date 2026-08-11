@@ -184,6 +184,16 @@ rather than by reading:
   overlay wiring deleted — and with it deleted, the rule guarded six files that
   were no longer there.
 
+A sixth round, run against the whole diff rather than the mechanism, found four
+more: the on-disk budget stopped bounding the on-disk file once the stamp was
+prepended outside it; `OVERLAY_NOTE` was built at import by a function that had
+just gained a `ValueError`, so a future guard there would surface as an
+`ImportError` for a module every agent imports; the only test for the
+unwritable-overlay guard used `chmod(0o444)`, which root ignores, so it would
+have silently stopped testing on a root-running runner; and the new campaign
+helper sat beside the existing `campaign_harness` under a name a reader could not
+tell apart.
+
 A fifth round found the strip on the *write* path uncovered — reverting it left
 all 2084 tests green while every upsert prepended another note, and
 `load_skill_overlay` strips only the leading one, so the rest reached the prompt.

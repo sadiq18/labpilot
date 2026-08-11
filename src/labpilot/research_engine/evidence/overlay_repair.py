@@ -57,10 +57,11 @@ import logging
 import re
 from pathlib import Path
 
+from labpilot.accessor.common.derived import strip_derived_note
 from labpilot.research_engine.evidence.models import EvidenceDecision
 from labpilot.research_engine.evidence.store import EvidenceCardStore
 from labpilot.research_engine.shared.labels import is_record_reference
-from labpilot.research_engine.shared.skills import overlay_body, overlay_dir, stamped_overlay
+from labpilot.research_engine.shared.skills import overlay_dir, stamped_overlay
 
 logger = logging.getLogger(__name__)
 
@@ -152,14 +153,10 @@ def repair_skill_overlays(
         except OSError as exc:
             logger.warning("could not read overlay %s: %s", path.name, exc)
             continue
-        original = overlay_body(raw)
-        # An overlay written before overlays carried a stamp is never rewritten
-        # if its content already matches the cards, so it would keep neither of
-        # criterion 4's options forever.
+        original = strip_derived_note(raw)
+        # `strip_derived_note` returns its argument unchanged when there is none.
         unstamped = raw == original
         if not original.strip():
-            # Including the empty file the previous version of this function
-            # wrote when every lesson was dropped.
             if unstamped:
                 try:
                     path.write_text(stamped_overlay(original), encoding="utf-8")
@@ -184,8 +181,7 @@ def repair_skill_overlays(
                 kept.append(rewritten)
 
         updated = ("\n\n".join(kept).rstrip() + "\n") if kept else ""
-        # Compared on content: reading strips the provenance note, which does not
-        # restore the trailing newline, so a raw compare rewrites every run.
+        # On content: stripping the note does not restore the trailing newline.
         if updated.strip() != original.strip() or unstamped:
             try:
                 path.write_text(stamped_overlay(updated), encoding="utf-8")
