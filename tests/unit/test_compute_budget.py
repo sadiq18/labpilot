@@ -12,7 +12,9 @@ import os
 import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
+import anyio
 import pytest
 
 from labpilot.research_engine.execution.training.compute_budget import (
@@ -279,6 +281,46 @@ def test_polars_thread_pool_is_capped_too() -> None:
         env = thread_limit_env()
         assert env["POLARS_MAX_THREADS"] == "2"
         assert env["RAYON_NUM_THREADS"] == "2"
+    finally:
+        reset_branch_cpu_share(token)
+
+
+def test_a_share_installed_once_reaches_the_worker_threads() -> None:
+    """The property task 7 actually depends on: install once, K workers inherit.
+
+    Everything else here installs the share inside the code that reads it.
+    This installs it in the parent and reads it from a worker dispatched the
+    way the fan-out does, through `anyio.to_thread.run_sync` — which is what
+    `ExperimentSpecialist.execute` uses for its blocking work.
+    """
+
+    async def worker_view() -> dict[str, str]:
+        return await anyio.to_thread.run_sync(thread_limit_env)
+
+    token = set_branch_cpu_share(4)
+    try:
+        assert anyio.run(worker_view)["OMP_NUM_THREADS"] == "4"
+    finally:
+        reset_branch_cpu_share(token)
+
+
+def test_a_bare_thread_pool_would_not_inherit_the_share() -> None:
+    """Pins why the concurrency primitive is load-bearing, not incidental.
+
+    A ContextVar reaches a worker only if that worker's context was copied
+    from the installer's. `ThreadPoolExecutor` does not copy it, so a fan-out
+    written that way would run every branch uncapped — silently, and with no
+    other test in this file noticing. Asserting the difference here means the
+    constraint is recorded as executable fact rather than a docstring claim.
+    """
+    token = set_branch_cpu_share(4)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            assert pool.submit(thread_limit_env).result() == {}
+        # ...while the mechanism the fan-out actually uses does deliver it.
+        assert anyio.run(lambda: anyio.to_thread.run_sync(thread_limit_env))[
+            "OMP_NUM_THREADS"
+        ] == "4"
     finally:
         reset_branch_cpu_share(token)
 

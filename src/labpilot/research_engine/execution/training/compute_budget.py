@@ -68,6 +68,16 @@ THREAD_LIMIT_VARS: tuple[str, ...] = (
 #: process — `os.environ` is shared between them and could not differ per
 #: branch, while a context value propagates into `anyio.to_thread.run_sync`
 #: and stays per-task. Same idiom as `accessor/common/provenance.py`.
+#:
+#: **The concurrency primitive is load-bearing, not incidental.** A context
+#: value reaches a worker only if that worker's context was copied from the
+#: installer's. `anyio.to_thread.run_sync` does copy it — which is what
+#: `ExperimentSpecialist.execute` uses, and therefore what the fan-out gets —
+#: but a plain `threading.Thread` or a `ThreadPoolExecutor` does **not**: such
+#: a worker starts from an empty context and sees no share at all. Installing
+#: the share and then dispatching branches through a bare thread pool would
+#: leave every one of them uncapped, silently and with no failing test unless
+#: one covers the propagation specifically (`test_compute_budget.py` does).
 _branch_cpu_share: ContextVar[int | None] = ContextVar(
     "_branch_cpu_share", default=None
 )
