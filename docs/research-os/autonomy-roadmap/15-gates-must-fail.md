@@ -115,7 +115,7 @@ The rule catches the fourth instance before it is written.
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
 | 4 — a derived artifact re-derives or says it is derived | **in progress.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites** and enforced by reading the files back. Enforcing it found **four more unstamped views already shipped** — see *Four more of the same shape*, below. Auto-discovery of a future writer is not built |
-| 5 — a broken artifact fails at the gate that owns it | not started |
+| 5 — a broken artifact fails at the gate that owns it | **done.** Five broken artifacts driven through the real sixteen-task baseline plan, each entering as the proposal a codegen agent returns, each asserted to stop at the task that owns it **for that task's own reason** — with every task before it passed and every task after it never run. Plus a healthy control and a repaired case — see *Where each defect stops*, below |
 
 ### Three of the first nine rejection tests proved nothing
 
@@ -138,6 +138,94 @@ figure, while the verdict lives one branch up in `if ok and not fresh:`. A
 red-then-green run against the wrong line proves nothing just as surely as a weak
 test does, which is worth saying because the sweep is the thing everything else
 here rests on.
+
+### Where each defect stops
+
+Criterion 5 is the one the other four cannot ask: run the whole campaign against
+a deliberately broken artifact and see **where it stops**. A missing gate shows
+up as a failure three steps downstream; a gate that fires on everything shows up
+as the wrong owner. Only a gate that is both present and correct stops the
+campaign exactly where the defect is.
+
+Measured, against the real baseline plan's sixteen tasks:
+
+| artifact | stops at | tasks done |
+|---|---|---|
+| the corpus's truncated `train.py` | `write_code` (3) | 2 |
+| parses, defines no entry point | `write_code` (3) | 2 |
+| runs, raises immediately | `run_smoke_test` (8) | 7 |
+| trains, writes no metrics | `run_training` (10) | 9 |
+| metrics but no predictions | `run_inference` (11) | 10 |
+| a healthy pipeline (the control) | — | 16 |
+| a stdlib name in the PEP 723 block | — | 16 |
+
+On rogii 2026-08-08 the first of those passed `research_review` **and**
+`run_smoke_test` and failed at `run_training` — seven steps from the codegen that
+produced it, with an error naming uv rather than the file. It now stops at task 3.
+
+**The artifact enters as codegen's proposal**, not planted in the workspace.
+Planting it would test the gates against a file nothing in the system claims to
+have written, which is a different and easier question.
+
+**Each case asserts ownership, not failure.** Two assertions do the detecting:
+the campaign stopped at the **owning task**, and the recorded error is that
+gate's **own reason**. The other two — every task before it passed, every task
+after it never ran — state the criterion's wording but are *entailed* by the
+first, because today's plan is a strict sixteen-task chain that aborts on the
+first failure. Deleting them and re-running the six gate mutations killed every
+one regardless; they are kept and labelled rather than mistaken for coverage.
+
+The last of those was added on review. Asserting the task type alone could not
+tell which of a task's gates fired, and `write_code` has two that this file
+exercises — the corpus artifact trips the PEP 723 check **and** the entry-point
+check. Neutering the first left every test green, with case 1 falling through to
+the second: two cases collapsed into one, and a gate the table credits went
+uncovered.
+
+Two things the work turned up:
+
+* **`dry_run: True` disables the gates this criterion is about.** It makes the
+  smoke gate syntax-only and stubs training, so a script that raises the moment
+  it runs completes all sixteen tasks. The existing end-to-end test uses those
+  constraints, which is right for what it checks and would have made this
+  criterion vacuous.
+* **The repaired defect stops nothing, which is the correct outcome for one
+  that is prevented rather than caught.** The corpus's stdlib dependency block
+  once made uv refuse all six dependencies before the run started — defect 11, a
+  failure at the very front of the campaign whose error named none of them.
+  `strip_stdlib_dependencies` removes the offending entry during apply, and a
+  script carrying that defect and nothing else now completes all sixteen tasks.
+
+  The corpus file itself is asserted at the apply layer instead of through a
+  campaign, and that split was forced by review: after `glob` is stripped the
+  file still declares pandas, numpy, scikit-learn, lightgbm and pyarrow, so the
+  smoke gate routed to `uv run --script` and resolved five packages **against
+  PyPI**. It was the one non-hermetic test in the suite — a PyPI blip would have
+  turned this criterion's evidence red for a reason unrelated to any gate, and a
+  cold run left ~600 MB in `~/.cache/uv`. The file now passes under
+  `UV_OFFLINE=1`.
+
+Each gate was confirmed load-bearing by removing it: disabling the PEP 723 check,
+the entry-point check, the smoke verdict, the training metrics check, the
+inference gate, or the stdlib strip each turns a case red — and removing the
+training gate produces exactly the reading this criterion exists to catch,
+*"stopped at run_inference, not run_training"*.
+
+**The fixtures take the smoke gate's short path**, and that was found by review
+rather than by design. The smoke gate runs the same `pipeline/train.py` from the
+same directory the training step will, so a fixture that wrote unconditionally
+left `metrics.json` and `predictions.csv` on disk at task 8 — inside the training
+gate's freshness window, because these scripts finish in milliseconds. Training
+and inference then found their evidence already there, and stubbing
+`TrainingRunner.run` to execute nothing at all left every test green: a campaign
+in which training never ran still reported sixteen tasks done. The fixtures now
+read `LABPILOT_SMOKE`, the flag the gate already sets for exactly this purpose,
+and that same stub now fails three tests.
+
+It is worth naming what that was: a control that could not tell a working
+pipeline from a campaign that skipped the work. Everything the file asserts about
+the five *broken* artifacts was true throughout — but the case whose job is to
+prove the harness reaches task 16 was being satisfied by a side effect of task 8.
 
 ### Four more of the same shape
 
