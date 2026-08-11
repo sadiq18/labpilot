@@ -184,7 +184,15 @@ rather than by reading:
   overlay wiring deleted — and with it deleted, the rule guarded six files that
   were no longer there.
 
-A fourth round then found the overlay's own stamp naming `research/evidence/`,
+A fifth round found the strip on the *write* path uncovered — reverting it left
+all 2084 tests green while every upsert prepended another note, and
+`load_skill_overlay` strips only the leading one, so the rest reached the prompt.
+Same class as the read-path finding, one function along. It also found the
+stamp-only write unguarded where its sibling twenty lines below catches `OSError`,
+so one read-only overlay skipped every overlay after it and the passes that
+follow — against the module's own *"repair must never break a run"*.
+
+A fourth round found the overlay's own stamp naming `research/evidence/`,
 which resolves to nothing from a file under the competition workspace while the
 cards sit under the knowledge tree. That is the **third** stamp on this milestone
 to name the wrong place, after `comparison.md` and the execution report. The

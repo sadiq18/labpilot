@@ -161,8 +161,12 @@ def repair_skill_overlays(
             # Including the empty file the previous version of this function
             # wrote when every lesson was dropped.
             if unstamped:
-                path.write_text(stamped_overlay(original), encoding="utf-8")
-                changed.append(path.name)
+                try:
+                    path.write_text(stamped_overlay(original), encoding="utf-8")
+                except OSError as exc:
+                    logger.warning("could not stamp overlay %s: %s", path.name, exc)
+                else:
+                    changed.append(path.name)
             continue
 
         kept: list[str] = []

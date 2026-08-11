@@ -196,3 +196,47 @@ def test_the_overlay_stamp_does_not_point_at_a_sibling_that_is_not_there(tmp_pat
 
     assert "<knowledge>" in note, "the stamp must say which tree the cards are in"
     assert not (tmp_path / "research" / "evidence").exists()
+
+
+def test_a_second_lesson_does_not_add_a_second_stamp(tmp_path):
+    """The strip on the *write* path. Without it each upsert prepends another
+    note, and `load_skill_overlay` strips only the leading one — so the rest
+    reach the prompt."""
+    from labpilot.research_engine.shared.skills import upsert_skill_overlay
+
+    for lesson in ("E-001", "E-002"):
+        upsert_skill_overlay(tmp_path, "code_engineer", lesson_id=lesson, keep=["SWA"])
+
+    written = (overlay_dir(tmp_path) / "code_engineer.md").read_text(encoding="utf-8")
+
+    assert written.count("Derived view") == 1
+    assert "Derived view" not in load_skill_overlay(tmp_path, "code_engineer")
+
+
+def test_an_unwritable_overlay_does_not_abort_the_repair(tmp_path):
+    """`repair must never break a run` — the sibling write is guarded and the
+    stamp-only branch was not, so one read-only file skipped every overlay after
+    it and the passes that follow."""
+    competition = "demo"
+    knowledge = tmp_path / "knowledge"
+    overlays = overlay_dir(tmp_path)
+    overlays.mkdir(parents=True)
+    blocked = overlays / "aaa_agent.md"
+    blocked.write_text("", encoding="utf-8")
+    blocked.chmod(0o444)
+    later = overlays / "zzz_agent.md"
+    later.write_text("<!-- lesson:E-001 -->\n## Lesson `E-001`\n- Keep: SWA\n", encoding="utf-8")
+    EvidenceCardStore(knowledge, competition).save(
+        EvidenceCard(
+            competition=competition,
+            treatment_experiment="E-001",
+            decision=EvidenceDecision.ACCEPTED,
+        )
+    )
+
+    try:
+        repair_skill_overlays(tmp_path, knowledge, competition)
+    finally:
+        blocked.chmod(0o644)
+
+    assert is_stamped(later.read_text(encoding="utf-8")), "the file after it was skipped"
