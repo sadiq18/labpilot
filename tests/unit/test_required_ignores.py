@@ -18,10 +18,14 @@ import pytest
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import (
     REQUIRED_IGNORES,
+    SHARED_STATE_IGNORES,
     WORKTREE_DIRNAME,
     ensure_required_ignores,
     scaffold_workspace,
 )
+
+#: Everything `ensure_required_ignores` reconciles, across both its groups.
+ALL_IGNORES = (*REQUIRED_IGNORES, *SHARED_STATE_IGNORES)
 
 
 def test_appends_missing_patterns_to_an_old_gitignore(tmp_path: Path) -> None:
@@ -36,10 +40,10 @@ def test_appends_missing_patterns_to_an_old_gitignore(tmp_path: Path) -> None:
     )
 
     added = ensure_required_ignores(root)
-    assert set(added) == set(REQUIRED_IGNORES)
+    assert set(added) == set(ALL_IGNORES)
 
     text = (root / ".gitignore").read_text(encoding="utf-8")
-    for pattern in REQUIRED_IGNORES:
+    for pattern in ALL_IGNORES:
         assert pattern in text
     # User customisation preserved, not rewritten.
     assert "scratch/" in text
@@ -68,7 +72,7 @@ def test_appends_only_the_genuinely_missing_pattern(tmp_path: Path) -> None:
 
     added = ensure_required_ignores(root)
     assert already not in added
-    assert set(added) == set(REQUIRED_IGNORES) - {already}
+    assert set(added) == set(ALL_IGNORES) - {already}
     # Not duplicated.
     text = (root / ".gitignore").read_text(encoding="utf-8")
     assert text.count(already) == 1
@@ -92,7 +96,7 @@ def test_ensure_roots_reconciles_an_existing_workspace(tmp_path: Path) -> None:
     Workspace.from_client(client).ensure_roots()
 
     text = gitignore.read_text(encoding="utf-8")
-    for pattern in REQUIRED_IGNORES:
+    for pattern in ALL_IGNORES:
         assert pattern in text
 
 
@@ -130,7 +134,7 @@ def test_unwritable_gitignore_warns_and_names_the_patterns(
 
     logged = " ".join(r.getMessage() for r in caplog.records)
     assert "Could not add" in logged
-    for pattern in REQUIRED_IGNORES:
+    for pattern in ALL_IGNORES:
         assert pattern in logged
 
 
@@ -154,6 +158,12 @@ def test_patterns_actually_ignore_the_real_artifact_names(tmp_path: Path) -> Non
         # branch, so an unmatched pattern here makes K copies of the working
         # tree committable.
         ws_root / WORKTREE_DIRNAME / "S-001" / "E-001" / "train.py": True,
+        # Bulk state (M11): tracked, each of these rode into every worktree —
+        # 105 MB per branch on a measured workspace.
+        ws_root / "knowledge" / "knowledge.db": True,
+        ws_root / "runs" / "E-001" / "oof.csv": True,
+        # ...but the hypothesis JSONs beside the database are small and stay
+        # tracked, which is why the pattern names the file and not `knowledge/`.
         hyp_dir / "H-001.json": False,  # real data — must stay tracked
     }
     for path, _ in artifacts.items():

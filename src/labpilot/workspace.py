@@ -73,7 +73,27 @@ REQUIRED_IGNORES: tuple[str, ...] = (
     f"{WORKTREE_DIRNAME}/",
 )
 
+#: Bulk research state, kept out of the tracked tree so `git worktree add`
+#: does not hand every branch of a fan-out its own copy. Measured on a 734 MB
+#: workspace: tracking these made each worktree cost 105 MB instead of 60 KB.
+#:
+#: Narrowed to the database rather than all of `knowledge/`: the hypothesis
+#: JSONs beside it are small and deliberately tracked
+#: (`test_required_ignores.py` asserts it). Design doc §8, "Disk usage".
+SHARED_STATE_IGNORES: tuple[str, ...] = (
+    "**/knowledge.db",
+    "runs/",
+)
+
 _REQUIRED_IGNORE_HEADER = "# Machine-local artifacts (locks, temp files, DB sidecars)"
+_SHARED_STATE_HEADER = "# Bulk research state — never copied into a per-branch worktree"
+
+#: Every group `ensure_required_ignores` reconciles, each under its own header
+#: so an existing `.gitignore` gains the same sections a fresh one is born with.
+_IGNORE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (_REQUIRED_IGNORE_HEADER, REQUIRED_IGNORES),
+    (_SHARED_STATE_HEADER, SHARED_STATE_IGNORES),
+)
 
 _GITIGNORE = f"""\
 # Competition data (often huge)
@@ -89,6 +109,9 @@ models/
 
 {_REQUIRED_IGNORE_HEADER}
 {chr(10).join(REQUIRED_IGNORES)}
+
+{_SHARED_STATE_HEADER}
+{chr(10).join(SHARED_STATE_IGNORES)}
 
 # Python / OS
 __pycache__/
@@ -549,16 +572,23 @@ def ensure_required_ignores(root: Path) -> list[str]:
         logger.warning("Could not read %s to check ignore patterns: %s", gitignore, exc)
         return []
     present = {line.strip() for line in existing.splitlines()}
-    missing = [pattern for pattern in REQUIRED_IGNORES if pattern not in present]
+    blocks: list[str] = []
+    missing: list[str] = []
+    for header, patterns in _IGNORE_GROUPS:
+        absent = [pattern for pattern in patterns if pattern not in present]
+        if not absent:
+            continue
+        blocks.append(f"\n{header}\n" + "\n".join(absent) + "\n")
+        missing.extend(absent)
     if not missing:
         return []
-    block = f"\n{_REQUIRED_IGNORE_HEADER}\n" + "\n".join(missing) + "\n"
     try:
-        gitignore.write_text(existing.rstrip("\n") + "\n" + block, encoding="utf-8")
+        gitignore.write_text(existing.rstrip("\n") + "\n" + "".join(blocks), encoding="utf-8")
     except OSError as exc:
         logger.warning(
-            "Could not add %d machine-local ignore pattern(s) to %s: %s. "
-            "Lock and temp files may be committed; add these manually: %s",
+            "Could not add %d ignore pattern(s) to %s: %s. "
+            "Lock, temp and shared-state files may be committed; "
+            "add these manually: %s",
             len(missing),
             gitignore,
             exc,

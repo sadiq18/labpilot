@@ -484,15 +484,59 @@ write** so that no `await`, and therefore no cancellation point, separates the
 record landing on disk from the `ExperimentCompleted` that announces it —
 otherwise a cancelled branch could leave a record no subscriber ever saw.
 
-**Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
-a required pre-build check, same as §5's budget question, but it does not need
-external sign-off — it's answerable by inspecting this repo's own workspace
-layout, not a cross-team decision. Confirm whether large inputs (`.cache/`,
-`runs/`) are shared across worktrees (they can be, via a symlink into a
-common directory outside the git-tracked tree) or would otherwise be
-duplicated K times — if the latter, K needs a disk-aware ceiling in addition
-to the concurrency-budget ceiling already in §3. Record the answer here before
-implementation starts.
+**Disk usage — answered, and the disk was the smaller half.** K worktrees means
+K checkouts of the *tracked* tree; `git worktree add` never copies ignored
+files, so `data/`, `.cache/` and `models/` were already safe. What was not safe
+is that `init_git_repo` runs `git add -A` once at scaffold, so everything else
+present at that moment became tracked — while every later commit goes through
+`snapshot_before_experiment`, which only touches
+`CODE_PATHS = ("pipeline", "src", "configs", "tests")`. `knowledge.db` and
+`runs/` were therefore tracked by accident, committed once, never updated
+again, and copied into every branch.
+
+Measured on a 734 MB workspace (300 MB `data/`, 200 MB `.cache/`, 100 MB
+`models/`, 60 MB `runs/`, 35 MB `knowledge.db`, incompressible bytes):
+
+| | tracked as before | `knowledge.db` + `runs/` ignored |
+|---|---|---|
+| after `git init` | 839 MB | 729 MB |
+| per worktree | **+104.9 MB** | **+0.06 MB** |
+| K=5 total | 1364 MB | 729 MB |
+
+So K needs no disk-aware ceiling. The fix is `SHARED_STATE_IGNORES` in
+`workspace.py`, narrowed to `**/knowledge.db` rather than all of `knowledge/`
+because the hypothesis JSONs beside it are small and deliberately tracked.
+
+**The real reason is staleness and drift, not bytes.** A per-branch
+`knowledge/` is not merely a wasteful copy — it is a *fork*. Each branch would
+read a snapshot frozen at campaign start, so nothing a sibling learns mid-step
+is visible to the others, and each would write its findings into a private file
+that teardown deletes. K branches would end the step having diverged from each
+other and from the shared base, with every claim, hypothesis transition and
+evidence card written into a copy nobody reads. That also silently voids §8's
+atomic claim and write-serialisation work above: both exist to make *shared*
+concurrent writes safe, and there is nothing to serialise once each branch owns
+its own database.
+
+Isolation is wanted for the *working tree* — the code a branch edits and would
+otherwise clobber. It is not wanted for research state, which is the one thing
+every branch must agree on.
+
+**Ignoring is only half of it.** Keeping these paths untracked stops them being
+*copied*; it does not make a branch read the shared ones. That needs the
+`Workspace` facade, which already takes `knowledge_dir`, `runs_dir` and
+`code_root` independently: task 7 points `code_root` at the worktree and leaves
+the other two on the shared workspace. Without that, a branch simply recreates
+an empty `knowledge/` inside its worktree and the drift returns.
+
+**Migration gap.** A `.gitignore` pattern does not untrack a file that is
+already tracked, so workspaces scaffolded before this change keep copying
+`knowledge.db` and `runs/` into every worktree. `ensure_required_ignores` fixes
+the pattern but cannot fix the index. Task 7 runs `reconcile_worktrees` at
+campaign start and already shells out to git; untracking there
+(`git rm -r --cached`) is the natural home, and is deliberately not done
+automatically here — it rewrites a user's index and belongs with the change
+that actually depends on it.
 
 **Compute budget (CPU/threads) — real, unaddressed gap.** Nothing sets thread
 or core limits today — confirmed via a repo-wide search: zero hits for
