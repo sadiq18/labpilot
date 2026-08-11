@@ -139,8 +139,17 @@ def promote_within_cohort(
         # smaller cohort than `members` now records — a later, better branch
         # would be listed as present and still not be promoted, purely
         # because *its* outcome file was the unreadable one.
-        effective_key = metric_key or state.get("metric_key")
-        effective_maximize = maximize if metric_key else state.get("maximize", maximize)
+        # Type-checked on the way back in, like `members`: these are read from
+        # a file on disk, and a `metric_key` that is not a string reaches
+        # `metrics.get(...)` as an unhashable key, killing the cohort for good
+        # behind the subscriber's guard.
+        stored_key = state.get("metric_key")
+        stored_maximize = state.get("maximize")
+        effective_key = metric_key or (stored_key if isinstance(stored_key, str) else None)
+        if metric_key or not isinstance(stored_maximize, bool):
+            effective_maximize = maximize
+        else:
+            effective_maximize = stored_maximize
         if effective_key:
             state["metric_key"] = effective_key
             state["maximize"] = effective_maximize
@@ -191,24 +200,19 @@ def _candidates_for(
     not written one yet (or wrote it somewhere this cohort cannot see), and
     ranking it on absent metrics would be inventing a result.
 
-    Metrics found once are cached onto the member entry, so a K-branch cohort
-    costs K record lookups over its lifetime rather than K per arrival — a
-    miss in `find_experiment_record` falls through to globbing and parsing
-    every file in `experiment/by_id/`, which grows with the whole campaign,
-    not with the cohort.
+    Re-read on every arrival rather than cached into the member entry. The
+    record in `experiment/by_id/` is the one writer for these fields, and a
+    copy in the cohort file would be a second — stale after a re-run, and
+    supplying a different `experiment_id` than the record does, which the
+    tie-break reads. K direct reads per arrival, on a cohort of a handful of
+    branches, is not worth a duplicate source of truth.
     """
     candidates: list[dict[str, Any]] = []
     for member in members:
         member_id = str(member.get("id") or "")
         if not member_id:
             continue
-        cached = member.get("metrics")
-        if isinstance(cached, dict):
-            record: dict[str, Any] | None = {"experiment_id": member_id, "metrics": cached}
-        else:
-            record = find_experiment_record(runs_dir, member_id)
-            if record is not None and isinstance(record.get("metrics"), dict):
-                member["metrics"] = record["metrics"]
+        record = find_experiment_record(runs_dir, member_id)
         if record is None:
             continue
         candidates.append(

@@ -172,6 +172,31 @@ def test_completed_at_is_stored_per_member(tmp_path: Path) -> None:
     assert state["promoted"] == "E-1"  # tied score, finished first
 
 
+def test_a_candidate_looks_the_same_however_many_times_it_is_ranked(
+    tmp_path: Path,
+) -> None:
+    """Ranking reads `experiment_id` to break ties, so a candidate must carry
+    the record's own id every time. Caching a member's metrics into the cohort
+    file and rebuilding a stand-in record around them supplied the execution
+    id instead, making the tie-break depend on how often the cohort had been
+    re-ranked.
+    """
+    runs = tmp_path / "runs"
+    _record(runs, "E-1", 0.5)
+    _record(runs, "E-2", 0.5)  # a genuine tie
+
+    seen = set()
+    for _ in range(3):
+        _land(runs, "E-1")
+        _land(runs, "E-2")
+        state = json.loads(cohort_path(runs, "C-1").read_text(encoding="utf-8"))
+        seen.add(state["promoted"])
+
+    assert len(seen) == 1
+    # And the cohort file stays a membership record, not a copy of the records.
+    assert all(set(m) == {"id", "completed_at"} for m in state["members"])
+
+
 def test_a_later_arrival_that_resolves_no_metric_still_gets_ranked(
     tmp_path: Path,
 ) -> None:
@@ -261,6 +286,72 @@ def test_malformed_member_entries_are_dropped_not_fatal(tmp_path: Path) -> None:
     state = _land(runs, "E-1")
 
     assert [m["id"] for m in state["members"]] == ["E-9", "E-1"]
+
+
+@pytest.mark.parametrize(
+    "stored_key", ['{"not": "a string"}', '["cv_rmse"]', "42"]
+)
+def test_a_wrongly_typed_stored_metric_key_does_not_kill_the_cohort(
+    tmp_path: Path, stored_key: str
+) -> None:
+    """Only read when *this* arrival resolved no key of its own — which is the
+    fallback path added for stale verdicts, so it has to survive the file. A
+    non-string key reaches `metrics.get(...)` as an unhashable value and
+    raises behind the subscriber's guard, retiring the cohort silently.
+    """
+    runs = tmp_path / "runs"
+    _record(runs, "E-1", 0.50)
+    path = cohort_path(runs, "C-1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'{{"metric_key": {stored_key}, "members": []}}', encoding="utf-8")
+
+    state = promote_within_cohort(
+        runs,
+        "C-1",
+        member_id="E-1",
+        completed_at=None,
+        competition="titanic",
+        metric_key=None,  # forces the stored key to be read
+        maximize=True,
+    )
+
+    assert [m["id"] for m in state["members"]] == ["E-1"]
+    assert state.get("promoted") is None
+
+
+def test_a_wrongly_typed_stored_direction_is_not_trusted(tmp_path: Path) -> None:
+    """A non-bool `maximize` is truthy, so an error metric would be maximised
+    and the worst branch promoted."""
+    runs = tmp_path / "runs"
+    _record(runs, "E-1", 0.50)
+    _record(runs, "E-2", 0.20)
+    path = cohort_path(runs, "C-1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '{"metric_key": "cv_rmse", "maximize": "yes", "members": []}', encoding="utf-8"
+    )
+
+    state = promote_within_cohort(
+        runs,
+        "C-1",
+        member_id="E-1",
+        completed_at=None,
+        competition="titanic",
+        metric_key=None,
+        maximize=False,  # the caller's own direction, which must win
+    )
+    state = promote_within_cohort(
+        runs,
+        "C-1",
+        member_id="E-2",
+        completed_at=None,
+        competition="titanic",
+        metric_key=None,
+        maximize=False,
+    )
+
+    assert state["maximize"] is False
+    assert state["promoted"] == "E-2"
 
 
 def test_a_corrupt_cohort_file_does_not_stop_the_next_branch(tmp_path: Path) -> None:
