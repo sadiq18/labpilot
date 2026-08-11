@@ -285,6 +285,13 @@ def _steps_since_improvement(values: list[float], maximize: bool, epsilon: float
     and nothing ever counts as an improvement. `epsilon` is the same
     noise floor `plateau` uses, so the two agree about what "no change" means.
 
+    That epsilon is **absolute**, and must be set to the metric's scale. It
+    was harmless while only `plateau` read it — that stop needs near-exact
+    ties and has fired on essentially nothing — but this drives the gathering
+    gate and the policy's view of progress, so a default of 1e-6 against a
+    metric whose values live near or below it swallows every real gain: the
+    campaign reads as permanently stagnant while improving on every run.
+
     One pass, carrying the best rather than re-scanning the prefix: this runs
     in the observe bundle and again in the gathering gate, so it is paid at
     least twice per conductor step against a series the campaign is designed

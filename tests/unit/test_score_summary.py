@@ -21,6 +21,7 @@ from labpilot.research_engine.conductor.budgets import (
     BudgetConfig,
     BudgetState,
     ScoreEvent,
+    comparable_tail,
     evaluate_stops,
     score_summary,
 )
@@ -56,11 +57,18 @@ def _state(*values: float, **kw) -> BudgetState:
 
 
 def _with_history(state: BudgetState) -> BudgetState:
-    """The same state as the M8-2 writer leaves it — `metric_history` derived
-    from the series, which is what `evaluate_stops` reads."""
+    """The same state as the M8-2 writer leaves it.
+
+    `metric_history` comes from `comparable_tail`, not from every event —
+    the writer narrows the derived window at a metric change so `plateau`
+    never spans two scales. Deriving it from all events here would hand a
+    later test a state the writer cannot produce, and it would then assert
+    against a plateau window that does not exist in production.
+    """
+    comparable = comparable_tail(state.score_events)
     return state.model_copy(
         update={
-            "metric_history": [e.value for e in state.score_events],
+            "metric_history": [e.value for e in comparable],
             "last_metric": state.score_events[-1].value if state.score_events else None,
         }
     )
@@ -314,7 +322,7 @@ def test_the_bundle_reflects_the_state_the_caller_is_acting_on(tmp_path: Path):
         in_hand = _state(194.8, 195.0, 196.0, 197.0)  # stagnant
 
         observe = build_observe_bundle(
-            store, ws, session.id, include_context=False, budget_state=in_hand
+            store, ws, session.id, include_context=False, budgets=(BudgetConfig(), in_hand)
         )
 
         assert observe["steps_since_improvement"] == 3
@@ -358,8 +366,7 @@ def test_decide_next_feeds_one_source_to_the_prompt_and_the_gate(tmp_path: Path)
             session.id,
             registry,
             prefer_offline=True,
-            budget_state=in_hand,
-            budget_config=BudgetConfig(plateau_window=3),
+            budgets=(BudgetConfig(plateau_window=3), in_hand),
         )
 
         assert observe["steps_since_improvement"] == 3
@@ -416,8 +423,8 @@ def test_a_stagnant_campaign_reopens_evidence_gathering(tmp_path: Path):
     stagnant = _state(194.8, 195.0, 196.0, 197.0)
     improving = _state(197.0, 196.0, 195.0, 194.0)
 
-    ok_stagnant, reason = should_gather_evidence(ws, stagnant, config)
-    ok_improving, _ = should_gather_evidence(ws, improving, config)
+    ok_stagnant, reason = should_gather_evidence(ws, (config, stagnant))
+    ok_improving, _ = should_gather_evidence(ws, (config, improving))
 
     assert ok_stagnant is True
     assert "no improvement" in reason
@@ -432,8 +439,8 @@ def test_the_stagnant_gate_changes_the_allowlist(tmp_path: Path):
     config = BudgetConfig(plateau_window=3)
     allowlist = {"analyze_competition", "run_plan"}
 
-    stagnant = available_tools(ws, allowlist, _state(194.8, 195.0, 196.0, 197.0), config)
-    improving = available_tools(ws, allowlist, _state(197.0, 196.0, 195.0, 194.0), config)
+    stagnant = available_tools(ws, allowlist, (config, _state(194.8, 195.0, 196.0, 197.0)))
+    improving = available_tools(ws, allowlist, (config, _state(197.0, 196.0, 195.0, 194.0)))
 
     assert "analyze_competition" in stagnant
     assert "analyze_competition" not in improving
@@ -445,7 +452,7 @@ def test_a_campaign_below_the_window_is_not_yet_stagnant(tmp_path: Path):
     ws = _stocked(_ws(tmp_path))
     config = BudgetConfig(plateau_window=3)
 
-    ok, _ = should_gather_evidence(ws, _state(194.8, 195.0, 196.0), config)
+    ok, _ = should_gather_evidence(ws, (config, _state(194.8, 195.0, 196.0)))
 
     assert ok is False
 
@@ -457,7 +464,7 @@ def test_a_zero_window_does_not_make_every_campaign_stagnant(tmp_path: Path):
     a config the user can set."""
     ws = _stocked(_ws(tmp_path))
 
-    ok, reason = should_gather_evidence(ws, BudgetState(), BudgetConfig(plateau_window=0))
+    ok, reason = should_gather_evidence(ws, (BudgetConfig(plateau_window=0), BudgetState()))
 
     assert ok is False, f"a zero window opened the gate on an empty series: {reason}"
 
@@ -478,11 +485,27 @@ def test_where_the_gate_sits_relative_to_the_plateau_stop(tmp_path: Path):
 
     flat_at_window = _state(194.8, 194.8, 194.8)
     assert evaluate_stops(config, _with_history(flat_at_window)) == "plateau"
-    assert should_gather_evidence(ws, flat_at_window, config)[0] is False
+    assert should_gather_evidence(ws, (config, flat_at_window))[0] is False
 
     drifting = _state(194.8, 195.0, 196.0, 197.0)
     assert evaluate_stops(config, _with_history(drifting)) == "none"
-    assert should_gather_evidence(ws, drifting, config)[0] is True
+    assert should_gather_evidence(ws, (config, drifting))[0] is True
+
+
+def test_the_gate_uses_the_campaigns_own_window_not_a_default(tmp_path: Path):
+    """The threshold lives in the config and the series in the state, so they
+    travel as one pair.
+
+    Passed separately, a caller could supply the series alone and have it
+    judged against a default window of 3 — firing two experiments earlier than
+    a campaign configured for 5 asked for, silently. The tuple makes that
+    unrepresentable.
+    """
+    ws = _stocked(_ws(tmp_path))
+    four_flat = _state(194.8, 195.0, 196.0, 197.0)  # steps_since_improvement == 3
+
+    assert should_gather_evidence(ws, (BudgetConfig(plateau_window=3), four_flat))[0] is True
+    assert should_gather_evidence(ws, (BudgetConfig(plateau_window=5), four_flat))[0] is False
 
 
 def test_no_series_is_not_the_same_answer_as_improving(tmp_path: Path):
@@ -490,5 +513,5 @@ def test_no_series_is_not_the_same_answer_as_improving(tmp_path: Path):
     improving" — the clause has nothing to say, and the other two decide."""
     ws = _stocked(_ws(tmp_path))
 
-    assert should_gather_evidence(ws, None, None) == should_gather_evidence(ws)
-    assert should_gather_evidence(ws, BudgetState(), BudgetConfig()) == should_gather_evidence(ws)
+    assert should_gather_evidence(ws, None) == should_gather_evidence(ws)
+    assert should_gather_evidence(ws, (BudgetConfig(), BudgetState())) == should_gather_evidence(ws)
