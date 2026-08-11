@@ -224,7 +224,11 @@ including the codegen prompt — the regression an earlier round had already fix
 once. Every fixture that reached a reader used an *unstamped* brief, so the strip
 path was never entered: the coverage was of the helper in isolation and of call
 sites with nothing to strip. All four are now driven over a brief the real writer
-stamped, and each reversion goes red.
+stamped, and each reversion goes red — including `compile_baseline_plan`, which
+was the one the first attempt at this claim still missed. Its excerpt reaches two
+durable sinks: `H-BASELINE.observation` keeps 280 characters and the baseline
+plan's goal keeps 120, so the 250-character block would have filled almost all of
+both, and both are stored and re-read as model input.
 
 **What is not built:** discovering a *future* writer automatically. The five are
 enumerated by hand, so a sixth added later is invisible until someone adds it —

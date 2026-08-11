@@ -362,9 +362,43 @@ def _reader_workspace_provider(knowledge) -> str:
     return "\n".join(item.text for item in items)
 
 
+def _reader_baseline_planner(knowledge) -> str:
+    """`compile_baseline_plan` — the reader whose output *persists*.
+
+    The brief excerpt reaches two durable places: `H-BASELINE.observation`, which
+    keeps `brief_excerpt.strip()[:280]`, and the baseline plan's goal, which keeps
+    a 120-character snippet. Unstripped, the 250-character provenance block fills
+    almost all of both, and both are stored and re-read as LLM input.
+    """
+    import json
+
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.planner import compile_baseline_plan
+    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+
+    paths = ResearchPaths(knowledge, "demo").ensure()
+    paths.report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "competition": "demo",
+                "techniques": {"items": []},
+                "retrieval": {"queries": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = compile_baseline_plan("demo", knowledge_dir=knowledge)
+    baseline = HypothesisStore(knowledge, "demo").ensure_baseline(brief_excerpt="")
+    # Both durable sinks, not just the returned object.
+    return f"{plan.goal}\n{baseline.observation}"
+
+
 _READERS = [
     pytest.param(_reader_retrieval, id="planner_retrieval"),
     pytest.param(_reader_workspace_provider, id="workspace_provider"),
+    pytest.param(_reader_baseline_planner, id="baseline_planner"),
 ]
 
 

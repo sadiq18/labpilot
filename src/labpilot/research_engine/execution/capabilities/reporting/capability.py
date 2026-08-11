@@ -108,9 +108,7 @@ class ReportingCapability(BaseCapability):
                 # execution's. The per-execution durable record is this
                 # execution's own evidence. Reported reviewing this branch, and
                 # the third time a stamp named the wrong thing.
-                source_of_record=(
-                    f"research/executions/{context.execution.id}/evidence/"
-                ),
+                source_of_record=f"research/executions/{context.execution.id}/evidence/",
                 warning=(
                     "A snapshot of the workspace's metrics.json when this report "
                     "was written. That file is shared across executions and is "
