@@ -10,9 +10,22 @@ from __future__ import annotations
 from labpilot.research_engine.agents.promotion import rank_candidates
 
 
-def _c(name: str, value=None, completed_at: str | None = None) -> dict:
+def _c(name: str, value=None, completed_at: str | None = None, **metric_fields) -> dict:
+    """A candidate as `_candidates_for` builds one.
+
+    `metric_fields` exists so a test can produce the metrics dict a *real*
+    run writes, not only the tidy `{key: float}` shape — a placeholder run's
+    `status` marker is a field of `metrics`, and a fixture that cannot express
+    it cannot catch a ranker that ignores it.
+    """
     metrics = {} if value is None else {"cv_rmse": value}
+    metrics.update(metric_fields)
     return {"experiment_id": name, "metrics": metrics, "completed_at": completed_at}
+
+
+def _stub(name: str, value: float) -> dict:
+    """Exactly what `ExperimentSpecialist` records for a dry-run branch."""
+    return _c(name, value, status="dry_run_stub")
 
 
 def test_lowest_wins_when_minimising() -> None:
@@ -96,6 +109,32 @@ def test_candidates_missing_the_metric_are_skipped() -> None:
         maximize=False,
     )
     assert best["experiment_id"] == "real"
+
+
+def test_a_run_that_never_trained_a_model_cannot_win() -> None:
+    """The rogii 2026-08-07 failure, as a cohort: a stub's 0.5 against a real
+    run's 194.80. Nothing about a placeholder's number is comparable, and on
+    an error metric it beats every genuine result.
+    """
+    best = rank_candidates(
+        [_stub("stub", 0.5), _c("real", 194.80)], "cv_rmse", maximize=False
+    )
+    assert best["experiment_id"] == "real"
+
+
+def test_the_other_placeholder_marker_is_refused_too() -> None:
+    """`PLACEHOLDER_STATUSES` holds two; a check that hardcoded one would pass
+    the test above and still promote a scaffold."""
+    best = rank_candidates(
+        [_c("scaffold", 0.5, status="last_resort_scaffold"), _c("real", 194.80)],
+        "cv_rmse",
+        maximize=False,
+    )
+    assert best["experiment_id"] == "real"
+
+
+def test_an_all_placeholder_cohort_has_no_winner() -> None:
+    assert rank_candidates([_stub("a", 0.5), _stub("b", 0.1)], "cv_rmse", maximize=False) is None
 
 
 def test_nothing_comparable_means_no_winner() -> None:

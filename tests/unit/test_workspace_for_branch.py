@@ -144,3 +144,32 @@ def test_ensure_roots_creates_the_pinned_dirs_not_branch_copies(tmp_path: Path) 
     assert not (worktree / "data").exists()
     assert not (worktree / ".cache").exists()
     assert branch.data_dir.is_dir()
+
+
+def test_ensure_roots_leaves_a_branchs_tracked_gitignore_alone(tmp_path: Path) -> None:
+    """`.gitignore` is tracked. Appending to the copy inside a worktree dirties
+    the branch before its experiment starts, and the edit lands in the
+    snapshot commit and `files_changed` as if the experiment made it.
+    """
+    client = scaffold_workspace(tmp_path / "titanic", "titanic")
+    shared = Workspace.from_client(client)
+    worktree = tmp_path / "worktrees" / "b1"
+    worktree.mkdir(parents=True)
+    # A checkout whose committed .gitignore predates a newly-added pattern.
+    (worktree / ".gitignore").write_text("*.pyc\n", encoding="utf-8")
+
+    shared.for_branch(worktree).ensure_roots()
+
+    assert (worktree / ".gitignore").read_text(encoding="utf-8") == "*.pyc\n"
+
+
+def test_the_shared_workspace_still_reconciles_its_ignores(tmp_path: Path) -> None:
+    """The skip is for branches only — the campaign's own workspace is where
+    a newly-added pattern has to land."""
+    client = scaffold_workspace(tmp_path / "titanic", "titanic")
+    shared = Workspace.from_client(client)
+    (Path(client.root) / ".gitignore").write_text("*.pyc\n", encoding="utf-8")
+
+    shared.ensure_roots()
+
+    assert (Path(client.root) / ".gitignore").read_text(encoding="utf-8") != "*.pyc\n"

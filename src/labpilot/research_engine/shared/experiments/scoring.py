@@ -11,11 +11,37 @@ is how four disagreeing "primary metric" lookups happened before.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from labpilot.research_engine.workspace_facade import Workspace
 
 logger = logging.getLogger(__name__)
+
+
+def comparable_metric_value(metrics: Any, metric_key: str) -> float | None:
+    """This run's score on `metric_key`, or None if it is not comparable.
+
+    One definition of "comparable", because every consumer that grew its own
+    kept a different subset and the missing one was always the placeholder
+    check. Refuses, in order:
+
+    * metrics from a run that never trained a model — the marker is explicit
+      and reading past it is how a stub's 0.5 was compared against a real
+      run's 194.80 (`evidence/builder.py`, measured rogii 2026-08-07);
+    * a `bool`, which is an `int` in Python and would rank as 1.0;
+    * anything non-numeric, or NaN/inf — every NaN comparison is False, so an
+      admitted NaN wins a `min()` by default rather than losing.
+    """
+    from labpilot.research_engine.evidence.builder import is_placeholder_metrics
+
+    if not isinstance(metrics, dict) or is_placeholder_metrics(metrics):
+        return None
+    raw = metrics.get(metric_key)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    return value if math.isfinite(value) else None
 
 
 def resolve_metric_and_direction(
@@ -36,11 +62,20 @@ def resolve_metric_and_direction(
     every caller agrees with the campaign rather than inventing a second
     opinion.
     """
-    from labpilot.research_engine.evidence.builder import metrics_as_experiment
+    from labpilot.research_engine.evidence.builder import (
+        is_placeholder_metrics,
+        metrics_as_experiment,
+    )
     from labpilot.research_engine.intelligence.paths import ResearchPaths
     from labpilot.research_engine.shared.experiments.comparator import (
         resolve_primary_metric_key_and_direction,
     )
+
+    if is_placeholder_metrics(metrics):
+        # A run that never trained a model has no key worth agreeing on, and
+        # letting it name the cohort's metric would be that run steering a
+        # comparison it cannot take part in.
+        return None, fallback_maximize
 
     paths = ResearchPaths(workspace.knowledge_dir, workspace.competition)
     experiment = metrics_as_experiment(execution_id, workspace.competition, metrics)

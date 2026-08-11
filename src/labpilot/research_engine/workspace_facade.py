@@ -46,6 +46,10 @@ class Workspace(BaseModel):
     cache_dir_override: Path | None = None
 
     _client: CompetitionWorkspace | None = PrivateAttr(default=None)
+    #: Set by :meth:`for_branch`. Marks a workspace whose `root` is a worktree
+    #: checkout rather than the campaign's own, so `ensure_roots` leaves the
+    #: tracked files in it alone.
+    _branched: bool = PrivateAttr(default=False)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -176,7 +180,7 @@ class Workspace(BaseModel):
         Pins resolve before the copy, so branching a branch keeps the original
         shared locations rather than compounding.
         """
-        return self.model_copy(
+        branch = self.model_copy(
             update={
                 "root": Path(code_root).resolve(),
                 "data_dir_override": self.data_dir,
@@ -184,6 +188,8 @@ class Workspace(BaseModel):
                 "runs_dir": self.effective_runs_dir,
             }
         )
+        branch._branched = True
+        return branch
 
     @property
     def _paths(self) -> WorkspacePaths:
@@ -256,6 +262,12 @@ class Workspace(BaseModel):
         only path that runs against an *existing* workspace, so it is where a
         newly-added lock/temp pattern can actually reach the workspaces that
         generate those files. `scaffold_workspace` only covers fresh ones.
+
+        Not on a branch, though: ``.gitignore`` is tracked, so appending to
+        the copy inside a worktree would dirty the branch before its
+        experiment starts and fold an unrelated edit into the snapshot commit
+        and ``files_changed``. The shared workspace this branch came from runs
+        the reconciliation itself, and that is the copy under version control.
         """
         self.research_paths.ensure()
         for path in (
@@ -267,5 +279,6 @@ class Workspace(BaseModel):
             self.effective_runs_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
-        ensure_required_ignores(self.root)
+        if not self._branched:
+            ensure_required_ignores(self.root)
         return self

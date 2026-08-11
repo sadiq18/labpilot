@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -30,6 +29,7 @@ from labpilot.accessor.common.atomic_write import atomic_write_text
 from labpilot.accessor.common.file_lock import locked
 from labpilot.research_engine.agents.events import EXPERIMENT_COMPLETED, EventBus
 from labpilot.research_engine.agents.git_evolution import find_experiment_record
+from labpilot.research_engine.shared.experiments.scoring import comparable_metric_value
 
 logger = logging.getLogger(__name__)
 
@@ -71,23 +71,14 @@ def rank_candidates(
     branches can genuinely score identically, and a winner that depends on
     dict ordering would make the same cohort promote differently on a re-read.
 
-    A candidate whose metric is missing, non-numeric, or non-finite is not
-    ranked at all rather than sorted to the bottom — a diverged run's NaN
-    compares False against everything, so admitting it would let it win by
-    default under `min`.
+    What counts as a comparable score is `comparable_metric_value`'s to say,
+    not this function's — a ranker with its own opinion is how a dry-run stub
+    came to beat a real training run.
     """
     scored: list[tuple[float, dict[str, Any]]] = []
     for candidate in candidates:
-        metrics = candidate.get("metrics")
-        if not isinstance(metrics, dict):
-            continue
-        raw = metrics.get(metric_key)
-        # `bool` is an `int` in Python: a metric of `True` would otherwise
-        # rank as 1.0 against real scores.
-        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-            continue
-        value = float(raw)
-        if not math.isfinite(value):
+        value = comparable_metric_value(candidate.get("metrics"), metric_key)
+        if value is None:
             continue
         scored.append((value, candidate))
 
@@ -133,7 +124,7 @@ def promote_within_cohort(
     path = cohort_path(runs_dir, cohort_id)
     with locked(path.with_suffix(".lock")):
         state = _read_state(path)
-        members: list[dict[str, Any]] = state.get("members") or []
+        members = _members_of(state)
         if not any(m.get("id") == member_id for m in members):
             members.append({"id": member_id, "completed_at": completed_at})
 
@@ -143,16 +134,29 @@ def promote_within_cohort(
         if competition:
             state["competition"] = competition
 
-        if metric_key:
-            state["metric_key"] = metric_key
-            state["maximize"] = maximize
-            best = rank_candidates(
-                _candidates_for(runs_dir, members), metric_key, maximize=maximize
-            )
+        # The cohort's own key wins when this arrival could not resolve one.
+        # Skipping the ranking instead would leave the verdict describing a
+        # smaller cohort than `members` now records — a later, better branch
+        # would be listed as present and still not be promoted, purely
+        # because *its* outcome file was the unreadable one.
+        effective_key = metric_key or state.get("metric_key")
+        effective_maximize = maximize if metric_key else state.get("maximize", maximize)
+        if effective_key:
+            state["metric_key"] = effective_key
+            state["maximize"] = effective_maximize
+            candidates = _candidates_for(runs_dir, members)
+            best = rank_candidates(candidates, effective_key, maximize=effective_maximize)
             promoted = best.get("cohort_member_id") if best else None
             state["promoted"] = promoted
+            # Only ranked candidates can be demoted. A member skipped for
+            # having no record, or for not being comparable, did not lose a
+            # comparison — it never entered one, and reporting it as demoted
+            # would mark an unscored branch as a rejected result.
             state["demoted"] = [
-                m["id"] for m in members if promoted and m["id"] != promoted
+                c["cohort_member_id"]
+                for c in candidates
+                if comparable_metric_value(c.get("metrics"), effective_key) is not None
+                and c["cohort_member_id"] != promoted
             ]
         else:
             # No resolvable metric means no comparison — record who ran, and
@@ -163,6 +167,21 @@ def promote_within_cohort(
     return state
 
 
+def _members_of(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """The member list, dropping anything that is not a member entry.
+
+    A cohort file can parse as JSON and still hold the wrong shape. Reading it
+    straight would raise on the first `m.get(...)`, and the subscriber's own
+    guard would swallow that — leaving the cohort permanently unable to record
+    a verdict, silently. Salvaging the entries that *are* well-formed keeps a
+    hand-edited or half-migrated file recoverable.
+    """
+    raw = state.get("members")
+    if not isinstance(raw, list):
+        return []
+    return [m for m in raw if isinstance(m, dict) and m.get("id")]
+
+
 def _candidates_for(
     runs_dir: Path | str, members: Sequence[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -171,13 +190,25 @@ def _candidates_for(
     A member whose record cannot be found is skipped: it is a branch that has
     not written one yet (or wrote it somewhere this cohort cannot see), and
     ranking it on absent metrics would be inventing a result.
+
+    Metrics found once are cached onto the member entry, so a K-branch cohort
+    costs K record lookups over its lifetime rather than K per arrival — a
+    miss in `find_experiment_record` falls through to globbing and parsing
+    every file in `experiment/by_id/`, which grows with the whole campaign,
+    not with the cohort.
     """
     candidates: list[dict[str, Any]] = []
     for member in members:
         member_id = str(member.get("id") or "")
         if not member_id:
             continue
-        record = find_experiment_record(runs_dir, member_id)
+        cached = member.get("metrics")
+        if isinstance(cached, dict):
+            record: dict[str, Any] | None = {"experiment_id": member_id, "metrics": cached}
+        else:
+            record = find_experiment_record(runs_dir, member_id)
+            if record is not None and isinstance(record.get("metrics"), dict):
+                member["metrics"] = record["metrics"]
         if record is None:
             continue
         candidates.append(
@@ -216,12 +247,19 @@ def _metric_for(payload: dict[str, Any]) -> tuple[str | None, bool]:
     knowledge_dir = payload.get("knowledge_dir")
     execution_id = payload.get("execution_id")
     metrics = payload.get("metrics")
-    if not knowledge_dir or not execution_id or not isinstance(metrics, dict):
+    # `competition` is checked with the rest: the resolver searches paths built
+    # from it, and an empty slug searches the wrong tree while still being able
+    # to return a key off the run's own metrics — a key resolved for no
+    # competition, which is worse than declining to resolve one.
+    competition = str(payload.get("competition") or "").strip()
+    if not knowledge_dir or not execution_id or not competition:
+        return None, True
+    if not isinstance(metrics, dict):
         return None, True
 
     runs_dir = payload.get("runs_dir")
     workspace = Workspace(
-        competition=str(payload.get("competition") or ""),
+        competition=competition,
         knowledge_dir=Path(str(knowledge_dir)),
         root=Path(str(payload.get("workspace_root") or knowledge_dir)),
         runs_dir=Path(str(runs_dir)) if runs_dir else None,
@@ -244,11 +282,15 @@ def promote_from_completion(payload: dict[str, Any]) -> dict[str, Any] | None:
         # campaign carries forward, so it guards its own input.
         return None
 
-    # `runs_dir` is where the records actually are; `workspace_root` is the
-    # pre-M11 shape and is only a fallback for payloads that predate the split.
-    runs_dir = payload.get("runs_dir") or payload.get("workspace_root")
+    # `runs_dir` only, with no fallback to `workspace_root`: under fan-out
+    # that root is the branch's own worktree, so a cohort file written there
+    # is invisible to the siblings it is supposed to compare and is deleted
+    # with the branch. Every branch would see a cohort of one and promote
+    # itself. A payload without `runs_dir` is not from a fan-out step.
+    runs_dir = payload.get("runs_dir")
     member_id = payload.get("execution_id") or payload.get("experiment_id")
     if not runs_dir or not member_id:
+        logger.info("cohort %s: no shared runs_dir on the event; not recorded", cohort_id)
         return None
 
     metric_key, maximize = _metric_for(payload)

@@ -152,6 +152,72 @@ def test_a_broken_payload_does_not_fail_the_experiment(tmp_path: Path) -> None:
     bus.publish(EXPERIMENT_COMPLETED, {"cohort_id": "C-1"})
 
 
+def test_a_payload_without_runs_dir_records_nothing(tmp_path: Path) -> None:
+    """Falling back to workspace_root would put the cohort file inside the
+    branch's own worktree: siblings could not see it, each branch would find a
+    cohort of one and promote itself, and teardown would delete the lot."""
+    client, ws_root, runs = _workspace(tmp_path)
+    bus = EventBus()
+    install_default_subscribers(bus)
+
+    payload = _payload(client, runs, "E-1", 0.5)
+    del payload["runs_dir"]
+    bus.publish(EXPERIMENT_COMPLETED, payload)
+
+    assert not (runs / "experiment" / "cohorts").exists()
+    assert not (ws_root / "experiment" / "cohorts").exists()
+
+
+def test_a_payload_without_a_competition_promotes_nobody(tmp_path: Path) -> None:
+    """An empty slug still resolves a key off the run's own metrics — a key
+    resolved for no competition, which must not decide a cohort."""
+    client, _, runs = _workspace(tmp_path)
+    bus = EventBus()
+    install_default_subscribers(bus)
+
+    _land(bus, client, runs, "E-1", 0.50, competition="")
+
+    state = json.loads(cohort_path(runs, "C-1").read_text(encoding="utf-8"))
+    assert state["members"] == [{"id": "E-1", "completed_at": "2026-08-11T10:00:00+00:00"}]
+    assert "promoted" not in state
+
+
+def test_a_dry_run_campaign_promotes_nobody(tmp_path: Path) -> None:
+    """`install_default_subscribers` runs in dry-run registries too, so the
+    placeholder guard has to hold on the real event path, not just in the
+    ranker's unit tests."""
+    client, _, runs = _workspace(tmp_path)
+    bus = EventBus()
+    install_default_subscribers(bus)
+
+    for execution_id in ("E-1", "E-2"):
+        write_experiment_git_record(
+            runs,
+            {
+                "experiment_id": f"exp_titanic_{execution_id}",
+                "execution_id": execution_id,
+                "competition": "titanic",
+                "metrics": {"status": "dry_run_stub", "cv_rmse": 0.5},
+                "aliases": [],
+            },
+        )
+        _competition_profile(runs, execution_id)
+        bus.publish(
+            EXPERIMENT_COMPLETED,
+            _payload(
+                client,
+                runs,
+                execution_id,
+                0.5,
+                metrics={"status": "dry_run_stub", "cv_rmse": 0.5},
+            ),
+        )
+
+    state = json.loads(cohort_path(runs, "C-1").read_text(encoding="utf-8"))
+    assert sorted(m["id"] for m in state["members"]) == ["E-1", "E-2"]
+    assert state.get("promoted") is None
+
+
 def test_the_verdict_updates_as_later_branches_land(tmp_path: Path) -> None:
     client, _, runs = _workspace(tmp_path)
     bus = EventBus()

@@ -124,9 +124,14 @@ class ConductorStore:
 
         `get_task` reads outside the lock deliberately — the row is committed
         by then, and a single `SELECT` needs no serialising.
+
+        The timestamp is taken inside the lock, with the id: stamped before
+        the wait, K branches queued at once would all record roughly the
+        caller's time rather than the insert's, and a row written later could
+        carry an earlier `created_at` than one written before it.
         """
-        now = _now()
         with write_lock_for(self.paths.db_path):
+            now = _now()
             tid = self._new_id(_TASK_PREFIX, "os_tasks")
             self._conn.execute(
                 """

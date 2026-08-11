@@ -172,6 +172,97 @@ def test_completed_at_is_stored_per_member(tmp_path: Path) -> None:
     assert state["promoted"] == "E-1"  # tied score, finished first
 
 
+def test_a_later_arrival_that_resolves_no_metric_still_gets_ranked(
+    tmp_path: Path,
+) -> None:
+    """The cohort already agreed on a key; one branch's unreadable outcome
+    file must not leave a better result sitting unpromoted."""
+    runs = tmp_path / "runs"
+    _record(runs, "E-1", 0.50)
+    _record(runs, "E-2", 0.20)
+
+    _land(runs, "E-1")
+    state = promote_within_cohort(
+        runs,
+        "C-1",
+        member_id="E-2",
+        completed_at=None,
+        competition="titanic",
+        metric_key=None,  # this event could not resolve one
+        maximize=True,  # and would have flipped the direction too
+    )
+
+    assert state["promoted"] == "E-2"
+    assert state["metric_key"] == "cv_rmse"
+    assert state["maximize"] is False
+
+
+def test_a_member_that_was_never_ranked_is_not_reported_as_demoted(
+    tmp_path: Path,
+) -> None:
+    """`demoted` means "compared and lost". A branch with no record yet has
+    not lost anything."""
+    runs = tmp_path / "runs"
+    _record(runs, "E-1", 0.50)
+
+    _land(runs, "E-1")
+    state = _land(runs, "E-no-record-yet")
+
+    assert state["promoted"] == "E-1"
+    assert state["demoted"] == []
+    assert [m["id"] for m in state["members"]] == ["E-1", "E-no-record-yet"]
+
+
+def test_a_placeholder_branch_is_recorded_but_never_promoted(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    write_experiment_git_record(
+        runs,
+        {
+            "experiment_id": "exp_E-stub",
+            "execution_id": "E-stub",
+            "metrics": {"status": "dry_run_stub", "cv_rmse": 0.5},
+            "aliases": [],
+        },
+    )
+    _record(runs, "E-real", 194.80)
+
+    _land(runs, "E-stub")
+    state = _land(runs, "E-real")
+
+    assert state["promoted"] == "E-real"
+    assert state["demoted"] == []  # the stub never entered the comparison
+    assert sorted(m["id"] for m in state["members"]) == ["E-real", "E-stub"]
+
+
+def test_a_cohort_file_whose_members_are_the_wrong_shape_recovers(
+    tmp_path: Path,
+) -> None:
+    """Parses as JSON, wrong shape. Reading it straight raises inside the
+    subscriber's own guard, which would silently retire the cohort."""
+    runs = tmp_path / "runs"
+    _record(runs, "E-1", 0.50)
+    path = cohort_path(runs, "C-1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"members": "not-a-list"}', encoding="utf-8")
+
+    state = _land(runs, "E-1")
+
+    assert state["promoted"] == "E-1"
+    assert [m["id"] for m in state["members"]] == ["E-1"]
+
+
+def test_malformed_member_entries_are_dropped_not_fatal(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    _record(runs, "E-1", 0.50)
+    path = cohort_path(runs, "C-1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"members": ["bare-string", {}, {"id": "E-9"}]}', encoding="utf-8")
+
+    state = _land(runs, "E-1")
+
+    assert [m["id"] for m in state["members"]] == ["E-9", "E-1"]
+
+
 def test_a_corrupt_cohort_file_does_not_stop_the_next_branch(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     _record(runs, "E-1", 0.50)
