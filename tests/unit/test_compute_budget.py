@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import anyio
 import pytest
 
+from labpilot.research_engine.execution.training import compute_budget
 from labpilot.research_engine.execution.training.compute_budget import (
     THREAD_LIMIT_VARS,
     available_cpus,
@@ -26,6 +27,30 @@ from labpilot.research_engine.execution.training.compute_budget import (
     thread_limit_env,
 )
 from labpilot.research_engine.execution.training.environment import child_environment
+
+
+@pytest.fixture
+def ample_cpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the clamp ceiling out of the way of tests about the plumbing.
+
+    `set_branch_cpu_share` clamps a share to the machine's own CPU count, so a
+    test that installs a literal share and asserts it back is also asserting
+    something about the host it runs on. That is how a 2-CPU CI runner turned
+    five of these red while they passed on every developer machine with cores
+    to spare — and four more, installing a share of 2, would have gone red on
+    a single-core box while looking perfectly safe here.
+
+    Clamping keeps its own tests, which derive the ceiling from
+    `available_cpus()` and so stay true on any machine. Everything reached by
+    this fixture is about what happens to a share *once installed* — the
+    ContextVar plumbing, the variable list, the subprocess — so the ceiling is
+    pinned above any plausible runner and the share is honoured as written.
+
+    Required in any test that asserts an installed share back; without it the
+    assertion silently becomes a statement about the CI runner's hardware.
+    """
+    monkeypatch.setattr(compute_budget, "available_cpus", lambda: 64)
+
 
 # --- discovering how many CPUs we may use ---------------------------------
 
@@ -162,7 +187,7 @@ def test_an_uncapped_share_installs_nothing() -> None:
         reset_branch_cpu_share(token)
 
 
-def test_installing_a_share_sets_every_thread_variable() -> None:
+def test_installing_a_share_sets_every_thread_variable(ample_cpus: None) -> None:
     token = set_branch_cpu_share(3)
     try:
         env = thread_limit_env()
@@ -221,7 +246,7 @@ def test_a_share_within_the_machine_is_left_alone(offset: int) -> None:
         reset_branch_cpu_share(token)
 
 
-def test_each_branch_thread_sees_its_own_share() -> None:
+def test_each_branch_thread_sees_its_own_share(ample_cpus: None) -> None:
     """A ContextVar, not os.environ: branches are threads in one process.
 
     os.environ is shared, so a per-branch cap could not be expressed with it —
@@ -252,7 +277,7 @@ def test_each_branch_thread_sees_its_own_share() -> None:
 # --- which variables, and why each one earns its place --------------------
 
 
-def test_loky_is_capped_because_n_jobs_minus_one_reads_it() -> None:
+def test_loky_is_capped_because_n_jobs_minus_one_reads_it(ample_cpus: None) -> None:
     """`OMP_NUM_THREADS` alone would miss the realistic failure.
 
     Generated code writing `n_jobs=-1` routes through joblib/loky, which
@@ -269,7 +294,7 @@ def test_loky_is_capped_because_n_jobs_minus_one_reads_it() -> None:
         reset_branch_cpu_share(token)
 
 
-def test_polars_thread_pool_is_capped_too() -> None:
+def test_polars_thread_pool_is_capped_too(ample_cpus: None) -> None:
     """Generated code picks its own dependencies; polars is a plausible one.
 
     The list cannot be complete against a PEP 723 open world, but a library
@@ -285,7 +310,7 @@ def test_polars_thread_pool_is_capped_too() -> None:
         reset_branch_cpu_share(token)
 
 
-def test_a_share_installed_once_reaches_the_worker_threads() -> None:
+def test_a_share_installed_once_reaches_the_worker_threads(ample_cpus: None) -> None:
     """The property task 7 actually depends on: install once, K workers inherit.
 
     Everything else here installs the share inside the code that reads it.
@@ -304,7 +329,7 @@ def test_a_share_installed_once_reaches_the_worker_threads() -> None:
         reset_branch_cpu_share(token)
 
 
-def test_a_bare_thread_pool_would_not_inherit_the_share() -> None:
+def test_a_bare_thread_pool_would_not_inherit_the_share(ample_cpus: None) -> None:
     """Pins why the concurrency primitive is load-bearing, not incidental.
 
     A ContextVar reaches a worker only if that worker's context was copied
@@ -318,9 +343,9 @@ def test_a_bare_thread_pool_would_not_inherit_the_share() -> None:
         with ThreadPoolExecutor(max_workers=1) as pool:
             assert pool.submit(thread_limit_env).result() == {}
         # ...while the mechanism the fan-out actually uses does deliver it.
-        assert anyio.run(lambda: anyio.to_thread.run_sync(thread_limit_env))[
-            "OMP_NUM_THREADS"
-        ] == "4"
+        assert (
+            anyio.run(lambda: anyio.to_thread.run_sync(thread_limit_env))["OMP_NUM_THREADS"] == "4"
+        )
     finally:
         reset_branch_cpu_share(token)
 
@@ -330,6 +355,7 @@ def test_a_bare_thread_pool_would_not_inherit_the_share() -> None:
 
 def test_child_environment_carries_the_cap_and_still_drops_secrets(
     monkeypatch: pytest.MonkeyPatch,
+    ample_cpus: None,
 ) -> None:
     """The cap rides the one function every generated-code launcher uses."""
     monkeypatch.setenv("GROQ_API_KEY", "secret")
@@ -349,6 +375,7 @@ def test_child_environment_carries_the_cap_and_still_drops_secrets(
 
 def test_the_cap_overrides_an_inherited_machine_wide_setting(
     monkeypatch: pytest.MonkeyPatch,
+    ample_cpus: None,
 ) -> None:
     """Under fan-out the operator's own value describes the whole machine."""
     monkeypatch.setenv("OMP_NUM_THREADS", "16")
@@ -373,7 +400,7 @@ def test_cap_can_be_opted_out_for_a_deterministic_environment() -> None:
         reset_branch_cpu_share(token)
 
 
-def test_a_real_subprocess_receives_the_cap() -> None:
+def test_a_real_subprocess_receives_the_cap(ample_cpus: None) -> None:
     """The dict being right does not prove the child process sees it.
 
     Everything else here asserts the contents of a dict; this launches an
