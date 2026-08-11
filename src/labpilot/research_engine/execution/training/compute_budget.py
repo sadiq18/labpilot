@@ -9,27 +9,15 @@ context-switch overhead can make the wall-clock *worse* than running the
 experiments one after another — which would defeat the only exit criterion
 M11 has.
 
-## Why environment variables, and what they do not cover
+The cap is a set of environment variables injected into the subprocess that
+runs `train.py`. ``OMP_NUM_THREADS`` alone would not do: the realistic failure
+is generated code writing ``n_jobs=-1``, which routes through joblib/loky and
+reads ``LOKY_MAX_CPU_COUNT``. A **hard-coded** count (``n_jobs=8``) is covered
+by neither, and that gap is accepted rather than solved.
 
-The alternative considered in the design was OS-level enforcement — a cgroup
-or ``taskset`` around the training subprocess. That cannot be the primary
-mechanism here: ``taskset``, ``cgexec`` and ``systemd-run`` are all Linux-only
-and absent on macOS, which is where this is developed and run. An enforcement
-layer that does not exist on the development platform is not enforcement.
-
-So the cap is a set of environment variables, injected into the subprocess
-that runs `train.py`. Two things are worth being precise about:
-
-* ``OMP_NUM_THREADS`` alone is **not** enough. The realistic failure is
-  generated code that writes ``n_jobs=-1`` — a common idiom the model reaches
-  for — which routes through joblib/loky and is governed by
-  ``LOKY_MAX_CPU_COUNT``, not by the OpenMP variable. Both are set, along with
-  the BLAS families that back numpy/scipy, including Apple's Accelerate
-  (``VECLIB_MAXIMUM_THREADS``) since macOS is the common dev platform.
-* A **hard-coded** count — ``n_jobs=8`` rather than ``-1`` — is not covered by
-  any of them. That residual risk is accepted rather than solved: closing it
-  needs the OS-level layer above, and the honest position is to name the gap
-  instead of implying the cap is total.
+Why environment variables rather than a cgroup, why a `ContextVar` rather than
+`os.environ`, and the rest of the reasoning behind these choices:
+`docs/research-os/autonomy-roadmap/design/05-parallel-branches.md` §8.
 
 ## Not wired yet, deliberately
 
@@ -114,16 +102,26 @@ def cpu_share(branches: int, *, total: int | None = None) -> int | None:
     return max(1, cpus // branches)
 
 
-def set_branch_cpu_share(cpus: int | None) -> Token[int | None]:
+def set_branch_cpu_share(cpus: int | None) -> Token:
     """Install the share for this context; returns a restoring token.
 
     `None` or `0` clears the cap, which is how the sequential path stays
     byte-for-byte identical to its behaviour before this module existed.
+
+    Anything else must be a positive count. A negative slipping through would
+    be written verbatim into every variable, and these do not treat a negative
+    as an error uniformly — an implementation that ignores it leaves the run
+    *uncapped*, which is silently the oversubscription this module exists to
+    prevent. `cpu_share()` cannot produce one, but this is public API and task
+    7 calls it with a computed value, so the check belongs here rather than in
+    the one caller that happens to be careful.
     """
-    return _branch_cpu_share.set(cpus if cpus else None)
+    if cpus is not None and cpus < 0:
+        raise ValueError(f"cpu share must be positive or None/0 to clear, got {cpus}")
+    return _branch_cpu_share.set(cpus or None)
 
 
-def reset_branch_cpu_share(token: Token[int | None]) -> None:
+def reset_branch_cpu_share(token: Token) -> None:
     """Restore whatever share was installed before the matching set."""
     _branch_cpu_share.reset(token)
 

@@ -160,3 +160,67 @@ def test_each_branch_thread_sees_its_own_share() -> None:
 def test_available_cpus_reports_something_usable() -> None:
     cpus = available_cpus()
     assert cpus is None or cpus >= 1
+
+
+def test_a_real_subprocess_receives_the_cap() -> None:
+    """The dict being right does not prove the child process sees it.
+
+    Everything else here asserts the contents of a dict; this launches an
+    actual process, which is the thing the module exists to constrain. A
+    dropped `env=` at a call site, or a launcher that builds its own
+    environment, would leave every other test in this file passing.
+    """
+    import subprocess
+    import sys
+
+    token = set_branch_cpu_share(3)
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import os;print(os.environ.get('OMP_NUM_THREADS'),"
+                "os.environ.get('LOKY_MAX_CPU_COUNT'))",
+            ],
+            env=child_environment(),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    finally:
+        reset_branch_cpu_share(token)
+
+    assert proc.stdout.split() == ["3", "3"]
+
+
+def test_a_real_subprocess_is_uncapped_on_the_sequential_path() -> None:
+    """No fan-out, no caps — the child sees whatever the operator set."""
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "import os;print(os.environ.get('LOKY_MAX_CPU_COUNT'))"],
+        env=child_environment(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "None"
+
+
+def test_a_negative_share_is_refused() -> None:
+    """`-1` written into these variables is not an error everywhere — an
+    implementation that ignores it leaves the run uncapped, which is the
+    failure this module exists to prevent, arrived at silently."""
+    with pytest.raises(ValueError, match="must be positive"):
+        set_branch_cpu_share(-1)
+
+
+def test_cap_can_be_opted_out_for_a_deterministic_environment() -> None:
+    """`base` exists so a caller can build an environment predictably."""
+    token = set_branch_cpu_share(2)
+    try:
+        assert child_environment({"PATH": "/bin"}, apply_cpu_cap=False) == {"PATH": "/bin"}
+        assert "OMP_NUM_THREADS" in child_environment({"PATH": "/bin"})
+    finally:
+        reset_branch_cpu_share(token)

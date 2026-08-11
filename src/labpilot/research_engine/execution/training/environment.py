@@ -137,7 +137,11 @@ def is_secret_env(name: str) -> bool:
     return upper.startswith(_SECRET_PREFIXES) or any(m in upper for m in _SECRET_MARKERS)
 
 
-def child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+def child_environment(
+    base: dict[str, str] | None = None,
+    *,
+    apply_cpu_cap: bool = True,
+) -> dict[str, str]:
     """Environment for the training subprocess, with credentials removed and
     any per-branch CPU cap applied.
 
@@ -152,12 +156,25 @@ def child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     already goes through — training, dependency resolution and both
     verification paths. Adding them at the call sites instead would be four
     places that have to agree, and a fifth launcher added later would silently
-    miss the cap. They deliberately override any inherited value: under
-    fan-out the operator's own `OMP_NUM_THREADS` is a machine-wide setting,
-    and each branch is entitled to a share of the machine, not all of it.
-    `thread_limit_env()` is empty unless a fan-out installed a share, so the
-    sequential path is unchanged.
+    miss the cap. Dependency resolution runs `uv`, which reads none of these
+    variables, so they are inert there rather than wrong — carrying them
+    everywhere is the price of having one choke point instead of four.
+
+    They deliberately override any inherited value: under fan-out the
+    operator's own `OMP_NUM_THREADS` describes the whole machine, and each
+    branch is entitled to a share of it, not all of it. `thread_limit_env()`
+    is empty unless a fan-out installed a share, so the sequential path is
+    unchanged.
+
+    `apply_cpu_cap=False` makes the result a pure function of `base` again,
+    for a caller that needs to construct an environment deterministically and
+    must not inherit an ambient share from further up the call stack. It
+    defaults to on so that no launcher can lose the cap by omission — the
+    failure mode of the opposite default is an uncapped branch, which is
+    silent.
     """
     source = dict(os.environ if base is None else base)
     kept = {k: v for k, v in source.items() if not is_secret_env(k)}
+    if not apply_cpu_cap:
+        return kept
     return {**kept, **thread_limit_env()}

@@ -397,14 +397,39 @@ the `TrainingRunner.run()` subprocess) if it proves necessary in practice.
 The injection point is `execution/training/environment.py::child_environment()`
 (consumed by `execution/training/runner.py::TrainingRunner.run()`'s
 `subprocess.run(..., env=child_environment())`) — **not** `agents/coding.py`,
-which only generates `train.py` and never executes it. Compute the cap as
-`max(1, available_cores // K)` before fan-out (`// K` alone can truncate to 0
-on small/CI machines, which most of these env vars treat as "unset," silently
-reintroducing the oversubscription this exists to prevent). This is
-implementable entirely inside M11, no external sign-off needed, but the
-mechanism above (env vars only, vs. env vars + OS-level enforcement) is a
-leaning, not a final decision — record whichever is chosen back into this
-paragraph before implementation.
+which only generates `train.py` and never executes it.
+
+**Resolved: environment variables only, and here is why the alternative was
+rejected.** The open question was env vars versus env vars plus OS-level
+enforcement (a cgroup or `taskset` around the training subprocess). Settled by
+checking rather than preferring: `taskset`, `cgexec` and `systemd-run` are all
+Linux-only and absent on macOS, which is where this is developed and run. An
+enforcement layer that does not exist on the development platform is not
+enforcement, so it cannot be the primary mechanism. The residual gap it would
+have closed — generated code with a **hard-coded** `n_jobs=8` rather than
+`-1`, which no environment variable governs — is therefore accepted and named
+rather than solved.
+
+Implementation notes that follow from the above, all in
+`execution/training/compute_budget.py`:
+
+- The variable set spans OpenMP, the three BLAS families, numexpr and loky.
+  `VECLIB_MAXIMUM_THREADS` is included because Apple Accelerate backs numpy on
+  the common dev platform, and `LOKY_MAX_CPU_COUNT` because it is what
+  `n_jobs=-1` actually consults.
+- The share travels in a `ContextVar`, not `os.environ`: branches are
+  concurrent threads in one process, so an environment variable is shared
+  between them and the last writer would set the value for all. A context
+  value propagates into `anyio.to_thread.run_sync` and stays per-task.
+- `available_cpus()` prefers `os.process_cpu_count()` (3.13+) and
+  `sched_getaffinity` over `os.cpu_count()`, since only those respect affinity
+  and cgroup limits — in a container pinned to 2 cores, `os.cpu_count()`
+  reports the host's count and every branch would be licensed to oversubscribe
+  the very limit the container imposed.
+- `cpu_share()` returns `None`, never `0`, for "cannot determine", and floors
+  at 1 otherwise (`2 // 3` is `0`). These variables read `0` as *unset, use
+  every core*, so the no-cap meaning must never be carried by a number that
+  means its opposite.
 
 ## 9. Tradeoffs
 
