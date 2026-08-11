@@ -115,7 +115,7 @@ The rule catches the fourth instance before it is written.
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
 | 4 — a derived artifact re-derives or says it is derived | **in progress.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites** and enforced by reading the files back. Enforcing it found **four more unstamped views already shipped** — see *Four more of the same shape*, below. Auto-discovery of a future writer is not built |
-| 5 — a broken artifact fails at the gate that owns it | not started |
+| 5 — a broken artifact fails at the gate that owns it | **done.** Six artifacts driven through the real sixteen-task baseline plan, each entering as the proposal a codegen agent returns. Every one stops at the task that owns it, with every task before it passed and every task after it never run — see *Where each defect stops*, below |
 
 ### Three of the first nine rejection tests proved nothing
 
@@ -138,6 +138,60 @@ figure, while the verdict lives one branch up in `if ok and not fresh:`. A
 red-then-green run against the wrong line proves nothing just as surely as a weak
 test does, which is worth saying because the sweep is the thing everything else
 here rests on.
+
+### Where each defect stops
+
+Criterion 5 is the one the other four cannot ask: run the whole campaign against
+a deliberately broken artifact and see **where it stops**. A missing gate shows
+up as a failure three steps downstream; a gate that fires on everything shows up
+as the wrong owner. Only a gate that is both present and correct stops the
+campaign exactly where the defect is.
+
+Measured, against the real baseline plan's sixteen tasks:
+
+| artifact | stops at | tasks done |
+|---|---|---|
+| the corpus's truncated `train.py` | `write_code` (3) | 2 |
+| parses, defines no entry point | `write_code` (3) | 2 |
+| runs, raises immediately | `run_smoke_test` (8) | 7 |
+| trains, writes no metrics | `run_training` (10) | 9 |
+| metrics but no predictions | `run_inference` (11) | 10 |
+| a healthy pipeline | — | 16 |
+
+On rogii 2026-08-08 the first of those passed `research_review` **and**
+`run_smoke_test` and failed at `run_training` — seven steps from the codegen that
+produced it, with an error naming uv rather than the file. It now stops at task 3.
+
+**The artifact enters as codegen's proposal**, not planted in the workspace.
+Planting it would test the gates against a file nothing in the system claims to
+have written, which is a different and easier question.
+
+**Each case asserts ownership, not failure.** That the campaign stopped at the
+owning task is the weakest of the three assertions; the two that carry it are
+that every task *before* passed — so the defect was not caught early by luck —
+and that every task *after* never ran.
+
+Two things the work turned up:
+
+* **`dry_run: True` disables the gates this criterion is about.** It makes the
+  smoke gate syntax-only and stubs training, so a script that raises the moment
+  it runs completes all sixteen tasks. The existing end-to-end test uses those
+  constraints, which is right for what it checks and would have made this
+  criterion vacuous.
+* **The repaired artifact stops somewhere else, and that is the point.** The
+  corpus's stdlib dependency block once made uv refuse all six dependencies
+  before the run started. `strip_stdlib_dependencies` removes the offending entry
+  during apply, so that defect gates nothing now — and the file, which is a
+  runnable script that writes no metrics, then stops at `run_training` for the
+  thing actually wrong with it. Prevention moved the stopping point from a
+  resolver that could not name the problem to the gate that owns the one it has.
+  The first version of that test asserted the campaign *succeeds*, which is only
+  true under `train_stub`, where nothing runs it.
+
+Each gate was confirmed load-bearing by removing it: disabling the entry-point
+check, the smoke verdict, the training metrics check, or the stdlib strip each
+turns a case red — and removing the training gate produces exactly the reading
+this criterion exists to catch, *"stopped at run_inference, not run_training"*.
 
 ### Four more of the same shape
 
