@@ -430,7 +430,7 @@ timestamp field today — add a `completed_at` field to `event_payload`. Ties on
 the metric are then broken by earliest `completed_at`, the first branch to
 finish wins, and promotion stays deterministic.
 
-*Implemented (task 5) at run completion, not at publish time as this paragraph
+*Implemented at run completion, not at publish time as this paragraph
 first specified.* Publish is separated from the run by `_load_metrics` and
 `write_experiment_git_record`, and the latter's cost scales with
 `files_changed`. Stamping after them would fold record-writing time into the
@@ -442,7 +442,7 @@ is the `ModelFailed` payload, and a `completed_at` on a run that died would
 assert the completion that `ExperimentSpecialist.execute`'s early return —
 and `tests/unit/test_failed_run_is_not_completed.py` — exist to deny.
 
-**The `runtime` field (task 5).** `ParallelWorkItem` gains `runtime`, and it
+**The `runtime` field.** `ParallelWorkItem` gains `runtime`, and it
 is *validated* rather than carried unread as this document originally
 proposed. An unread field would have been dead code by definition, and worse
 than absent: an item asking for Kaggle would run locally, finish, report a

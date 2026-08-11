@@ -149,7 +149,7 @@ def test_max_workers_validation(tmp_path: Path) -> None:
 
 
 def test_runtime_defaults_to_local() -> None:
-    """M11 task 5: the field exists so remote dispatch has somewhere to land."""
+    """M11: the field exists so remote dispatch has somewhere to land."""
     item = ParallelWorkItem(id="w", agent=_FakeAgent(), task=AgentTask(id="T", capability="fake"))
     assert item.runtime == LOCAL_RUNTIME
 

@@ -1,8 +1,9 @@
-"""M11 task 5: `ExperimentCompleted` carries when the run finished.
+"""M11: `ExperimentCompleted` carries when the run finished.
 
-Promotion (task 6) ranks branches on the metric and breaks a tie by earliest
-finisher, so the payload carries a finish time. The stamp is only meaningful
-on a run that actually finished: the failure path shares this dict, and a
+The promotion subscriber ranks branches on the metric and breaks a tie by
+earliest finisher, so the payload carries a finish time. The stamp is only
+meaningful on a run that actually finished: the failure path shares this
+dict, and a
 `completed_at` on a run that died would assert the completion
 `test_failed_run_is_not_completed.py` exists to deny.
 """
@@ -195,12 +196,12 @@ def test_the_live_subscriber_tolerates_the_new_key(tmp_path: Path) -> None:
     written = json.loads(note.read_text(encoding="utf-8"))
     assert written["execution_id"] == "E-1"
     # The stamp does *not* reach the note: the subscriber builds its own dict
-    # from named keys. Recorded so task 6 reads `completed_at` off the event
-    # rather than discovering by a silent miss that the artifact has none.
+    # from named keys. Recorded so promotion reads `completed_at` off the
+    # event rather than discovering by a silent miss that the artifact has none.
     assert "completed_at" not in written, (
-        "the evidence note now carries completed_at — if that was deliberate "
-        "(see task 10, persisting the stamp), update this assertion; it pins "
-        "current behaviour, not a requirement"
+        "the evidence note now carries completed_at — if persisting the stamp "
+        "was a deliberate decision, update this assertion; it pins current "
+        "behaviour, not a requirement (design doc §8, tie-break)"
     )
 
 
