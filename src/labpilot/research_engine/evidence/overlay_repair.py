@@ -148,10 +148,15 @@ def repair_skill_overlays(
     changed: list[str] = []
     for path in sorted(root.glob("*.md")):
         try:
-            original = overlay_body(path.read_text(encoding="utf-8", errors="replace"))
+            raw = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             logger.warning("could not read overlay %s: %s", path.name, exc)
             continue
+        original = overlay_body(raw)
+        # An overlay written before overlays carried a stamp is never rewritten
+        # if its content already matches the cards, so it would keep neither of
+        # criterion 4's options forever.
+        unstamped = raw == original
         if not original.strip():
             continue
 
@@ -172,7 +177,7 @@ def repair_skill_overlays(
         updated = ("\n\n".join(kept).rstrip() + "\n") if kept else ""
         # Compared on content: reading strips the provenance note, which does not
         # restore the trailing newline, so a raw compare rewrites every run.
-        if updated.strip() != original.strip():
+        if updated.strip() != original.strip() or unstamped:
             try:
                 path.write_text(stamped_overlay(updated), encoding="utf-8")
             except OSError as exc:

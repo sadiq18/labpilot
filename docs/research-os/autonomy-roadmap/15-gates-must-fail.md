@@ -168,8 +168,21 @@ excused on the grounds that `repair_skill_overlays` rebuilds them:
 So the overlays are stamped like every other view, and the exemption is deleted.
 `load_skill_overlay` strips the note before the prompt budget applies, and the
 repair pass re-applies it — a stamp is not a lesson block, so a rebuild would
-otherwise drop it and the next walk would report the file. That last one has its
-own test.
+otherwise drop it and the next walk would report the file.
+
+Three more corrections came out of reviewing that change, all found by mutation
+rather than by reading:
+
+* The strip on the **prompt** path had no test, and it is the reader that reaches
+  six agents. Reverting it left the whole suite green while a ~250-character note
+  headed every overlay chunk inside an 1800-character budget.
+* Repair wrote only when content changed, so an overlay written **before** this
+  change whose lessons already agreed with the cards was never stamped — it kept
+  neither of criterion 4's options indefinitely. Repair now migrates it.
+* The non-vacuity guard could not fail: `overlay_dir()` builds a path without
+  touching disk, so `any(overlay_dir(...))` was true even with the campaign's
+  overlay wiring deleted — and with it deleted, the rule guarded six files that
+  were no longer there.
 
 **Two gaps, stated rather than implied.**
 

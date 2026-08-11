@@ -15,7 +15,11 @@ from labpilot.accessor.common.derived import derived_note, strip_derived_note
 from labpilot.research_engine.evidence.models import EvidenceCard, EvidenceDecision
 from labpilot.research_engine.evidence.overlay_repair import repair_skill_overlays
 from labpilot.research_engine.evidence.store import EvidenceCardStore
-from labpilot.research_engine.shared.skills import overlay_dir, stamped_overlay
+from labpilot.research_engine.shared.skills import (
+    load_skill_overlay,
+    overlay_dir,
+    stamped_overlay,
+)
 
 
 def is_stamped(text: str) -> bool:
@@ -55,7 +59,12 @@ def test_the_walk_reaches_the_views_that_exist(tmp_path, monkeypatch):
     names = {path.name for path in tmp_path.rglob("*.md")}
 
     assert {"profile.md", "P-001.md", "E-001_report.md", "report.md"} <= names
-    assert any(overlay_dir(root) for root in tmp_path.glob("competitions/*"))
+    # `overlay_dir()` builds a path and never touches disk, so `any(overlay_dir(...))`
+    # was true even with the campaign's overlay wiring deleted.
+    overlays = [
+        path for root in tmp_path.glob("competitions/*") for path in overlay_dir(root).glob("*.md")
+    ]
+    assert overlays, "the campaign wrote no skill overlays"
 
 
 def test_a_view_added_without_a_stamp_is_reported(tmp_path):
@@ -104,4 +113,46 @@ def test_an_overlay_keeps_its_stamp_when_the_repair_pass_rewrites_it(tmp_path):
     text = stale.read_text(encoding="utf-8")
     assert "Avoid: SWA" not in text
     assert is_stamped(text), "the repair dropped the stamp; the next walk would report it"
+    assert unexplained_views(tmp_path) == []
+
+
+def test_the_prompt_reader_strips_the_note(tmp_path):
+    """The fifth reader, and the one that reaches six agents' system prompts.
+
+    Reverting it to a plain read left the whole suite green: the ~250-character
+    note then heads the overlay chunk of every prompt, inside a 1800-character
+    budget.
+    """
+    overlays = overlay_dir(tmp_path)
+    overlays.mkdir(parents=True)
+    (overlays / "code_engineer.md").write_text(stamped_overlay("- Keep: SWA\n"), encoding="utf-8")
+
+    injected = load_skill_overlay(tmp_path, "code_engineer")
+
+    assert injected == "- Keep: SWA"
+    assert "not authoritative" not in injected.lower()
+
+
+def test_an_overlay_written_before_stamping_is_migrated_by_the_repair(tmp_path):
+    """Repair only wrote when content changed, so a legacy overlay that already
+    agreed with the cards kept neither of criterion 4's options forever."""
+    competition = "demo"
+    knowledge = tmp_path / "knowledge"
+    overlays = overlay_dir(tmp_path)
+    overlays.mkdir(parents=True)
+    legacy = overlays / "code_engineer.md"
+    legacy.write_text("<!-- lesson:E-026 -->\n## Lesson `E-026`\n- Keep: SWA\n", encoding="utf-8")
+    EvidenceCardStore(knowledge, competition).save(
+        EvidenceCard(
+            competition=competition,
+            treatment_experiment="E-026",
+            decision=EvidenceDecision.ACCEPTED,
+        )
+    )
+
+    repair_skill_overlays(tmp_path, knowledge, competition)
+
+    text = legacy.read_text(encoding="utf-8")
+    assert is_stamped(text)
+    assert "- Keep: SWA" in text
     assert unexplained_views(tmp_path) == []
