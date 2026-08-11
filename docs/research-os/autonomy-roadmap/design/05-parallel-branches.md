@@ -397,14 +397,46 @@ the `TrainingRunner.run()` subprocess) if it proves necessary in practice.
 The injection point is `execution/training/environment.py::child_environment()`
 (consumed by `execution/training/runner.py::TrainingRunner.run()`'s
 `subprocess.run(..., env=child_environment())`) — **not** `agents/coding.py`,
-which only generates `train.py` and never executes it. Compute the cap as
-`max(1, available_cores // K)` before fan-out (`// K` alone can truncate to 0
-on small/CI machines, which most of these env vars treat as "unset," silently
-reintroducing the oversubscription this exists to prevent). This is
-implementable entirely inside M11, no external sign-off needed, but the
-mechanism above (env vars only, vs. env vars + OS-level enforcement) is a
-leaning, not a final decision — record whichever is chosen back into this
-paragraph before implementation.
+which only generates `train.py` and never executes it.
+
+**Resolved: environment variables only, and here is why the alternative was
+rejected.** The open question was env vars versus env vars plus OS-level
+enforcement (a cgroup or `taskset` around the training subprocess). Settled by
+checking rather than preferring: `taskset`, `cgexec` and `systemd-run` are all
+Linux-only and absent on macOS, which is where this is developed and run. An
+enforcement layer that does not exist on the development platform is not
+enforcement, so it cannot be the primary mechanism. The residual gap it would
+have closed — generated code with a **hard-coded** `n_jobs=8` rather than
+`-1`, which no environment variable governs — is therefore accepted and named
+rather than solved.
+
+Implementation notes that follow from the above, all in
+`execution/training/compute_budget.py`:
+
+- The variable set spans OpenMP, the three BLAS families, numexpr, loky and
+  polars/rayon. `VECLIB_MAXIMUM_THREADS` is included because Apple Accelerate
+  backs numpy on the common dev platform, and `LOKY_MAX_CPU_COUNT` because it
+  is what `n_jobs=-1` actually consults. **The list cannot be complete**:
+  generated code declares its own dependencies via PEP 723, so a library whose
+  pool is governed by an unlisted variable runs uncapped. That is the same
+  open-world objection this codebase already used to reject a package
+  allowlist, and it applies here — the difference being that an unknown
+  package fails loudly at import while an unknown thread variable just means
+  one library quietly ignores the budget. Worth keeping accurate; not worth
+  presenting as exhaustive.
+- The share travels in a `ContextVar`, not `os.environ`: branches are
+  concurrent threads in one process, so an environment variable is shared
+  between them and the last writer would set the value for all. A context
+  value propagates into `anyio.to_thread.run_sync` and stays per-task.
+- `available_cpus()` prefers `os.process_cpu_count()` (3.13+) and
+  `sched_getaffinity` over `os.cpu_count()`, since only those respect affinity
+  and cgroup limits — in a container pinned to 2 cores, `os.cpu_count()`
+  reports the host's count and every branch would be licensed to oversubscribe
+  the very limit the container imposed.
+- `cpu_share()` returns `None`, never `0`, for "cannot determine", and floors
+  at 1 otherwise (`2 // 3` is `0`). These variables read `0` as *unset, use
+  every core*, so the no-cap meaning must never be carried by a number that
+  means its opposite.
 
 ## 9. Tradeoffs
 
@@ -415,7 +447,7 @@ paragraph before implementation.
 | Write serialization | WAL only vs. WAL + module-level writer lock | both, for different reasons | WAL is for read/write concurrency, not writer-vs-writer safety — a single atomic UPDATE is already safe without any lock (verified). The lock is for multi-statement allocate-then-insert sequences specifically (verified: 6/20 unlocked concurrent id-allocations collided); an instance-level lock (à la `BudgetLedger`) doesn't work there since `ConductorStore` is constructed fresh per call |
 | Promotion storage | field on `Experiment` vs. `manifest.metadata` | `manifest.metadata` | `Experiment` is assembled fresh on every call, not persisted — a pydantic field has nowhere to round-trip; `manifest.metadata` already has a writer (`save_manifest`) |
 | Worktree cleanup | teardown-only vs. teardown + startup reconciliation | both | Teardown alone doesn't survive a hard crash; reconciliation is what actually closes the orphan risk already visible in this repo |
-| Compute isolation | no cap vs. env-var cap vs. env-var cap + OS-level enforcement | env-var cap (leaning; OS-level not ruled out) | Generated code passing explicit `n_jobs=-1` (or worse, a hard-coded count) under K-way fan-out can make wall-clock worse than sequential; `OMP_NUM_THREADS`+`LOKY_MAX_CPU_COUNT` cover the common case cheaply but don't fully close a hard-coded explicit count — not a final decision, see §8 |
+| Compute isolation | no cap vs. env-var cap vs. env-var cap + OS-level enforcement | **env-var cap** (resolved) | OS-level enforcement cannot be primary: `taskset`, `cgexec` and `systemd-run` are Linux-only and absent on macOS, where this is developed and run. `OMP_NUM_THREADS`+`LOKY_MAX_CPU_COUNT` cover the realistic failure (`n_jobs=-1`); a hard-coded count stays uncovered and is accepted rather than solved — see §8 |
 | LLM budget under fan-out | pre-split `ParallelBudget` K-ways vs. reuse the gateway's existing pace-and-retry | reuse existing gateway behavior | A fixed split is wrong on its own terms (forks need unequal budget); `RoleBoundClient.complete(allow_wait=True)` already sleeps-and-retries per caller thread, which is sufficient once each branch runs on its own thread — zero new code, see §5 |
 | Auditability under fan-out | step-level `DecisionRecord`/breaker vs. per-branch parity | per-branch parity | A step-level shortcut is less code but a branch failing wouldn't show up in the audit trail the way a sequential failure does today — explicitly rejected in favor of not reopening the silent-degradation bug class `conductor/loop.py` already guards against |
 

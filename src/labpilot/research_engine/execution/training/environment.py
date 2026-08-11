@@ -43,6 +43,8 @@ import re
 import shutil
 from pathlib import Path
 
+from labpilot.research_engine.execution.training.compute_budget import thread_limit_env
+
 logger = logging.getLogger(__name__)
 
 #: PEP 723 opening fence. The block must start at the beginning of a line.
@@ -135,14 +137,52 @@ def is_secret_env(name: str) -> bool:
     return upper.startswith(_SECRET_PREFIXES) or any(m in upper for m in _SECRET_MARKERS)
 
 
-def child_environment(base: dict[str, str] | None = None) -> dict[str, str]:
-    """Environment for the training subprocess, with credentials removed.
+def child_environment(
+    base: dict[str, str] | None = None,
+    *,
+    apply_cpu_cap: bool = True,
+) -> dict[str, str]:
+    """Environment for the training subprocess, with credentials removed and
+    any per-branch CPU cap applied.
 
     Generated code is untrusted: it was written by a model, may pull packages
     nobody has reviewed, and has no business holding the operator's provider
     keys or Kaggle credentials. Stripping them costs nothing — a training script
     needs data on disk, not API access — and bounds what a hostile dependency
     can exfiltrate even though it cannot stop it reaching the network.
+
+    The thread caps are applied here rather than at each `subprocess.run`
+    because this is the one function every path that launches generated code
+    already goes through — training, dependency resolution and both
+    verification paths. Adding them at the call sites instead would be four
+    places that have to agree, and a fifth launcher added later would silently
+    miss the cap. Dependency resolution runs `uv`, which reads none of these
+    variables, so they are inert there rather than wrong — carrying them
+    everywhere is the price of having one choke point instead of four.
+
+    They deliberately override any inherited value: under fan-out the
+    operator's own `OMP_NUM_THREADS` describes the whole machine, and each
+    branch is entitled to a share of it, not all of it. `thread_limit_env()`
+    is empty unless a fan-out installed a share, so the sequential path is
+    unchanged.
+
+    `apply_cpu_cap=False` makes the result a pure function of `base` again,
+    for a caller that needs to construct an environment deterministically and
+    must not inherit an ambient share from further up the call stack. It
+    defaults to on so that no launcher can lose the cap by omission — the
+    failure mode of the opposite default is an uncapped branch, which is
+    silent.
+
+    It has no production caller today, which is a fair thing to challenge
+    against "no configurability that wasn't requested". It is kept because the
+    alternative is worse: without it, `base` is documented as determining the
+    result and quietly does not, so a caller building an environment for
+    comparison gets six keys it never supplied and cannot see in its own
+    argument. The parameter is how that contract is stated honestly rather
+    than a knob speculating about a future need.
     """
     source = dict(os.environ if base is None else base)
-    return {k: v for k, v in source.items() if not is_secret_env(k)}
+    kept = {k: v for k, v in source.items() if not is_secret_env(k)}
+    if not apply_cpu_cap:
+        return kept
+    return {**kept, **thread_limit_env()}
