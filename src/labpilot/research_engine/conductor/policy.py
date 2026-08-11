@@ -669,11 +669,13 @@ def should_gather_evidence(
       selector has passed over for two campaigns stop voting;
     * **stale** — no artifact newer than `_EVIDENCE_COOLDOWN_HOURS`, which
       guarantees recovery no matter how large the pool grows;
-    * **stagnant** — `plateau_window` experiments have finished without one
-      improving on the rest. A backlog that keeps producing hypotheses which
+    * **stagnant** — `plateau_window` experiments have finished since one last
+      improved on the rest. A backlog that keeps producing hypotheses which
       do not move the score is, at the tool-allowlist level, the same
       situation as a thin or stale one: the campaign needs different ideas,
-      not another turn of the ones it has.
+      not another turn of the ones it has. This is *not* an earlier form of
+      the `plateau` stop and does not fire before it — see the comment at the
+      clause for how the two differ and why that is acceptable.
 
     The stagnant clause is why this reads `budget_state` at all. It is
     deliberately a *gate*, not a number in the policy prompt: `decide_next` is
@@ -703,6 +705,18 @@ def should_gather_evidence(
     if viable < _VIABLE_TARGET:
         return True, f"only {viable} viable hypotheses queued"
 
+    # Shares `plateau_window` so one knob governs "how long is long enough",
+    # but the two measure different things and do not fire together: this
+    # counts experiments since the last record, `plateau` measures the spread
+    # of the last `n` readings. On a perfectly flat series `plateau` stops the
+    # campaign one experiment *before* this opens — n readings versus n-1
+    # transitions — so on that path the gate never gets to act. It is left
+    # that way deliberately: `plateau` needs a spread within `plateau_epsilon`
+    # (1e-6), i.e. near-exact ties that real CV scores do not produce, and on
+    # the realistic drifting-worse series `plateau` never fires at all and
+    # this is the only signal. Firing earlier would mean gathering after a
+    # single non-improving experiment, to serve a case that does not occur.
+    #
     # `max(1, ...)` for the same reason `evaluate_stops` normalises it: a
     # window of zero would make every campaign stagnant, including one that
     # has never run an experiment.

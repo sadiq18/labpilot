@@ -21,6 +21,7 @@ from labpilot.research_engine.conductor.budgets import (
     BudgetConfig,
     BudgetState,
     ScoreEvent,
+    evaluate_stops,
     score_summary,
 )
 from labpilot.research_engine.conductor.policy import (
@@ -52,6 +53,17 @@ def _events(*values: float, metric: str = "cv_rmse", maximize: bool = False) -> 
 
 def _state(*values: float, **kw) -> BudgetState:
     return BudgetState(score_events=_events(*values, **kw))
+
+
+def _with_history(state: BudgetState) -> BudgetState:
+    """The same state as the M8-2 writer leaves it — `metric_history` derived
+    from the series, which is what `evaluate_stops` reads."""
+    return state.model_copy(
+        update={
+            "metric_history": [e.value for e in state.score_events],
+            "last_metric": state.score_events[-1].value if state.score_events else None,
+        }
+    )
 
 
 def _stocked(ws: Workspace, count: int = 8, evidence_age_hours: float = 2.0) -> Workspace:
@@ -381,6 +393,29 @@ def test_a_zero_window_does_not_make_every_campaign_stagnant(tmp_path: Path):
     ok, reason = should_gather_evidence(ws, BudgetState(), BudgetConfig(plateau_window=0))
 
     assert ok is False, f"a zero window opened the gate on an empty series: {reason}"
+
+
+def test_where_the_gate_sits_relative_to_the_plateau_stop(tmp_path: Path):
+    """Pins the relationship between the two, because it is not the obvious one.
+
+    They share `plateau_window` but measure different things: this counts
+    experiments since the last record, `plateau` measures the spread of the
+    last n readings. On a perfectly flat series `plateau` stops the campaign
+    at n readings while the gate needs n+1, so on that path the gate never
+    acts — acceptable only because `plateau` needs near-exact ties that real
+    CV scores do not produce. On the realistic drifting series `plateau` never
+    fires and the gate is the only signal.
+    """
+    ws = _stocked(_ws(tmp_path))
+    config = BudgetConfig(plateau_window=3)
+
+    flat_at_window = _state(194.8, 194.8, 194.8)
+    assert evaluate_stops(config, _with_history(flat_at_window)) == "plateau"
+    assert should_gather_evidence(ws, flat_at_window, config)[0] is False
+
+    drifting = _state(194.8, 195.0, 196.0, 197.0)
+    assert evaluate_stops(config, _with_history(drifting)) == "none"
+    assert should_gather_evidence(ws, drifting, config)[0] is True
 
 
 def test_no_series_is_not_the_same_answer_as_improving(tmp_path: Path):
