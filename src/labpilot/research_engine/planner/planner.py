@@ -167,8 +167,8 @@ def compile_baseline_plan(
         brief = ""
         if paths.brief_path.is_file():
             # Stripped before the budget applies: the provenance block is for a
-            # human deciding whether to trust the file, and 200 characters of it
-            # inside a 2000-character window displaces the brief itself.
+            # human deciding whether to trust the file, and ~250 characters of
+            # it inside a 2000-character window displaces the brief itself.
             brief = read_derived(paths.brief_path)[:2000]
 
         baseline_hyp = HypothesisStore(knowledge_dir, competition).ensure_baseline(

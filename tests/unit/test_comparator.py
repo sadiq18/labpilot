@@ -183,6 +183,15 @@ def test_render_markdown_sections_and_persistence(tmp_path: Path):
     assert "Inference: not tracked" in md
     assert comparison.verdict.value in md
     assert comparison.verdict_reason in md
+    # The renderer must stay unstamped: `experiments compare --format markdown`
+    # calls it live and recomputes whenever the stored JSON records a different
+    # pair, so a stamp here tells that reader to open a `comparison.json` that
+    # may not exist or may describe something else. The write site owns the
+    # stamp. Guarded because re-adding it to the renderer left the whole suite
+    # green — the file-level assertions below are satisfied by a doubled stamp.
+    assert "not authoritative" not in md.lower()
+    assert not md.lstrip().startswith(">")
+
 
     run_dir = tmp_path / "child-run"
     run_dir.mkdir()

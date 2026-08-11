@@ -79,7 +79,7 @@ def strip_derived_note(text: str) -> str:
 
     A stamp is for a human deciding whether to trust the file. Two readers of
     `research_brief.md` are not human — `planner.py` feeds it to an LLM under a
-    2000-character budget — and for them the block is 200 characters of overhead
+    2000-character budget — and for them the block is ~250 characters of overhead
     that displaces the brief it is attached to. Stripping costs nothing and keeps
     the stamp free.
 

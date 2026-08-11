@@ -268,7 +268,7 @@ def test_every_persisted_markdown_view_says_it_is_one(tmp_path):
 
 def test_a_machine_reader_can_drop_the_block_it_does_not_need(tmp_path):
     """`research_brief.md` is read by the planner under a 2000-character budget,
-    where the stamp is 200 characters that displace the brief. Stripping is what
+    where the stamp is ~250 characters that displace the brief. Stripping is what
     lets the file carry one at all."""
     views = dict(_persisted_views(tmp_path))
     stamped = views["research_brief.md"]
@@ -299,8 +299,8 @@ def test_a_real_reader_of_a_stamped_view_gets_the_content(tmp_path):
     Nothing exercised it. Every fixture that reached a call site wrote an
     *unstamped* brief, so the strip path was never entered — the coverage was of
     the helper in isolation and of call sites that had nothing to strip. The
-    regression it guards is the one round 2 fixed: 277 characters of "distrust
-    this" at the head of the codegen prompt's research window.
+    regression it guards is the one round 2 fixed: ~250 characters of
+    "distrust this" at the head of the codegen prompt's research window.
 
     Driven through `_brief_excerpt`, a real call site, on a file written by the
     real writer.
@@ -429,7 +429,7 @@ def test_the_codegen_prompt_never_carries_the_provenance_block(tmp_path):
 
     `_write_code` puts the brief in `StructuredContext.text`, which the code
     engineer's template renders verbatim under *"Research brief / Analyze
-    excerpt"*. Unstripped, the first 277 characters of that window told the model
+    excerpt"*. Unstripped, the first ~250 characters of that window told the model
     to distrust the context it was being handed — in the role the surrounding
     code calls the one that must never degrade.
 
