@@ -2,6 +2,10 @@
 
 Runs independent specialist tasks with a worker cap and shared budget.
 No research branch trees or merge policy — that stays backlog.
+
+Everything here runs in this process. An item declaring any other runtime is
+refused before the batch starts rather than run locally anyway — see
+`LOCAL_RUNTIME` below.
 """
 
 from __future__ import annotations
@@ -16,6 +20,13 @@ from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.context.models import ContextBundle
 from labpilot.research_engine.workspace_facade import Workspace
 
+#: The only runtime this module can execute. Copy of `LocalRuntime.provider`
+#: in `execution/runtimes/models.py`, not a vocabulary of its own;
+#: `test_parallel_workers.py` pins the two equal. Why it is copied rather
+#: than imported, and why anything else is refused rather than run here:
+#: `docs/research-os/autonomy-roadmap/design/05-parallel-branches.md` §8.
+LOCAL_RUNTIME = "local"
+
 
 @dataclass
 class ParallelWorkItem:
@@ -26,6 +37,8 @@ class ParallelWorkItem:
     task: object
     cost: float = 1.0
     context: ContextBundle | None = None
+    #: Where this item is meant to run; see `LOCAL_RUNTIME` above.
+    runtime: str = LOCAL_RUNTIME
 
 
 @dataclass
@@ -64,13 +77,28 @@ async def run_parallel_async(
     max_workers: int = 4,
     budget_limit: float | None = None,
 ) -> list[ParallelResult]:
-    """Run work items concurrently; failures do not cancel siblings.
+    """Run work items concurrently; a *failing* item does not cancel siblings.
 
     ``max_workers`` caps in-flight tasks. When ``budget_limit`` is set, items
     whose ``cost`` would exceed the remaining budget are skipped with an error.
+
+    Raises ``ValueError`` — before any item starts, so nothing runs — for
+    ``max_workers < 1`` or an item whose ``runtime`` is not `LOCAL_RUNTIME`.
+    Why refused up front rather than per item:
+    docs/research-os/autonomy-roadmap/design/05-parallel-branches.md §8,
+    "The `runtime` field".
     """
     if max_workers < 1:
         raise ValueError("max_workers must be >= 1")
+
+    # Pairs rather than a set of values: naming the item is what makes the
+    # error actionable when a fan-out builds a dozen of these, and it avoids
+    # sorting a heterogeneous set — a `None` runtime among strings raises
+    # TypeError from the sort rather than the ValueError intended here.
+    offenders = [(item.id, item.runtime) for item in items if item.runtime != LOCAL_RUNTIME]
+    if offenders:
+        detail = ", ".join(f"{item_id}={runtime!r}" for item_id, runtime in offenders)
+        raise ValueError(f"unsupported runtime(s): {detail}; only {LOCAL_RUNTIME!r} runs today")
 
     budget = ParallelBudget(limit=budget_limit) if budget_limit is not None else None
     limiter = anyio.CapacityLimiter(max_workers)
@@ -116,7 +144,11 @@ def run_parallel_sync(
     max_workers: int = 4,
     budget_limit: float | None = None,
 ) -> list[ParallelResult]:
-    """Sync facade — Conductor callers need no event loop."""
+    """Sync facade — Conductor callers need no event loop.
+
+    Raises whatever `run_parallel_async` validates, notably a ``ValueError``
+    for an item whose ``runtime`` this process cannot honour.
+    """
 
     async def _main() -> list[ParallelResult]:
         return await run_parallel_async(

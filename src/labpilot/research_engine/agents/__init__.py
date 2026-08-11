@@ -33,6 +33,7 @@ from labpilot.research_engine.agents.git_evolution import (
 from labpilot.research_engine.agents.implementation import ImplementationSpecialist
 from labpilot.research_engine.agents.models import AgentTask, SpecialistDescriptor, as_agent_task
 from labpilot.research_engine.agents.parallel import (
+    LOCAL_RUNTIME,
     ParallelBudget,
     ParallelResult,
     ParallelWorkItem,
@@ -69,6 +70,7 @@ __all__ = [
     "ExperimentSpecialist",
     "GitTool",
     "ImplementationSpecialist",
+    "LOCAL_RUNTIME",
     "ParallelBudget",
     "ParallelResult",
     "ParallelWorkItem",

@@ -5,14 +5,18 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import pytest
+
 from labpilot.research_engine.agents.models import AgentTask
 from labpilot.research_engine.agents.parallel import (
+    LOCAL_RUNTIME,
     ParallelWorkItem,
     parallel_summary,
     run_parallel_sync,
 )
 from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.context.models import ContextBundle, ContextRequest
+from labpilot.research_engine.execution.runtimes.models import LocalRuntime
 from labpilot.research_engine.workspace_facade import Workspace
 
 
@@ -139,8 +143,148 @@ def test_shared_budget_skips_overflow(tmp_path: Path) -> None:
 
 
 def test_max_workers_validation(tmp_path: Path) -> None:
-    import pytest
-
     ws = _ws(tmp_path)
     with pytest.raises(ValueError, match="max_workers"):
         run_parallel_sync([], ws, _bundle(), max_workers=0)
+
+
+def test_runtime_defaults_to_local() -> None:
+    """M11: the field exists so remote dispatch has somewhere to land."""
+    item = ParallelWorkItem(id="w", agent=_FakeAgent(), task=AgentTask(id="T", capability="fake"))
+    assert item.runtime == LOCAL_RUNTIME
+
+
+def test_local_runtime_matches_the_shipped_runtime_vocabulary() -> None:
+    """`LOCAL_RUNTIME` is a copy of a value the execution layer already owns.
+
+    `parallel.py` keeps it as a literal rather than importing the runtime
+    models for one string. That copy is only safe if something notices when
+    the two diverge, which is what this asserts — otherwise a rename in
+    `execution/runtimes/` leaves the fan-out validating against a provider id
+    that no longer exists, refusing or accepting everything depending on
+    which side moved.
+    """
+    assert LOCAL_RUNTIME == LocalRuntime(id="rt-local").provider
+
+
+def test_an_equal_but_distinct_local_runtime_is_allowed(tmp_path: Path) -> None:
+    """The guard's own boundary, exercised with a value it cannot shortcut.
+
+    Every other passing item leans on the dataclass default, which *is* the
+    module constant — so `!= LOCAL_RUNTIME` and `is not LOCAL_RUNTIME` behave
+    identically and the comparison is never really tested. Building the string
+    at runtime is what separates them: this is what a runtime value arriving
+    from config or a JSON payload looks like, and an identity check would
+    refuse it while accepting the constant. A containment guard in
+    `git_worktree.py` shipped with a clause that never fired on equality for
+    want of exactly this test.
+    """
+    from_config = "".join(["loc", "al"])
+    assert from_config == LOCAL_RUNTIME
+    assert from_config is not LOCAL_RUNTIME, "the test needs a non-identical equal string"
+
+    ws = _ws(tmp_path)
+    agent = _FakeAgent(hold_s=0.0)
+    items = [
+        ParallelWorkItem(
+            id="explicit",
+            agent=agent,
+            task=AgentTask(id="T0", capability="fake"),
+            runtime=from_config,
+        ),
+    ]
+    results = run_parallel_sync(items, ws, _bundle(), max_workers=1)
+    assert results[0].ok
+    assert [r.id for r in results[0].refs] == ["echo:T0"]
+
+
+def test_a_runtime_that_cannot_run_here_is_refused(tmp_path: Path) -> None:
+    """Refused, not silently run locally.
+
+    Nothing dispatches remotely yet. Executing a Kaggle-bound item on this
+    machine would succeed, report a metric, and leave no trace that the
+    answer came from the wrong place — so the value is checked instead of
+    ignored. The day remote dispatch lands, this test names what changes.
+    """
+    ws = _ws(tmp_path)
+    items = [
+        ParallelWorkItem(
+            id="remote",
+            agent=_FakeAgent(hold_s=0.0),
+            task=AgentTask(id="T0", capability="fake"),
+            runtime="kaggle_kernel",
+        ),
+    ]
+    with pytest.raises(ValueError, match="unsupported runtime"):
+        run_parallel_sync(items, ws, _bundle(), max_workers=1)
+
+
+def test_the_refusal_happens_before_any_sibling_runs(tmp_path: Path) -> None:
+    """A pre-flight check, not a per-item failure.
+
+    Budget and cost are spent by running work; discovering the bad item after
+    three siblings have already trained would waste exactly what the check is
+    cheap enough to prevent.
+    """
+    ws = _ws(tmp_path)
+    agent = _FakeAgent(hold_s=0.0)
+    items = [
+        ParallelWorkItem(id="ok", agent=agent, task=AgentTask(id="T0", capability="fake")),
+        ParallelWorkItem(
+            id="bad",
+            agent=agent,
+            task=AgentTask(id="T1", capability="fake"),
+            runtime="google_colab",
+        ),
+    ]
+    with pytest.raises(ValueError, match="google_colab"):
+        run_parallel_sync(items, ws, _bundle(), max_workers=2)
+    assert agent.max_in_flight == 0, "a sibling ran before the runtime was validated"
+
+
+def test_the_refusal_names_the_item_not_just_the_runtime(tmp_path: Path) -> None:
+    """A dozen-item fan-out needs to say which branch was misconfigured."""
+    ws = _ws(tmp_path)
+    agent = _FakeAgent(hold_s=0.0)
+    items = [
+        ParallelWorkItem(id=f"ok{i}", agent=agent, task=AgentTask(id=f"T{i}", capability="fake"))
+        for i in range(3)
+    ]
+    items.append(
+        ParallelWorkItem(
+            id="branch-7",
+            agent=agent,
+            task=AgentTask(id="T7", capability="fake"),
+            runtime="google_colab",
+        )
+    )
+    with pytest.raises(ValueError, match="branch-7"):
+        run_parallel_sync(items, ws, _bundle(), max_workers=2)
+
+
+def test_a_none_runtime_is_refused_not_a_type_error(tmp_path: Path) -> None:
+    """Dataclasses do not enforce annotations, so `None` is constructible.
+
+    Collecting the offenders as (id, runtime) pairs rather than sorting a set
+    of the values is what keeps this a ValueError: sorting `{None, "kaggle_kernel"}`
+    raises TypeError from the comparison, burying the real problem under an
+    error about `<` that the caller never wrote.
+    """
+    ws = _ws(tmp_path)
+    agent = _FakeAgent(hold_s=0.0)
+    items = [
+        ParallelWorkItem(
+            id="none-runtime",
+            agent=agent,
+            task=AgentTask(id="T0", capability="fake"),
+            runtime=None,
+        ),
+        ParallelWorkItem(
+            id="str-runtime",
+            agent=agent,
+            task=AgentTask(id="T1", capability="fake"),
+            runtime="kaggle_kernel",
+        ),
+    ]
+    with pytest.raises(ValueError, match="unsupported runtime"):
+        run_parallel_sync(items, ws, _bundle(), max_workers=2)
