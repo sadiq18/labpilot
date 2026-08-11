@@ -290,3 +290,61 @@ def test_a_single_branch_is_not_capped_at_all() -> None:
         assert child_environment({"PATH": "/bin"}) == {"PATH": "/bin"}
     finally:
         reset_branch_cpu_share(token)
+
+
+def test_discovery_falls_through_when_the_preferred_source_answers_none(
+    monkeypatch,
+) -> None:
+    """`os.process_cpu_count()` returns `int | None`, so present != useful.
+
+    Stopping at the first source that *exists* rather than the first that
+    *answers* left the caller uncapped on a machine whose count `os.cpu_count()`
+    could still supply — and an uncapped fan-out is the failure this module
+    exists to prevent.
+    """
+    import os
+
+    monkeypatch.setattr(os, "process_cpu_count", lambda: None, raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 12)
+    if hasattr(os, "sched_getaffinity"):
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set())
+
+    assert available_cpus() == 12
+
+
+def test_discovery_prefers_the_affinity_aware_source(monkeypatch) -> None:
+    """A container pinned to 2 cores must not be told it has the host's 64."""
+    import os
+
+    monkeypatch.setattr(os, "process_cpu_count", lambda: 2, raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 64)
+
+    assert available_cpus() == 2
+
+
+def test_discovery_returns_none_only_when_every_source_fails(monkeypatch) -> None:
+    import os
+
+    monkeypatch.setattr(os, "process_cpu_count", lambda: None, raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: None)
+    if hasattr(os, "sched_getaffinity"):
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set())
+
+    assert available_cpus() is None
+
+
+def test_a_failed_discovery_leaves_the_run_uncapped_and_says_so(
+    monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The real discovery-failure path, not the `total=0` shortcut."""
+    import logging
+    import os
+
+    monkeypatch.setattr(os, "process_cpu_count", lambda: None, raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: None)
+    if hasattr(os, "sched_getaffinity"):
+        monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set())
+
+    with caplog.at_level(logging.WARNING):
+        assert cpu_share(4) is None
+    assert any("could not determine available CPUs" in r.getMessage() for r in caplog.records)

@@ -69,13 +69,25 @@ def available_cpus() -> int | None:
     share computed from it would license every branch to oversubscribe the
     very limit the container imposed. The project floor is 3.11, so the newer
     API is probed rather than assumed.
+
+    Each source is tried until one gives an answer, rather than stopping at
+    the first that *exists*: `os.process_cpu_count()` is documented as
+    returning `int | None`, so a present-but-undetermined answer must fall
+    through to the next source. Returning that `None` would leave the caller
+    with no cap on a machine whose count the older call could still supply,
+    and an uncapped fan-out is the failure this module exists to prevent.
     """
-    process_cpu_count = getattr(os, "process_cpu_count", None)
-    if process_cpu_count is not None:
-        return process_cpu_count()
-    if hasattr(os, "sched_getaffinity"):
-        return len(os.sched_getaffinity(0))
-    return os.cpu_count()
+    for source in (
+        getattr(os, "process_cpu_count", None),
+        (lambda: len(os.sched_getaffinity(0))) if hasattr(os, "sched_getaffinity") else None,
+        os.cpu_count,
+    ):
+        if source is None:
+            continue
+        cpus = source()
+        if cpus:
+            return cpus
+    return None
 
 
 def cpu_share(branches: int, *, total: int | None = None) -> int | None:
@@ -131,7 +143,9 @@ def set_branch_cpu_share(cpus: int | None) -> Token:
     """
     if cpus is not None and cpus < 0:
         raise ValueError(f"cpu share must be positive or None/0 to clear, got {cpus}")
-    ceiling = available_cpus()
+    # Looked up only when there is a share to compare against — clearing a cap
+    # has no use for the machine's size, and discovery is a syscall.
+    ceiling = available_cpus() if cpus else None
     if cpus and ceiling and cpus > ceiling:
         # Clamped rather than refused: the share is an upper bound on threads,
         # so asking for more than the machine has is a caller's arithmetic
