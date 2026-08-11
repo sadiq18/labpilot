@@ -1,10 +1,10 @@
 """M11 task 5: `ExperimentCompleted` carries when the run finished.
 
 Promotion (task 6) ranks branches on the metric and breaks a tie by earliest
-finisher, so the payload needs a finish time it does not have today. The
-stamp is only meaningful on a run that actually finished: the failure path
-shares this dict, and a `completed_at` on a run that died would assert the
-completion `test_failed_run_is_not_completed.py` exists to deny.
+finisher, so the payload carries a finish time. The stamp is only meaningful
+on a run that actually finished: the failure path shares this dict, and a
+`completed_at` on a run that died would assert the completion
+`test_failed_run_is_not_completed.py` exists to deny.
 """
 
 from __future__ import annotations
@@ -52,7 +52,14 @@ def stub_run(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
     takes this fixture and forgets to call the setter still cannot reach the
     real plan runner — it gets an empty result instead of doing real work.
     """
-    monkeypatch.setattr(experiment_mod, "snapshot_before_experiment", lambda *a, **k: None)
+
+    def _no_snapshot(
+        workspace_root: Path, *, session_id: str, experiment_key: str, message: str
+    ) -> None:
+        """Signature-faithful: `lambda *a, **k` would swallow a renamed kwarg."""
+        del workspace_root, session_id, experiment_key, message
+
+    monkeypatch.setattr(experiment_mod, "snapshot_before_experiment", _no_snapshot)
 
     def _set(**data: Any) -> None:
         def _fake_run_plan(*_a: object, **_k: object) -> ToolResult:

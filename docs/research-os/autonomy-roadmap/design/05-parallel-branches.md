@@ -460,7 +460,7 @@ Runtime abstraction this document's non-goals already point at.
 models: `execution.runtimes` is *not* otherwise imported by the agents
 package (checked, not assumed), so importing it would add a dependency for
 one string. `test_parallel_workers.py` asserts the copy equals
-`LocalRuntime().provider`, so the two cannot drift unnoticed.
+`LocalRuntime(id=...).provider`, so the two cannot drift unnoticed.
 
 **Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
 a required pre-build check, same as §5's budget question, but it does not need
