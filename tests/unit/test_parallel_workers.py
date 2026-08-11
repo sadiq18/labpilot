@@ -5,8 +5,11 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import pytest
+
 from labpilot.research_engine.agents.models import AgentTask
 from labpilot.research_engine.agents.parallel import (
+    LOCAL_RUNTIME,
     ParallelWorkItem,
     parallel_summary,
     run_parallel_sync,
@@ -139,37 +142,56 @@ def test_shared_budget_skips_overflow(tmp_path: Path) -> None:
 
 
 def test_max_workers_validation(tmp_path: Path) -> None:
-    import pytest
-
     ws = _ws(tmp_path)
     with pytest.raises(ValueError, match="max_workers"):
         run_parallel_sync([], ws, _bundle(), max_workers=0)
 
 
-def test_runtime_defaults_to_local(tmp_path: Path) -> None:
+def test_runtime_defaults_to_local() -> None:
     """M11 task 5: the field exists so remote dispatch has somewhere to land."""
-    del tmp_path
     item = ParallelWorkItem(id="w", agent=_FakeAgent(), task=AgentTask(id="T", capability="fake"))
-    assert item.runtime == "local"
+    assert item.runtime == LOCAL_RUNTIME
 
 
-def test_a_non_default_runtime_still_executes_locally(tmp_path: Path) -> None:
-    """Pins the docstring's claim that nothing reads this field yet.
+def test_a_runtime_that_cannot_run_here_is_refused(tmp_path: Path) -> None:
+    """Refused, not silently run locally.
 
-    Recorded as executable fact rather than prose so the day someone wires
-    remote dispatch, this test fails and names what it has to change. Without
-    it, `runtime="kaggle"` looks like a request the system honours.
+    Nothing dispatches remotely yet. Executing a Kaggle-bound item on this
+    machine would succeed, report a metric, and leave no trace that the
+    answer came from the wrong place — so the value is checked instead of
+    ignored. The day remote dispatch lands, this test names what changes.
     """
     ws = _ws(tmp_path)
-    agent = _FakeAgent(hold_s=0.0)
     items = [
         ParallelWorkItem(
             id="remote",
-            agent=agent,
+            agent=_FakeAgent(hold_s=0.0),
             task=AgentTask(id="T0", capability="fake"),
             runtime="kaggle",
         ),
     ]
-    results = run_parallel_sync(items, ws, _bundle(), max_workers=1)
-    assert results[0].ok
-    assert [r.id for r in results[0].refs] == ["echo:T0"]
+    with pytest.raises(ValueError, match="unsupported runtime"):
+        run_parallel_sync(items, ws, _bundle(), max_workers=1)
+
+
+def test_the_refusal_happens_before_any_sibling_runs(tmp_path: Path) -> None:
+    """A pre-flight check, not a per-item failure.
+
+    Budget and cost are spent by running work; discovering the bad item after
+    three siblings have already trained would waste exactly what the check is
+    cheap enough to prevent.
+    """
+    ws = _ws(tmp_path)
+    agent = _FakeAgent(hold_s=0.0)
+    items = [
+        ParallelWorkItem(id="ok", agent=agent, task=AgentTask(id="T0", capability="fake")),
+        ParallelWorkItem(
+            id="bad",
+            agent=agent,
+            task=AgentTask(id="T1", capability="fake"),
+            runtime="colab",
+        ),
+    ]
+    with pytest.raises(ValueError, match="colab"):
+        run_parallel_sync(items, ws, _bundle(), max_workers=2)
+    assert agent.max_in_flight == 0, "a sibling ran before the runtime was validated"

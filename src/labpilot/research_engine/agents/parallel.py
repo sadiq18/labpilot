@@ -16,6 +16,12 @@ from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.context.models import ContextBundle
 from labpilot.research_engine.workspace_facade import Workspace
 
+#: The only runtime this module can actually execute. Remote dispatch
+#: (Kaggle, Colab, cloud) is separately tracked — TODO.md "P2 remote
+#: execution" — and until it lands, anything else is refused rather than run
+#: in the wrong place.
+LOCAL_RUNTIME = "local"
+
 
 @dataclass
 class ParallelWorkItem:
@@ -26,12 +32,13 @@ class ParallelWorkItem:
     task: object
     cost: float = 1.0
     context: ContextBundle | None = None
-    #: Where this item is meant to run. **Nothing reads it yet** — every item
-    #: executes locally regardless of what is set here, so treat a non-default
-    #: value as a label rather than a request. Remote dispatch is separately
-    #: tracked (TODO.md "P2 remote execution"); the field is carried now so
-    #: that work has a place to attach to.
-    runtime: str = "local"
+    #: Where this item is meant to run. Only `LOCAL_RUNTIME` is executable
+    #: today; the field exists so remote dispatch has somewhere to attach
+    #: without retrofitting every caller. It is validated rather than ignored
+    #: because the alternative is silent: an item asking for Kaggle would run
+    #: locally, finish, and report success, and nothing downstream could tell
+    #: that the answer came from the wrong machine.
+    runtime: str = LOCAL_RUNTIME
 
 
 @dataclass
@@ -77,6 +84,15 @@ async def run_parallel_async(
     """
     if max_workers < 1:
         raise ValueError("max_workers must be >= 1")
+
+    # Checked up front, before any item starts: an item bound for a runtime
+    # that does not exist yet is a caller's mistake, not a worker fault, and
+    # the whole point is to refuse it rather than quietly run it here.
+    unsupported = sorted({i.runtime for i in items if i.runtime != LOCAL_RUNTIME})
+    if unsupported:
+        raise ValueError(
+            f"unsupported runtime(s) {unsupported}; only {LOCAL_RUNTIME!r} runs today"
+        )
 
     budget = ParallelBudget(limit=budget_limit) if budget_limit is not None else None
     limiter = anyio.CapacityLimiter(max_workers)
