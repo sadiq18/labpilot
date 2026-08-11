@@ -99,7 +99,7 @@ def test_the_markdown_warns_above_the_status_line(tmp_path):
     text = md_path.read_text(encoding="utf-8")
 
     warning_at = text.index("source of record")
-    status_at = text.index("**Status (at creation):**")
+    status_at = text.index("- **Status:**")
     assert warning_at < status_at
 
 
@@ -114,9 +114,33 @@ def test_a_plan_rendered_live_is_not_told_it_is_stale():
     assert "source of record" not in text
 
 
-def test_the_markdown_does_not_present_status_as_current():
-    """`- **Status:** ready` reads as fact. It is a creation-time value."""
+def test_the_written_markdown_does_not_present_status_as_current(tmp_path):
+    """`- **Status:** ready` reads as fact, and in the *file* it is a
+    creation-time value — nothing rewrites a projection when the plan moves.
+
+    The guarantee is carried by the stamp rather than by a "(at creation)"
+    parenthesis on the label. The label is shared with `plan show --format
+    markdown`, which reads the DB live, and there the parenthesis was simply
+    false: after `update_plan_status` it printed "Status (at creation): done",
+    a value that was never the creation-time one. Provenance belongs to the
+    writer; the renderer states the field it was given.
+    """
+    from labpilot.research_engine.planner.serializer import write_projections
+
+    _, md_path = write_projections(
+        _plan(), knowledge_dir=tmp_path / "knowledge", competition="demo"
+    )
+    text = md_path.read_text(encoding="utf-8")
+
+    status_at = text.index("- **Status:**")
+    assert text.index("status at creation time") < status_at
+    assert text.index("Query the DB") < status_at
+
+
+def test_a_live_render_does_not_call_the_current_status_a_creation_time_one():
+    """The other half. `plan show` renders whatever the DB holds now, so any
+    claim about *when* that value was true has to come from the writer."""
     text = render_markdown(_plan())
 
-    assert "**Status (at creation):**" in text
-    assert "- **Status:** " not in text
+    assert "- **Status:** " in text
+    assert "(at creation)" not in text

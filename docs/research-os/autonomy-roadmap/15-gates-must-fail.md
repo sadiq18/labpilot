@@ -182,10 +182,10 @@ fixed that, and fixed it for plan projections too, where the stale warning had
 been printed on live reads since before this branch.
 
 **The strip was per-caller.** `research_brief.md` is the only one of these read
-back as *machine* input, and of its three readers two stripped the block and one
-did not: the codegen prompt, which spent 277 of its 3000 characters telling the
-model to distrust the context it was being handed. The context provider emitted
-it twice more, against an 8000-character retrieval budget. `read_derived` is now
+back as *machine* input, and of its **four** readers two stripped the block and
+two did not: the codegen prompt, which spent ~250 of its 3000 characters telling
+the model to distrust the context it was being handed, and the context provider,
+which emitted it twice against an 8000-character retrieval budget. `read_derived` is now
 the single reader, so the next consumer gets stripping without knowing to ask —
 the same argument as the single stamp, on the other side of the file.
 

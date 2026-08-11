@@ -101,10 +101,10 @@ def read_derived(path: Path | str, *, errors: str = "strict") -> str:
     """A persisted view's content, without the block a machine does not need.
 
     Every reader of `research_brief.md` that feeds an LLM wants this, and each
-    one had to know to ask: two of the three stripped and the third — the codegen
-    prompt, the one role the comments call *"must never degrade"* — spent 277 of
-    its 3000 characters telling the model to distrust the context it was being
-    handed. Reported reviewing this branch.
+    one had to know to ask: of its four readers two stripped and two did not —
+    including the codegen prompt, the one role the comments call *"must never
+    degrade"*, which spent ~250 of its 3000 characters telling the model to
+    distrust the context it was being handed. Reported reviewing this branch.
 
     A shared reader rather than a shared stripper, because the next consumer will
     write `path.read_text()` and not think about provenance at all.
