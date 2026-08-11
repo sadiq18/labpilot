@@ -41,7 +41,21 @@ def _direction_to_maximize(raw: Any) -> bool | None:
 
 
 def _from_competition_json(path: Path) -> bool | None:
-    """Read ``metric.direction`` from a workspace/knowledge ``competition.json``."""
+    """Read the metric direction from a ``competition.json``.
+
+    Two shapes share the filename. The hand-written workspace config nests the
+    metric under ``metric``; `CompetitionParser.save` writes a
+    ``CompetitionSpec``, whose metric is ``evaluation_metric``. Reading only
+    the first meant every parser-written spec — the machine-generated ones,
+    which is most of them — answered "unknown" here and fell through to the
+    profile artifact, so a competition with a perfectly explicit direction on
+    disk could still be unresolvable.
+
+    Read as a dict rather than through `CompetitionSpec`: the model defaults
+    `direction` to ``"maximize"``, which would turn an absent field into a
+    confident wrong answer instead of the ``None`` that lets the caller keep
+    looking.
+    """
     if not path.is_file():
         return None
     try:
@@ -51,9 +65,15 @@ def _from_competition_json(path: Path) -> bool | None:
         return None
     if not isinstance(data, dict):
         return None
-    metric = data.get("metric")
-    if isinstance(metric, dict):
-        return _direction_to_maximize(metric.get("direction"))
+    for key in ("metric", "evaluation_metric"):
+        metric = data.get(key)
+        if isinstance(metric, dict):
+            # The first block present decides, including when its answer is
+            # "unknown". Falling through on an unparseable direction would let
+            # a machine-written `evaluation_metric` override a hand-written
+            # `metric` whose direction is merely misspelled — the deliberate
+            # source losing to the generated one.
+            return _direction_to_maximize(metric.get("direction"))
     return None
 
 
