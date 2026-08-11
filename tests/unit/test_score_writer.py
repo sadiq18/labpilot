@@ -25,10 +25,11 @@ from labpilot.research_engine.conductor.budgets import (
 )
 from labpilot.research_engine.conductor.checkpoint import load_budget_pair
 from labpilot.research_engine.conductor.loop import _record_experiment_outcome
-from labpilot.research_engine.conductor.scoring import _direction_for, score_event_for
+from labpilot.research_engine.conductor.scoring import score_event_for
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.intelligence.competition.direction import _direction_to_maximize
 from labpilot.research_engine.intelligence.paths import ResearchPaths
+from labpilot.research_engine.shared.experiments.scoring import _direction_for
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import scaffold_workspace
 

@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, Sequence
 
+from labpilot.accessor.common.atomic_write import atomic_write_text
 from labpilot.research_engine.git import (
     CODE_PATHS,
     CommitSnapshot,
@@ -72,12 +73,18 @@ def write_experiment_git_record(
     workspace_root: Path,
     payload: dict[str, Any],
 ) -> Path:
-    """Write latest record.json and indexed copies under experiment/by_id/."""
+    """Write latest record.json and indexed copies under experiment/by_id/.
+
+    Written atomically (M11): since records moved to the shared runs dir, the
+    K branches of one fan-out step all write `record.json` — the same path,
+    concurrently. `write_text` truncates and then writes, so a reader landing
+    between the two sees an empty or half-written record.
+    """
     root = Path(workspace_root)
     exp_dir = root / "experiment"
     exp_dir.mkdir(parents=True, exist_ok=True)
     latest = exp_dir / "record.json"
-    latest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(latest, json.dumps(payload, indent=2) + "\n")
 
     keys: list[str] = []
     for key in (
@@ -93,7 +100,7 @@ def write_experiment_git_record(
     indexed_dir.mkdir(parents=True, exist_ok=True)
     body = json.dumps(payload, indent=2) + "\n"
     for key in keys:
-        (indexed_dir / f"{key}.json").write_text(body, encoding="utf-8")
+        atomic_write_text(indexed_dir / f"{key}.json", body)
     return latest
 
 

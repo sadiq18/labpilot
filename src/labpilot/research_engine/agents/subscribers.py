@@ -12,6 +12,7 @@ from labpilot.research_engine.agents.events import (
     EXPERIMENT_COMPLETED,
     EventBus,
 )
+from labpilot.research_engine.agents.promotion import install_promotion_subscriber
 from labpilot.research_engine.memory.hooks import install_experience_memory_subscriber
 
 
@@ -84,6 +85,7 @@ def install_evidence_refresh_subscriber(bus: EventBus) -> None:
 
 
 def install_default_subscribers(bus: EventBus) -> None:
-    """Install evidence refresh + experience memory write hooks."""
+    """Install evidence refresh + experience memory + cohort promotion hooks."""
     install_evidence_refresh_subscriber(bus)
     install_experience_memory_subscriber(bus)
+    install_promotion_subscriber(bus)
