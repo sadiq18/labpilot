@@ -17,6 +17,7 @@ import pytest
 
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import (
+    LARGE_INPUT_IGNORES,
     REQUIRED_IGNORES,
     SHARED_STATE_IGNORES,
     WORKTREE_DIRNAME,
@@ -24,8 +25,8 @@ from labpilot.workspace import (
     scaffold_workspace,
 )
 
-#: Everything `ensure_required_ignores` reconciles, across both its groups.
-ALL_IGNORES = (*REQUIRED_IGNORES, *SHARED_STATE_IGNORES)
+#: Everything `ensure_required_ignores` reconciles, across all three groups.
+ALL_IGNORES = (*REQUIRED_IGNORES, *SHARED_STATE_IGNORES, *LARGE_INPUT_IGNORES)
 
 
 def test_appends_missing_patterns_to_an_old_gitignore(tmp_path: Path) -> None:
@@ -33,14 +34,16 @@ def test_appends_missing_patterns_to_an_old_gitignore(tmp_path: Path) -> None:
     root = tmp_path / "titanic"
     root.mkdir()
     # A workspace scaffolded before these patterns existed, plus a user's own
-    # customisation that must survive.
+    # customisation that must survive. `data/` is already present, the way a
+    # real old workspace's template-written line would be — it must not be
+    # reported as added a second time.
     (root / ".gitignore").write_text(
         "# Competition data (often huge)\ndata/\n\n# my own thing\nscratch/\n",
         encoding="utf-8",
     )
 
     added = ensure_required_ignores(root)
-    assert set(added) == set(ALL_IGNORES)
+    assert set(added) == set(ALL_IGNORES) - {"data/"}
 
     text = (root / ".gitignore").read_text(encoding="utf-8")
     for pattern in ALL_IGNORES:
@@ -72,10 +75,31 @@ def test_appends_only_the_genuinely_missing_pattern(tmp_path: Path) -> None:
 
     added = ensure_required_ignores(root)
     assert already not in added
-    assert set(added) == set(ALL_IGNORES) - {already}
+    assert set(added) == set(ALL_IGNORES) - {already, "data/"}
     # Not duplicated.
     text = (root / ".gitignore").read_text(encoding="utf-8")
     assert text.count(already) == 1
+
+
+def test_a_groups_header_is_not_duplicated_across_calls(tmp_path: Path) -> None:
+    """A group whose header already ran must not gain a second one.
+
+    Reproduces the case a bare per-pattern check misses: the header is
+    present, only one of its group's patterns is. Simulates a workspace
+    reconciled before a new pattern joined `SHARED_STATE_IGNORES` — the
+    header from that earlier run must not be re-emitted for the new pattern.
+    """
+    root = tmp_path / "titanic"
+    root.mkdir()
+    header = "# Bulk research state — never copied into a per-branch worktree"
+    (root / ".gitignore").write_text(f"{header}\n/knowledge/knowledge.db\n", encoding="utf-8")
+
+    added = ensure_required_ignores(root)
+    assert "/runs/" in added
+
+    text = (root / ".gitignore").read_text(encoding="utf-8")
+    assert text.count(header) == 1
+    assert "/runs/" in text
 
 
 def test_no_gitignore_is_left_alone(tmp_path: Path) -> None:
@@ -90,7 +114,9 @@ def test_ensure_roots_reconciles_an_existing_workspace(tmp_path: Path) -> None:
     """End to end: the path `research conduct` actually takes."""
     client = scaffold_workspace(tmp_path / "titanic", "titanic")
     gitignore = Path(client.root) / ".gitignore"
-    # Simulate a workspace scaffolded before the patterns were added.
+    # Simulate a workspace scaffolded before the patterns were added. `data/`
+    # is present, `.cache/` and `models/` are not — the retrofit gap large
+    # inputs had until `LARGE_INPUT_IGNORES` joined the reconciled groups.
     gitignore.write_text("data/\n.env\n", encoding="utf-8")
 
     Workspace.from_client(client).ensure_roots()
@@ -98,6 +124,43 @@ def test_ensure_roots_reconciles_an_existing_workspace(tmp_path: Path) -> None:
     text = gitignore.read_text(encoding="utf-8")
     for pattern in ALL_IGNORES:
         assert pattern in text
+
+
+def test_retrofit_closes_the_large_input_gap_git_worktree_add_would_hit(
+    tmp_path: Path,
+) -> None:
+    """The doc claimed `.cache/`/`models/` were 'already safe'; only true if
+    `.gitignore` has the line. Proves the retrofit path actually closes it —
+    not just that the pattern gets added, but that git agrees afterward.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    client = scaffold_workspace(root / "titanic", "titanic")
+    ws_root = Path(client.root)
+    # A `.gitignore` missing the large-input lines, as an old workspace's
+    # would be — `data/` present (the original template always had it),
+    # `.cache/`/`models/` absent.
+    (ws_root / ".gitignore").write_text("data/\n", encoding="utf-8")
+    cache_file = ws_root / ".cache" / "kaggle" / "titanic.zip"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text("x", encoding="utf-8")
+
+    before = subprocess.run(
+        ["git", "check-ignore", "-q", str(cache_file.relative_to(root))],
+        cwd=root,
+        check=False,
+    )
+    assert before.returncode != 0, "fixture didn't reproduce the gap"
+
+    ensure_required_ignores(ws_root)
+
+    after = subprocess.run(
+        ["git", "check-ignore", "-q", str(cache_file.relative_to(root))],
+        cwd=root,
+        check=False,
+    )
+    assert after.returncode == 0, "retrofit did not close the .cache/ gap"
 
 
 def test_unreadable_gitignore_warns_instead_of_failing_silently(
@@ -123,7 +186,9 @@ def test_unwritable_gitignore_warns_and_names_the_patterns(
     """The operator needs to know *which* patterns to add by hand."""
     root = tmp_path / "titanic"
     root.mkdir()
-    (root / ".gitignore").write_text("data/\n", encoding="utf-8")
+    # A line outside every reconciled group, so every pattern in ALL_IGNORES
+    # is genuinely missing and must appear in the logged message below.
+    (root / ".gitignore").write_text("scratch/\n", encoding="utf-8")
 
     def _boom(*_args: object, **_kwargs: object) -> None:
         raise OSError("read-only file system")
@@ -165,6 +230,13 @@ def test_patterns_actually_ignore_the_real_artifact_names(tmp_path: Path) -> Non
         # ...but the hypothesis JSONs beside the database are small and stay
         # tracked, which is why the pattern names the file and not `knowledge/`.
         hyp_dir / "H-001.json": False,  # real data — must stay tracked
+        # Anchored (leading `/`), not `**/`: a same-named path nested under
+        # tracked code is unrelated and must stay tracked.
+        ws_root / "pipeline" / "runs" / "some_output.log": False,
+        ws_root / "pipeline" / "knowledge.db": False,
+        # Large inputs (retrofit path, not just the fresh-scaffold template).
+        ws_root / ".cache" / "kaggle" / "titanic.zip": True,
+        ws_root / "models" / "checkpoint.pt": True,
     }
     for path, _ in artifacts.items():
         path.parent.mkdir(parents=True, exist_ok=True)

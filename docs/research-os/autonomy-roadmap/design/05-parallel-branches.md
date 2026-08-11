@@ -486,7 +486,12 @@ otherwise a cancelled branch could leave a record no subscriber ever saw.
 
 **Disk usage — answered, and the disk was the smaller half.** K worktrees means
 K checkouts of the *tracked* tree; `git worktree add` never copies ignored
-files, so `data/`, `.cache/` and `models/` were already safe. What was not safe
+files, so `data/`, `.cache/` and `models/` are safe wherever `.gitignore`
+actually carries the line — true of a freshly-scaffolded workspace, not of one
+that predates it or had the line hand-edited away. `LARGE_INPUT_IGNORES`
+closes that gap the same way `SHARED_STATE_IGNORES` does below: reconciled
+into an *existing* workspace by `ensure_required_ignores`, not only written
+into the fresh-scaffold template. What was not safe at all, template or not,
 is that `init_git_repo` runs `git add -A` once at scaffold, so everything else
 present at that moment became tracked — while every later commit goes through
 `snapshot_before_experiment`, which only touches
@@ -504,8 +509,22 @@ Measured on a 734 MB workspace (300 MB `data/`, 200 MB `.cache/`, 100 MB
 | K=5 total | 1364 MB | 729 MB |
 
 So K needs no disk-aware ceiling. The fix is `SHARED_STATE_IGNORES` in
-`workspace.py`, narrowed to `**/knowledge.db` rather than all of `knowledge/`
-because the hypothesis JSONs beside it are small and deliberately tracked.
+`workspace.py`: `/knowledge/knowledge.db` rather than all of `knowledge/`,
+because the hypothesis JSONs beside it are small and deliberately tracked;
+anchored to the workspace root rather than `**/`, because an unanchored
+pattern also matches a same-named path nested under tracked code — a pipeline
+script that writes its own output to `pipeline/runs/`, for instance, would
+have that output silently untracked by a pattern meant only for the
+workspace-level `runs/`.
+
+Reconciling a group whose *header* already exists but has gained a new
+pattern needed one more check than reconciling patterns alone: the loop
+originally appended a fresh header on every group with a missing pattern, so
+re-running it after `SHARED_STATE_IGNORES` grew a second entry duplicated the
+header already written for the first. `ensure_required_ignores` now checks
+whether a group's header line is already present before writing it again —
+found by review, not by the tests that shipped with the first version, which
+only ever exercised a single pass over a `.gitignore` missing an entire group.
 
 **The real reason is staleness and drift, not bytes.** A per-branch
 `knowledge/` is not merely a wasteful copy — it is a *fork*. Each branch would
