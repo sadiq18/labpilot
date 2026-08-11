@@ -247,6 +247,14 @@ def score_summary(state: BudgetState, config: BudgetConfig) -> ScoreSummary:
         return ScoreSummary()
 
     values = [event.value for event in events]
+    # Direction is a property of the metric, not of an individual reading, so
+    # the newest event decides for the whole window. Flags within one metric
+    # can genuinely disagree: M8-2 falls back to the campaign's configured
+    # direction when the competition profile cannot answer, so an early
+    # experiment may carry a guess and a later one — after `analyze` writes
+    # the spec — the resolved answer. The later reading is the better-informed
+    # one, and re-splitting the window by flag would fragment a series that
+    # measures a single thing.
     maximize = events[-1].maximize
     best = max(values) if maximize else min(values)
     latest = values[-1]
@@ -272,14 +280,22 @@ def _steps_since_improvement(values: list[float], maximize: bool, epsilon: float
     best including itself — otherwise every event trivially ties its own best
     and nothing ever counts as an improvement. `epsilon` is the same
     noise floor `plateau` uses, so the two agree about what "no change" means.
+
+    One pass, carrying the best rather than re-scanning the prefix: this runs
+    in the observe bundle and again in the gathering gate, so it is paid at
+    least twice per conductor step against a series the campaign is designed
+    to grow.
     """
+    if not values:
+        return 0
     improved_at = 0
+    best_before = values[0]
     for index in range(1, len(values)):
-        prior = values[:index]
-        best_before = max(prior) if maximize else min(prior)
-        gain = values[index] - best_before if maximize else best_before - values[index]
+        value = values[index]
+        gain = value - best_before if maximize else best_before - value
         if gain > epsilon:
             improved_at = index
+        best_before = max(best_before, value) if maximize else min(best_before, value)
     return len(values) - 1 - improved_at
 
 

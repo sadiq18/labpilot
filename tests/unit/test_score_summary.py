@@ -209,6 +209,28 @@ def test_a_change_of_metric_does_not_leak_into_the_summary():
     assert summary.last_3_scores == [194.8]
 
 
+def test_the_newest_reading_settles_the_direction_for_the_window():
+    """Flags within one metric can disagree: M8-2 falls back to the campaign's
+    configured direction when the competition profile cannot answer, so an
+    early experiment may carry a guess and a later one the resolved answer.
+
+    Direction belongs to the metric rather than the reading, so the
+    better-informed newest event decides — rather than splitting a series that
+    measures a single thing into two windows.
+    """
+    guessed_then_resolved = BudgetState(
+        score_events=[
+            _events(194.8, maximize=True)[0],  # recorded before the spec existed
+            _events(190.9, maximize=False)[0],  # recorded after `analyze` ran
+        ]
+    )
+
+    summary = score_summary(guessed_then_resolved, BudgetConfig())
+
+    assert summary.best_so_far == 190.9  # minimised, per the newest flag
+    assert summary.steps_since_improvement == 0
+
+
 def test_the_noise_floor_is_the_one_plateau_uses():
     """A gain smaller than `plateau_epsilon` is not an improvement, so the
     gate and the stop cannot disagree about what "no change" means."""
@@ -236,6 +258,24 @@ def test_the_observe_bundle_carries_the_progress_numbers(tmp_path: Path):
         assert observe["last_3_scores"] == [194.8, 195.0, 196.0]
         assert observe["steps_since_improvement"] == 2
         assert observe["score_metric"] == "cv_rmse"
+    finally:
+        store.close()
+
+
+def test_the_bundle_keeps_its_shape_when_the_session_is_missing(tmp_path: Path):
+    """Every other field here degrades to a value rather than disappearing.
+    A consumer that subscripts a key present on every real session would
+    otherwise raise only on the rare path — the one least exercised."""
+    ws = _ws(tmp_path)
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        observe = build_observe_bundle(store, ws, "S-does-not-exist", include_context=False)
+
+        assert observe["best_so_far"] is None
+        assert observe["last_3_scores"] == []
+        assert observe["delta_vs_best"] is None
+        assert observe["steps_since_improvement"] == 0
+        assert observe["score_metric"] is None
     finally:
         store.close()
 

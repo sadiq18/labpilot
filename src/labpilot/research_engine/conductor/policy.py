@@ -16,6 +16,7 @@ from labpilot.research_engine.conductor.approvals import (
 from labpilot.research_engine.conductor.budgets import (
     BudgetConfig,
     BudgetState,
+    ScoreSummary,
     budgets_from_metadata,
     score_summary,
 )
@@ -144,10 +145,15 @@ def _attach_score_progress(observe: dict[str, Any], session: Any) -> None:
     trust. `score_metric` travels with them so the model cannot compare a
     reading against a threshold for a different metric.
     """
+    # A missing session means "no readings", not "no such fields". Every
+    # sibling here degrades to a value rather than disappearing, and a
+    # consumer that subscripts a key present on every real session would
+    # otherwise raise only on the rare path.
     if session is None:
-        return
-    config, state = budgets_from_metadata(session.metadata)
-    summary = score_summary(state, config)
+        summary = ScoreSummary()
+    else:
+        config, state = budgets_from_metadata(session.metadata)
+        summary = score_summary(state, config)
     observe["best_so_far"] = summary.best_so_far
     observe["last_3_scores"] = summary.last_3_scores
     observe["delta_vs_best"] = summary.delta_vs_best
