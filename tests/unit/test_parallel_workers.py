@@ -16,6 +16,7 @@ from labpilot.research_engine.agents.parallel import (
 )
 from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.context.models import ContextBundle, ContextRequest
+from labpilot.research_engine.execution.runtimes.models import LocalRuntime
 from labpilot.research_engine.workspace_facade import Workspace
 
 
@@ -153,6 +154,19 @@ def test_runtime_defaults_to_local() -> None:
     assert item.runtime == LOCAL_RUNTIME
 
 
+def test_local_runtime_matches_the_shipped_runtime_vocabulary() -> None:
+    """`LOCAL_RUNTIME` is a copy of a value the execution layer already owns.
+
+    `parallel.py` keeps it as a literal rather than importing the runtime
+    models for one string. That copy is only safe if something notices when
+    the two diverge, which is what this asserts — otherwise a rename in
+    `execution/runtimes/` leaves the fan-out validating against a provider id
+    that no longer exists, refusing or accepting everything depending on
+    which side moved.
+    """
+    assert LOCAL_RUNTIME == LocalRuntime(id="rt-local").provider
+
+
 def test_an_equal_but_distinct_local_runtime_is_allowed(tmp_path: Path) -> None:
     """The guard's own boundary, exercised with a value it cannot shortcut.
 
@@ -198,7 +212,7 @@ def test_a_runtime_that_cannot_run_here_is_refused(tmp_path: Path) -> None:
             id="remote",
             agent=_FakeAgent(hold_s=0.0),
             task=AgentTask(id="T0", capability="fake"),
-            runtime="kaggle",
+            runtime="kaggle_kernel",
         ),
     ]
     with pytest.raises(ValueError, match="unsupported runtime"):
@@ -220,10 +234,10 @@ def test_the_refusal_happens_before_any_sibling_runs(tmp_path: Path) -> None:
             id="bad",
             agent=agent,
             task=AgentTask(id="T1", capability="fake"),
-            runtime="colab",
+            runtime="google_colab",
         ),
     ]
-    with pytest.raises(ValueError, match="colab"):
+    with pytest.raises(ValueError, match="google_colab"):
         run_parallel_sync(items, ws, _bundle(), max_workers=2)
     assert agent.max_in_flight == 0, "a sibling ran before the runtime was validated"
 
@@ -241,7 +255,7 @@ def test_the_refusal_names_the_item_not_just_the_runtime(tmp_path: Path) -> None
             id="branch-7",
             agent=agent,
             task=AgentTask(id="T7", capability="fake"),
-            runtime="colab",
+            runtime="google_colab",
         )
     )
     with pytest.raises(ValueError, match="branch-7"):
@@ -269,7 +283,7 @@ def test_a_none_runtime_is_refused_not_a_type_error(tmp_path: Path) -> None:
             id="str-runtime",
             agent=agent,
             task=AgentTask(id="T1", capability="fake"),
-            runtime="kaggle",
+            runtime="kaggle_kernel",
         ),
     ]
     with pytest.raises(ValueError, match="unsupported runtime"):
