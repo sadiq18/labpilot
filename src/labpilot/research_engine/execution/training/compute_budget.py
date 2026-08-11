@@ -89,6 +89,15 @@ def cpu_share(branches: int, *, total: int | None = None) -> int | None:
     """
     if branches < 1:
         raise ValueError(f"branches must be at least 1, got {branches}")
+    if branches == 1:
+        # Nothing to divide the machine with, so nothing to prevent. Returning
+        # the full count instead would be honest arithmetic and the wrong
+        # answer: installing it pins six variables that were previously unset,
+        # and a pinned number is not the same as absent — a library that would
+        # apply its own heuristic gets a hard value instead. Keeping this None
+        # is what lets a caller compute the share unconditionally without
+        # having to remember that K=1 is the sequential path.
+        return None
     cpus = available_cpus() if total is None else total
     if cpus is None or cpus < 1:
         # Undiscoverable: capping to 1 would serialise the fan-out on a

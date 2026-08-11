@@ -24,7 +24,7 @@ from labpilot.research_engine.execution.training.environment import child_enviro
 
 def test_share_divides_the_machine_between_branches() -> None:
     assert cpu_share(4, total=16) == 4
-    assert cpu_share(1, total=16) == 16
+    assert cpu_share(2, total=16) == 8
 
 
 def test_share_never_falls_to_zero() -> None:
@@ -237,13 +237,21 @@ def test_a_share_larger_than_the_machine_is_clamped(caplog) -> None:
     assert any("clamping to" in r.getMessage() for r in caplog.records)
 
 
-def test_a_share_within_the_machine_is_left_alone() -> None:
-    """Clamping must not quietly rewrite a legitimate share."""
+@pytest.mark.parametrize("offset", [0, 1, 2])
+def test_a_share_within_the_machine_is_left_alone(offset: int) -> None:
+    """Clamping must not quietly rewrite a legitimate share.
+
+    Parametrised across the values *at* and just below the boundary, not just
+    1: a clamp written as `min(cpus, ceiling // 2)`, or firing at `>=` rather
+    than `>`, rewrites every realistic mid-range share while leaving 1 alone.
+    """
     ceiling = available_cpus()
-    assert ceiling and ceiling >= 1
-    token = set_branch_cpu_share(1)
+    assert ceiling, "this test needs a discoverable CPU count"
+    share = max(1, ceiling - offset)
+
+    token = set_branch_cpu_share(share)
     try:
-        assert thread_limit_env()["OMP_NUM_THREADS"] == "1"
+        assert thread_limit_env()["OMP_NUM_THREADS"] == str(share)
     finally:
         reset_branch_cpu_share(token)
 
@@ -262,5 +270,23 @@ def test_cap_can_be_opted_out_for_a_deterministic_environment() -> None:
     try:
         assert child_environment({"PATH": "/bin"}, apply_cpu_cap=False) == {"PATH": "/bin"}
         assert "OMP_NUM_THREADS" in child_environment({"PATH": "/bin"})
+    finally:
+        reset_branch_cpu_share(token)
+
+
+def test_a_single_branch_is_not_capped_at_all() -> None:
+    """K=1 is the sequential path: no contention, so nothing to prevent.
+
+    Task 7's natural implementation computes the share once per step and
+    installs it without special-casing K=1, so this is what keeps a
+    non-fanned-out run's environment identical to what it is today.
+    """
+    assert cpu_share(1) is None
+    assert cpu_share(1, total=16) is None
+
+    token = set_branch_cpu_share(cpu_share(1))
+    try:
+        assert thread_limit_env() == {}
+        assert child_environment({"PATH": "/bin"}) == {"PATH": "/bin"}
     finally:
         reset_branch_cpu_share(token)
