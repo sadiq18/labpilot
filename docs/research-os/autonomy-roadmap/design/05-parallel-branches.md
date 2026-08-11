@@ -413,10 +413,17 @@ rather than solved.
 Implementation notes that follow from the above, all in
 `execution/training/compute_budget.py`:
 
-- The variable set spans OpenMP, the three BLAS families, numexpr and loky.
-  `VECLIB_MAXIMUM_THREADS` is included because Apple Accelerate backs numpy on
-  the common dev platform, and `LOKY_MAX_CPU_COUNT` because it is what
-  `n_jobs=-1` actually consults.
+- The variable set spans OpenMP, the three BLAS families, numexpr, loky and
+  polars/rayon. `VECLIB_MAXIMUM_THREADS` is included because Apple Accelerate
+  backs numpy on the common dev platform, and `LOKY_MAX_CPU_COUNT` because it
+  is what `n_jobs=-1` actually consults. **The list cannot be complete**:
+  generated code declares its own dependencies via PEP 723, so a library whose
+  pool is governed by an unlisted variable runs uncapped. That is the same
+  open-world objection this codebase already used to reject a package
+  allowlist, and it applies here — the difference being that an unknown
+  package fails loudly at import while an unknown thread variable just means
+  one library quietly ignores the budget. Worth keeping accurate; not worth
+  presenting as exhaustive.
 - The share travels in a `ContextVar`, not `os.environ`: branches are
   concurrent threads in one process, so an environment variable is shared
   between them and the last writer would set the value for all. A context
