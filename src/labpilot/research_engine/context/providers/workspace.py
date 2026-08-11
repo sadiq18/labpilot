@@ -6,6 +6,7 @@ from pathlib import Path
 
 import anyio
 
+from labpilot.accessor.common.derived import read_derived
 from labpilot.research_engine.context.models import ContextItem, ContextRequest
 
 _TEXT_SUFFIXES = {".md", ".txt", ".json", ".yaml", ".yml", ".csv"}
@@ -37,7 +38,7 @@ class WorkspaceProvider:
                 if not path.is_file() or path.suffix.lower() not in _TEXT_SUFFIXES:
                     continue
                 try:
-                    text = path.read_text(encoding="utf-8", errors="ignore").strip()
+                    text = read_derived(path, errors="ignore").strip()
                 except OSError:
                     continue
                 if not text:
@@ -61,7 +62,7 @@ class WorkspaceProvider:
         brief = paths.brief_path
         if brief.is_file():
             try:
-                text = brief.read_text(encoding="utf-8", errors="ignore").strip()
+                text = read_derived(brief, errors="ignore").strip()
             except OSError:
                 text = ""
             if text:

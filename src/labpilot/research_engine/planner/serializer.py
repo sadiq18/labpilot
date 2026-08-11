@@ -133,6 +133,7 @@ def write_projections(
             dated=True,
         )
         + "\n\n"
-        + render_markdown(plan)
+        + render_markdown(plan),
+        encoding="utf-8",
     )
     return json_path, md_path

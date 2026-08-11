@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from labpilot.accessor.common.derived import strip_derived_note
+from labpilot.accessor.common.derived import read_derived
 from labpilot.accessor.common.ids import task_id as make_task_id
 from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.research_engine.intelligence.paths import ResearchPaths
@@ -169,7 +169,7 @@ def compile_baseline_plan(
             # Stripped before the budget applies: the provenance block is for a
             # human deciding whether to trust the file, and 200 characters of it
             # inside a 2000-character window displaces the brief itself.
-            brief = strip_derived_note(paths.brief_path.read_text(encoding="utf-8"))[:2000]
+            brief = read_derived(paths.brief_path)[:2000]
 
         baseline_hyp = HypothesisStore(knowledge_dir, competition).ensure_baseline(
             brief_excerpt=brief

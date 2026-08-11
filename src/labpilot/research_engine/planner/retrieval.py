@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from labpilot.accessor.common.derived import strip_derived_note
+from labpilot.accessor.common.derived import read_derived
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.shared.experiments.models import Hypothesis
 
@@ -75,5 +75,5 @@ def _brief_excerpt(knowledge_dir: Path, competition: str) -> str:
     brief_path = paths.brief_path
     if not brief_path.is_file():
         return ""
-    text = strip_derived_note(brief_path.read_text(errors="ignore")).strip()
+    text = read_derived(brief_path, errors="ignore").strip()
     return text[:MAX_BRIEF_CHARS]

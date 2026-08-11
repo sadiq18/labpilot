@@ -22,6 +22,7 @@ where to go, which is the position the two misdiagnoses were already in.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 #: How a stamped markdown view begins, so a machine reader can drop it again.
 _NOTE_OPENER = "> **Derived view — not authoritative.**"
@@ -87,3 +88,18 @@ def strip_derived_note(text: str) -> str:
     while index < len(lines) and not lines[index].strip():
         index += 1
     return "\n".join(lines[index:])
+
+
+def read_derived(path: Path | str, *, errors: str = "strict") -> str:
+    """A persisted view's content, without the block a machine does not need.
+
+    Every reader of `research_brief.md` that feeds an LLM wants this, and each
+    one had to know to ask: two of the three stripped and the third — the codegen
+    prompt, the one role the comments call *"must never degrade"* — spent 277 of
+    its 3000 characters telling the model to distrust the context it was being
+    handed. Reported reviewing this branch.
+
+    A shared reader rather than a shared stripper, because the next consumer will
+    write `path.read_text()` and not think about provenance at all.
+    """
+    return strip_derived_note(Path(path).read_text(encoding="utf-8", errors=errors))

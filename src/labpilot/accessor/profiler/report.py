@@ -16,7 +16,8 @@ def write_profile(run_dir: Path, profile: DatasetProfile) -> tuple[Path, Path]:
             warning="Regenerated only when profiling reruns; the data may have changed.",
         )
         + "\n\n"
-        + render_markdown(profile)
+        + render_markdown(profile),
+        encoding="utf-8",
     )
 
     return json_path, md_path

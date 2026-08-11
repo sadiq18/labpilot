@@ -69,5 +69,7 @@ def write_brief(brief: ResearchBrief, path: Path) -> Path:
             "this file."
         ),
     )
-    path.write_text(note + "\n\n" + render_brief_markdown(brief) + "\n")
+    # Explicit encoding: the stamp's em dash is the first non-ASCII byte these
+    # files have ever carried, and every reader already specifies utf-8.
+    path.write_text(note + "\n\n" + render_brief_markdown(brief) + "\n", encoding="utf-8")
     return path

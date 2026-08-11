@@ -227,7 +227,8 @@ def write_comparison(run_dir: Path, comparison: ExperimentComparison) -> None:
             ),
         )
         + "\n\n"
-        + render_markdown(comparison)
+        + render_markdown(comparison),
+        encoding="utf-8",
     )
 
 

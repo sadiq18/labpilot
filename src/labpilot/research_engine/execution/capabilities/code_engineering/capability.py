@@ -21,6 +21,7 @@ import json
 import logging
 from pathlib import Path
 
+from labpilot.accessor.common.derived import read_derived
 from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.execution.capabilities._helpers import (
     evidence,
@@ -506,7 +507,10 @@ class CodeEngineeringCapability(BaseCapability):
         brief = ""
         brief_path = context.paths.brief_path
         if brief_path.is_file():
-            brief = brief_path.read_text(encoding="utf-8")[:3000]
+            # The provenance block is 277 characters of "distrust this" at the
+            # head of the codegen prompt's research context. Reported reviewing
+            # this branch: two other readers stripped and this one did not.
+            brief = read_derived(brief_path)[:3000]
 
         hyp_fields = self._hypothesis_fields(context)
         plan_meta = dict(context.plan.metadata or {})
