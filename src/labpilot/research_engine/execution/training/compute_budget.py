@@ -36,11 +36,22 @@ from contextvars import ContextVar, Token
 
 logger = logging.getLogger(__name__)
 
-#: Every variable that bounds a thread pool the generated code might reach.
-#: Set together because they govern different layers and a script can use any
-#: of them: OpenMP backs LightGBM and XGBoost, the three BLAS families back
-#: numpy/scipy depending on the wheel, numexpr backs `pandas.eval`, and loky
-#: is what scikit-learn's `n_jobs=-1` actually consults.
+#: Variables that bound a thread pool the generated code might reach. Set
+#: together because they govern different layers and a script can use any of
+#: them: OpenMP backs LightGBM and XGBoost, the three BLAS families back
+#: numpy/scipy depending on the wheel, numexpr backs `pandas.eval`, loky is
+#: what scikit-learn's `n_jobs=-1` actually consults, and polars runs its own
+#: rayon pool.
+#:
+#: **This list is curated against an open world, and that is a real limit.**
+#: Generated code declares its own dependencies via PEP 723, so the set of
+#: libraries is unbounded by design — `environment.py` argues at length why a
+#: curated allowlist is the wrong answer for package *names*, and the same
+#: objection applies here: a library whose pool is governed by a variable not
+#: listed runs uncapped. The difference is the cost of being wrong. An unknown
+#: package fails loudly at import; an unknown thread variable just means one
+#: library ignores the budget, so the list is worth keeping accurate without
+#: pretending it can ever be complete.
 THREAD_LIMIT_VARS: tuple[str, ...] = (
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
@@ -48,6 +59,8 @@ THREAD_LIMIT_VARS: tuple[str, ...] = (
     "NUMEXPR_NUM_THREADS",
     "VECLIB_MAXIMUM_THREADS",
     "LOKY_MAX_CPU_COUNT",
+    "POLARS_MAX_THREADS",
+    "RAYON_NUM_THREADS",
 )
 
 #: The share for the branch running in this context. A `ContextVar` rather
@@ -92,6 +105,17 @@ def available_cpus() -> int | None:
 
 def cpu_share(branches: int, *, total: int | None = None) -> int | None:
     """CPUs each of `branches` concurrent branches may use, or None to not cap.
+
+    `None` is returned in two cases, both meaning "install no cap":
+
+    * **`branches == 1`** — the sequential path, where nothing contends, so
+      there is nothing to prevent. `total` is ignored. This exists so a caller
+      can compute the share unconditionally rather than special-casing K=1
+      itself, and it is what keeps a non-fanned-out run's environment
+      identical to what it was before this module existed.
+    * **the CPU count is undiscoverable** — capping to 1 would serialise a
+      machine that may be large, so the library default is preferred and the
+      reason is logged.
 
     Never returns 0: integer division floors, so `2 // 3` is 0, and 0 does not
     mean "one thread" to these variables — it typically means "unset, use the

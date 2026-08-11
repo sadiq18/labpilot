@@ -348,3 +348,19 @@ def test_a_failed_discovery_leaves_the_run_uncapped_and_says_so(
     with caplog.at_level(logging.WARNING):
         assert cpu_share(4) is None
     assert any("could not determine available CPUs" in r.getMessage() for r in caplog.records)
+
+
+def test_polars_thread_pool_is_capped_too() -> None:
+    """Generated code picks its own dependencies; polars is a plausible one.
+
+    The list cannot be complete against a PEP 723 open world, but a library
+    this likely for tabular work running a full-machine pool per branch would
+    oversubscribe exactly as if there were no cap.
+    """
+    token = set_branch_cpu_share(2)
+    try:
+        env = thread_limit_env()
+        assert env["POLARS_MAX_THREADS"] == "2"
+        assert env["RAYON_NUM_THREADS"] == "2"
+    finally:
+        reset_branch_cpu_share(token)
