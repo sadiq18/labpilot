@@ -76,6 +76,78 @@ def test_module_values_compare_across_a_symlinked_workspace(tmp_path: Path) -> N
     assert real.exists()
 
 
+def test_reconcile_does_not_create_a_repo_in_a_non_git_workspace(tmp_path: Path) -> None:
+    """A cleanup sweep must not have `git init` as a side effect.
+
+    `open_git_tool` falls back to `Repo.init()` plus a bootstrap commit for a
+    directory that is not a repository. Tolerable where the caller exists to
+    do git work; not for an unattended startup sweep against a workspace the
+    user deliberately keeps out of git — `init_git_repo` is optional at
+    scaffold time.
+    """
+    plain = tmp_path / "no-git-here"
+    plain.mkdir()
+
+    result = reconcile_worktrees(plain, live_branches=set())
+
+    assert result.removed == ()
+    assert result.ok
+    assert not (plain / ".git").exists(), "reconciliation created a git repository"
+
+
+def test_reconcile_result_cannot_be_mutated_after_the_fact(tmp_path: Path) -> None:
+    """`ok` is derived from `failed`, so an in-place edit would rewrite the verdict."""
+    root = _repo(tmp_path)
+    create_experiment_worktree(root, session_id="s1", experiment_key="exp-a")
+    result = reconcile_worktrees(root, live_branches=set())
+
+    assert isinstance(result.removed, tuple)
+    assert isinstance(result.failed, tuple)
+    with pytest.raises(AttributeError):
+        result.removed.append(Path("/tmp/injected"))  # type: ignore[attr-defined]
+
+
+def test_worktree_paths_with_trailing_whitespace_are_parsed_intact(
+    tmp_path: Path,
+) -> None:
+    """`splitlines()` already drops the line ending; stripping corrupts paths.
+
+    A stripped path does not exist, so `try_under` rejected it as uncontained
+    and reconciliation skipped that worktree forever while reporting nothing
+    to clean.
+    """
+    root = _repo(tmp_path)
+    # The trailing space must be on the *last* component: `line.strip()` only
+    # reaches the end of the line, so a space mid-path would not exercise it.
+    odd = tmp_path / "wt "  # legal directory name on macOS and Linux
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "odd/space", str(odd), "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+    seen = list_registered_worktrees(root)
+
+    assert odd.resolve() in seen, f"trailing space lost; parsed {[str(p) for p in seen]}"
+    assert all(p.exists() for p in seen), "a parsed path does not exist on disk"
+
+
+def test_worktree_dirname_is_the_one_the_gitignore_pattern_uses(tmp_path: Path) -> None:
+    """One definition of the directory name, not three.
+
+    The name lives in `labpilot.workspace` and `REQUIRED_IGNORES` is built
+    from it, so a rename cannot leave the ignore pattern matching a stale
+    literal while its own test still passes.
+    """
+    from labpilot.workspace import REQUIRED_IGNORES
+
+    assert f"{WORKTREE_DIRNAME}/" in REQUIRED_IGNORES
+    root = _repo(tmp_path)
+    wt = create_experiment_worktree(root, session_id="s1", experiment_key="exp-a")
+    assert wt.path.is_relative_to(root / WORKTREE_DIRNAME)
+
+
 def test_worktree_isolates_edits_between_branches(tmp_path: Path) -> None:
     """The bug this exists to fix: two branches editing the same file."""
     root = _repo(tmp_path)
@@ -194,7 +266,7 @@ def test_reconcile_ignores_worktrees_outside_our_directory(tmp_path: Path) -> No
 
     result = reconcile_worktrees(root, live_branches=set())
 
-    assert result.removed == []
+    assert result.removed == ()
     assert outside.is_dir()
     # Still registered under its own branch — reconciliation left it entirely alone.
     assert list_registered_worktrees(root)[outside.resolve()] == "my/work"

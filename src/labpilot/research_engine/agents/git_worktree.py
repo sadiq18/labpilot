@@ -25,27 +25,22 @@ enough:
   is what makes the crash case recoverable rather than requiring a human with
   `git worktree prune`.
 
-## The path invariant, and why it is a type
+## The path invariant
 
 Every path this module deletes is **resolved** and **strictly inside**
 `.worktrees/`. Both properties are carried by `_SafeTarget`, not by checks at
 call sites, and `_force_unregister` — the only function here that deletes
 anything — accepts nothing else.
 
-That is a deliberate response to how this module actually failed. Four review
-rounds produced four variants of one mistake, each a path property applied at
-some call sites and not others: containment missing from create and remove,
-then permitted at its own boundary, then a third hand-rolled copy inside
-`reconcile_worktrees`, then normalization used when reporting paths but not
-when returning them. Centralising each *check* fixed each instance and left
-the shape intact, so the next omission simply appeared somewhere else.
-
 If you add an operation that removes or overwrites anything here, take a
 `_SafeTarget`. Normalising an *input* at a public entry point is fine — that
 is what `Path(repo_root).resolve()` and `experiment_worktree_root` do. What
-must not reappear is a *decision* about whether a path is safe, made anywhere
-but `_SafeTarget._check`: `is_relative_to` outside that method is the bug
-returning.
+must not reappear is a *decision* about whether a path is safe made anywhere
+but `_SafeTarget._check`.
+
+Why a type rather than a convention, and the four review rounds that argued
+for it, are recorded in
+`docs/research-os/autonomy-roadmap/design/05-parallel-branches.md` §8.
 
 **Nothing in production calls this yet, and that is the intended state.** It
 is the mechanism M11 task 7 consumes: the conductor creates one worktree per
@@ -67,15 +62,21 @@ from pathlib import Path
 
 from labpilot.research_engine.agents.git_evolution import research_branch_name
 from labpilot.research_engine.git import GitTool, open_git_tool
+from labpilot.workspace import WORKTREE_DIRNAME
 
 logger = logging.getLogger(__name__)
 
-#: Worktrees live under the workspace root so they are discoverable and share
-#: its filesystem (git requires the same volume for a linked worktree). The
-#: directory is machine-local and covered by `REQUIRED_IGNORES` in
-#: `labpilot.workspace`, so it is never committed and is reconciled into
-#: workspaces that predate this feature.
-WORKTREE_DIRNAME = ".worktrees"
+__all__ = [
+    "WORKTREE_DIRNAME",
+    "ExperimentWorktree",
+    "ReconcileResult",
+    "create_experiment_worktree",
+    "experiment_worktree",
+    "experiment_worktree_root",
+    "list_registered_worktrees",
+    "reconcile_worktrees",
+    "remove_experiment_worktree",
+]
 
 
 @dataclass(frozen=True)
@@ -91,16 +92,21 @@ class ExperimentWorktree:
 class ReconcileResult:
     """What the startup sweep actually managed to clear.
 
-    Both lists are returned rather than only the successes, because the
+    Both collections are returned rather than only the successes, because the
     caller's decision depends on the failures: a worktree that could not be
     removed still holds its branch checked out, so the experiment keys under
     `failed` will die inside `create_experiment_worktree` later with git's
     "already checked out". A log line cannot be acted on by the campaign
     startup that needs to decide whether to fan out over those keys.
+
+    Tuples, not lists: `frozen=True` stops the fields being rebound but not a
+    list being mutated in place, and `ok` is derived from `failed`, so an
+    in-place edit would retroactively change the verdict this record exists
+    to preserve.
     """
 
-    removed: list[Path]
-    failed: list[Path]
+    removed: tuple[Path, ...]
+    failed: tuple[Path, ...]
 
     @property
     def ok(self) -> bool:
@@ -116,34 +122,28 @@ def experiment_worktree_root(repo_root: Path) -> Path:
 
 @dataclass(frozen=True)
 class _SafeTarget:
-    """A path this module is permitted to delete. Resolved, and strictly
+    """A path this module is permitted to delete: resolved, and strictly
     inside the experiment worktree root.
 
-    **This type exists to end a recurring class of bug, not for tidiness.**
-    Four review rounds on this module found four variants of one mistake: a
-    path property applied at some call sites and not others — containment
-    missing in create and remove, then permitted at the boundary, then a
-    third hand-rolled copy in `reconcile_worktrees`, then normalization
-    applied when reporting paths but not when returning them.
+    Obtainable only through `under()` / `try_under()`, which resolve and
+    verify — so a destructive operation cannot skip either property, because
+    it cannot construct the argument. `value` being always resolved also makes
+    it the single normal form every path leaving this module is in, so the
+    module's own return values compare equal to each other.
 
-    Centralising the *check* was not enough, because a check is still a
-    discipline each call site has to remember. So the property moved into the
-    type: `_force_unregister` takes a `_SafeTarget`, and the only way to
-    obtain one is `under()` / `try_under()`, which resolve and verify. A new
-    destructive operation cannot skip either property, because it cannot get
-    an argument without them.
-
-    `value` is always resolved, which also makes it the single normal form
-    every path leaving this module is in — `create` and `reconcile` used to
-    disagree, so `wt.path in result.removed` was False on any symlinked
-    workspace (macOS `/tmp`), even for a worktree that had just been removed.
+    Design rationale and the review history that produced this shape:
+    `docs/research-os/autonomy-roadmap/design/05-parallel-branches.md` §8.
     """
 
     value: Path
 
     @staticmethod
-    def _check(root: Path, path: Path) -> Path | None:
-        """Resolve and verify. Returns the resolved path, or None if unsafe.
+    def _check(root: Path, path: Path) -> tuple[Path | None, str]:
+        """Resolve and verify. Returns `(resolved, "")` or `(None, reason)`.
+
+        The reason is returned rather than re-derived by the caller: the rule
+        and its explanation are then one piece of logic, so editing the
+        boundary here cannot leave `under()` reporting the wrong cause.
 
         "Strictly inside" is deliberate: `Path.is_relative_to` is `True` for
         an equal path, but the root holds *every* branch's checkout, so
@@ -153,26 +153,23 @@ class _SafeTarget:
         resolved_root = root.resolve()
         resolved = path.resolve()
         if resolved == resolved_root:
-            return None
+            return None, (
+                f"resolves to the experiment worktree root {resolved_root} "
+                "itself, which holds every branch"
+            )
         if not resolved.is_relative_to(resolved_root):
-            return None
-        return resolved
+            return None, (
+                f"resolves to {resolved}, outside the experiment worktree "
+                f"root {resolved_root}"
+            )
+        return resolved, ""
 
     @classmethod
     def under(cls, root: Path, path: Path) -> _SafeTarget:
         """Validating constructor for callers that must fail loudly."""
-        resolved = cls._check(root, path)
+        resolved, reason = cls._check(root, path)
         if resolved is None:
-            resolved_root = root.resolve()
-            if path.resolve() == resolved_root:
-                raise ValueError(
-                    f"refusing to operate on {path}: resolves to the experiment "
-                    f"worktree root {resolved_root} itself, which holds every branch"
-                )
-            raise ValueError(
-                f"refusing to operate on {path}: resolves to {path.resolve()}, "
-                f"outside the experiment worktree root {resolved_root}"
-            )
+            raise ValueError(f"refusing to operate on {path}: {reason}")
         return cls(value=resolved)
 
     @classmethod
@@ -183,7 +180,7 @@ class _SafeTarget:
         not own — a developer's own worktree elsewhere in the repo is normal
         and must be left alone.
         """
-        resolved = cls._check(root, path)
+        resolved, _ = cls._check(root, path)
         return None if resolved is None else cls(value=resolved)
 
 
@@ -294,8 +291,12 @@ def list_registered_worktrees(
     out = tool.execute("worktree", "list", "--porcelain")
     found: dict[Path, str | None] = {}
     current: Path | None = None
+    # Deliberately not stripping: `splitlines()` already removes the line
+    # ending, and a path may legally begin or end with whitespace. Stripping
+    # produced a path that does not exist, which `_SafeTarget.try_under` then
+    # rejected as uncontained — so reconciliation skipped that worktree
+    # forever while reporting nothing to clean.
     for line in out.splitlines():
-        line = line.strip()
         if line.startswith("worktree "):
             current = Path(line[len("worktree ") :]).resolve()
             found[current] = None
@@ -322,6 +323,15 @@ def reconcile_worktrees(
     this runs unattended at startup.
     """
     repo_root = Path(repo_root).resolve()
+    if git is None and not _is_git_repo(repo_root):
+        # `open_git_tool` runs `Repo.init()` plus a bootstrap commit when the
+        # directory is not a repository. That is tolerable for the paths that
+        # exist to *do* git work, but this one is an unattended startup sweep:
+        # creating a repository in a workspace the user deliberately keeps out
+        # of git would be a side effect nobody could predict from the name,
+        # and there is nothing to reconcile without a repo anyway.
+        logger.debug("%s is not a git repository; nothing to reconcile", repo_root)
+        return ReconcileResult(removed=(), failed=())
     tool = git or open_git_tool(repo_root)
     own_root = experiment_worktree_root(repo_root)
     removed: list[Path] = []
@@ -355,8 +365,13 @@ def reconcile_worktrees(
         else:
             removed.append(path)
 
-    # Also clears registrations whose directory vanished without `remove`.
-    tool.execute("worktree", "prune")
+    # Belt-and-braces for registrations whose directory vanished without a
+    # `remove`. Only worth a subprocess when this sweep actually touched
+    # something — with nothing under `.worktrees/`, `worktree list` has
+    # already told us there is nothing of ours to prune, and this runs on the
+    # startup path of every campaign.
+    if removed or failed:
+        tool.execute("worktree", "prune")
     if removed:
         logger.info("reconciled %d orphaned experiment worktree(s)", len(removed))
     if failed:
@@ -367,7 +382,18 @@ def reconcile_worktrees(
             len(failed),
             ", ".join(str(p) for p in failed),
         )
-    return ReconcileResult(removed=removed, failed=failed)
+    return ReconcileResult(removed=tuple(removed), failed=tuple(failed))
+
+
+def _is_git_repo(root: Path) -> bool:
+    """Does `root` hold a repository, without creating one to find out?
+
+    Matches what `open_git_tool` would accept: GitPython's `Repo(root)` does
+    not search parent directories, so a plain subdirectory of a repo is not
+    one for our purposes either. `.git` is a file rather than a directory
+    inside a linked worktree, so both are accepted.
+    """
+    return (Path(root) / ".git").exists()
 
 
 def _force_unregister(tool: GitTool, target: _SafeTarget) -> None:

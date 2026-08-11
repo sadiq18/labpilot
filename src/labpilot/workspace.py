@@ -54,6 +54,13 @@ _WORKSPACE_DIRS = (
 #: covered without editing this list. Kept as the single source of truth for
 #: both `_GITIGNORE` (fresh workspaces) and `ensure_required_ignores`
 #: (existing ones) so the two cannot drift apart.
+#: Directory holding per-experiment git worktrees (M11). Defined here rather
+#: than in `research_engine/agents/git_worktree.py` so the ignore pattern below
+#: is built from the same name the code uses — a rename that missed one of the
+#: two would leave K full checkouts of the working tree committable, with the
+#: pattern's own test still passing against the stale literal.
+WORKTREE_DIRNAME = ".worktrees"
+
 REQUIRED_IGNORES: tuple[str, ...] = (
     "**/knowledge.db-journal",
     "**/knowledge.db-wal",
@@ -61,10 +68,9 @@ REQUIRED_IGNORES: tuple[str, ...] = (
     "**/*.writelock",
     "**/.*.lock",
     "**/.*.tmp-*",
-    # Per-experiment git worktrees (M11) — local checkouts of branches that
-    # already live in the object store, so committing them would duplicate
-    # the tree. See `research_engine/agents/git_worktree.py`.
-    ".worktrees/",
+    # Per-experiment git worktrees — local checkouts of branches that already
+    # live in the object store, so committing them would duplicate the tree.
+    f"{WORKTREE_DIRNAME}/",
 )
 
 _REQUIRED_IGNORE_HEADER = "# Machine-local artifacts (locks, temp files, DB sidecars)"

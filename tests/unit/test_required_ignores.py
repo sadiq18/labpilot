@@ -18,6 +18,7 @@ import pytest
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import (
     REQUIRED_IGNORES,
+    WORKTREE_DIRNAME,
     ensure_required_ignores,
     scaffold_workspace,
 )
@@ -152,7 +153,7 @@ def test_patterns_actually_ignore_the_real_artifact_names(tmp_path: Path) -> Non
         # Per-experiment worktrees (M11 task 3): a whole checked-out tree per
         # branch, so an unmatched pattern here makes K copies of the working
         # tree committable.
-        ws_root / ".worktrees" / "S-001" / "E-001" / "train.py": True,
+        ws_root / WORKTREE_DIRNAME / "S-001" / "E-001" / "train.py": True,
         hyp_dir / "H-001.json": False,  # real data — must stay tracked
     }
     for path, _ in artifacts.items():
