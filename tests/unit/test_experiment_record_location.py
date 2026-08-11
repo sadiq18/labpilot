@@ -31,14 +31,13 @@ from labpilot.research_engine.workspace_facade import Workspace
 def _worktree_shaped(tmp_path: Path, name: str) -> Workspace:
     """A workspace whose `root` is private but whose `runs_dir` is shared.
 
-    Mirrors what task 7 builds per branch: `code_root` (here, `root`) unique
-    per call, `runs_dir` pinned to the same shared directory across calls —
-    the split PR #136 and this task both depend on.
+    Built the way task 7 builds each branch — via `for_branch`, so this test
+    exercises the real split rather than a local imitation of it.
     """
     shared = experiment_workspace(tmp_path)
     branch_root = tmp_path / "branches" / name
     branch_root.mkdir(parents=True)
-    return shared.model_copy(update={"root": branch_root, "runs_dir": shared.effective_runs_dir})
+    return shared.for_branch(branch_root)
 
 
 def test_the_record_is_findable_after_its_branch_root_is_deleted(
