@@ -114,7 +114,7 @@ The rule catches the fourth instance before it is written.
 | 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
-| 4 — a derived artifact re-derives or says it is derived | **done.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites**. Enforcement is now by **discovery**: a campaign runs, and every markdown it leaves must carry a stamp or name what rebuilds it — see *Finding the views instead of listing them*, below |
+| 4 — a derived artifact re-derives or says it is derived | **mostly done.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites**. Enforcement is by **discovery** for the markdown a baseline campaign leaves; the hand list still carries two off-path writers and the JSON views — see *Finding the views instead of listing them*, below, which states both gaps |
 | 5 — a broken artifact fails at the gate that owns it | **done.** Five broken artifacts driven through the real sixteen-task baseline plan, each entering as the proposal a codegen agent returns, each asserted to stop at the task that owns it **for that task's own reason** — with every task before it passed and every task after it never run. Plus a healthy control and a repaired case — see *Where each defect stops*, below |
 
 ### Three of the first nine rejection tests proved nothing
@@ -141,30 +141,45 @@ here rests on.
 
 ### Finding the views instead of listing them
 
-The first version of this criterion enumerated five writers by hand, and the
-fifth was found by a reviewer rather than by the rule. A hand-written list is
-review with a test's name on it: it cannot see the writer nobody thought of,
-which is the only one that matters.
+The first version enumerated five writers by hand, and the fifth was found by a
+reviewer rather than by the rule. A hand list is review with a test's name on it:
+it cannot see the writer nobody thought of, which is the only one that matters.
 
-So the rule now runs a campaign and walks what it leaves behind. Every `.md`
-under the tree must either carry a provenance stamp or sit in a directory that
-names what rebuilds it — criterion 4's two options, asked of the filesystem
-rather than of a list.
+So the rule runs a campaign and walks what it leaves. Every `.md` must carry a
+provenance stamp or sit in the directory a rebuilder rewrites — criterion 4's two
+options, asked of the filesystem rather than of a list. Ten files on a real
+campaign: four stamped, six skill overlays.
 
-Measured on a real campaign: ten markdown files, four stamped (`profile.md`, the
-plan projection, the execution report and its workspace copy) and six skill
-overlays, which take the other option — `repair_skill_overlays` rebuilds them
-from the current cards on every run.
+**What review had to correct.** The first version of the discovery rule
+reproduced the defect it was written to remove, one level along:
 
-Two things this buys that the list did not:
+* The exemption was a **path substring**, `".labpilot/skills"`, so
+  `skills_v2/`, `skills-archive/`, `skills.md` and any nested file were exempt
+  too — while `repair_skill_overlays` rewrites exactly `<overlays>/*.md`. It now
+  resolves the directory through `overlay_dir`, production's own answer, and
+  compares the parent exactly.
+* The exemption's justification was `hasattr(module, "repair_skill_overlays")`,
+  which **any module attribute satisfies** — `logger` passed. Gutting the
+  rebuilder to `return []` left every test green. The exemption is now earned:
+  the test corrupts an overlay and requires the named rebuilder to correct it
+  from the cards.
 
-* **A new writer fails closed.** Removing the stamp from any of the three
-  writers turns the rule red, including the execution report — the view review
-  had to find by hand.
-* **An exemption cannot outlive its justification.** The re-derived set stores
-  the *name* of the rebuilder, and a test asserts that function still exists.
-  Renaming `repair_skill_overlays` without updating the exemption fails, instead
-  of leaving a directory permanently excused.
+**Two gaps, stated rather than implied.**
+
+* **Markdown only.** A campaign leaves ~30 JSON files and nearly all are sources
+  of record — evidence, metrics, `profile.json`. Widening the glob would need an
+  exemption list longer than the thing it guards, which is the trap this section
+  is about. `P-001.json` carries `_projection` and is covered by the hand list in
+  `test_derived_views_say_so.py`, not by discovery.
+* **Baseline-plan path only.** `write_brief` and `write_comparison` are not
+  reached by a baseline campaign, so discovery does not see them; unstamping
+  either is caught by the hand list alone. The list is still load-bearing for two
+  of the five writers.
+
+One more correction worth keeping: `repair_skill_overlays` runs in the conductor
+loop, **not** during a campaign — it was called zero times in the run these tests
+drive. An earlier draft of this section said the overlays are "rebuilt on every
+run", which overstated what the exemption rests on.
 
 A tree walk rather than a patched `Path.write_text`: both see exactly the same
 ten files, and the walk needs no monkeypatching and is immune to how a file was

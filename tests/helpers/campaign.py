@@ -95,7 +95,10 @@ def run_baseline_campaign(tmp_path: Path, monkeypatch, train_py: str):
     )
     # `child_environment()` forwards the whole environment to the training
     # subprocess, so an exported LABPILOT_SMOKE reaches the fixtures there too.
-    monkeypatch.delenv("LABPILOT_SMOKE", raising=False)
+    # LABPILOT_EXPERIENCE_DB redirects a write out of tmp_path, which breaks the
+    # premise that walking the tree sees everything the campaign wrote.
+    for leaked in ("LABPILOT_SMOKE", "LABPILOT_EXPERIENCE_DB"):
+        monkeypatch.delenv(leaked, raising=False)
 
     knowledge = tmp_path / "knowledge"
     paths = ResearchPaths(knowledge, COMPETITION).ensure()
