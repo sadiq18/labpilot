@@ -243,19 +243,28 @@ def test_an_unwritable_overlay_does_not_abort_the_repair(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "write_text", refuse_the_blocked_one)
     repair_skill_overlays(tmp_path, knowledge, competition)
-    monkeypatch.undo()
 
     assert is_stamped(later.read_text(encoding="utf-8")), "the file after it was skipped"
 
 
-def test_the_on_disk_budget_bounds_the_file_including_its_stamp(tmp_path):
-    """`ON_DISK_CHAR_BUDGET` names the on-disk overlay, so the note comes out of
-    it. Summarising the body alone and then prepending ~240 characters left the
-    file over the budget it is measured against."""
+# slack=2 is the tightest feasible budget: the note, its blank line and the
+# trailing newline leave exactly one character for content.
+@pytest.mark.parametrize(
+    "slack", [2, 3, 10, 200, 4760], ids=["tightest", "tight", "small", "roomy", "default"]
+)
+def test_the_on_disk_budget_bounds_the_file_including_its_stamp(tmp_path, slack):
+    """`ON_DISK_CHAR_BUDGET` names the on-disk overlay, so the note and both of
+    its newlines come out of it.
+
+    Parametrised because the first version of this test chose one generous
+    budget, where the summariser lands far below the room it is given — at
+    `cost + 10` the same assertion failed by a character, and at `cost + 200` it
+    passed. The sizes that matter are the ones near the boundary.
+    """
     from labpilot.research_engine.shared.skills import overlay_note_cost, upsert_skill_overlay
 
-    budget = overlay_note_cost() + 200
-    for lesson in range(30):
+    budget = overlay_note_cost() + slack
+    for lesson in range(40):
         upsert_skill_overlay(
             tmp_path,
             "code_engineer",
@@ -268,3 +277,42 @@ def test_the_on_disk_budget_bounds_the_file_including_its_stamp(tmp_path):
 
     assert len(written) <= budget, f"{len(written)} chars against a {budget} budget"
     assert is_stamped(written), "the note must survive summarisation, not be truncated by it"
+
+
+def test_a_budget_that_cannot_hold_the_note_is_refused(tmp_path):
+    """Silently clamping to `max(1, ...)` wrote a file five times the budget."""
+    from labpilot.research_engine.shared.skills import overlay_note_cost, upsert_skill_overlay
+
+    with pytest.raises(ValueError, match="leaves no room"):
+        upsert_skill_overlay(
+            tmp_path,
+            "code_engineer",
+            lesson_id="E-001",
+            keep=["x"],
+            on_disk_budget=overlay_note_cost(),
+        )
+
+
+def test_stamping_an_already_stamped_overlay_does_not_add_a_second_note(tmp_path):
+    """`strip_derived_note` removes only the leading block, so the second would
+    reach the prompt."""
+    once = stamped_overlay("- Keep: SWA\n")
+
+    assert stamped_overlay(once).count("Derived view") == 1
+
+
+def test_an_upsert_that_appends_nothing_still_migrates_a_legacy_overlay(tmp_path):
+    """The early return on an existing lesson happens before any write, so this
+    was the one path that left a pre-stamp overlay unstamped."""
+    from labpilot.research_engine.shared.skills import overlay_path, upsert_skill_overlay
+
+    path = overlay_path(tmp_path, "code_engineer")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("<!-- lesson:E-001 -->\n## Lesson `E-001`\n- Keep: SWA\n", encoding="utf-8")
+
+    upsert_skill_overlay(tmp_path, "code_engineer", lesson_id="E-001", keep=["SWA"])
+
+    text = path.read_text(encoding="utf-8")
+    assert is_stamped(text)
+    assert "- Keep: SWA" in text
+    assert unexplained_views(tmp_path) == []

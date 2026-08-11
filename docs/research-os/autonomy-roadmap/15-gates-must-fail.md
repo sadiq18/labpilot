@@ -185,8 +185,23 @@ rather than by reading:
   were no longer there.
 
 A sixth round, run against the whole diff rather than the mechanism, found four
-more: the on-disk budget stopped bounding the on-disk file once the stamp was
-prepended outside it; `OVERLAY_NOTE` was built at import by a function that had
+more, and a seventh caught the first of those fixed wrongly. The on-disk budget
+stopped bounding the on-disk file once the stamp was prepended outside it —
+subtracting the note was not enough, because the trailing newline is added
+*after* summarising and `max(1, ...)` silently accepted budgets smaller than the
+note itself, so a 250-character budget wrote 251 bytes and a 50-character one
+wrote 242. It now subtracts both and refuses a budget that cannot hold the note.
+
+**The test written for that fix picked the one budget where it passed.** It was
+added precisely because a sweep showed the fix untested, then used
+`cost + 200` — the region where the summariser lands far below the room it is
+given. At `cost + 10` the same assertion failed by a character. It is
+parametrised over the boundary now. This is the fixture-too-comfortable pattern
+recorded at the end of this document, walked into while explicitly trying to
+avoid it, which is the strongest argument for mutating the *input* rather than
+trusting a green sweep.
+
+The same round also found: `OVERLAY_NOTE` was built at import by a function that had
 just gained a `ValueError`, so a future guard there would surface as an
 `ImportError` for a module every agent imports; the only test for the
 unwritable-overlay guard used `chmod(0o444)`, which root ignores, so it would

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from labpilot.accessor.common.derived import derived_note, strip_derived_note
@@ -48,10 +49,15 @@ _OVERLAY_SOURCE = "the evidence cards, under <knowledge>/<competition>/research/
 _OVERLAY_WARNING = "Lessons here are rewritten when their card is repaired; the notes are not."
 
 
+@lru_cache(maxsize=1)
+def _overlay_note() -> str:
+    """Cacheable only because the note is undated; adding a date must drop this."""
+    return derived_note(source_of_record=_OVERLAY_SOURCE, warning=_OVERLAY_WARNING)
+
+
 def stamped_overlay(body: str) -> str:
-    """Overlay content with its provenance note."""
-    note = derived_note(source_of_record=_OVERLAY_SOURCE, warning=_OVERLAY_WARNING)
-    return note + "\n\n" + body.lstrip("\n")
+    """Overlay content with its provenance note, applied once."""
+    return _overlay_note() + "\n\n" + strip_derived_note(body).lstrip("\n")
 
 
 def overlay_note_cost() -> int:
@@ -90,13 +96,14 @@ def upsert_skill_overlay(
     path = overlay_path(workspace_root, agent_key)
     assert path is not None
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing = (
-        strip_derived_note(path.read_text(encoding="utf-8", errors="replace"))
-        if path.is_file()
-        else ""
-    )
+    raw = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    existing = strip_derived_note(raw)
     marker = f"<!-- lesson:{lesson_id} -->"
     if marker in existing:
+        # Nothing to append, but an overlay written before overlays were stamped
+        # is only ever migrated by a path that writes.
+        if raw and raw == existing:
+            path.write_text(stamped_overlay(existing), encoding="utf-8")
         return path
 
     block_lines = [marker, f"## Lesson `{lesson_id}`"]
@@ -115,9 +122,14 @@ def upsert_skill_overlay(
     updated = (existing.rstrip() + "\n\n" if existing.strip() else "") + "\n".join(
         block_lines
     )
-    # The budget bounds the file, so the note's cost comes out of it — and it is
-    # applied before stamping, so the note is never what gets truncated.
-    room = max(1, on_disk_budget - overlay_note_cost())
+    # The budget bounds the written file: the note, the blank line after it, and
+    # the trailing newline all come out of it before the body is summarised.
+    room = on_disk_budget - overlay_note_cost() - 1
+    if room < 1:
+        raise ValueError(
+            f"on_disk_budget={on_disk_budget} leaves no room for content; "
+            f"the provenance note alone costs {overlay_note_cost()}"
+        )
     if len(updated) > room:
         updated = summarize_skill_text(updated, max_chars=room)
     path.write_text(stamped_overlay(updated.rstrip() + "\n"), encoding="utf-8")
