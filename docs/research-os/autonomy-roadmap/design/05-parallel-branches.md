@@ -462,6 +462,28 @@ package (checked, not assumed), so importing it would add a dependency for
 one string. `test_parallel_workers.py` asserts the copy equals
 `LocalRuntime(id=...).provider`, so the two cannot drift unnoticed.
 
+**Branch bookkeeping runs off the event loop.** `ExperimentSpecialist.execute`
+offloaded `snapshot_before_experiment` and `run_plan` but left the metrics
+read and the git-record write (cost scales with `files_changed`) inline. All K
+branches share one loop, so each branch's bookkeeping stalled every sibling:
+the fan-out would serialise on exactly the work §5 argues is cheap. Both now
+go through `anyio.to_thread.run_sync`, matching the two calls that already
+did. The stat that decided the metrics `ArtifactRef` folded into the read —
+a successful `read_text` already proves the file exists, so it is only needed
+to tell an absent file from a corrupt one. This had to land before the
+budget-pacing test, which measures whether fan-out beats sequential and would
+otherwise have measured this instead.
+
+Two consequences worth naming. **The per-branch worktree is now load-bearing
+for write safety, not just for checkout isolation.** `write_experiment_git_record`
+writes one `experiment/record.json` per workspace root under no lock; while it
+ran on the loop, two branches could never be inside it at once, so distinct
+roots were a convenience. In threads they genuinely overlap, and two branches
+sharing a root would tear that file. **The read is ordered before the
+write** so that no `await`, and therefore no cancellation point, separates the
+record landing on disk from the `ExperimentCompleted` that announces it —
+otherwise a cancelled branch could leave a record no subscriber ever saw.
+
 **Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
 a required pre-build check, same as §5's budget question, but it does not need
 external sign-off — it's answerable by inspecting this repo's own workspace

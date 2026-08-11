@@ -19,6 +19,13 @@ from typing import Any
 
 import anyio
 import pytest
+from helpers.experiment_harness import (
+    bundle,
+    experiment_workspace,
+    stub_git_snapshot,
+    stub_run_plan,
+    training_task,
+)
 
 from labpilot.research_engine.agents import experiment as experiment_mod
 from labpilot.research_engine.agents.events import (
@@ -27,48 +34,21 @@ from labpilot.research_engine.agents.events import (
     EventBus,
 )
 from labpilot.research_engine.agents.experiment import ExperimentSpecialist
-from labpilot.research_engine.agents.models import AgentTask
 from labpilot.research_engine.agents.subscribers import install_evidence_refresh_subscriber
-from labpilot.research_engine.context.models import ContextBundle, ContextRequest
-from labpilot.research_engine.tools.descriptors import ToolResult
-from labpilot.research_engine.workspace_facade import Workspace
-
-
-def _ws(tmp_path: Path) -> Workspace:
-    return Workspace.from_competition(
-        tmp_path / "knowledge", "demo", code_root=tmp_path / "ws"
-    ).ensure_roots()
-
-
-def _bundle() -> ContextBundle:
-    return ContextBundle(request=ContextRequest(competition="demo", goal="test"))
 
 
 @pytest.fixture
 def stub_run(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
-    """Run `execute` without git branching or a real training run.
+    """Returns a setter for the outcome `run_plan` reports.
 
-    Returns a setter for the outcome `run_plan` reports. Both patches are
-    installed now and the setter only replaces one of them, so a test that
-    takes this fixture and forgets to call the setter still cannot reach the
-    real plan runner — it gets an empty result instead of doing real work.
+    Installed once up front too, so a test that takes this fixture and forgets
+    to call the setter still cannot reach the real plan runner.
     """
 
-    def _no_snapshot(
-        workspace_root: Path, *, session_id: str, experiment_key: str, message: str
-    ) -> None:
-        """Signature-faithful: `lambda *a, **k` would swallow a renamed kwarg."""
-        del workspace_root, session_id, experiment_key, message
-
-    monkeypatch.setattr(experiment_mod, "snapshot_before_experiment", _no_snapshot)
+    stub_git_snapshot(monkeypatch)
 
     def _set(**data: Any) -> None:
-        def _fake_run_plan(*_a: object, **_k: object) -> ToolResult:
-            # The real handler is annotated `-> ToolResult`; returning one
-            # keeps the stub honest about the contract `execute` consumes.
-            return ToolResult(data=dict(data), refs=[])
-
-        monkeypatch.setattr("labpilot.research_engine.tools.handlers.run.run_plan", _fake_run_plan)
+        stub_run_plan(monkeypatch, **data)
 
     _set()
     return _set
@@ -78,9 +58,8 @@ def _run(tmp_path: Path) -> list[tuple[str, dict[str, Any]]]:
     """Execute the specialist, returning every event it emitted."""
     seen: list[tuple[str, dict[str, Any]]] = []
     agent = ExperimentSpecialist(on_event=lambda e, p: seen.append((e, p)))
-    task = AgentTask(id="T-1", capability="run_training", description="train")
 
-    anyio.run(lambda: agent.execute(task, _ws(tmp_path), _bundle()))
+    anyio.run(lambda: agent.execute(training_task(), experiment_workspace(tmp_path), bundle()))
     return seen
 
 
@@ -139,11 +118,11 @@ def test_the_stamp_excludes_the_record_write(
     stub_run(execution_id="E-1", status="succeeded")
     entered: dict[str, datetime] = {}
 
-    def _slow_metrics(root: Path) -> dict[str, Any]:
+    def _slow_metrics(root: Path) -> tuple[dict[str, Any], bool]:
         del root
         entered["metrics"] = datetime.now(UTC)
         time.sleep(0.05)
-        return {}
+        return {}, False
 
     def _slow_record(root: Path, payload: dict[str, Any]) -> Path:
         del payload
