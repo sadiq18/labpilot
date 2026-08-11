@@ -114,7 +114,7 @@ The rule catches the fourth instance before it is written.
 | 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
-| 4 — a derived artifact re-derives or says it is derived | **in progress.** One stamp helper (`accessor/common/derived.py`) instead of a copy per writer, and the rule enforced by calling every markdown view renderer rather than reading it. Enforcing it found **two more unstamped views already shipped** — see *Two more of the same shape*, below. Auto-discovery of a future writer is not built |
+| 4 — a derived artifact re-derives or says it is derived | **in progress.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the four **write sites** and enforced by reading the files back. Enforcing it found **three more unstamped views already shipped** — see *Three more of the same shape*, below. Auto-discovery of a future writer is not built |
 | 5 — a broken artifact fails at the gate that owns it | not started |
 
 ### Three of the first nine rejection tests proved nothing
@@ -139,50 +139,58 @@ red-then-green run against the wrong line proves nothing just as surely as a wea
 test does, which is worth saying because the sweep is the thing everything else
 here rests on.
 
-### Two more of the same shape
+### Three more of the same shape
 
 Criterion 4 named four artifacts and each had been answered individually —
 `repair_card_directions`, `rederive_beliefs_from_cards`, `repair_skill_overlays`,
 and a staleness stamp on plan projections. What none of them had was a *rule*, so
 the criterion asks for one enforced over the writers.
 
-Writing that rule found two more views, already shipped and unstamped:
+Writing that rule found three more views, already shipped and unstamped:
 
 * **`comparison.md`**, written beside `comparison.json` by `write_comparison` —
   whose own docstring calls the JSON *"(source of truth)"* and the markdown
-  *"(view)"*. The author knew. This is the one that matters: evidence-card
-  directions are repaired on every campaign, and a verdict rendered into markdown
+  *"(view)"*. The author knew. This is the one that matters most: evidence-card
+  directions are repaired on every campaign, so a verdict rendered into markdown
   before that repair keeps exactly the reading the repair exists to correct.
-* **`profile.md`**, written beside `profile.json` by the same call.
+* **`profile.md`**, beside the `profile.json` the same call writes.
+* **`research_brief.md`**, rendered from `analyze.json` and *not written with
+  it*: `research analyze --skip-hypothesize` rewrites the JSON and skips the
+  brief, so the previous run's file survives and the next `plan create` feeds it
+  forward.
 
-A third candidate turned out already compliant and is worth recording:
+A fourth candidate turned out already compliant and is worth recording:
 `JournalProjector.render_markdown` is printed by `cli/reflect.py` and never
-written to disk, so it takes the criterion's *other* option — it re-derives on
+written to disk, so it takes the criterion's *other* option and re-derives on
 every read. "Renders markdown from a source" is not the test; "a file persists
 after its source moves" is.
 
-**The stamp is one helper, not a copy per writer.** `projection_stamp` was
-already the first copy; a second would be how the next field gets added to one
-and not the other, which is criterion 2's defect wearing criterion 4's clothes.
+#### The stamp belongs to the writer, and the strip belongs to one reader
 
-Two details the work turned on:
+Both halves were wrong first, and both were found by review rather than by the
+tests written alongside them.
 
-* The timestamp had to become **opt-in**. Stamping unconditionally broke
-  `test_render_markdown_sections_and_persistence`, which asserts two renders of
-  one comparison are byte-identical — the comparator's docstring promises a
-  *"Deterministic markdown view"*, and a view that regenerates identically
-  produces no diff to review. Plan projections take the date, because for them
-  staleness *over time* is the danger; the comparison does not, because its
-  danger is the source being rewritten in place and "read the JSON" is the fact
-  that acts.
-* The check **calls** each renderer instead of reading its source. Criterion 1
-  spent seven rounds learning that; `inspect.getsource(...)` searching for
-  `derived_note` would pass on a renderer that imported it and never called it.
+**The stamp went in the renderer.** Two callers render *live* rather than
+persisting — `experiments compare --format markdown` recomputes whenever the
+stored JSON records a different pair, and `plan show --format markdown` reads the
+DB directly — and both were then told to "read the JSON" for a file that may not
+exist or may describe something else. A stamp that misdirects is worse than none,
+which is the failure it exists to prevent. Moving it to the four write sites
+fixed that, and fixed it for plan projections too, where the stale warning had
+been printed on live reads since before this branch.
 
-**What is not built:** discovering a *future* writer automatically. The three
-renderers are enumerated by hand, so a fourth added later is invisible until
-someone adds it. Stated rather than left to be found — the same limit shape as
-the verdict observer's.
+**The strip was per-caller.** `research_brief.md` is the only one of these read
+back as *machine* input, and of its three readers two stripped the block and one
+did not: the codegen prompt, which spent 277 of its 3000 characters telling the
+model to distrust the context it was being handed. The context provider emitted
+it twice more, against an 8000-character retrieval budget. `read_derived` is now
+the single reader, so the next consumer gets stripping without knowing to ask —
+the same argument as the single stamp, on the other side of the file.
+
+**What is not built:** discovering a *future* writer automatically. The four are
+enumerated by hand, so a fifth added later is invisible until someone adds it.
+Stated rather than left to be found, the same limit shape as the verdict
+observer's.
 
 ### The half of the command nobody shared
 
