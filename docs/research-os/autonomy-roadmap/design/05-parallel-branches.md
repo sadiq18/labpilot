@@ -424,9 +424,20 @@ corresponding read in `assemble_experiment()` so it survives the next
 `build_graph()` call.
 
 **Tie-break.** `ExperimentCompleted`'s payload (`agents/experiment.py`) has no
-timestamp field today — add a `completed_at` field to `event_payload` at
-publish time. Ties on the metric are then broken by earliest `completed_at`,
-the first branch to finish wins, and promotion stays deterministic.
+timestamp field today — add a `completed_at` field to `event_payload`. Ties on
+the metric are then broken by earliest `completed_at`, the first branch to
+finish wins, and promotion stays deterministic.
+
+*Implemented (task 5) at run completion, not at publish time as this paragraph
+first specified.* Publish is separated from the run by `_load_metrics` and
+`write_experiment_git_record`, and the latter's cost scales with
+`files_changed`. Stamping after them would fold record-writing time into the
+comparison, so a branch that finished first but wrote a large record could
+lose a tie-break to one that finished later and wrote less — the ranking would
+partly measure record size. The stamp is therefore taken as soon as `run_plan`
+returns, and attached to the payload only on the success path: the same dict
+is the `ModelFailed` payload, and a `completed_at` on a run that died would
+assert the completion §8's failure carve-out exists to deny.
 
 **Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
 a required pre-build check, same as §5's budget question, but it does not need

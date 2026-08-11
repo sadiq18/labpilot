@@ -18,8 +18,9 @@ from labpilot.research_engine.workspace_facade import Workspace
 
 #: The only runtime this module can actually execute. Remote dispatch
 #: (Kaggle, Colab, cloud) is separately tracked — TODO.md "P2 remote
-#: execution" — and until it lands, anything else is refused rather than run
-#: in the wrong place.
+#: execution". Anything else is refused rather than run here, because running
+#: it here is silent: the item would finish, report a metric, and leave
+#: nothing downstream able to tell the answer came from the wrong machine.
 LOCAL_RUNTIME = "local"
 
 
@@ -32,12 +33,7 @@ class ParallelWorkItem:
     task: object
     cost: float = 1.0
     context: ContextBundle | None = None
-    #: Where this item is meant to run. Only `LOCAL_RUNTIME` is executable
-    #: today; the field exists so remote dispatch has somewhere to attach
-    #: without retrofitting every caller. It is validated rather than ignored
-    #: because the alternative is silent: an item asking for Kaggle would run
-    #: locally, finish, and report success, and nothing downstream could tell
-    #: that the answer came from the wrong machine.
+    #: Where this item is meant to run; see `LOCAL_RUNTIME` above.
     runtime: str = LOCAL_RUNTIME
 
 
@@ -77,22 +73,29 @@ async def run_parallel_async(
     max_workers: int = 4,
     budget_limit: float | None = None,
 ) -> list[ParallelResult]:
-    """Run work items concurrently; failures do not cancel siblings.
+    """Run work items concurrently; a *failing* item does not cancel siblings.
 
     ``max_workers`` caps in-flight tasks. When ``budget_limit`` is set, items
     whose ``cost`` would exceed the remaining budget are skipped with an error.
+
+    Raises ``ValueError`` — before any item starts, so nothing runs — for
+    ``max_workers < 1`` or an item whose ``runtime`` is not `LOCAL_RUNTIME`.
+    Both are the caller's mistake rather than a worker fault, which is why
+    they abort the batch instead of being reported per item: a runtime this
+    process cannot honour is not something the other branches' results can be
+    trusted alongside.
     """
     if max_workers < 1:
         raise ValueError("max_workers must be >= 1")
 
-    # Checked up front, before any item starts: an item bound for a runtime
-    # that does not exist yet is a caller's mistake, not a worker fault, and
-    # the whole point is to refuse it rather than quietly run it here.
-    unsupported = sorted({i.runtime for i in items if i.runtime != LOCAL_RUNTIME})
-    if unsupported:
-        raise ValueError(
-            f"unsupported runtime(s) {unsupported}; only {LOCAL_RUNTIME!r} runs today"
-        )
+    # Pairs rather than a set of values: naming the item is what makes the
+    # error actionable when a fan-out builds a dozen of these, and it avoids
+    # sorting a heterogeneous set — a `None` runtime among strings raises
+    # TypeError from the sort rather than the ValueError intended here.
+    offenders = [(i.id, i.runtime) for i in items if i.runtime != LOCAL_RUNTIME]
+    if offenders:
+        detail = ", ".join(f"{item_id}={runtime!r}" for item_id, runtime in offenders)
+        raise ValueError(f"unsupported runtime(s): {detail}; only {LOCAL_RUNTIME!r} runs today")
 
     budget = ParallelBudget(limit=budget_limit) if budget_limit is not None else None
     limiter = anyio.CapacityLimiter(max_workers)
@@ -138,7 +141,11 @@ def run_parallel_sync(
     max_workers: int = 4,
     budget_limit: float | None = None,
 ) -> list[ParallelResult]:
-    """Sync facade — Conductor callers need no event loop."""
+    """Sync facade — Conductor callers need no event loop.
+
+    Raises whatever `run_parallel_async` validates, notably a ``ValueError``
+    for an item whose ``runtime`` this process cannot honour.
+    """
 
     async def _main() -> list[ParallelResult]:
         return await run_parallel_async(

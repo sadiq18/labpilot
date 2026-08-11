@@ -195,3 +195,51 @@ def test_the_refusal_happens_before_any_sibling_runs(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="colab"):
         run_parallel_sync(items, ws, _bundle(), max_workers=2)
     assert agent.max_in_flight == 0, "a sibling ran before the runtime was validated"
+
+
+def test_the_refusal_names_the_item_not_just_the_runtime(tmp_path: Path) -> None:
+    """A dozen-item fan-out needs to say which branch was misconfigured."""
+    ws = _ws(tmp_path)
+    agent = _FakeAgent(hold_s=0.0)
+    items = [
+        ParallelWorkItem(id=f"ok{i}", agent=agent, task=AgentTask(id=f"T{i}", capability="fake"))
+        for i in range(3)
+    ]
+    items.append(
+        ParallelWorkItem(
+            id="branch-7",
+            agent=agent,
+            task=AgentTask(id="T7", capability="fake"),
+            runtime="colab",
+        )
+    )
+    with pytest.raises(ValueError, match="branch-7"):
+        run_parallel_sync(items, ws, _bundle(), max_workers=2)
+
+
+def test_a_none_runtime_is_refused_not_a_type_error(tmp_path: Path) -> None:
+    """Dataclasses do not enforce annotations, so `None` is constructible.
+
+    Collecting the offenders as (id, runtime) pairs rather than sorting a set
+    of the values is what keeps this a ValueError: sorting `{None, "kaggle"}`
+    raises TypeError from the comparison, burying the real problem under an
+    error about `<` that the caller never wrote.
+    """
+    ws = _ws(tmp_path)
+    agent = _FakeAgent(hold_s=0.0)
+    items = [
+        ParallelWorkItem(
+            id="none-runtime",
+            agent=agent,
+            task=AgentTask(id="T0", capability="fake"),
+            runtime=None,  # type: ignore[arg-type]
+        ),
+        ParallelWorkItem(
+            id="str-runtime",
+            agent=agent,
+            task=AgentTask(id="T1", capability="fake"),
+            runtime="kaggle",
+        ),
+    ]
+    with pytest.raises(ValueError, match="unsupported runtime"):
+        run_parallel_sync(items, ws, _bundle(), max_workers=2)
