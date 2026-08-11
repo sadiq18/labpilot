@@ -388,11 +388,23 @@ tight enough that this has fired on essentially nothing in nine campaigns,
 per the plan's own trap), while `stagnant` checks steps since the last event
 that beat the *global* best. A series oscillating below best without
 converging (100, 90, 95, 85 against a best of 100) makes `stagnant` fire
-while `plateau` structurally cannot — consistent with "go find a different
-idea" being the easier bar to clear, but not identical math, and an
-implementer should verify the relationship on the actual `evaluate_stops`
-and `score_summary` implementations rather than assume it from this
-paragraph alone.
+while `plateau` structurally cannot.
+
+**Measured when M8-5 shipped, because this paragraph asked for it.** The
+"easier bar" reading is wrong on a flat series, and in the one direction that
+matters: `steps_since_improvement` counts transitions since the last record
+while `plateau_window` counts readings, so with `plateau_window=3` a
+perfectly flat series stops on `plateau` at three readings while the gate
+would only open at four. `evaluate_stops` runs at the top of the step and
+breaks the loop, so on that path `decide_next` is never reached and the gate
+cannot act at all.
+
+It was left that way rather than lowered. `plateau` needs a spread within
+`plateau_epsilon` (1e-6) — near-exact ties that real CV scores do not
+produce, which is why it has fired on essentially nothing in nine campaigns.
+On the realistic drifting-worse series `plateau` never fires and `stagnant`
+is the only signal. Firing earlier would mean gathering after a single
+non-improving experiment, to serve a case that does not occur.
 
 **Plumbing.** `should_gather_evidence` gains a second parameter,
 `budget_state: BudgetState | None = None`, defaulted so its 8 existing
