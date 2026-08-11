@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -185,5 +186,11 @@ class ExperimentSpecialist:
             # Both subscribers of this event — the evidence-refresh note and the
             # experience-memory writer — record a *result*, and a crash has none.
             return refs
+        # Stamped here rather than in the literal above because that dict is
+        # also the `ModelFailed` payload: a `completed_at` on a run that died
+        # asserts the completion the block above exists to deny. M11's
+        # promotion breaks a tie on the metric by earliest finisher, so this
+        # is read as a result, and a crash has no finish time.
+        event_payload["completed_at"] = datetime.now(UTC).isoformat()
         self._emit(EXPERIMENT_COMPLETED, event_payload)
         return refs

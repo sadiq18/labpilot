@@ -144,3 +144,32 @@ def test_max_workers_validation(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     with pytest.raises(ValueError, match="max_workers"):
         run_parallel_sync([], ws, _bundle(), max_workers=0)
+
+
+def test_runtime_defaults_to_local(tmp_path: Path) -> None:
+    """M11 task 5: the field exists so remote dispatch has somewhere to land."""
+    del tmp_path
+    item = ParallelWorkItem(id="w", agent=_FakeAgent(), task=AgentTask(id="T", capability="fake"))
+    assert item.runtime == "local"
+
+
+def test_a_non_default_runtime_still_executes_locally(tmp_path: Path) -> None:
+    """Pins the docstring's claim that nothing reads this field yet.
+
+    Recorded as executable fact rather than prose so the day someone wires
+    remote dispatch, this test fails and names what it has to change. Without
+    it, `runtime="kaggle"` looks like a request the system honours.
+    """
+    ws = _ws(tmp_path)
+    agent = _FakeAgent(hold_s=0.0)
+    items = [
+        ParallelWorkItem(
+            id="remote",
+            agent=agent,
+            task=AgentTask(id="T0", capability="fake"),
+            runtime="kaggle",
+        ),
+    ]
+    results = run_parallel_sync(items, ws, _bundle(), max_workers=1)
+    assert results[0].ok
+    assert [r.id for r in results[0].refs] == ["echo:T0"]

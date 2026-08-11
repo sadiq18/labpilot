@@ -26,6 +26,12 @@ class ParallelWorkItem:
     task: object
     cost: float = 1.0
     context: ContextBundle | None = None
+    #: Where this item is meant to run. **Nothing reads it yet** — every item
+    #: executes locally regardless of what is set here, so treat a non-default
+    #: value as a label rather than a request. Remote dispatch is separately
+    #: tracked (TODO.md "P2 remote execution"); the field is carried now so
+    #: that work has a place to attach to.
+    runtime: str = "local"
 
 
 @dataclass
