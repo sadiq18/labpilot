@@ -404,6 +404,23 @@ class HypothesisStore:
             }
         )
 
+    def _claim(self, hypothesis_id: str) -> tuple[Hypothesis, bool]:
+        """Attempt the `proposed` → `testing` claim; report whether we made it.
+
+        The flag is set inside the mutator, so it is decided under the same
+        lock as the write it describes.
+        """
+        won = False
+
+        def mutate(hypothesis: Hypothesis) -> Hypothesis | None:
+            nonlocal won
+            if hypothesis.status != HypothesisStatus.PROPOSED:
+                return None
+            won = True
+            return self._apply_status(hypothesis, HypothesisStatus.TESTING)
+
+        return self._locked_mutate(hypothesis_id, mutate), won
+
     def mark_testing_if_proposed(self, hypothesis_id: str) -> Hypothesis:
         """Flip `proposed` → `testing` when a run attaches this hypothesis.
 
@@ -416,14 +433,26 @@ class HypothesisStore:
         a valid lock target. Every other read-then-write mutator on this class
         goes through the same `_locked_mutate` — a claim is only exclusive if
         nothing else can race it.
+
+        Returns the hypothesis either way; use `claim_if_proposed` when you
+        need to know whether *you* were the one who claimed it.
         """
+        return self._claim(hypothesis_id)[0]
 
-        def mutate(hypothesis: Hypothesis) -> Hypothesis | None:
-            if hypothesis.status != HypothesisStatus.PROPOSED:
-                return None
-            return self._apply_status(hypothesis, HypothesisStatus.TESTING)
+    def claim_if_proposed(self, hypothesis_id: str) -> Hypothesis | None:
+        """Claim exclusively: the winner gets the hypothesis, losers get `None`.
 
-        return self._locked_mutate(hypothesis_id, mutate)
+        Same transition and same lock as `mark_testing_if_proposed`, which
+        cannot express this: a no-op mutator leaves `_locked_mutate` returning
+        the hypothesis it read, so every branch of a K-way race is handed
+        `status=testing` and would conclude it won.
+
+        K-way fan-out needs the distinction to pick which branch actually runs
+        a hypothesis, and — since a loser must not release a claim it never
+        made — which branch is entitled to call `release_claim`.
+        """
+        claimed, won = self._claim(hypothesis_id)
+        return claimed if won else None
 
     def release_claim(self, hypothesis_id: str) -> Hypothesis:
         """Undo `mark_testing_if_proposed` (M11): only `testing` → `proposed`.
