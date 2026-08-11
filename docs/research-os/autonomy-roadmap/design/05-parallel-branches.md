@@ -257,6 +257,38 @@ in `ConductorStore`), and run `git worktree prune`. This mirrors an existing
 condition already observed in this repo's own worktree list, so it is treated
 as a required path, not a nice-to-have.
 
+**Path safety in the worktree module is carried by a type, not by checks.**
+Every path `agents/git_worktree.py` deletes is resolved *and* strictly inside
+`.worktrees/`; both properties live in `_SafeTarget`, and
+`_force_unregister` — the only function there that deletes anything — accepts
+nothing else. A new destructive operation cannot skip either property because
+it cannot construct the argument.
+
+That shape was arrived at the expensive way, and the reasoning is worth
+keeping because the alternative looks cheaper every time. Five review rounds
+on the module produced five variants of **one** mistake — a path property
+applied at some call sites and not others:
+
+| Round | What was missing | Consequence |
+|---|---|---|
+| 1 | containment in `create`/`remove` | `rmtree` deleted `knowledge/` (with `knowledge.db`) before git rejected the refname |
+| 2 | containment at its own boundary — a dead clause permitted the root | `rmtree` on `.worktrees/` destroyed *every* concurrent branch |
+| 3 | containment in `reconcile`'s separate copy of the rule | same, from the unattended startup sweep |
+| 4 | normalization between returning and reporting | `wt.path in result.removed` False on any symlinked workspace |
+| 5 | the dirname duplicated as a literal outside the module | a rename would silently un-ignore K full checkouts |
+
+Rounds 1–3 were each fixed by centralising the *check*, which kept working and
+kept not working: a check is still a discipline every call site must remember,
+so the omission simply moved — and round 4 proved it by appearing in a
+different *property*. Round 5 then found the duplication reappearing just
+outside the boundary the type had drawn.
+
+The rule for anyone extending this: normalising an *input* at a public entry
+point is fine; a *decision* about whether a path is safe belongs only in
+`_SafeTarget._check`, and the directory name has exactly one definition
+(`labpilot.workspace.WORKTREE_DIRNAME`, which `REQUIRED_IGNORES` is built
+from).
+
 **Atomic writes — a second reader-vs-writer race, found by review, not
 designed for up front.** Locking the mutators (`HypothesisStore`,
 `EvidenceCardStore`) closes writer-vs-writer races, but `get()`/`list()`
