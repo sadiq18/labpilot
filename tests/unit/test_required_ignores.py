@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import (
     LARGE_INPUT_IGNORES,
@@ -51,6 +52,10 @@ def test_appends_missing_patterns_to_an_old_gitignore(tmp_path: Path) -> None:
     # User customisation preserved, not rewritten.
     assert "scratch/" in text
     assert "# my own thing" in text
+    # The retrofit must not write a second, differently-worded "competition
+    # data" section next to the one already there — it has to recognise the
+    # pre-existing header as the same group, not invent a third spelling.
+    assert text.count("Competition data") == 1
 
 
 def test_is_idempotent(tmp_path: Path) -> None:
@@ -92,14 +97,39 @@ def test_a_groups_header_is_not_duplicated_across_calls(tmp_path: Path) -> None:
     root = tmp_path / "titanic"
     root.mkdir()
     header = "# Bulk research state — never copied into a per-branch worktree"
-    (root / ".gitignore").write_text(f"{header}\n/knowledge/knowledge.db\n", encoding="utf-8")
+    already_satisfied = SHARED_STATE_IGNORES[0]
+    (root / ".gitignore").write_text(f"{header}\n{already_satisfied}\n", encoding="utf-8")
 
     added = ensure_required_ignores(root)
-    assert "/runs/" in added
+    assert set(added) == {"/runs/"} | set(REQUIRED_IGNORES) | set(LARGE_INPUT_IGNORES)
 
     text = (root / ".gitignore").read_text(encoding="utf-8")
     assert text.count(header) == 1
     assert "/runs/" in text
+
+
+def test_the_original_groups_header_is_not_duplicated_either(tmp_path: Path) -> None:
+    """The header-dedup fix, exercised against the group it was found in.
+
+    The regression test above only ever covered `SHARED_STATE_IGNORES` — the
+    group added by this PR. `REQUIRED_IGNORES` is the original group the bug
+    was found in; nothing pinned that a fix scoped to the new group's header
+    (by name, by hardcoded string, by any means other than the loop's own
+    `header` variable) actually generalised to the old one.
+    """
+    root = tmp_path / "titanic"
+    root.mkdir()
+    header = "# Machine-local artifacts (locks, temp files, DB sidecars)"
+    already_satisfied = REQUIRED_IGNORES[0]
+    (root / ".gitignore").write_text(f"{header}\n{already_satisfied}\n", encoding="utf-8")
+
+    added = ensure_required_ignores(root)
+    assert set(added) == set(REQUIRED_IGNORES[1:]) | set(SHARED_STATE_IGNORES) | set(
+        LARGE_INPUT_IGNORES
+    )
+
+    text = (root / ".gitignore").read_text(encoding="utf-8")
+    assert text.count(header) == 1
 
 
 def test_no_gitignore_is_left_alone(tmp_path: Path) -> None:
@@ -183,12 +213,15 @@ def test_unreadable_gitignore_warns_instead_of_failing_silently(
 def test_unwritable_gitignore_warns_and_names_the_patterns(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The operator needs to know *which* patterns to add by hand."""
+    """The operator needs to know *which* patterns to add by hand.
+
+    `data/` is already present, the way a real old workspace's `.gitignore`
+    would be — so the failure path is exercised with a group that is only
+    partly missing, not the easy all-or-nothing case.
+    """
     root = tmp_path / "titanic"
     root.mkdir()
-    # A line outside every reconciled group, so every pattern in ALL_IGNORES
-    # is genuinely missing and must appear in the logged message below.
-    (root / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    (root / ".gitignore").write_text("# Competition data (often huge)\ndata/\n", encoding="utf-8")
 
     def _boom(*_args: object, **_kwargs: object) -> None:
         raise OSError("read-only file system")
@@ -200,7 +233,10 @@ def test_unwritable_gitignore_warns_and_names_the_patterns(
     logged = " ".join(r.getMessage() for r in caplog.records)
     assert "Could not add" in logged
     for pattern in ALL_IGNORES:
+        if pattern == "data/":
+            continue  # already present — must not be reported as missing
         assert pattern in logged
+    assert "data/" not in logged
 
 
 def test_patterns_actually_ignore_the_real_artifact_names(tmp_path: Path) -> None:
@@ -224,8 +260,13 @@ def test_patterns_actually_ignore_the_real_artifact_names(tmp_path: Path) -> Non
         # tree committable.
         ws_root / WORKTREE_DIRNAME / "S-001" / "E-001" / "train.py": True,
         # Bulk state (M11): tracked, each of these rode into every worktree —
-        # 105 MB per branch on a measured workspace.
+        # 105 MB per branch on a measured workspace. Both the bare top-level
+        # spelling and the real path — resolved the way every store actually
+        # resolves it, via `ResearchPaths`, one directory deeper — since a
+        # fixture that only ever tested the former stayed green after the
+        # pattern regressed to matching nothing real.
         ws_root / "knowledge" / "knowledge.db": True,
+        ResearchPaths(ws_root / "knowledge", "titanic").db_path: True,
         ws_root / "runs" / "E-001" / "oof.csv": True,
         # ...but the hypothesis JSONs beside the database are small and stay
         # tracked, which is why the pattern names the file and not `knowledge/`.

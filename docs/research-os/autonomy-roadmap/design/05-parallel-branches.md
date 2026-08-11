@@ -509,13 +509,28 @@ Measured on a 734 MB workspace (300 MB `data/`, 200 MB `.cache/`, 100 MB
 | K=5 total | 1364 MB | 729 MB |
 
 So K needs no disk-aware ceiling. The fix is `SHARED_STATE_IGNORES` in
-`workspace.py`: `/knowledge/knowledge.db` rather than all of `knowledge/`,
+`workspace.py`: `/knowledge/**/knowledge.db` rather than all of `knowledge/`,
 because the hypothesis JSONs beside it are small and deliberately tracked;
-anchored to the workspace root rather than `**/`, because an unanchored
-pattern also matches a same-named path nested under tracked code — a pipeline
-script that writes its own output to `pipeline/runs/`, for instance, would
-have that output silently untracked by a pattern meant only for the
-workspace-level `runs/`.
+anchored under the workspace root rather than bare `**/`, because an
+unanchored pattern also matches a same-named path nested under tracked code —
+a pipeline script that writes its own output to `pipeline/runs/`, for
+instance, would have that output silently untracked by a pattern meant only
+for the workspace-level `runs/`.
+
+**The anchor itself needed a second pass — anchoring is not the same as
+anchoring at the right depth.** The first anchored form, `/knowledge/knowledge.db`,
+matches nothing real: `ResearchPaths.db_path` (`intelligence/paths.py`) puts
+the database at `knowledge/research/knowledge.db` for a client workspace and
+`knowledge/<competition>/research/knowledge.db` for legacy — one or two
+directories past where a bare anchor reaches. That reopened the exact bug
+this section exists to close, silently, because the unanchored `**/knowledge.db`
+this replaced had matched the real path fine; the anchoring fix broke the
+primary case while fixing the false-positive one. Found by review, and by the
+same mechanism as before: the test asserting the pattern matches real artifact
+names planted its fixture at the convenient top-level path rather than
+resolving it through `ResearchPaths` the way every actual store does.
+`/knowledge/**/knowledge.db` — anchored at the workspace root, open depth
+below it — matches all three real shapes and still excludes `pipeline/knowledge.db`.
 
 Reconciling a group whose *header* already exists but has gained a new
 pattern needed one more check than reconciling patterns alone: the loop
@@ -547,6 +562,18 @@ every branch must agree on.
 `code_root` independently: task 7 points `code_root` at the worktree and leaves
 the other two on the shared workspace. Without that, a branch simply recreates
 an empty `knowledge/` inside its worktree and the drift returns.
+
+That independence does not extend to `data_dir`/`cache_dir` — both are
+computed properties on `Workspace`, derived from `root`, with no field of
+their own the way `runs_dir` has. Once `code_root` points at a worktree those
+two move with it, and since `LARGE_INPUT_IGNORES` now keeps `data/`/`.cache/`
+out of every worktree's checkout, a branch that reaches for either finds it
+merely empty rather than duplicated — a competition dataset a branch expects
+to read, or a Kaggle cache it expects to reuse, simply isn't there. Task 7
+needs to close this the same way it closes it for `knowledge_dir`/`runs_dir`,
+or the fan-out re-downloads/re-materializes these per branch, which is the
+K-times cost this section exists to avoid, just moved from disk to network
+and wall-clock.
 
 **Migration gap.** A `.gitignore` pattern does not untrack a file that is
 already tracked, so workspaces scaffolded before this change keep copying

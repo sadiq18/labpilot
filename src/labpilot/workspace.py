@@ -74,45 +74,47 @@ REQUIRED_IGNORES: tuple[str, ...] = (
 )
 
 #: Bulk research state, kept out of the tracked tree so `git worktree add`
-#: does not hand every branch of a fan-out its own copy. Anchored to the
-#: workspace root, not `**/` — why: design doc §8, "Disk usage".
+#: does not hand every branch of a fan-out its own copy. Anchored under the
+#: workspace root, not bare `**/` — why, and why `knowledge.db`'s own real
+#: path needs the middle `**/`: design doc §8, "Disk usage".
 SHARED_STATE_IGNORES: tuple[str, ...] = (
-    "/knowledge/knowledge.db",
+    "/knowledge/**/knowledge.db",
     "/runs/",
-)
-
-#: Large inputs `_GITIGNORE` already carries for a fresh workspace, reconciled
-#: here too so an existing one gets the same retrofit `SHARED_STATE_IGNORES`
-#: gets. Why this group exists at all: design doc §8, "Disk usage".
-LARGE_INPUT_IGNORES: tuple[str, ...] = (
-    "data/",
-    ".cache/",
-    "models/",
 )
 
 _REQUIRED_IGNORE_HEADER = "# Machine-local artifacts (locks, temp files, DB sidecars)"
 _SHARED_STATE_HEADER = "# Bulk research state — never copied into a per-branch worktree"
-_LARGE_INPUT_HEADER = "# Competition data & local models (often huge)"
+_COMPETITION_DATA_HEADER = "# Competition data (often huge)"
+_LOCAL_MODELS_HEADER = "# Local models"
+
+_COMPETITION_DATA_IGNORES: tuple[str, ...] = ("data/", ".cache/")
+_LOCAL_MODELS_IGNORES: tuple[str, ...] = ("models/",)
+
+#: Large inputs, split under the same two headers `_GITIGNORE` has always
+#: used rather than a third, invented one — the split (not one merged group)
+#: is why retrofitting an old workspace doesn't write a second "competition
+#: data" section next to the one already there. Design doc §8, "Disk usage".
+LARGE_INPUT_IGNORES: tuple[str, ...] = (*_COMPETITION_DATA_IGNORES, *_LOCAL_MODELS_IGNORES)
 
 #: Every group `ensure_required_ignores` reconciles, each under its own header
 #: so an existing `.gitignore` gains the same sections a fresh one is born with.
 _IGNORE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (_REQUIRED_IGNORE_HEADER, REQUIRED_IGNORES),
     (_SHARED_STATE_HEADER, SHARED_STATE_IGNORES),
-    (_LARGE_INPUT_HEADER, LARGE_INPUT_IGNORES),
+    (_COMPETITION_DATA_HEADER, _COMPETITION_DATA_IGNORES),
+    (_LOCAL_MODELS_HEADER, _LOCAL_MODELS_IGNORES),
 )
 
 _GITIGNORE = f"""\
-# Competition data (often huge)
-data/
-.cache/
+{_COMPETITION_DATA_HEADER}
+{chr(10).join(_COMPETITION_DATA_IGNORES)}
 
 # Secrets
 .env
 .env.*
 
-# Local models
-models/
+{_LOCAL_MODELS_HEADER}
+{chr(10).join(_LOCAL_MODELS_IGNORES)}
 
 {_REQUIRED_IGNORE_HEADER}
 {chr(10).join(REQUIRED_IGNORES)}
@@ -585,10 +587,7 @@ def ensure_required_ignores(root: Path) -> list[str]:
         absent = [pattern for pattern in patterns if pattern not in present]
         if not absent:
             continue
-        # A group whose header already exists (this reconciliation added it
-        # last time, or `_GITIGNORE` did) but is missing a later-added
-        # pattern must not get the header a second time — only the newly
-        # absent patterns are appended, under whichever header already ran.
+        # Empty when the header already ran — design doc §8, "Disk usage".
         prefix = "" if header in present else f"{header}\n"
         blocks.append(f"\n{prefix}" + "\n".join(absent) + "\n")
         missing.extend(absent)
