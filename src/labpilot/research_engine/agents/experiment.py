@@ -114,7 +114,7 @@ class ExperimentSpecialist:
         # docs/research-os/autonomy-roadmap/design/05-parallel-branches.md §8,
         # "Tie-break".
         run_finished_at = datetime.now(UTC).isoformat()
-        metrics = _load_metrics(workspace.root)
+        metrics = await anyio.to_thread.run_sync(_load_metrics, workspace.root)
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
         status = str(result.data.get("status") or "unknown")
         experiment_id = f"exp_{workspace.competition}_{execution_id}"
@@ -132,7 +132,9 @@ class ExperimentSpecialist:
             "files_changed": files_changed,
             "aliases": [experiment_key],
         }
-        record_path = write_experiment_git_record(workspace.root, record_payload)
+        record_path = await anyio.to_thread.run_sync(
+            write_experiment_git_record, workspace.root, record_payload
+        )
 
         refs = list(result.refs)
         refs.append(
@@ -145,7 +147,7 @@ class ExperimentSpecialist:
             )
         )
         metrics_path = workspace.root / "metrics.json"
-        if metrics_path.is_file():
+        if await anyio.to_thread.run_sync(metrics_path.is_file):
             refs.append(
                 ArtifactRef(
                     kind="metrics",

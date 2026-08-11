@@ -462,6 +462,16 @@ package (checked, not assumed), so importing it would add a dependency for
 one string. `test_parallel_workers.py` asserts the copy equals
 `LocalRuntime(id=...).provider`, so the two cannot drift unnoticed.
 
+**Branch bookkeeping runs off the event loop.** `ExperimentSpecialist.execute`
+offloaded `snapshot_before_experiment` and `run_plan` but left three
+filesystem calls inline — the metrics read, the git-record write (cost scales
+with `files_changed`), and the stat deciding the metrics `ArtifactRef`. All K
+branches share one loop, so each branch's bookkeeping stalled every sibling:
+the fan-out would serialise on exactly the work §5 argues is cheap. All three
+now go through `anyio.to_thread.run_sync`, matching the two calls that already
+did. This had to land before the budget-pacing test, which measures whether
+fan-out beats sequential and would otherwise have measured this instead.
+
 **Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
 a required pre-build check, same as §5's budget question, but it does not need
 external sign-off — it's answerable by inspecting this repo's own workspace
