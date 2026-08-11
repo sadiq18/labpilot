@@ -473,23 +473,41 @@ table.add_row(desc.name, desc.description[:80], desc.capability_status,
 ### 6.4 If a rename actually happens
 
 Exit criterion 3 floats renaming a structurally-fixed tool. A rename is not
-just `catalog.py` — the Conductor hardcodes tool names outside the registry,
-in at least three places, all keyed on the literal string `"implement"`:
+just `catalog.py` — the Conductor hardcodes tool names outside the registry.
+For `"implement"` there are **five** such sites, in four distinct roles:
 
-- `conductor/actions.py`'s intent-keyword tuple (an *intent-matching* string,
-  not a tool reference — a rename must update it too, or the keyword still
-  fires and maps to a tool name that no longer exists);
-- `conductor/actions.py`'s `_default_args`, which selects default arguments
-  by tool name (a default-argument selector, not a status/precondition
-  check — corrected from an earlier draft of this doc, which mislabeled it);
-- `conductor/policy.py`'s `requires` dict in `available_tools`, which is the
-  actual gating/precondition check (`"implement": has_runnable`).
+- **Dispatch targets** — `conductor/actions.py`'s
+  `ToolStep(tool="implement", ...)`, which appears **twice**: once in the
+  `implement` intent template and again inside the *`experiment`* template.
+  These are the references that actually route work, so a rename that misses
+  them makes `ToolRegistry.require` raise
+  `KeyError: no tool registered: implement` when a campaign reaches the step
+  — and because one of them sits in the experiment flow, that breaks the
+  primary research loop, not just the implement intent. An earlier draft of
+  this section omitted both, which is why they are listed first now.
+- **Intent keyword** — `conductor/actions.py`'s keyword tuple. An
+  *intent-matching* string rather than a tool reference, but a rename must
+  update it too, or the keyword still fires and maps to a name that is gone.
+- **Default-argument selector** — `conductor/actions.py`'s `_default_args`
+  (not a status/precondition check; an earlier draft mislabeled it).
+- **Precondition gate** — `conductor/policy.py`'s `requires` dict in
+  `available_tools` (`"implement": has_runnable`).
+
+Do not work from this list alone — `git grep '"<old name>"'` is the check,
+and the list is only what that grep found on 2026-08-11.
+
+**This is enforced, not just documented.**
+`test_conductor.py::test_every_template_step_names_a_registered_tool`
+asserts every `ToolStep.tool` in `_TEMPLATES` resolves against the default
+catalog, so a rename that misses a dispatch target fails the build instead of
+a campaign. That guard covers all seven tools the templates dispatch, not
+only `implement`.
 
 [11-capability-registration.md §4.4](11-capability-registration.md) makes
 this exact point for the opposite direction (registering a tool doesn't stop
 `no_capability` until the intent map is updated too); the same is true in
-reverse for a rename. If the re-audit renames a tool, updating all three
-sites is part of the same PR, not a follow-up.
+reverse for a rename. If the re-audit renames a tool, updating every site is
+part of the same PR, not a follow-up.
 
 ---
 
@@ -503,7 +521,7 @@ sites is part of the same PR, not a follow-up.
 | `tests/unit/test_tool_contracts.py` (new) | parametrized contract test + meta-test for missing fields |
 | `tests/unit/tool_contract_fixtures.py` (new) | `_fixture_workspace`, `_fixture_inputs`, `_degraded_inputs`, `_digest`/normalized-digest, one entry per tool — the per-tool detail §6.2.2 scopes but doesn't write |
 | `cli/tools_cli.py` | `tools_list()` — two new columns |
-| `conductor/actions.py`, `conductor/policy.py` | update if the re-audit renames a tool — three hardcoded-string sites, see §6.4 |
+| `conductor/actions.py`, `conductor/policy.py` | update if the re-audit renames a tool — five hardcoded-string sites in four roles, see §6.4 |
 | `cli/conduct.py`, `tests/helpers/campaign_harness.py`, and 6 test files (§4) | add `capability_status="fixed"` to every non-catalog `ToolDescriptor(...)` construction — required by §6.1, else these fail to construct |
 | `autonomy-roadmap/10-capability-audit.md` | re-audited table, replacing the 2026-08-02 snapshot |
 
