@@ -264,6 +264,36 @@ def test_an_improvement_rearms_the_latch(tmp_path: Path):
     assert len(store.list()) == 2
 
 
+def test_a_plateau_that_had_nothing_to_propose_retries_when_something_appears(tmp_path: Path):
+    """M8-5 opens `analyze_competition` *because* the campaign is stagnant, so
+    the vocabulary can grow during the very plateau this reacts to.
+
+    Latching on the attempt rather than the result would mean the technique
+    the stagnation signal went and found could never be proposed for the
+    plateau that prompted the search.
+    """
+    from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
+
+    ws = _ws(tmp_path)  # vocabulary starts empty
+    state = _stagnant()
+    config = BudgetConfig(plateau_window=3)
+    store = HypothesisStore(ws.knowledge_dir, ws.competition)
+
+    _mint_hook(ws, state, config)
+    assert store.list() == []
+    assert state.stagnation_mint_fired is False, "an attempt that minted nothing must not latch"
+
+    # analyze_competition runs and brings back something untried.
+    with KnowledgeStore(ws.knowledge_dir, ws.competition) as knowledge:
+        knowledge.merge_technique("gradient_boosting_dart")
+
+    state.score_events.append(_event("E-005", 198.0, technique="another"))
+    _mint_hook(ws, state, config)
+
+    assert len(store.list()) == 1
+    assert state.stagnation_mint_fired is True
+
+
 def test_the_hook_does_nothing_while_the_campaign_improves(tmp_path: Path):
     ws = _with_vocabulary(_ws(tmp_path), "gradient_boosting_dart")
     state = BudgetState(

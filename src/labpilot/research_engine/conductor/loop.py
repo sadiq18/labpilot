@@ -296,14 +296,21 @@ def _maybe_mint_on_stagnation(
     Runs before `persist_budgets`, so the latch is saved by the same write
     that saves the event that set it — a crash between them cannot leave a
     campaign that minted but does not remember doing so.
+
+    The latch follows the mint's *result*, not the attempt. A plateau can
+    begin with nothing to propose and acquire something mid-way: the M8-5 gate
+    reopens `analyze_competition` precisely because the campaign is stuck, so
+    the vocabulary grows during exactly the plateau this would otherwise have
+    given up on. Suppressing repeats of a mint that happened is the intent;
+    suppressing retries of one that did not is a different thing.
     """
     if not stagnation_window(budget_state, budget_cfg):
         budget_state.stagnation_mint_fired = False
         return
     if budget_state.stagnation_mint_fired:
         return
-    budget_state.stagnation_mint_fired = True
-    mint_stagnation_hypothesis(workspace, budget_state, budget_cfg)
+    if mint_stagnation_hypothesis(workspace, budget_state, budget_cfg) is not None:
+        budget_state.stagnation_mint_fired = True
 
 
 def _record_experiment_outcome(
