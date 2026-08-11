@@ -66,15 +66,33 @@ from labpilot.research_engine.planner.schemas.task_types import TaskStatus, Task
 
 _GUARD = '\n\nif __name__ == "__main__":\n    main()\n'
 
+#: Every fixture that writes an artifact takes the short path under smoke.
+#:
+#: The smoke gate runs the same `pipeline/train.py` from the same directory the
+#: training step will, so a fixture that writes unconditionally leaves
+#: `metrics.json` and `predictions.csv` on disk at task 8 — inside the training
+#: gate's freshness window, because these finish in milliseconds. Training and
+#: inference then find their evidence already there. Reported reviewing this
+#: branch, and demonstrated: stubbing `TrainingRunner.run` to never execute
+#: anything left all eight tests green.
+#:
+#: `LABPILOT_SMOKE` is the flag the gate already sets for exactly this — the
+#: documented signal a template reads to shorten its run.
+_SMOKE_SHORT_PATH = (
+    "import json\n"
+    "import os\n"
+    "\n"
+    "\n"
+    "def main():\n"
+    '    if os.environ.get("LABPILOT_SMOKE"):\n'
+    "        return\n"
+)
+
 #: A script that does everything the plan asks: trains, records a metric, and
 #: writes predictions. The control — without it, "the campaign stopped at task N"
 #: could mean the harness cannot get past task N at all.
 _HEALTHY = (
-    "import json\n"
-    "\n"
-    "\n"
-    "def main():\n"
-    '    with open("metrics.json", "w") as handle:\n'
+    _SMOKE_SHORT_PATH + '    with open("metrics.json", "w") as handle:\n'
     '        json.dump({"cv_accuracy": 0.5}, handle)\n'
     '    with open("predictions.csv", "w") as handle:\n'
     '        handle.write("id,y\\n0,0\\n1,0\\n")\n' + _GUARD
@@ -131,8 +149,7 @@ _CASES = (
     ),
     Broken(
         "produces metrics, and no predictions",
-        "import json\n\n\ndef main():\n"
-        '    with open("metrics.json", "w") as handle:\n'
+        _SMOKE_SHORT_PATH + '    with open("metrics.json", "w") as handle:\n'
         '        json.dump({"cv_accuracy": 0.5}, handle)\n' + _GUARD,
         TaskType.RUN_INFERENCE,
         "no predictions.csv and no submission.csv",

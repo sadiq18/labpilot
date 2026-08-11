@@ -205,10 +205,27 @@ Two things the work turned up:
   cold run left ~600 MB in `~/.cache/uv`. The file now passes under
   `UV_OFFLINE=1`.
 
-Each gate was confirmed load-bearing by removing it: disabling the entry-point
-check, the smoke verdict, the training metrics check, or the stdlib strip each
-turns a case red — and removing the training gate produces exactly the reading
-this criterion exists to catch, *"stopped at run_inference, not run_training"*.
+Each gate was confirmed load-bearing by removing it: disabling the PEP 723 check,
+the entry-point check, the smoke verdict, the training metrics check, the
+inference gate, or the stdlib strip each turns a case red — and removing the
+training gate produces exactly the reading this criterion exists to catch,
+*"stopped at run_inference, not run_training"*.
+
+**The fixtures take the smoke gate's short path**, and that was found by review
+rather than by design. The smoke gate runs the same `pipeline/train.py` from the
+same directory the training step will, so a fixture that wrote unconditionally
+left `metrics.json` and `predictions.csv` on disk at task 8 — inside the training
+gate's freshness window, because these scripts finish in milliseconds. Training
+and inference then found their evidence already there, and stubbing
+`TrainingRunner.run` to execute nothing at all left every test green: a campaign
+in which training never ran still reported sixteen tasks done. The fixtures now
+read `LABPILOT_SMOKE`, the flag the gate already sets for exactly this purpose,
+and that same stub now fails three tests.
+
+It is worth naming what that was: a control that could not tell a working
+pipeline from a campaign that skipped the work. Everything the file asserts about
+the five *broken* artifacts was true throughout — but the case whose job is to
+prove the harness reaches task 16 was being satisfied by a side effect of task 8.
 
 ### Four more of the same shape
 
