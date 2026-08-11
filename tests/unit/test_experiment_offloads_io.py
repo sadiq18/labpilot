@@ -54,6 +54,17 @@ def test_load_metrics_treats_a_directory_as_absent(tmp_path: Path) -> None:
     assert experiment_mod._load_metrics(tmp_path) == ({}, False)
 
 
+def test_load_metrics_survives_a_file_that_is_not_utf8(tmp_path: Path) -> None:
+    """`read_text` raises UnicodeDecodeError, which is a ValueError not an OSError.
+
+    Every other malformed case degrades to no metrics; this one used to
+    propagate and take a finished experiment down with it.
+    """
+    (tmp_path / "metrics.json").write_bytes(b"\x80\x81\x82 not utf-8")
+
+    assert experiment_mod._load_metrics(tmp_path) == ({}, True)
+
+
 def test_the_metrics_read_and_record_write_leave_the_loop_thread(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

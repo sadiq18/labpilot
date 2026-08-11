@@ -35,10 +35,13 @@ def _load_metrics(root: Path) -> tuple[dict[str, Any], bool]:
     path = root / _METRICS_FILE
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        # Absent and corrupt both yield no metrics, but only the corrupt one
-        # is still an artifact worth pointing at — hence the stat, needed
-        # here and not on the path where the read already proved existence.
+    except (OSError, ValueError):
+        # ValueError, not JSONDecodeError: a file that is not valid UTF-8
+        # raises UnicodeDecodeError from `read_text`, and losing a finished
+        # experiment to an unreadable side file is worse than no metrics.
+        # Absent and corrupt both yield none, but only the corrupt one is
+        # still an artifact worth pointing at — hence the stat here, and not
+        # on the path where the read already proved existence.
         return {}, path.is_file()
     return (data if isinstance(data, dict) else {"value": data}), True
 
