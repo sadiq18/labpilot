@@ -112,8 +112,7 @@ class ExperimentSpecialist:
         # loading metrics, writing the git record — and its cost scales with
         # `files_changed`. Stamping after it would time the record write as
         # well as the run, so a branch that finished first but wrote a large
-        # record could lose a tie-break to one that finished later. The name
-        # says which moment it must capture; it is read once, at the emit.
+        # record could lose a tie-break to one that finished later.
         run_finished_at = datetime.now(UTC).isoformat()
         metrics = _load_metrics(workspace.root)
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")

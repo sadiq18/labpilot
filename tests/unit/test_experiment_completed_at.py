@@ -9,6 +9,7 @@ completion `test_failed_run_is_not_completed.py` exists to deny.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -22,9 +23,24 @@ from labpilot.research_engine.agents import experiment as experiment_mod
 from labpilot.research_engine.agents.events import EXPERIMENT_COMPLETED, MODEL_FAILED
 from labpilot.research_engine.agents.experiment import ExperimentSpecialist
 from labpilot.research_engine.agents.models import AgentTask
+from labpilot.research_engine.agents.subscribers import install_evidence_refresh_subscriber
 from labpilot.research_engine.context.models import ContextBundle, ContextRequest
 from labpilot.research_engine.tools.descriptors import ToolResult
 from labpilot.research_engine.workspace_facade import Workspace
+
+
+class _Bus:
+    """Minimal event bus, same shape as `test_failed_run_is_not_completed`'s."""
+
+    def __init__(self) -> None:
+        self.handlers: dict[str, list[Any]] = {}
+
+    def subscribe(self, event: str, handler: Any) -> None:
+        self.handlers.setdefault(event, []).append(handler)
+
+    def publish(self, event: str, payload: dict[str, Any]) -> None:
+        for handler in self.handlers.get(event, []):
+            handler(event, payload)
 
 
 def _ws(tmp_path: Path) -> Workspace:
@@ -137,6 +153,43 @@ def test_the_stamp_excludes_the_record_write(
 
     stamped = datetime.fromisoformat(events[0][1]["completed_at"])
     assert stamped <= entered[0], "the stamp was taken after the record write began"
+
+
+def test_the_live_subscriber_tolerates_the_new_key(tmp_path: Path) -> None:
+    """The key has to survive the path it is actually published into.
+
+    Every other test here reads the payload straight off the emitter. This
+    puts one through `install_evidence_refresh_subscriber`, the real
+    ExperimentCompleted consumer, so the addition is checked against a reader
+    rather than assumed inert because dicts ignore extra keys.
+    """
+    (tmp_path / "artifacts").mkdir(parents=True, exist_ok=True)
+    bus = _Bus()
+    install_evidence_refresh_subscriber(bus)
+
+    bus.publish(
+        EXPERIMENT_COMPLETED,
+        {
+            "experiment_id": "exp_E-1",
+            "execution_id": "E-1",
+            "plan_id": "P-001",
+            "competition": "demo",
+            "workspace_root": str(tmp_path),
+            "metrics": {"rmse": 1.0},
+            "status": "succeeded",
+            "completed_at": datetime.now(UTC).isoformat(),
+        },
+    )
+
+    note = tmp_path / "artifacts" / "evidence_refresh_demo.json"
+    assert note.is_file(), "the subscriber refused a payload carrying completed_at"
+    written = json.loads(note.read_text(encoding="utf-8"))
+    assert written["execution_id"] == "E-1"
+    # And the stamp does *not* reach the note: the subscriber builds its own
+    # dict from named keys. Task 6 must therefore read `completed_at` off the
+    # event, not off this artifact — asserted rather than left to be
+    # discovered by a tie-break that silently finds nothing there.
+    assert "completed_at" not in written
 
 
 def test_stamps_order_by_finish_so_the_earliest_branch_can_win(
