@@ -29,17 +29,17 @@ _EXPERIMENT_SCHEMA = "labpilot.artifact.experiment/v1"
 _METRICS_SCHEMA = "labpilot.artifact.metrics/v1"
 
 
-def _load_metrics(root: Path) -> dict[str, Any]:
-    # No `is_file()` guard: a missing (or non-regular) path raises `OSError`
-    # from `read_text()` itself — `FileNotFoundError`/`IsADirectoryError` are
-    # both subclasses — so a separate check would only add a second stat on
-    # the same path the caller already stats once more, below, to decide
-    # whether to attach the metrics `ArtifactRef`.
+def _load_metrics(root: Path) -> tuple[dict[str, Any], bool]:
+    """Parsed `metrics.json`, and whether the file is there to be referenced."""
+    path = root / "metrics.json"
     try:
-        data = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {"value": data}
+        # Absent and corrupt both yield no metrics, but only the corrupt one
+        # is still an artifact worth pointing at — hence the stat, needed
+        # here and not on the path where the read already proved existence.
+        return {}, path.is_file()
+    return (data if isinstance(data, dict) else {"value": data}), True
 
 
 class ExperimentSpecialist:
@@ -114,12 +114,12 @@ class ExperimentSpecialist:
         # docs/research-os/autonomy-roadmap/design/05-parallel-branches.md §8,
         # "Tie-break".
         run_finished_at = datetime.now(UTC).isoformat()
-        # Both reads happen before the write so that no `await` — and so no
-        # cancellation point — sits between the record landing on disk and the
-        # event that announces it.
-        metrics = await anyio.to_thread.run_sync(_load_metrics, workspace.root)
-        metrics_path = workspace.root / "metrics.json"
-        has_metrics_file = await anyio.to_thread.run_sync(metrics_path.is_file)
+        # Read before the write so that no `await` — and so no cancellation
+        # point — sits between the record landing on disk and the event that
+        # announces it.
+        metrics, has_metrics_file = await anyio.to_thread.run_sync(
+            _load_metrics, workspace.root
+        )
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
         status = str(result.data.get("status") or "unknown")
         experiment_id = f"exp_{workspace.competition}_{execution_id}"
@@ -157,7 +157,7 @@ class ExperimentSpecialist:
                     kind="metrics",
                     id=f"metrics:{execution_id}",
                     schema_id=_METRICS_SCHEMA,
-                    path=str(metrics_path),
+                    path=str(workspace.root / "metrics.json"),
                     competition=workspace.competition,
                 )
             )

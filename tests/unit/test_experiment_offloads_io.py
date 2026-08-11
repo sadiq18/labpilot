@@ -33,7 +33,7 @@ def test_the_metrics_read_and_record_write_leave_the_loop_thread(
     real_load = experiment_mod._load_metrics
     real_write = experiment_mod.write_experiment_git_record
 
-    def _load(root: Path) -> dict[str, Any]:
+    def _load(root: Path) -> tuple[dict[str, Any], bool]:
         ran_on["load_metrics"] = threading.current_thread().name
         return real_load(root)
 
@@ -54,33 +54,6 @@ def test_the_metrics_read_and_record_write_leave_the_loop_thread(
     assert set(ran_on) == {"load_metrics", "write_record"}
     assert ran_on["load_metrics"] != loop_thread
     assert ran_on["write_record"] != loop_thread
-
-
-def test_the_metrics_stat_leaves_the_loop_thread(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The `is_file` deciding the metrics ArtifactRef is the third blocking call."""
-    stub_experiment_io(monkeypatch, execution_id="E-1", status="succeeded")
-    ws = experiment_workspace(tmp_path)
-    metrics_path = ws.root / "metrics.json"
-    metrics_path.write_text('{"rmse": 1.0}', encoding="utf-8")
-
-    real_is_file = Path.is_file
-    stat_threads: list[str] = []
-
-    def _is_file(self: Path) -> bool:
-        # Matched on the exact path, not the filename: a stat of some other
-        # `metrics.json` must not be mistaken for the call under test.
-        if self == metrics_path:
-            stat_threads.append(threading.current_thread().name)
-        return real_is_file(self)
-
-    monkeypatch.setattr(Path, "is_file", _is_file)
-
-    anyio.run(lambda: ExperimentSpecialist().execute(training_task(), ws, bundle()))
-
-    assert stat_threads, "the metrics path was never stat'd"
-    assert threading.main_thread().name not in stat_threads
 
 
 def test_the_offloaded_calls_still_read_and_write_the_right_paths(

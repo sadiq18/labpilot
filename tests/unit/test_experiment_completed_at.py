@@ -115,11 +115,11 @@ def test_the_stamp_excludes_the_record_write(
     stub_run(execution_id="E-1", status="succeeded")
     entered: dict[str, datetime] = {}
 
-    def _slow_metrics(root: Path) -> dict[str, Any]:
+    def _slow_metrics(root: Path) -> tuple[dict[str, Any], bool]:
         del root
         entered["metrics"] = datetime.now(UTC)
         time.sleep(0.05)
-        return {}
+        return {}, False
 
     def _slow_record(root: Path, payload: dict[str, Any]) -> Path:
         del payload
