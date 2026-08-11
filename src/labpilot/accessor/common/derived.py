@@ -45,6 +45,14 @@ def derived_note(*, source_of_record: str, warning: str, dated: bool = False) ->
     reader who was misled by the plan projections was reading markdown, and a
     provenance line indistinguishable from the content is one they scroll past.
 
+    The generic text says what is true of every view — that it is a copy, and of
+    what — and leaves *why it might be wrong* to the caller's `warning`. It said
+    "and may have changed since" for one round, which is false for a view written
+    in the same call as its source: `comparison.md` and `profile.md` are always
+    exactly as fresh as the JSON beside them. A stamp that overstates is the same
+    defect as one that misdirects, and this file's whole subject is a document
+    asserting something it cannot know. Reported reviewing this branch.
+
     `dated` is opt-in because a timestamp makes the renderer non-deterministic,
     and some of these are documented as pure functions of their input: the
     comparator says *"Deterministic markdown view"* and a test asserts two renders
@@ -62,8 +70,7 @@ def derived_note(*, source_of_record: str, warning: str, dated: bool = False) ->
     dateline = f"Generated {when} from" if dated else "Generated from"
     return (
         f"> **Derived view — not authoritative.** {dateline} "
-        f"`{source_of_record}`, which is the source of record and may have "
-        f"changed since.\n>\n> {warning}"
+        f"`{source_of_record}`, which is the source of record.\n>\n> {warning}"
     )
 
 

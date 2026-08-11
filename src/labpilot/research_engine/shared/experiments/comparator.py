@@ -148,10 +148,8 @@ def resolve_primary_metric_key_and_direction(
 def render_markdown(comparison: ExperimentComparison) -> str:
     """Deterministic markdown view over an ExperimentComparison (no LLM).
 
-    Stamped because `comparison.json` beside it is the source of record and is
-    *actively repaired*: `repair_card_directions` re-orients evidence-card
-    verdicts on every campaign, and a verdict already rendered here keeps the
-    reading that repair exists to correct. M20 criterion 4.
+    Unstamped: the stamp belongs to `write_comparison`, because this is also what
+    `experiments compare --format markdown` prints from a live recomputation.
     """
     lines: list[str] = [
         f"# Comparison: {comparison.base_id} → {comparison.compare_id}",
@@ -212,18 +210,23 @@ def write_comparison(run_dir: Path, comparison: ExperimentComparison) -> None:
     """Persist comparison.json (source of truth) and comparison.md (view)."""
     (run_dir / "comparison.json").write_text(comparison.model_dump_json(indent=2) + "\n")
     # Stamped here rather than in `render_markdown`, because the stamp is a fact
-    # about the *file* and not about the rendering. `labpilot experiments compare
-    # --format markdown` renders live and recomputes whenever the stored JSON
-    # records a different pair — a stamp inside the renderer told that reader to
-    # "read the JSON" for a file that may not exist or may describe a different
-    # comparison, which is the misdirection a stamp exists to prevent. Reported
-    # reviewing this branch. M20 criterion 4.
+    # about the *file* and not about the rendering: `experiments compare --format
+    # markdown` renders live, and a stamp inside the renderer told that reader to
+    # "read the JSON" for a file that may not exist.
+    #
+    # The warning says what is true of *this* pair — one write, one object, no
+    # divergence — rather than the staleness claim it carried for one round.
+    # `repair_card_directions` rewrites evidence cards under `research/evidence/`
+    # and never touches this file, and the production `comparison.json` is
+    # written by `evidence/builder.py` under a different schema entirely.
+    # Reported reviewing this branch. M20 criterion 4.
     (run_dir / "comparison.md").write_text(
         derived_note(
             source_of_record="comparison.json",
             warning=(
-                "The verdict below is the verdict at render time. Evidence-card "
-                "directions are repaired every campaign; read the JSON."
+                "Written from the same object as the JSON beside it, so the two "
+                "never disagree. `load_comparison` and every consumer read the "
+                "JSON; edits here are lost on the next write."
             ),
         )
         + "\n\n"

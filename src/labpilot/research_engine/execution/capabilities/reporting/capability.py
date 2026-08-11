@@ -7,6 +7,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from labpilot.accessor.common.derived import derived_note
 from labpilot.research_engine.execution.capabilities._helpers import evidence
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.context import TaskContext
@@ -96,6 +97,19 @@ class ReportingCapability(BaseCapability):
         reports_dir.mkdir(parents=True, exist_ok=True)
         report_path = reports_dir / f"{context.execution.id}_report.md"
         lines = [
+            # Fifth of the persisted views, and the one that reaches an LLM most
+            # directly: `reports_dir` is what `WorkspaceProvider` rglobs into
+            # context. Written once from `metrics.json` and never re-derived.
+            # M20 criterion 4, found reviewing this branch.
+            derived_note(
+                source_of_record="metrics.json",
+                warning=(
+                    "The metrics below are the metrics at report time. A rerun "
+                    "overwrites metrics.json and leaves this file alone."
+                ),
+                dated=True,
+            ),
+            "",
             f"# Experiment report — {context.competition}",
             "",
             f"- plan: `{context.plan.id}`",

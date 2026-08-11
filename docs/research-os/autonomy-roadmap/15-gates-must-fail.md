@@ -114,7 +114,7 @@ The rule catches the fourth instance before it is written.
 | 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
-| 4 — a derived artifact re-derives or says it is derived | **in progress.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the four **write sites** and enforced by reading the files back. Enforcing it found **three more unstamped views already shipped** — see *Three more of the same shape*, below. Auto-discovery of a future writer is not built |
+| 4 — a derived artifact re-derives or says it is derived | **in progress.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the four **write sites** and enforced by reading the files back. Enforcing it found **four more unstamped views already shipped** — see *Three more of the same shape*, below. Auto-discovery of a future writer is not built |
 | 5 — a broken artifact fails at the gate that owns it | not started |
 
 ### Three of the first nine rejection tests proved nothing
@@ -139,25 +139,27 @@ red-then-green run against the wrong line proves nothing just as surely as a wea
 test does, which is worth saying because the sweep is the thing everything else
 here rests on.
 
-### Three more of the same shape
+### Four more of the same shape
 
 Criterion 4 named four artifacts and each had been answered individually —
 `repair_card_directions`, `rederive_beliefs_from_cards`, `repair_skill_overlays`,
 and a staleness stamp on plan projections. What none of them had was a *rule*, so
 the criterion asks for one enforced over the writers.
 
-Writing that rule found three more views, already shipped and unstamped:
+Writing that rule found four more views, already shipped and unstamped:
 
 * **`comparison.md`**, written beside `comparison.json` by `write_comparison` —
   whose own docstring calls the JSON *"(source of truth)"* and the markdown
-  *"(view)"*. The author knew. This is the one that matters most: evidence-card
-  directions are repaired on every campaign, so a verdict rendered into markdown
-  before that repair keeps exactly the reading the repair exists to correct.
+  *"(view)"*. The author knew.
 * **`profile.md`**, beside the `profile.json` the same call writes.
 * **`research_brief.md`**, rendered from `analyze.json` and *not written with
   it*: `research analyze --skip-hypothesize` rewrites the JSON and skips the
   brief, so the previous run's file survives and the next `plan create` feeds it
-  forward.
+  forward. This is the one that matters most — it is the only one of the five
+  read back as machine input, and the only one where the pair genuinely diverges.
+* **`<execution>_report.md`**, written once from `metrics.json` into
+  `reports_dir` — the directory `WorkspaceProvider` rglobs into LLM context, so
+  an unstamped copy travels further than any of the others.
 
 A fourth candidate turned out already compliant and is worth recording:
 `JournalProjector.render_markdown` is printed by `cli/reflect.py` and never
@@ -187,8 +189,27 @@ it twice more, against an 8000-character retrieval budget. `read_derived` is now
 the single reader, so the next consumer gets stripping without knowing to ask —
 the same argument as the single stamp, on the other side of the file.
 
-**What is not built:** discovering a *future* writer automatically. The four are
-enumerated by hand, so a fifth added later is invisible until someone adds it.
+#### A stamp must not overstate either
+
+The generic note read *"...which is the source of record **and may have changed
+since**"*, and for two of the five that is false: `comparison.md` and
+`profile.md` are written from the same object as their JSON, in the same call, so
+the pair can never disagree. Worse, `comparison.md`'s warning named
+`repair_card_directions` as the thing that would invalidate it — that pass
+rewrites evidence cards under `research/evidence/` and never touches this file,
+and the `comparison.json` production actually writes comes from
+`evidence/builder.py` under a different schema. A reader following that pointer
+would have opened the JSON, found the identical verdict, and believed they had
+confirmed it against the source of record.
+
+Overstating is the same defect as misdirecting, in the document whose entire
+purpose is to be accurate about what it knows. The generic text now says only
+what is true of every view — that it is a copy, and of what — and each writer's
+`warning` says what its own risk actually is.
+
+**What is not built:** discovering a *future* writer automatically. The five are
+enumerated by hand, so a sixth added later is invisible until someone adds it —
+and the fifth was found by review, not by the rule.
 Stated rather than left to be found, the same limit shape as the verdict
 observer's.
 

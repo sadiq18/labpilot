@@ -51,6 +51,7 @@ of one idea drifting apart is the defect criterion 2 is named after.
 from __future__ import annotations
 
 import json
+import pathlib
 
 from labpilot.accessor.common.derived import (
     derived_note,
@@ -224,6 +225,21 @@ def _persisted_views(root) -> list[tuple[str, str]]:
     brief_path = write_brief(ResearchBrief(competition="demo"), root / "research_brief.md")
     written.append(("research_brief.md", brief_path.read_text()))
 
+    # The fifth, driven through its capability because that is the only writer.
+    # It lands in `reports_dir`, which `WorkspaceProvider` rglobs into LLM
+    # context, so an unstamped copy travels further than the others.
+    from helpers.capability_context import capability_context
+
+    from labpilot.research_engine.execution.capabilities.reporting import ReportingCapability
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    report_root = root / "report_ws"
+    context = capability_context(report_root, task_type=TaskType.GENERATE_REPORT)
+    (context.workspace_root / "metrics.json").write_text('{"cv": 0.8}', encoding="utf-8")
+    result = ReportingCapability().execute(context)
+    report = next(p for p in result.paths if p.endswith("_report.md"))
+    written.append(("execution report", pathlib.Path(report).read_text(encoding="utf-8")))
+
     return written
 
 
@@ -272,3 +288,45 @@ def test_stripping_keeps_a_quote_that_belongs_to_the_content():
 
     assert strip_derived_note(stamped) == body.rstrip("\n")
     assert strip_derived_note(body) == body
+
+
+def test_a_real_reader_of_a_stamped_view_gets_the_content(tmp_path):
+    """Reported reviewing this branch, and mutation-proven: replacing
+    `read_derived`'s body with a plain `read_text` left the whole suite green.
+
+    Nothing exercised it. Every fixture that reached a call site wrote an
+    *unstamped* brief, so the strip path was never entered — the coverage was of
+    the helper in isolation and of call sites that had nothing to strip. The
+    regression it guards is the one round 2 fixed: 277 characters of "distrust
+    this" at the head of the codegen prompt's research window.
+
+    Driven through `_brief_excerpt`, a real call site, on a file written by the
+    real writer.
+    """
+    from labpilot.research_engine.intelligence.brief.models import ResearchBrief
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.intelligence.renderers.markdown import write_brief
+    from labpilot.research_engine.planner.retrieval import _brief_excerpt
+
+    knowledge = tmp_path / "knowledge"
+    paths = ResearchPaths(knowledge, "demo")
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    write_brief(ResearchBrief(competition="demo"), paths.brief_path)
+
+    on_disk = paths.brief_path.read_text(encoding="utf-8")
+    excerpt = _brief_excerpt(knowledge, "demo")
+
+    assert on_disk.lstrip().startswith(">"), "the fixture must actually be stamped"
+    assert "not authoritative" not in excerpt.lower()
+    assert not excerpt.lstrip().startswith(">")
+    assert excerpt.strip(), "stripping must not empty what the planner sees"
+
+
+def test_read_derived_leaves_a_file_that_was_never_stamped_alone(tmp_path):
+    """The other direction, so the fix cannot be "strip the first paragraph"."""
+    from labpilot.accessor.common.derived import read_derived
+
+    plain = tmp_path / "notes.md"
+    plain.write_text("# Notes\n\n> a quotation\n", encoding="utf-8")
+
+    assert read_derived(plain) == "# Notes\n\n> a quotation\n"

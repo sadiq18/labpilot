@@ -13,7 +13,10 @@ def write_profile(run_dir: Path, profile: DatasetProfile) -> tuple[Path, Path]:
     md_path.write_text(
         derived_note(
             source_of_record="profile.json",
-            warning="Regenerated only when profiling reruns; the data may have changed.",
+            warning=(
+                "Written from the same profile as the JSON beside it, so the two "
+                "never disagree. Every consumer reads `profile.json`."
+            ),
         )
         + "\n\n"
         + render_markdown(profile),
