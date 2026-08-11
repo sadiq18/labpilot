@@ -76,8 +76,10 @@ _GUARD = '\n\nif __name__ == "__main__":\n    main()\n'
 #: branch, and demonstrated: stubbing `TrainingRunner.run` to never execute
 #: anything left all eight tests green.
 #:
-#: `LABPILOT_SMOKE` is the flag the gate already sets for exactly this — the
-#: documented signal a template reads to shorten its run. That coupling is worth
+#: `LABPILOT_SMOKE` is the flag the smoke gate sets on the subprocess for exactly
+#: this purpose. No shipped template reads it today — the Jinja pack that did went
+#: with M19 §2 — so these fixtures are currently its only consumer, which is why
+#: the coupling below is worth stating rather than assuming. That coupling is worth
 #: naming: if the smoke gate stopped setting it, these fixtures would go back to
 #: writing during smoke and the blind spot above would return with every test
 #: here still green. What stops that is `test_verification_calls_production.py`,
@@ -117,7 +119,7 @@ class Broken:
 
     label: str
     train_py: str
-    owner: TaskType | None
+    owner: TaskType
     says: str
     was: str
 
