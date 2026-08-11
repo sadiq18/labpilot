@@ -112,30 +112,44 @@ class ConductorStore:
         decision_id: str | None = None,
         max_retries: int = 1,
     ) -> OsTask:
-        tid = self._new_id(_TASK_PREFIX, "os_tasks")
+        """Queue one tool call; allocate its id and insert it as one locked step.
+
+        Same allocate-then-insert race as `_append_new` guards, and the same
+        fix (M11). It matters here for a different reason: decisions are
+        recorded once per branch, but a task is what a branch *is* — K-way
+        fan-out enqueues K of them at once. Measured unlocked, with each
+        branch on its own connection as fan-out requires: 8 concurrent
+        enqueues produced one task and seven `UNIQUE constraint failed:
+        os_tasks.id`.
+
+        `get_task` reads outside the lock deliberately — the row is committed
+        by then, and a single `SELECT` needs no serialising.
+        """
         now = _now()
-        self._conn.execute(
-            """
-            INSERT INTO os_tasks (
-                id, session_id, tool_name, status, priority, retry_count, max_retries,
-                args_json, dependencies_json, artifact_refs_json, error, decision_id,
-                created_at, updated_at, started_at, completed_at
-            ) VALUES (?, ?, ?, 'pending', ?, 0, ?, ?, ?, '[]', NULL, ?, ?, ?, NULL, NULL)
-            """,
-            (
-                tid,
-                session_id,
-                tool_name,
-                priority,
-                max_retries,
-                dumps(args or {}),
-                dumps(dependencies or []),
-                decision_id,
-                now,
-                now,
-            ),
-        )
-        self._conn.commit()
+        with write_lock_for(self.paths.db_path):
+            tid = self._new_id(_TASK_PREFIX, "os_tasks")
+            self._conn.execute(
+                """
+                INSERT INTO os_tasks (
+                    id, session_id, tool_name, status, priority, retry_count, max_retries,
+                    args_json, dependencies_json, artifact_refs_json, error, decision_id,
+                    created_at, updated_at, started_at, completed_at
+                ) VALUES (?, ?, ?, 'pending', ?, 0, ?, ?, ?, '[]', NULL, ?, ?, ?, NULL, NULL)
+                """,
+                (
+                    tid,
+                    session_id,
+                    tool_name,
+                    priority,
+                    max_retries,
+                    dumps(args or {}),
+                    dumps(dependencies or []),
+                    decision_id,
+                    now,
+                    now,
+                ),
+            )
+            self._conn.commit()
         task = self.get_task(tid)
         assert task is not None
         return task
