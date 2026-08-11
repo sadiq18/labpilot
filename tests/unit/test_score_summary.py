@@ -301,6 +301,51 @@ def test_the_bundle_reflects_the_state_the_caller_is_acting_on(tmp_path: Path):
         store.close()
 
 
+def test_decide_next_feeds_one_source_to_the_prompt_and_the_gate(tmp_path: Path):
+    """End to end, through the function the loop actually calls.
+
+    The unit tests below pin each consumer separately, which leaves the wiring
+    itself unverified: removing the state from `decide_next`'s bundle call
+    passes both of them, and the prompt would silently describe a different
+    campaign from the one the allowlist was built for.
+    """
+    from labpilot.research_engine.conductor.policy import decide_next
+    from labpilot.research_engine.tools.descriptors import ToolDescriptor, ToolResult
+    from labpilot.research_engine.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDescriptor(
+            name="analyze_competition",
+            handler=lambda workspace, **_: ToolResult(refs=[], data={}),
+        )
+    )
+
+    ws = _stocked(_ws(tmp_path))
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        persisted = _state(197.0, 196.0, 195.0, 194.0)  # improving, on disk
+        session = store.create_session(
+            "g", metadata={"budget_state": persisted.model_dump(mode="json")}
+        )
+        in_hand = _state(194.8, 195.0, 196.0, 197.0)  # stagnant, in the caller's hand
+
+        _, observe = decide_next(
+            store,
+            ws,
+            session.id,
+            registry,
+            prefer_offline=True,
+            budget_state=in_hand,
+            budget_config=BudgetConfig(plateau_window=3),
+        )
+
+        assert observe["steps_since_improvement"] == 3
+        assert observe["best_so_far"] == 194.8
+    finally:
+        store.close()
+
+
 def test_the_bundle_keeps_its_shape_when_the_session_is_missing(tmp_path: Path):
     """Every other field here degrades to a value rather than disappearing.
     A consumer that subscripts a key present on every real session would

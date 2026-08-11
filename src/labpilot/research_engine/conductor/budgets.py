@@ -232,11 +232,12 @@ class ScoreSummary(BaseModel):
 def score_summary(state: BudgetState, config: BudgetConfig) -> ScoreSummary:
     """Summarise the comparable score series.
 
-    Takes `(state, config)` to match `goal_progress(config, state)`, the shape
-    M17's plan records as validated by a prototype, so that milestone renders
-    its progress line from this rather than deriving the same four numbers a
-    second way — which is how the primary-metric key ended up with four
-    disagreeing resolvers.
+    Takes the same two arguments as `goal_progress(config, state)` — the
+    shape M17's plan records as validated by a prototype — so that milestone
+    renders its progress line by calling this rather than deriving the same
+    four numbers a second way, which is how the primary-metric key ended up
+    with four disagreeing resolvers. (The order differs; only the pair
+    matters, since `goal_progress` will call this from inside itself.)
 
     Only the comparable tail counts. Readings either side of a metric change
     are on different scales, so a "best" across them would compare an RMSE to
