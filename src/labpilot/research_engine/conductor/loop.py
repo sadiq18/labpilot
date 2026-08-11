@@ -36,6 +36,8 @@ from labpilot.research_engine.conductor.approvals import (
     maybe_approve,
 )
 from labpilot.research_engine.conductor.budgets import (
+    BudgetConfig,
+    BudgetState,
     ScoreEvent,
     comparable_tail,
     evaluate_stops,
@@ -52,6 +54,10 @@ from labpilot.research_engine.conductor.metrics import ensure_metrics, record_su
 from labpilot.research_engine.conductor.models import DecisionRecord
 from labpilot.research_engine.conductor.policy import decide_next
 from labpilot.research_engine.conductor.scheduler import Scheduler
+from labpilot.research_engine.conductor.stagnation import (
+    mint_stagnation_hypothesis,
+    stagnation_window,
+)
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.telemetry.agent_provenance import recording_provenance
 from labpilot.research_engine.tools.registry import ToolRegistry
@@ -276,6 +282,30 @@ def _techniques_for(
         return None, []
 
 
+def _maybe_mint_on_stagnation(
+    workspace: Workspace, budget_state: BudgetState, budget_cfg: BudgetConfig
+) -> None:
+    """Propose a change of direction once per plateau, on the edge into it.
+
+    Edge-triggered, not level-triggered: `steps_since_improvement` only grows
+    while a campaign is stuck, so minting whenever it is high would add a
+    near-duplicate hypothesis on every remaining step. The latch clears on the
+    next improvement, so a later plateau in the same campaign mints again
+    rather than staying suppressed for good.
+
+    Runs before `persist_budgets`, so the latch is saved by the same write
+    that saves the event that set it — a crash between them cannot leave a
+    campaign that minted but does not remember doing so.
+    """
+    if not stagnation_window(budget_state, budget_cfg):
+        budget_state.stagnation_mint_fired = False
+        return
+    if budget_state.stagnation_mint_fired:
+        return
+    budget_state.stagnation_mint_fired = True
+    mint_stagnation_hypothesis(workspace, budget_state, budget_cfg)
+
+
 def _record_experiment_outcome(
     store,
     session_id: str,
@@ -338,6 +368,7 @@ def _record_experiment_outcome(
             logger.info(
                 "recorded %s=%s for %s", event.metric_name, event.value, event.experiment_id
             )
+            _maybe_mint_on_stagnation(workspace, budget_state, budget_cfg)
     persist_budgets(store, session_id, budget_cfg, budget_state)
 
 
