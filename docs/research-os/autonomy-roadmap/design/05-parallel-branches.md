@@ -125,8 +125,10 @@ docstring — do not redo)
   tracked, already-deferred item
   ([TODO.md](../../../research-pipeline/milestones/TODO.md), "P2 remote
   execution"), not part of this milestone. `ParallelWorkItem` still gets a
-  `runtime` field defaulting to `"local"` (§7) so that work can build on this
-  fan-out later without retrofitting it.
+  `runtime` field defaulting to `"local"` (§7, §8) so that work can build on
+  this fan-out later without retrofitting it — and, until it does, so a
+  remote-bound item is refused rather than run locally under a label nobody
+  reads.
 - Arbitrary branch-merge policy or conflict resolution beyond "pick one
   winner, keep the losers as evidence."
 
@@ -207,7 +209,7 @@ of the sequential path.
 | Component | Change | Notes |
 |---|---|---|
 | `conductor/loop.py` | New: build K `ParallelWorkItem`s instead of one `OsTask`, call `run_parallel_sync`; emit a `DecisionRecord`/checkpoint per branch and feed each branch's outcome to the circuit breaker | Existing single-hypothesis path stays as the K=1 case; full audit parity with sequential dispatch, decided in §8 |
-| `agents/parallel.py::ParallelWorkItem` | Minor: add `runtime: str = "local"` field (unread this milestone, forward-compat only) | Otherwise reused as-is; M5's concurrency primitives are sufficient |
+| `agents/parallel.py::ParallelWorkItem` | Minor: add `runtime: str = LOCAL_RUNTIME` field, validated before the batch starts (not unread — see §8) | Otherwise reused as-is; M5's concurrency primitives are sufficient |
 | `execution/training/environment.py::child_environment` | New: inject a per-branch thread-cap env vars into the training subprocess's environment | See §8. **Not** `agents/coding.py` — that only generates code, it never executes it; `execution/training/runner.py::TrainingRunner.run()` is the actual `subprocess.run(...)` call, and `child_environment()` already builds the env dict it uses |
 | `git_evolution.py` / `git/python_backend.py` | New: worktree create/teardown per branch, crash-safe | `create_branch` today mutates the single working tree; needs a worktree-based sibling, not a modification of the existing checkout path |
 | *(new)* reconciliation check | New: startup-time `git worktree prune` + orphan sweep | Closes the crash gap — see §8. A worktree whose creating process dies before teardown runs is a standard git-worktree failure mode, not something this design can assume away |
@@ -304,6 +306,64 @@ had. Verified empirically both times: reverting to the old write reliably
 produced 1000+ torn reads under a synchronized reader/writer stress test;
 the fix produces zero.
 
+**The same torn-read race a third time, in git's store rather than ours — so
+creation retries instead.** `git worktree add` registers itself by writing
+`.git/worktrees/<name>/gitdir` and *then* `commondir`, neither atomically.
+Every git command that enumerates worktrees calls `get_worktrees()` first —
+`add` and `remove` included, not just `list` — and a registration whose
+`gitdir` exists while `commondir` is still zero bytes is **fatal**, not
+skipped:
+
+```
+fatal: failed to read .git/worktrees/exp-3/commondir: Undefined error: 0
+```
+
+(errno 0 because the read hits EOF on an empty file rather than failing.)
+This is precisely the `write_text` truncate-then-write window above, in a
+store we do not own and cannot make atomic.
+
+It is not theoretical: it flaked
+`test_concurrent_creation_gives_each_thread_its_own_tree` once during a
+full-suite run and then passed three reruns, which is what sent this to
+investigation. Measured on git 2.47.1 by running the test's own fan-out in a
+loop with per-thread exceptions captured: **9 failing rounds in 250 at K=6,
+and 9 in 250 at K=8** — ~3.6% of fan-outs, one single failure mode, no others.
+Under task 7 that is a campaign branch aborting a few percent of the time.
+
+The window is microseconds wide and closes on its own, so
+`create_experiment_worktree` retries — four attempts, exponential backoff from
+50 ms. Three details are deliberate:
+
+- **It retries any failure, not a match on git's message.** That message goes
+  through gettext (`fatal: failed to read %s`), so a non-English git would
+  walk straight past a string match. Retrying blind is safe here only because
+  every repeated operation is idempotent by construction: `_force_unregister`
+  tolerates absence and `add -B` force-resets. A permanent failure costs the
+  backoff budget and is then re-raised **as git wrote it** — unwrapped, so the
+  real cause is what reaches the caller.
+- **The unregister and `mkdir` are inside the loop, not hoisted above it.** A
+  concurrent `add` breaks *this* call's `worktree remove` the same way, and
+  `_force_unregister` swallows that by design — so an attempt can fail with
+  "already registered" purely because its own cleanup was the casualty.
+  Repeating the cleanup is what makes the next attempt a retry rather than a
+  rerun of the same broken state.
+- **Path validation stays outside the loop.** A branch resolving out of
+  `.worktrees/` is wrong on every attempt; retrying it would only re-enter the
+  deleting path against a target already judged unsafe.
+
+Verified the same way as the atomic-write fix: 800 further rounds (400 at K=6,
+400 at K=8) with the retry in place, on the same machine and harness that
+produced the 18 baseline failures.
+
+**Not fixed, and deliberately so:** `list_registered_worktrees` and
+`_force_unregister` are victims of the identical window. Both are reached from
+`reconcile_worktrees`, which task 7 runs at campaign *start*, before any
+fan-out — no concurrency within a campaign. Two campaigns sharing one repo
+would race, but a retry would not make that safe: reconcile removes any
+worktree not in *this* campaign's `live_branches`, so it would happily delete
+a worktree the other campaign just created. That is a scoping question for
+multi-campaign support, not a retry.
+
 **Locking one store's own methods isn't enough — audit every entry point
 into its data.** `HypothesisStore`'s five mutators are all locked, but
 `evidence/apply.py::apply_card_to_hypothesis` reached past the public API
@@ -366,9 +426,41 @@ corresponding read in `assemble_experiment()` so it survives the next
 `build_graph()` call.
 
 **Tie-break.** `ExperimentCompleted`'s payload (`agents/experiment.py`) has no
-timestamp field today — add a `completed_at` field to `event_payload` at
-publish time. Ties on the metric are then broken by earliest `completed_at`,
-the first branch to finish wins, and promotion stays deterministic.
+timestamp field today — add a `completed_at` field to `event_payload`. Ties on
+the metric are then broken by earliest `completed_at`, the first branch to
+finish wins, and promotion stays deterministic.
+
+*Implemented at run completion, not at publish time as this paragraph
+first specified.* Publish is separated from the run by `_load_metrics` and
+`write_experiment_git_record`, and the latter's cost scales with
+`files_changed`. Stamping after them would fold record-writing time into the
+comparison, so a branch that finished first but wrote a large record could
+lose a tie-break to one that finished later and wrote less — the ranking would
+partly measure record size. The stamp is therefore taken as soon as `run_plan`
+returns, and attached to the payload only on the success path: the same dict
+is the `ModelFailed` payload, and a `completed_at` on a run that died would
+assert the completion that `ExperimentSpecialist.execute`'s early return —
+and `tests/unit/test_failed_run_is_not_completed.py` — exist to deny.
+
+**The `runtime` field.** `ParallelWorkItem` gains `runtime`, and it
+is *validated* rather than carried unread as this document originally
+proposed. An unread field would have been dead code by definition, and worse
+than absent: an item asking for Kaggle would run locally, finish, report a
+metric, and leave nothing downstream able to tell the answer came from the
+wrong machine. `run_parallel_async` therefore refuses any non-local runtime
+before the batch starts — up front, because the mistake is knowable without
+running anything and refusing late means having already spent budget and
+compute on siblings that were never going to add up to the fan-out asked for.
+
+The value is not a new vocabulary. It is the `provider` discriminator from
+`execution/runtimes/models.py`, where `LocalRuntime.provider` is `"local"`
+and the siblings are `"kaggle_kernel"`, `"google_colab"` and `"other"` — the
+Runtime abstraction this document's non-goals already point at.
+`parallel.py` keeps `LOCAL_RUNTIME` as a literal rather than importing those
+models: `execution.runtimes` is *not* otherwise imported by the agents
+package (checked, not assumed), so importing it would add a dependency for
+one string. `test_parallel_workers.py` asserts the copy equals
+`LocalRuntime(id=...).provider`, so the two cannot drift unnoticed.
 
 **Disk usage.** K worktrees means K full checkouts of the tracked tree. This is
 a required pre-build check, same as §5's budget question, but it does not need
@@ -470,6 +562,22 @@ Implementation notes that follow from the above, all in
 - **Claim race**: fire `mark_testing_if_proposed` concurrently (threads or
   `anyio` tasks) against the same hypothesis id, assert exactly one caller
   transitions it to `TESTING`.
+- **Concurrency tests must name their own cause.**
+  `test_concurrent_creation_gives_each_thread_its_own_tree` originally ran
+  `create_experiment_worktree` in a bare `threading.Thread` with no exception
+  capture, so the git race in §8 surfaced only as `assert len(made) == n` — a
+  count that named neither the failing thread nor git's error, on a test that
+  then passed three reruns. Each worker now captures its own traceback and the
+  assertion reports them, cause before symptom. The rule this generalises to:
+  a thread whose exception dies inside `Thread.run` converts every concurrency
+  bug into the same uninformative arithmetic failure.
+- **Race fixes get a deterministic test, not a stressier one.** The retry is
+  pinned by a `GitTool` wrapper that fails `worktree add` a set number of times
+  with git's verbatim message — covering the retry, the bounded exhaustion
+  re-raising git's own error, and validation *not* being retried. Reproducing
+  the real window needs two threads inside a microsecond, which is exactly why
+  the bug reached main; the stress loop measures the rate, the fake pins the
+  behaviour, and only the fake belongs in the suite.
 - **Claim rollback**: force worktree setup to fail after a successful claim,
   assert the hypothesis returns to `proposed` rather than sticking in
   `testing`.

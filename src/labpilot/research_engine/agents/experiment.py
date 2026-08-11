@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,11 +30,13 @@ _METRICS_SCHEMA = "labpilot.artifact.metrics/v1"
 
 
 def _load_metrics(root: Path) -> dict[str, Any]:
-    path = root / "metrics.json"
-    if not path.is_file():
-        return {}
+    # No `is_file()` guard: a missing (or non-regular) path raises `OSError`
+    # from `read_text()` itself — `FileNotFoundError`/`IsADirectoryError` are
+    # both subclasses — so a separate check would only add a second stat on
+    # the same path the caller already stats once more, below, to decide
+    # whether to attach the metrics `ArtifactRef`.
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {"value": data}
@@ -107,6 +110,10 @@ class ExperimentSpecialist:
             )
         )
 
+        # Taken here, not at publish — why:
+        # docs/research-os/autonomy-roadmap/design/05-parallel-branches.md §8,
+        # "Tie-break".
+        run_finished_at = datetime.now(UTC).isoformat()
         metrics = _load_metrics(workspace.root)
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
         status = str(result.data.get("status") or "unknown")
@@ -185,5 +192,9 @@ class ExperimentSpecialist:
             # Both subscribers of this event — the evidence-refresh note and the
             # experience-memory writer — record a *result*, and a crash has none.
             return refs
+        # Attached here, not in the literal above, because that dict is also
+        # the `ModelFailed` payload — see the "Tie-break" comment above and
+        # design doc §8.
+        event_payload["completed_at"] = run_finished_at
         self._emit(EXPERIMENT_COMPLETED, event_payload)
         return refs
