@@ -108,7 +108,8 @@ class BudgetState(BaseModel):
     score_events: list[ScoreEvent] = Field(default_factory=list)
     #: Set when the M8-6 stagnation mint fires for the current plateau, so a
     #: long plateau doesn't mint a near-duplicate hypothesis every step.
-    #: Cleared on the next improvement. No reader yet.
+    #: Cleared on the next improvement. Read by `_maybe_mint_on_stagnation`
+    #: in conductor/loop.py.
     stagnation_mint_fired: bool = False
     #: Reset by any execution that succeeds, so a campaign that recovers is not
     #: punished for the failures it climbed out of.

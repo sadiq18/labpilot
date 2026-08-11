@@ -13,7 +13,7 @@ from typing import Any
 from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
 from labpilot.research_engine.intelligence.models import ResearchArtifactType
 from labpilot.research_engine.execution.technique.status_constants import (
-    PLANNER_VISIBLE_STATUSES,
+    is_planner_visible,
 )
 from labpilot.research_engine.intelligence.retrieval.models import (
     QueryPlan,
@@ -111,8 +111,7 @@ class SymbolicFetcher:
         pipeline = {normalize_label(item) for item in intent.current_pipeline}
         question_terms = _terms(intent.question)
         for row in rows:
-            status = str(row.get("status") or "candidate")
-            if status not in PLANNER_VISIBLE_STATUSES:
+            if not is_planner_visible(row.get("status")):
                 continue
             score = float(row.get("confidence") or 0.5)
             axes: list[str] = []

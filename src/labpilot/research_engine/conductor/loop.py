@@ -36,10 +36,13 @@ from labpilot.research_engine.conductor.approvals import (
     maybe_approve,
 )
 from labpilot.research_engine.conductor.budgets import (
+    BudgetConfig,
+    BudgetState,
     ScoreEvent,
     comparable_tail,
     evaluate_stops,
     metric_names_match,
+    score_summary,
     submit_tools_allowed,
 )
 from labpilot.research_engine.conductor.checkpoint import (
@@ -52,6 +55,10 @@ from labpilot.research_engine.conductor.metrics import ensure_metrics, record_su
 from labpilot.research_engine.conductor.models import DecisionRecord
 from labpilot.research_engine.conductor.policy import decide_next
 from labpilot.research_engine.conductor.scheduler import Scheduler
+from labpilot.research_engine.conductor.stagnation import (
+    mint_stagnation_hypothesis,
+    stagnation_window,
+)
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.telemetry.agent_provenance import recording_provenance
 from labpilot.research_engine.tools.registry import ToolRegistry
@@ -276,6 +283,63 @@ def _techniques_for(
         return None, []
 
 
+def _maybe_mint_on_stagnation(
+    workspace: Workspace, budget_state: BudgetState, budget_cfg: BudgetConfig
+) -> None:
+    """Propose a change of direction once per plateau, on the edge into it.
+
+    Edge-triggered, not level-triggered: `steps_since_improvement` only grows
+    while a campaign is stuck, so minting whenever it is high would add a
+    near-duplicate hypothesis on every remaining step. The latch clears on the
+    next improvement, so a later plateau in the same campaign mints again
+    rather than staying suppressed for good.
+
+    Runs before `persist_budgets`, so `score_events` and the latch are saved
+    by the same write — a crash before that write loses both together rather
+    than leaving them disagreeing. The mint itself is a separate write to a
+    separate store (the hypothesis lands in `knowledge_dir` the moment
+    `HypothesisStore.create` returns, well before `persist_budgets` commits
+    the latch), so a crash in that narrow window can still leave a hypothesis
+    on disk with the latch unset. On resume this reopens the same plateau
+    rather than duplicating it exactly: the technique-exclusion dedup in
+    `_untried_technique` sees the orphaned hypothesis and will not name its
+    technique again, so the worst case is a second hypothesis for a different
+    untried technique, not a byte-for-byte duplicate.
+
+    The latch follows the mint's *result*, not the attempt. A plateau can
+    begin with nothing to propose and acquire something mid-way: the M8-5 gate
+    reopens `analyze_competition` precisely because the campaign is stuck, so
+    the vocabulary grows during exactly the plateau this would otherwise have
+    given up on. Suppressing repeats of a mint that happened is the intent;
+    suppressing retries of one that did not is a different thing.
+
+    Wrapped in its own guard for the same reason `_techniques_for` above is:
+    `_record_experiment_outcome` runs inside the dispatch loop's outer
+    try/except, so an escape here would not stay local — it would land as a
+    dispatch error and count a *successful* experiment as a failure against
+    the circuit breaker.
+    """
+    try:
+        # Computed once and threaded through: this runs on every recorded
+        # experiment, not just stagnant ones, so re-deriving the same
+        # summary/window a second time inside mint_stagnation_hypothesis
+        # would pay the comparable_tail scan twice on every single step.
+        summary = score_summary(budget_state, budget_cfg)
+        window = stagnation_window(budget_state, budget_cfg, summary=summary)
+        if not window:
+            budget_state.stagnation_mint_fired = False
+            return
+        if budget_state.stagnation_mint_fired:
+            return
+        minted = mint_stagnation_hypothesis(
+            workspace, budget_state, budget_cfg, window=window, summary=summary
+        )
+        if minted is not None:
+            budget_state.stagnation_mint_fired = True
+    except Exception:  # noqa: BLE001 — a failed mint must not cost the score its record
+        logger.exception("stagnation mint failed; recording the score without it")
+
+
 def _record_experiment_outcome(
     store,
     session_id: str,
@@ -338,6 +402,7 @@ def _record_experiment_outcome(
             logger.info(
                 "recorded %s=%s for %s", event.metric_name, event.value, event.experiment_id
             )
+            _maybe_mint_on_stagnation(workspace, budget_state, budget_cfg)
     persist_budgets(store, session_id, budget_cfg, budget_state)
 
 
