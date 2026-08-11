@@ -87,6 +87,14 @@ def test_the_markdown_note_carries_the_same_three_facts():
     assert "not authoritative" in note.lower()
 
 
+def test_a_stamp_must_name_a_source_of_record():
+    """An empty source renders a note that reads as valid and points nowhere."""
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        derived_note(source_of_record="  ", warning="w")
+
+
 def test_the_markdown_note_renders_from_the_stamp_not_beside_it():
     """One definition of the fact set, checked by moving it.
 

@@ -114,7 +114,7 @@ The rule catches the fourth instance before it is written.
 | 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
-| 4 — a derived artifact re-derives or says it is derived | **in progress.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites** and enforced by reading the files back. Enforcing it found **four more unstamped views already shipped** — see *Four more of the same shape*, below. Auto-discovery of a future writer is not built |
+| 4 — a derived artifact re-derives or says it is derived | **mostly done.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at every **write site** that persists a view. Enforcement is by **discovery** for the markdown a baseline campaign leaves, with no exemption list; the hand list still carries two off-path writers and the JSON views — see *Finding the views instead of listing them*, below, which states both gaps |
 | 5 — a broken artifact fails at the gate that owns it | **done.** Five broken artifacts driven through the real sixteen-task baseline plan, each entering as the proposal a codegen agent returns, each asserted to stop at the task that owns it **for that task's own reason** — with every task before it passed and every task after it never run. Plus a healthy control and a repaired case — see *Where each defect stops*, below |
 
 ### Three of the first nine rejection tests proved nothing
@@ -138,6 +138,111 @@ figure, while the verdict lives one branch up in `if ok and not fresh:`. A
 red-then-green run against the wrong line proves nothing just as surely as a weak
 test does, which is worth saying because the sweep is the thing everything else
 here rests on.
+
+### Finding the views instead of listing them
+
+The first version enumerated five writers by hand, and the fifth was found by a
+reviewer rather than by the rule. A hand list is review with a test's name on it:
+it cannot see the writer nobody thought of, which is the only one that matters.
+
+So the rule runs a campaign and walks what it leaves. Every `.md` must carry a
+provenance stamp. There is no exemption list, and that took two review rounds to
+arrive at.
+
+**The exemption was the hand list again, twice over.** Skill overlays were
+excused on the grounds that `repair_skill_overlays` rebuilds them:
+
+* The exemption was a path **substring**, so `skills_v2/`, `skills-archive/` and
+  nested files were excused too, while the rebuilder rewrites exactly
+  `<overlays>/*.md`.
+* Its justification was `hasattr(module, "repair_skill_overlays")`, which **any
+  module attribute satisfies** — `logger` passed — and gutting the rebuilder to
+  `return []` left every test green.
+* Then the premise itself turned out to be false. A campaign leaves **no**
+  evidence cards, so the rebuild is a no-op on the tree the rule walks; and the
+  overlays it writes carry only `Try:` and `Note:` bullets, which the repair pass
+  *deliberately* never rewrites. Those six files took **neither** of criterion
+  4's two options — no stamp, and nothing re-deriving them. A `Note:` line is a
+  snapshot of the evidence at write time, which is the rogii failure exactly.
+
+So the overlays are stamped like every other view, and the exemption is deleted.
+`load_skill_overlay` strips the note before the prompt budget applies, and the
+repair pass re-applies it — a stamp is not a lesson block, so a rebuild would
+otherwise drop it and the next walk would report the file.
+
+Three more corrections came out of reviewing that change, all found by mutation
+rather than by reading:
+
+* The strip on the **prompt** path had no test, and it is the reader that reaches
+  six agents. Reverting it left the whole suite green while a ~250-character note
+  headed every overlay chunk inside an 1800-character budget.
+* Repair wrote only when content changed, so an overlay written **before** this
+  change whose lessons already agreed with the cards was never stamped — it kept
+  neither of criterion 4's options indefinitely. Repair now migrates it.
+* The non-vacuity guard could not fail: `overlay_dir()` builds a path without
+  touching disk, so `any(overlay_dir(...))` was true even with the campaign's
+  overlay wiring deleted — and with it deleted, the rule guarded six files that
+  were no longer there.
+
+A sixth round, run against the whole diff rather than the mechanism, found four
+more, and a seventh caught the first of those fixed wrongly. The on-disk budget
+stopped bounding the on-disk file once the stamp was prepended outside it —
+subtracting the note was not enough, because the trailing newline is added
+*after* summarising and `max(1, ...)` silently accepted budgets smaller than the
+note itself, so a 250-character budget wrote 251 bytes and a 50-character one
+wrote 242. It now subtracts both and refuses a budget that cannot hold the note.
+
+**The test written for that fix picked the one budget where it passed.** It was
+added precisely because a sweep showed the fix untested, then used
+`cost + 200` — the region where the summariser lands far below the room it is
+given. At `cost + 10` the same assertion failed by a character. It is
+parametrised over the boundary now. This is the fixture-too-comfortable pattern
+recorded at the end of this document, walked into while explicitly trying to
+avoid it, which is the strongest argument for mutating the *input* rather than
+trusting a green sweep.
+
+The same round also found: `OVERLAY_NOTE` was built at import by a function that had
+just gained a `ValueError`, so a future guard there would surface as an
+`ImportError` for a module every agent imports; the only test for the
+unwritable-overlay guard used `chmod(0o444)`, which root ignores, so it would
+have silently stopped testing on a root-running runner; and the new campaign
+helper sat beside the existing `campaign_harness` under a name a reader could not
+tell apart.
+
+A fifth round found the strip on the *write* path uncovered — reverting it left
+all 2084 tests green while every upsert prepended another note, and
+`load_skill_overlay` strips only the leading one, so the rest reached the prompt.
+Same class as the read-path finding, one function along. It also found the
+stamp-only write unguarded where its sibling twenty lines below catches `OSError`,
+so one read-only overlay skipped every overlay after it and the passes that
+follow — against the module's own *"repair must never break a run"*.
+
+A fourth round found the overlay's own stamp naming `research/evidence/`,
+which resolves to nothing from a file under the competition workspace while the
+cards sit under the knowledge tree. That is the **third** stamp on this milestone
+to name the wrong place, after `comparison.md` and the execution report. The
+recurring lesson is narrow and worth stating: a stamp's source of record is a
+claim about a *path*, and a path claim is only true relative to where the file
+sits. It now says which tree to look in. The same round found the legacy
+migration unable to reach the empty overlay the previous repair wrote, because
+the empty check ran first.
+
+**Two gaps, stated rather than implied.**
+
+* **Markdown only.** A campaign leaves ~30 JSON files and nearly all are sources
+  of record — evidence, metrics, `profile.json`. Widening the glob would need an
+  exemption list longer than the thing it guards, which is what this section is
+  about. `P-001.json`'s `_projection` stamp is covered by
+  `test_projections_announce_they_are_derived.py`, not by discovery.
+* **Baseline-plan path only.** `write_brief` and `write_comparison` are not
+  reached by a baseline campaign, so discovery does not see them; unstamping
+  either is caught by the hand list in `test_derived_views_say_so.py` (and, for
+  the comparison, `test_comparator.py`). Those files are still load-bearing for
+  two of the writers.
+
+A tree walk rather than a patched `Path.write_text`: both see exactly the same
+ten files, and the walk needs no monkeypatching and is immune to how a file was
+written. The campaign harness is shared with criterion 5.
 
 ### Where each defect stops
 

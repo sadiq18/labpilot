@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
+
+from labpilot.accessor.common.derived import derived_note, strip_derived_note
 
 DEFAULT_OVERLAY_DIRNAME = ".labpilot/skills"
 #: Soft budget before rewriting the on-disk overlay to a compact summary.
@@ -40,6 +43,28 @@ def overlay_path(workspace_root: Path | str | None, agent_key: str) -> Path | No
     return root / f"{safe}.md"
 
 
+#: Named absolutely: overlays live under the competition workspace and the cards
+#: under the knowledge tree, so a relative path resolves to nothing from here.
+_OVERLAY_SOURCE = "the evidence cards, under <knowledge>/<competition>/research/evidence/"
+_OVERLAY_WARNING = "Lessons here are rewritten when their card is repaired; the notes are not."
+
+
+@lru_cache(maxsize=1)
+def _overlay_note() -> str:
+    """Cacheable only because the note is undated; adding a date must drop this."""
+    return derived_note(source_of_record=_OVERLAY_SOURCE, warning=_OVERLAY_WARNING)
+
+
+def stamped_overlay(body: str) -> str:
+    """Overlay content with its provenance note, applied once."""
+    return _overlay_note() + "\n\n" + strip_derived_note(body).lstrip("\n")
+
+
+def overlay_note_cost() -> int:
+    """Characters `stamped_overlay` adds, so a budget can allow for them."""
+    return len(stamped_overlay(""))
+
+
 def load_skill_overlay(
     workspace_root: Path | str | None,
     agent_key: str,
@@ -50,7 +75,7 @@ def load_skill_overlay(
     path = overlay_path(workspace_root, agent_key)
     if path is None or not path.is_file():
         return ""
-    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    text = strip_derived_note(path.read_text(encoding="utf-8", errors="replace")).strip()
     if len(text) <= max_chars:
         return text
     return summarize_skill_text(text, max_chars=max_chars)
@@ -71,9 +96,14 @@ def upsert_skill_overlay(
     path = overlay_path(workspace_root, agent_key)
     assert path is not None
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    raw = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    existing = strip_derived_note(raw)
     marker = f"<!-- lesson:{lesson_id} -->"
     if marker in existing:
+        # Nothing to append, but an overlay written before overlays were stamped
+        # is only ever migrated by a path that writes.
+        if raw and raw == existing:
+            path.write_text(stamped_overlay(existing), encoding="utf-8")
         return path
 
     block_lines = [marker, f"## Lesson `{lesson_id}`"]
@@ -92,9 +122,17 @@ def upsert_skill_overlay(
     updated = (existing.rstrip() + "\n\n" if existing.strip() else "") + "\n".join(
         block_lines
     )
-    if len(updated) > on_disk_budget:
-        updated = summarize_skill_text(updated, max_chars=on_disk_budget)
-    path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+    # The budget bounds the written file: the note, the blank line after it, and
+    # the trailing newline all come out of it before the body is summarised.
+    room = on_disk_budget - overlay_note_cost() - 1
+    if room < 1:
+        raise ValueError(
+            f"on_disk_budget={on_disk_budget} leaves no room for content; "
+            f"the provenance note alone costs {overlay_note_cost()}"
+        )
+    if len(updated) > room:
+        updated = summarize_skill_text(updated, max_chars=room)
+    path.write_text(stamped_overlay(updated.rstrip() + "\n"), encoding="utf-8")
     return path
 
 
