@@ -735,6 +735,11 @@ def _run_until_stop_inner(
                     session_id,
                     registry,
                     llm_client=llm_client,
+                    # Already loaded for this step's stop evaluation. The
+                    # stagnant clause gates the allowlist before the prompt is
+                    # built, so the series has to arrive with the decision.
+                    budget_state=budget_state,
+                    budget_config=budget_cfg,
                     **policy_kw,
                 )
                 _progress(
@@ -962,6 +967,8 @@ def _run_until_stop_inner(
             session_id,
             registry,
             llm_client=llm_client,
+            budget_state=budget_state,
+            budget_config=budget_cfg,
             **policy_kw,
         )
         decision_id = store.new_decision_id()
