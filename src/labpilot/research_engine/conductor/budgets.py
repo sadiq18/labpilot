@@ -205,6 +205,111 @@ def comparable_tail(events: list[ScoreEvent]) -> list[ScoreEvent]:
     return list(reversed(tail))
 
 
+class ScoreSummary(BaseModel):
+    """What the score series says about progress, in the terms a decision needs.
+
+    Derived, never stored: computed from `score_events` on demand so it cannot
+    drift from the series the way `metric_history` did before it had a writer.
+    """
+
+    #: The best value seen, read in the series' own direction. `None` until a
+    #: comparable score exists.
+    best_so_far: float | None = None
+    #: Most recent last, so the tail reads in the order it happened.
+    last_3_scores: list[float] = Field(default_factory=list)
+    #: How far the latest reading sits from the best, in the metric's own
+    #: direction: `0.0` at a record, negative behind one, never positive —
+    #: `best_so_far` includes the latest, so it can at most tie. Whether the
+    #: latest run *improved* is `steps_since_improvement == 0`, which is why
+    #: this measures distance instead of repeating that.
+    delta_vs_best: float | None = None
+    #: Completed experiments since one last improved on everything before it —
+    #: not conductor steps. A campaign that spends ten steps reflecting between
+    #: two experiments has taken one, not eleven.
+    steps_since_improvement: int = 0
+    #: The metric these numbers are readings of, so a consumer cannot compare
+    #: them against a threshold for something else.
+    metric_name: str | None = None
+
+
+def score_summary(state: BudgetState, config: BudgetConfig) -> ScoreSummary:
+    """Summarise the comparable score series.
+
+    Takes the same two arguments as `goal_progress(config, state)` — the
+    shape M17's plan records as validated by a prototype — so that milestone
+    renders its progress line by calling this rather than deriving the same
+    four numbers a second way, which is how the primary-metric key ended up
+    with four disagreeing resolvers. (The order differs; only the pair
+    matters, since `goal_progress` will call this from inside itself.)
+
+    Only the comparable tail counts. Readings either side of a metric change
+    are on different scales, so a "best" across them would compare an RMSE to
+    an accuracy — the defect this milestone exists to prevent.
+    """
+    events = comparable_tail(state.score_events)
+    if not events:
+        return ScoreSummary()
+
+    values = [event.value for event in events]
+    # Direction is a property of the metric, not of an individual reading, so
+    # the newest event decides for the whole window. Flags within one metric
+    # can genuinely disagree: M8-2 falls back to the campaign's configured
+    # direction when the competition profile cannot answer, so an early
+    # experiment may carry a guess and a later one — after `analyze` writes
+    # the spec — the resolved answer. The later reading is the better-informed
+    # one, and re-splitting the window by flag would fragment a series that
+    # measures a single thing.
+    maximize = events[-1].maximize
+    best = max(values) if maximize else min(values)
+    latest = values[-1]
+
+    # Distance behind the record, expressed the same way in both directions so
+    # a consumer never re-derives the sign from the metric — that
+    # re-derivation is exactly what `ScoreEvent.maximize` exists to prevent.
+    delta = latest - best if maximize else best - latest
+
+    return ScoreSummary(
+        best_so_far=best,
+        last_3_scores=values[-3:],
+        delta_vs_best=delta,
+        steps_since_improvement=_steps_since_improvement(values, maximize, config.plateau_epsilon),
+        metric_name=events[-1].metric_name,
+    )
+
+
+def _steps_since_improvement(values: list[float], maximize: bool, epsilon: float) -> int:
+    """Experiments since one beat everything before it by more than `epsilon`.
+
+    Measured against the best of the *preceding* readings, not the running
+    best including itself — otherwise every event trivially ties its own best
+    and nothing ever counts as an improvement. `epsilon` is the same
+    noise floor `plateau` uses, so the two agree about what "no change" means.
+
+    That epsilon is **absolute**, and must be set to the metric's scale. It
+    was harmless while only `plateau` read it — that stop needs near-exact
+    ties and has fired on essentially nothing — but this drives the gathering
+    gate and the policy's view of progress, so a default of 1e-6 against a
+    metric whose values live near or below it swallows every real gain: the
+    campaign reads as permanently stagnant while improving on every run.
+
+    One pass, carrying the best rather than re-scanning the prefix: this runs
+    in the observe bundle and again in the gathering gate, so it is paid at
+    least twice per conductor step against a series the campaign is designed
+    to grow.
+    """
+    if not values:
+        return 0
+    improved_at = 0
+    best_before = values[0]
+    for index in range(1, len(values)):
+        value = values[index]
+        gain = value - best_before if maximize else best_before - value
+        if gain > epsilon:
+            improved_at = index
+        best_before = max(best_before, value) if maximize else min(best_before, value)
+    return len(values) - 1 - improved_at
+
+
 def _last_metric_matches_target(config: BudgetConfig, state: BudgetState) -> bool:
     """Whether `last_metric` is a reading of the metric the target names.
 

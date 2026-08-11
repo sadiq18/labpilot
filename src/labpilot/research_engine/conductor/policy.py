@@ -13,6 +13,13 @@ from labpilot.research_engine.conductor.approvals import (
     OfflineFallbackPrompt,
     resolve_offline_fallback,
 )
+from labpilot.research_engine.conductor.budgets import (
+    BudgetConfig,
+    BudgetState,
+    ScoreSummary,
+    budgets_from_metadata,
+    score_summary,
+)
 from labpilot.research_engine.conductor.models import NextAction
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.intelligence.hypothesis.viability import (
@@ -51,12 +58,20 @@ def build_observe_bundle(
     include_context: bool = True,
     max_context_items: int = 16,
     max_context_chars: int = 4000,
+    budgets: tuple[BudgetConfig, BudgetState] | None = None,
 ) -> dict[str, Any]:
     """Gather durable state for policy input.
 
     When ``include_context`` is true (online path), attach a best-effort
     Context Engine summary and ranked refs. Failures never raise — observe
     always remains usable for offline / LLM policy.
+
+    ``budgets`` is the campaign state the caller is already acting on.
+    `decide_next` passes what it hands the gathering gate, so the numbers the
+    model reads and the allowlist it chooses from come from one source;
+    deriving them separately from the session would let the prompt and the
+    allowlist describe different campaigns. Falls back to the session when not
+    given, for callers that have no state in hand.
     """
     session = store.get_session(session_id)
     tasks = store.list_tasks(session_id)
@@ -112,6 +127,7 @@ def build_observe_bundle(
     observe["viable_hypotheses"] = viable
     observe["untested_hypotheses"] = proposed_total
     observe["hours_since_last_artifact"] = hours_since_last_artifact(workspace)
+    _attach_score_progress(observe, session, budgets)
     _attach_evidence_refresh(observe, workspace)
     if include_context:
         _attach_context(
@@ -122,6 +138,47 @@ def build_observe_bundle(
             max_chars=max_context_chars,
         )
     return observe
+
+
+def _attach_score_progress(
+    observe: dict[str, Any],
+    session: Any,
+    budgets: tuple[BudgetConfig, BudgetState] | None = None,
+) -> None:
+    """Surface what the score series says about progress.
+
+    The policy already sees how much work is queued and how old the evidence
+    is; this is the same mechanism applied to the thing the campaign is
+    actually for.
+
+    Reads ``budgets`` when the caller has it, and only falls back to the
+    session otherwise. That order is deliberate: the caller's state is what
+    the gathering gate was judged against, and these numbers have to describe
+    the same campaign the allowlist was built for — which means they can
+    legitimately differ from what is currently persisted.
+
+    Named for what they hold, following `viable_hypotheses` /
+    `untested_hypotheses`: a number the model reads deserves a name it can
+    trust. `score_metric` travels with them so the model cannot compare a
+    reading against a threshold for a different metric.
+    """
+    if budgets is not None:
+        config, state = budgets
+        summary = score_summary(state, config)
+    elif session is None:
+        # A missing session means "no readings", not "no such fields". Every
+        # sibling here degrades to a value rather than disappearing, and a
+        # consumer that subscripts a key present on every real session would
+        # otherwise raise only on the rare path.
+        summary = ScoreSummary()
+    else:
+        config, state = budgets_from_metadata(session.metadata)
+        summary = score_summary(state, config)
+    observe["best_so_far"] = summary.best_so_far
+    observe["last_3_scores"] = summary.last_3_scores
+    observe["delta_vs_best"] = summary.delta_vs_best
+    observe["steps_since_improvement"] = summary.steps_since_improvement
+    observe["score_metric"] = summary.metric_name
 
 
 def _attach_evidence_refresh(observe: dict[str, Any], workspace: Workspace) -> None:
@@ -492,7 +549,11 @@ _EVIDENCE_COOLDOWN_HOURS = float(os.environ.get("LABPILOT_EVIDENCE_COOLDOWN_HOUR
 _MIN_RESWEEP_HOURS = float(os.environ.get("LABPILOT_MIN_RESWEEP_HOURS", "0.5"))
 
 
-def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
+def available_tools(
+    workspace: Workspace,
+    allowlist: set[str],
+    budgets: tuple[BudgetConfig, BudgetState] | None = None,
+) -> set[str]:
     """Drop tools whose preconditions the workspace does not yet satisfy.
 
     Offering the whole catalog regardless of state lets a campaign burn steps
@@ -515,9 +576,11 @@ def available_tools(workspace: Workspace, allowlist: set[str]) -> set[str]:
     # minutes of network and LLM work). Once there is a backlog of untested
     # hypotheses, the useful move is to *test* one, not to re-derive the same
     # techniques and beliefs again. Gathering reopens when the backlog runs dry.
-    gather_ok, gather_reason = should_gather_evidence(workspace)
+    gather_ok, gather_reason = should_gather_evidence(workspace, budgets)
     if not gather_ok:
         logger.info("Skipping evidence gathering: %s", gather_reason)
+    else:
+        logger.info("Evidence gathering available: %s", gather_reason)
 
     requires: dict[str, bool] = {
         # Nothing to reflect on until an experiment has produced evidence.
@@ -582,8 +645,12 @@ def hours_since_last_artifact(workspace: Workspace) -> float | None:
     return (datetime.now(UTC) - stamp).total_seconds() / 3600.0
 
 
-def should_gather_evidence(workspace: Workspace) -> tuple[bool, str]:
-    """Gather when the pool is thin **or** the evidence is stale.
+def should_gather_evidence(
+    workspace: Workspace,
+    budgets: tuple[BudgetConfig, BudgetState] | None = None,
+) -> tuple[bool, str]:
+    """Gather when the pool is thin, the evidence is stale, **or** the score
+    has stopped moving.
 
     This was two brakes in series — gather only if the backlog was thin *and*
     the last sweep was old — which made either one a veto. The backlog clause
@@ -601,7 +668,27 @@ def should_gather_evidence(workspace: Workspace) -> tuple[bool, str]:
       actually pick, counted by `viable_hypothesis_count` so that rows the
       selector has passed over for two campaigns stop voting;
     * **stale** — no artifact newer than `_EVIDENCE_COOLDOWN_HOURS`, which
-      guarantees recovery no matter how large the pool grows.
+      guarantees recovery no matter how large the pool grows;
+    * **stagnant** — `plateau_window` experiments have finished since one last
+      improved on the rest. A backlog that keeps producing hypotheses which
+      do not move the score is, at the tool-allowlist level, the same
+      situation as a thin or stale one: the campaign needs different ideas,
+      not another turn of the ones it has. This is *not* an earlier form of
+      the `plateau` stop and does not fire before it — see the comment at the
+      clause for how the two differ and why that is acceptable.
+
+    The stagnant clause is why this reads campaign state at all. It is
+    deliberately a *gate*, not a number in the policy prompt: `decide_next` is
+    LLM-driven, and a metric the model merely sees is the bet that already
+    lost — `evaluate_stops` has read one since M3 and changed no decision in
+    nine campaigns. Removing the tool from the allowlist before the prompt is
+    built is what makes the signal deterministic and testable.
+
+    ``budgets`` is the `(config, state)` pair as `load_budget_pair` returns
+    it, taken whole rather than as two optional arguments: the threshold lives
+    in the config and the series in the state, so a caller supplying one
+    without the other would be judged against a window and a noise floor the
+    campaign never configured.
 
     The cost of gathering when it was not needed is a sweep that mostly
     re-ingests known kernels. The cost of *not* gathering was four campaigns
@@ -623,6 +710,28 @@ def should_gather_evidence(workspace: Workspace) -> tuple[bool, str]:
     viable = viable_hypothesis_count(workspace.knowledge_dir, workspace.competition)
     if viable < _VIABLE_TARGET:
         return True, f"only {viable} viable hypotheses queued"
+
+    # Shares `plateau_window` so one knob governs "how long is long enough",
+    # but the two measure different things and do not fire together: this
+    # counts experiments since the last record, `plateau` measures the spread
+    # of the last `n` readings. On a perfectly flat series `plateau` stops the
+    # campaign one experiment *before* this opens — n readings versus n-1
+    # transitions — so on that path the gate never gets to act. It is left
+    # that way deliberately: `plateau` needs a spread within `plateau_epsilon`
+    # (1e-6), i.e. near-exact ties that real CV scores do not produce, and on
+    # the realistic drifting-worse series `plateau` never fires at all and
+    # this is the only signal. Firing earlier would mean gathering after a
+    # single non-improving experiment, to serve a case that does not occur.
+    #
+    # `max(1, ...)` for the same reason `evaluate_stops` normalises it: a
+    # window of zero would make every campaign stagnant, including one that
+    # has never run an experiment.
+    if budgets is not None:
+        stagnant_config, stagnant_state = budgets
+        window = max(1, stagnant_config.plateau_window)
+        stagnant_for = score_summary(stagnant_state, stagnant_config).steps_since_improvement
+        if stagnant_for >= window:
+            return True, f"{stagnant_for} experiments with no improvement"
 
     if age_hours is None:
         return True, "no evidence gathered yet"
@@ -733,19 +842,27 @@ def decide_next(
     prefer_offline: bool = False,
     auto_offline_fallback: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+    budgets: tuple[BudgetConfig, BudgetState] | None = None,
 ) -> tuple[NextAction, dict[str, Any]]:
     """Observe + think; return validated NextAction and observe bundle.
 
     Online path attaches Context Engine evidence to observe. ``prefer_offline``
     skips retrieve entirely (no forced Context Engine success).
+
+    ``budgets`` is the `(config, state)` pair `load_budget_pair` returns. It
+    carries the score series down to `available_tools`, whose stagnant clause
+    gates the allowlist rather than adding a number to the prompt, and to the
+    observe bundle, so both describe the same campaign. Defaults to None so a
+    caller with no campaign state behaves exactly as before.
     """
     all_tools = set(registry.names())
-    allowlist = available_tools(workspace, all_tools)
+    allowlist = available_tools(workspace, all_tools, budgets)
     observe = build_observe_bundle(
         store,
         workspace,
         session_id,
         include_context=not prefer_offline,
+        budgets=budgets,
     )
     action = llm_next_action(
         observe,
