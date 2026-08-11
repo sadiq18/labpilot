@@ -167,10 +167,13 @@ produced it, with an error naming uv rather than the file. It now stops at task 
 Planting it would test the gates against a file nothing in the system claims to
 have written, which is a different and easier question.
 
-**Each case asserts ownership, not failure.** That the campaign stopped at the
-owning task is the weakest of the assertions. The others carry it: every task
-*before* passed, so the defect was not caught early by luck; every task *after*
-never ran; and the recorded error names *that gate's own* reason.
+**Each case asserts ownership, not failure.** Two assertions do the detecting:
+the campaign stopped at the **owning task**, and the recorded error is that
+gate's **own reason**. The other two — every task before it passed, every task
+after it never ran — state the criterion's wording but are *entailed* by the
+first, because today's plan is a strict sixteen-task chain that aborts on the
+first failure. Deleting them and re-running the six gate mutations killed every
+one regardless; they are kept and labelled rather than mistaken for coverage.
 
 The last of those was added on review. Asserting the task type alone could not
 tell which of a task's gates fired, and `write_code` has two that this file

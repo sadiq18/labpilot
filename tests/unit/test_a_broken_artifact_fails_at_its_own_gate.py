@@ -22,13 +22,23 @@ returns. Planting it directly in the workspace would test the gates against a
 file nothing in the system claims to have written, which is a different and
 easier question.
 
-Each case asserts three things, and the second and third are what make it a
-statement about *ownership* rather than about failure:
+Each case asserts four things. Two of them do the detecting:
 
-* the campaign stopped at the owning task;
-* every task before it **passed** — so the defect was not caught early by luck,
-  and the gates ahead of the owner did not fire on something they do not own;
-* every task after it never ran — so nothing downstream is doing the owner's job.
+* the campaign stopped at the **owning task** — a missing gate downstream of the
+  defect, or a gate firing on something it does not own, both show up here;
+* the recorded error is that gate's **own reason** — `write_code` has two gates
+  this file exercises, and without this they collapse into one.
+
+The other two say the campaign behaved like a campaign: every task before the
+owner passed, and every task after it never ran. Both are **entailed** by the
+first assertion given today's plan shape — sixteen tasks in a strict chain, all
+`abort_on_failure`, and the engine returning on the first error — so neither
+currently detects anything the first does not. Measured, on review: deleting them
+and re-running six gate mutations killed every one regardless. They are kept
+because they state the criterion's own wording ("not three steps downstream") and
+would start carrying weight the moment the plan gains a branch or a task that
+does not abort; they are documented here rather than removed so nobody reads them
+as the part that catches things.
 """
 
 from __future__ import annotations
@@ -234,8 +244,8 @@ def test_a_healthy_pipeline_completes_every_task(tmp_path, monkeypatch):
 @pytest.mark.slow
 @pytest.mark.parametrize("case", _CASES, ids=lambda case: case.label)
 def test_a_broken_artifact_stops_at_the_gate_that_owns_it(tmp_path, monkeypatch, case):
-    """The criterion. See the module docstring for why the two ordering
-    assertions carry more weight than the first."""
+    """The criterion. See the module docstring for which of these four
+    assertions detect, and which are entailed by the plan's shape."""
     execution, tasks = _run_campaign(tmp_path, monkeypatch, case.train_py)
 
     assert execution.status == "failed", f"nothing stopped it ({case.was})"
@@ -254,6 +264,8 @@ def test_a_broken_artifact_stops_at_the_gate_that_owns_it(tmp_path, monkeypatch,
         f"{case.owner.value} stopped it, but for a different reason than this case is "
         f"about. Expected {case.says!r}, got: {error}"
     )
+    # Entailed by the assertions above given a strict-chain plan — see the module
+    # docstring. Kept as the criterion's own wording, not as detection.
     assert all(task.status == TaskStatus.DONE for task in tasks[:stopped_at]), (
         "a gate ahead of the owner fired on something it does not own: "
         f"{[t.type.value for t in tasks[:stopped_at] if t.status != TaskStatus.DONE]}"
