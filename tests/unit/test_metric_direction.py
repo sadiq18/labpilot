@@ -367,6 +367,75 @@ def test_a_target_with_an_unknown_direction_is_refused(tmp_path):
         )
 
 
+def _spec_competition_json(root: Path, direction: str | None) -> None:
+    """The shape `CompetitionParser.save` writes — a `CompetitionSpec`, whose
+    metric is `evaluation_metric` rather than `metric`."""
+    root.mkdir(parents=True, exist_ok=True)
+    metric: dict[str, object] = {"name": "mse", "key": "mse"}
+    if direction is not None:
+        metric["direction"] = direction
+    (root / "competition.json").write_text(
+        json.dumps({"slug": "demo", "title": "demo", "evaluation_metric": metric}),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    ("direction", "expected"), [("minimize", False), ("maximize", True), ("Minimize", False)]
+)
+def test_a_parser_written_spec_resolves(tmp_path, direction, expected):
+    """`CompetitionParser.save` writes `evaluation_metric`, not `metric`.
+
+    Reading only `metric` meant every machine-generated spec — most of them —
+    answered "unknown" and fell through to the profile artifact, so a
+    competition with an explicit direction on disk was still unresolvable.
+    """
+    _spec_competition_json(tmp_path, direction)
+
+    assert resolve_maximize(competition="demo", workspace_root=tmp_path) is expected
+
+
+def test_a_parser_written_spec_without_a_direction_stays_unknown(tmp_path):
+    """`MetricSpec.direction` defaults to "maximize" in the model, so this is
+    read as a dict — parsing through `CompetitionSpec` would turn an absent
+    field into a confident wrong answer instead of the None that lets the
+    caller keep looking."""
+    _spec_competition_json(tmp_path, None)
+
+    assert resolve_maximize(competition="demo", workspace_root=tmp_path) is None
+
+
+def test_the_hand_written_metric_block_keeps_its_veto(tmp_path):
+    """When both shapes are present the hand-written `metric` decides,
+    including when its answer is "unknown".
+
+    Falling through on an unparseable direction would let a generated
+    `evaluation_metric` override a deliberate `metric` whose direction is
+    merely misspelled.
+    """
+    (tmp_path / "competition.json").write_text(
+        json.dumps(
+            {
+                "metric": {"name": "mse", "direction": "lower-is-better"},
+                "evaluation_metric": {"name": "mse", "key": "mse", "direction": "maximize"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert resolve_maximize(competition="demo", workspace_root=tmp_path) is None
+
+
+def test_a_parser_written_spec_resolves_from_the_knowledge_copy(tmp_path):
+    """The caller-visible consequence: `_resolve_direction` refuses to sign a
+    conclusion it cannot orient, so widening the reader turns a refusal into a
+    built card. Pin it, since it is a behaviour change for four callers."""
+    paths = ResearchPaths(tmp_path / "kb", "demo")
+    _spec_competition_json(paths.root, "minimize")
+
+    assert resolve_maximize(competition="demo", knowledge_root=paths.root) is False
+
+
 def test_no_target_tolerates_an_unknown_direction(tmp_path):
     """Nothing reads `maximize` without a target, so this must not block a run."""
     from labpilot.cli.conduct import _budget_metadata

@@ -145,6 +145,85 @@ class BudgetState(BaseModel):
         return max(0.0, (current - start).total_seconds())
 
 
+#: How a metric was measured, as spelled in a recorded key: `cv_rmse` is
+#: cross-validated, `lb_auc` is the leaderboard. These qualify the metric; they
+#: are not part of its name.
+_MEASUREMENT_PREFIXES = ("cv_", "lb_", "val_", "test_", "train_")
+
+
+def metric_names_match(recorded: str | None, requested: str | None) -> bool:
+    """Whether a recorded metric key answers a request for `requested`.
+
+    Lives beside `ScoreEvent` because it interprets that model's
+    `metric_name`, and is public because the conductor needs it too.
+
+    The two names come from different places and are spelled differently on
+    purpose: a `ScoreEvent` carries the resolver's key (`cv_rmse`), while
+    `--target-metric` takes the competition's own metric (`rmse`, from
+    `MetricSpec.key`) — the only spelling a user has. Requiring equality means
+    the target never matches and the stop never fires.
+
+    An unqualified request matches any measurement of that metric, because the
+    user naming `rmse` cannot be asking for a particular one. A *qualified*
+    request is taken literally: `lb_auc` is not answered by a `cv_auc`
+    reading, since local and leaderboard scores are the distinction the
+    milestone keeps separate rather than a spelling difference.
+    """
+    left = str(recorded or "").strip().lower()
+    right = str(requested or "").strip().lower()
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    # Only an unqualified request can widen: a request that already names a
+    # measurement can never equal `prefix + itself` unless the recorded key is
+    # doubly prefixed, so no separate guard for it is reachable.
+    return any(left == f"{prefix}{right}" for prefix in _MEASUREMENT_PREFIXES)
+
+
+def comparable_tail(events: list[ScoreEvent]) -> list[ScoreEvent]:
+    """The trailing run of events measuring the same metric as the newest one.
+
+    The series can legitimately change metric mid-campaign — `analyze` can
+    correct which key is primary. Readings either side of that change are on
+    different scales, so `plateau` must not take a max-minus-min across them.
+
+    Narrowing the *derived view* rather than deleting the events is what keeps
+    both guarantees: the comparison stays honest, and every experiment id
+    remains citable, which exit criterion 1 and the stagnation mint both
+    depend on. Truncating the series instead would break exactly the
+    citation the design doc refused to sacrifice.
+    """
+    if not events:
+        return []
+    newest = events[-1].metric_name
+    tail: list[ScoreEvent] = []
+    for event in reversed(events):
+        if not metric_names_match(event.metric_name, newest):
+            break
+        tail.append(event)
+    return list(reversed(tail))
+
+
+def _last_metric_matches_target(config: BudgetConfig, state: BudgetState) -> bool:
+    """Whether `last_metric` is a reading of the metric the target names.
+
+    `last_metric` is a bare number; `target_value` is a threshold for a
+    specific metric. Comparing them without checking which metric produced the
+    number lets a `cv_rmse` of 190.97 satisfy an `lb_auc` target of 0.90 and
+    end the campaign on a metric it was never measuring.
+
+    Only enforced when the series says what the metric was. A session whose
+    `last_metric` predates `score_events` has no key to check, and refusing to
+    compare there would silently disarm a target that used to fire — so an
+    unknown metric keeps the older, looser behaviour rather than a new
+    stricter one.
+    """
+    if not state.score_events:
+        return True
+    return metric_names_match(state.score_events[-1].metric_name, config.target_metric)
+
+
 def evaluate_stops(
     config: BudgetConfig,
     state: BudgetState,
@@ -186,7 +265,12 @@ def evaluate_stops(
         return "wall_time"
     if config.max_cost_usd is not None and state.llm_cost_usd >= config.max_cost_usd:
         return "cost_budget"
-    if config.target_metric and config.target_value is not None and state.last_metric is not None:
+    if (
+        config.target_metric
+        and config.target_value is not None
+        and state.last_metric is not None
+        and _last_metric_matches_target(config, state)
+    ):
         if config.maximize and state.last_metric >= config.target_value:
             return "metric_target"
         if not config.maximize and state.last_metric <= config.target_value:
