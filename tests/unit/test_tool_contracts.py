@@ -121,11 +121,20 @@ def test_tool_contract(name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     observed_a = _run(fixture.inputs_a)
     observed_b = _run(fixture.inputs_b)
 
-    # Guard the guard: an observe() that returns nothing for both calls would
-    # make the inequality below unfalsifiable in the permissive direction and
-    # trivially true in neither — assert it saw something first (AGENTS.md
+    # Guard the guard: an observe() returning an empty container for both
+    # calls would make the inequality below trivially unfalsifiable (AGENTS.md
     # rule 4: "if a test could pass on an empty list, assert non-empty").
-    assert observed_a, f"{name}: observe() returned nothing — the fixture proves nothing"
+    #
+    # Emptiness, not falsiness: `0`, `0.0` and `False` are all legitimate
+    # observations — `submit_learn` observes a `learning_gain` float, and a
+    # gain of exactly 0.0 is a real result, not a missing one. A bare
+    # `assert observed_a` would reject it as "proves nothing".
+    assert observed_a is not None, f"{name}: observe() returned None"
+    if isinstance(observed_a, (str, bytes, list, tuple, set, dict)):
+        assert len(observed_a) > 0, (
+            f"{name}: observe() returned an empty {type(observed_a).__name__} — "
+            "the fixture proves nothing"
+        )
 
     assert observed_a != observed_b, (
         f"{name} declares varies_by={tool.varies_by} but varying it produced "
@@ -133,7 +142,7 @@ def test_tool_contract(name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     )
 
 
-@pytest.mark.parametrize("name", ["generate_plan", "query_memory", "run_plan"])
+@pytest.mark.parametrize("name", ["generate_plan", "query_memory", "run_plan", "run_experiment"])
 def test_the_contract_would_catch_a_hollow_tool(name: str, tmp_path: Path) -> None:
     """Prove the harness can fail — feed one input twice and watch it collapse.
 
@@ -143,10 +152,15 @@ def test_the_contract_would_catch_a_hollow_tool(name: str, tmp_path: Path) -> No
     same work. If a tool went hollow tomorrow — same output whatever the
     input — this is the property that makes the contract notice.
 
-    Three tools rather than all ten: one payload-observing
-    (`generate_plan`), one store-observing (`query_memory`), one
-    evidence-observing (`run_plan`), which covers each distinct `observe()`
-    strategy in the catalog.
+    Four tools rather than all ten: one payload-observing
+    (`generate_plan`), one store-observing (`query_memory`), and both
+    evidence-observing ones (`run_plan`, `run_experiment`).
+
+    `run_experiment` is here because leaving it out is how its observe()
+    shipped broken: it read back `data["plan_id"]`, the caller's own
+    argument, so the contract passed on the inputs differing rather than on
+    the tool doing anything. A list that samples strategies is only as good
+    as its claim to cover them, so this enumerates rather than samples.
     """
     registry = build_default_tool_registry()
 

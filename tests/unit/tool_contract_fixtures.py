@@ -36,8 +36,6 @@ from helpers.fake_codegen import FakeCodegenLLM
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.workspace_facade import Workspace
 
-_DEFERRED_TOOLS: frozenset[str] = frozenset()
-
 
 @dataclass
 class ToolFixture:
@@ -525,12 +523,19 @@ def _seed_run_experiment(tmp_path: Path) -> ToolFixture:
         workspace=ws,
         inputs_a={"plan_id": plan_a, "dry_run": True},
         inputs_b={"plan_id": plan_b, "dry_run": True},
-        # `run_experiment` returns no execution_id, so the evidence-set trick
-        # is unavailable; the experiment/metrics paths it does return are
-        # plan-scoped, which is the id-free signal here.
-        observe=lambda _ws, result: (
-            result.data["plan_id"],
-            bool(result.data["experiment_path"]),
+        # Same evidence-set comparison as `run_plan`. An earlier version
+        # observed `(data["plan_id"], bool(data["experiment_path"]))`, which
+        # was **vacuous**: the handler echoes `plan_id` straight back from
+        # its argument, and `experiment_path` is the same file both times
+        # (`.../ws/experiment/record.json`, overwritten per run), so the only
+        # thing that differed was the input compared against itself. That is
+        # precisely the false-real-verdict §6.2.1 exists to prevent, and it
+        # would have passed a `run_experiment` gutted to ignore its plan.
+        #
+        # The execution id is reachable after all — via `result.refs`, not
+        # `data` — so the honest signal is available here too.
+        observe=lambda ws, result: tuple(
+            execution_capability_checks(ws, _execution_id_from(result))
         ),
     )
 
@@ -551,12 +556,6 @@ _BUILDERS = {
 
 def build_fixture(name: str, tmp_path: Path) -> ToolFixture:
     """Return the fixture for `name`, or raise for the not-yet-built five."""
-    if name in _DEFERRED_TOOLS:
-        raise NotImplementedError(
-            f"contract fixture for {name!r} not yet built — see "
-            "docs/research-os/design/12-capability-audit.md §6.2.2 and "
-            "tool_contract_fixtures.py's module docstring for why"
-        )
     builder = _BUILDERS.get(name)
     if builder is None:
         raise KeyError(f"no contract fixture registered for tool {name!r}")
@@ -572,6 +571,22 @@ def assert_search_papers_degraded(data: dict[str, Any]) -> None:
     )
     assert data.get("papers") == [], (
         f"search_papers: degraded path should return no papers, got {data.get('papers')!r}"
+    )
+
+
+def _execution_id_from(result: Any) -> str:
+    """The execution id off a ToolResult's refs.
+
+    `run_experiment` does not put it in `data` the way `run_plan` does, but
+    it does emit an `execution`-kind ref — which is what makes the same
+    id-free evidence comparison available to both.
+    """
+    for ref in result.refs:
+        if ref.kind == "execution":
+            return str(ref.id)
+    raise AssertionError(
+        "no execution ref on this ToolResult, so its work cannot be observed "
+        "id-free — do not fall back to comparing echoed inputs (§6.2.1)"
     )
 
 
@@ -604,8 +619,14 @@ def normalized_digest(payload: dict[str, Any], *, drop: tuple[str, ...]) -> str:
 
     §6.2.1: several tools' artifacts carry an id or timestamp that changes on
     every call regardless of input — digesting the raw payload would make the
-    contract test pass for a tool that ignores its input. `drop` names the
-    keys to strip before hashing (nested keys as dotted paths, one level).
+    contract test pass for a tool that ignores its input.
+
+    `drop` is a flat set of key *names*, removed wherever they appear at any
+    nesting depth. Dotted paths are **not** supported — an earlier docstring
+    claimed they were, which would have let a caller write
+    ``drop=("summary.created_at",)``, strip nothing, and reintroduce the very
+    false positive this helper exists to remove. Scope a drop by renaming the
+    field or pre-trimming the payload instead.
     """
 
     def _strip(obj: Any) -> Any:

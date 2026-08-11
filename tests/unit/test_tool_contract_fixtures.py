@@ -17,6 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tool_contract_fixtures import (
+    _execution_id_from,
     assert_search_papers_degraded,
     build_fixture,
     execution_capability_checks,
@@ -265,11 +266,20 @@ def test_run_experiment_varies_by_plan(tmp_path: Path) -> None:
     fixture = build_fixture("run_experiment", tmp_path)
     registry = build_default_tool_registry()
 
-    result_a = registry.invoke("run_experiment", fixture.workspace, **fixture.inputs_a)
-    result_b = registry.invoke("run_experiment", fixture.workspace, **fixture.inputs_b)
+    # Observe each call before the next, and compare the *work recorded*, not
+    # the payload. An earlier version asserted
+    # `result_a.data["plan_id"] != result_b.data["plan_id"]` — which compares
+    # the two fixture inputs to each other and would hold for a
+    # `run_experiment` gutted to return a constant stub.
+    def _work(inputs: dict[str, object]) -> tuple:
+        result = registry.invoke("run_experiment", fixture.workspace, **inputs)
+        assert result.data["submit"] is False, "the specialist path must never upload"
+        return tuple(execution_capability_checks(fixture.workspace, _execution_id_from(result)))
 
-    assert result_a.data["plan_id"] != result_b.data["plan_id"]
-    assert result_a.data["submit"] is False and result_b.data["submit"] is False
+    work_a = _work(fixture.inputs_a)
+    work_b = _work(fixture.inputs_b)
+    assert work_a, "the two-step plan recorded no evidence at all"
+    assert work_a != work_b, "different plans executed identical work"
 
 
 def test_every_catalog_tool_has_a_fixture(tmp_path: Path) -> None:
