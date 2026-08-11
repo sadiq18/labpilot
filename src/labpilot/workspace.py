@@ -73,22 +73,54 @@ REQUIRED_IGNORES: tuple[str, ...] = (
     f"{WORKTREE_DIRNAME}/",
 )
 
+#: Bulk research state, kept out of the tracked tree so `git worktree add`
+#: does not hand every branch of a fan-out its own copy. Anchored under the
+#: workspace root, not bare `**/` — why, and why `knowledge.db`'s own real
+#: path needs the middle `**/`: design doc §8, "Disk usage".
+SHARED_STATE_IGNORES: tuple[str, ...] = (
+    "/knowledge/**/knowledge.db",
+    "/runs/",
+)
+
 _REQUIRED_IGNORE_HEADER = "# Machine-local artifacts (locks, temp files, DB sidecars)"
+_SHARED_STATE_HEADER = "# Bulk research state — never copied into a per-branch worktree"
+_COMPETITION_DATA_HEADER = "# Competition data (often huge)"
+_LOCAL_MODELS_HEADER = "# Local models"
+
+_COMPETITION_DATA_IGNORES: tuple[str, ...] = ("data/", ".cache/")
+_LOCAL_MODELS_IGNORES: tuple[str, ...] = ("models/",)
+
+#: Large inputs, split under the same two headers `_GITIGNORE` has always
+#: used rather than a third, invented one — the split (not one merged group)
+#: is why retrofitting an old workspace doesn't write a second "competition
+#: data" section next to the one already there. Design doc §8, "Disk usage".
+LARGE_INPUT_IGNORES: tuple[str, ...] = (*_COMPETITION_DATA_IGNORES, *_LOCAL_MODELS_IGNORES)
+
+#: Every group `ensure_required_ignores` reconciles, each under its own header
+#: so an existing `.gitignore` gains the same sections a fresh one is born with.
+_IGNORE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (_REQUIRED_IGNORE_HEADER, REQUIRED_IGNORES),
+    (_SHARED_STATE_HEADER, SHARED_STATE_IGNORES),
+    (_COMPETITION_DATA_HEADER, _COMPETITION_DATA_IGNORES),
+    (_LOCAL_MODELS_HEADER, _LOCAL_MODELS_IGNORES),
+)
 
 _GITIGNORE = f"""\
-# Competition data (often huge)
-data/
-.cache/
+{_COMPETITION_DATA_HEADER}
+{chr(10).join(_COMPETITION_DATA_IGNORES)}
 
 # Secrets
 .env
 .env.*
 
-# Local models
-models/
+{_LOCAL_MODELS_HEADER}
+{chr(10).join(_LOCAL_MODELS_IGNORES)}
 
 {_REQUIRED_IGNORE_HEADER}
 {chr(10).join(REQUIRED_IGNORES)}
+
+{_SHARED_STATE_HEADER}
+{chr(10).join(SHARED_STATE_IGNORES)}
 
 # Python / OS
 __pycache__/
@@ -549,16 +581,25 @@ def ensure_required_ignores(root: Path) -> list[str]:
         logger.warning("Could not read %s to check ignore patterns: %s", gitignore, exc)
         return []
     present = {line.strip() for line in existing.splitlines()}
-    missing = [pattern for pattern in REQUIRED_IGNORES if pattern not in present]
+    blocks: list[str] = []
+    missing: list[str] = []
+    for header, patterns in _IGNORE_GROUPS:
+        absent = [pattern for pattern in patterns if pattern not in present]
+        if not absent:
+            continue
+        # Empty when the header already ran — design doc §8, "Disk usage".
+        prefix = "" if header in present else f"{header}\n"
+        blocks.append(f"\n{prefix}" + "\n".join(absent) + "\n")
+        missing.extend(absent)
     if not missing:
         return []
-    block = f"\n{_REQUIRED_IGNORE_HEADER}\n" + "\n".join(missing) + "\n"
     try:
-        gitignore.write_text(existing.rstrip("\n") + "\n" + block, encoding="utf-8")
+        gitignore.write_text(existing.rstrip("\n") + "\n" + "".join(blocks), encoding="utf-8")
     except OSError as exc:
         logger.warning(
-            "Could not add %d machine-local ignore pattern(s) to %s: %s. "
-            "Lock and temp files may be committed; add these manually: %s",
+            "Could not add %d ignore pattern(s) to %s: %s. "
+            "Lock, temp and shared-state files may be committed; "
+            "add these manually: %s",
             len(missing),
             gitignore,
             exc,
