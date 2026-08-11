@@ -129,20 +129,31 @@ def test_the_stamp_excludes_the_record_write(
     ranking would partly measure record size.
     """
     stub_run(execution_id="E-1", status="succeeded")
-    entered: list[datetime] = []
+    entered: dict[str, datetime] = {}
+
+    def _slow_metrics(root: Path) -> dict[str, Any]:
+        del root
+        entered["metrics"] = datetime.now(UTC)
+        time.sleep(0.05)
+        return {}
 
     def _slow_record(root: Path, payload: dict[str, Any]) -> Path:
         del payload
-        entered.append(datetime.now(UTC))
+        entered["record"] = datetime.now(UTC)
         time.sleep(0.05)
         return root / "record.json"
 
+    # Both halves of the block the comment names, not just the record write:
+    # with only the latter pinned, the stamp could slide past the metrics read
+    # and the suite would stay green while the comment became false.
+    monkeypatch.setattr(experiment_mod, "_load_metrics", _slow_metrics)
     monkeypatch.setattr(experiment_mod, "write_experiment_git_record", _slow_record)
 
     events = _run(tmp_path)
 
     stamped = datetime.fromisoformat(events[0][1]["completed_at"])
-    assert stamped <= entered[0], "the stamp was taken after the record write began"
+    assert stamped <= entered["metrics"], "the stamp was taken after the metrics read began"
+    assert stamped <= entered["record"], "the stamp was taken after the record write began"
 
 
 def test_the_live_subscriber_tolerates_the_new_key(tmp_path: Path) -> None:

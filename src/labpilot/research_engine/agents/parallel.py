@@ -4,8 +4,8 @@ Runs independent specialist tasks with a worker cap and shared budget.
 No research branch trees or merge policy — that stays backlog.
 
 Everything here runs in this process. An item declaring any other runtime is
-refused before the batch starts rather than run locally anyway (§8 of the
-M11 design doc, `LOCAL_RUNTIME` below).
+refused before the batch starts rather than run locally anyway — see
+`LOCAL_RUNTIME` below.
 """
 
 from __future__ import annotations
