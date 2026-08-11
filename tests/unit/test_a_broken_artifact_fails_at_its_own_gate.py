@@ -77,7 +77,11 @@ _GUARD = '\n\nif __name__ == "__main__":\n    main()\n'
 #: anything left all eight tests green.
 #:
 #: `LABPILOT_SMOKE` is the flag the gate already sets for exactly this — the
-#: documented signal a template reads to shorten its run.
+#: documented signal a template reads to shorten its run. That coupling is worth
+#: naming: if the smoke gate stopped setting it, these fixtures would go back to
+#: writing during smoke and the blind spot above would return with every test
+#: here still green. What stops that is `test_verification_calls_production.py`,
+#: which asserts the gate sets it; this file depends on that one.
 _SMOKE_SHORT_PATH = (
     "import json\n"
     "import os\n"
@@ -205,6 +209,14 @@ def _run_campaign(tmp_path: Path, monkeypatch, train_py: str):
         "labpilot.research_engine.intelligence.competition.parser.fetch_rules_excerpt",
         lambda *args, **kwargs: "",
     )
+    # The fixtures branch on this, and `child_environment()` passes the whole
+    # environment through to the *training* subprocess as well — so a developer
+    # with `LABPILOT_SMOKE=1` exported, or in a `.env` that `uv run` injects,
+    # gets three red tests blaming the training metrics gate. `tests/conftest.py`
+    # clears eight other `LABPILOT_*` vars and not this one. Reported reviewing
+    # this branch, and the same contamination class as the PyPI resolution the
+    # round before.
+    monkeypatch.delenv("LABPILOT_SMOKE", raising=False)
 
     knowledge = tmp_path / "knowledge"
     paths = ResearchPaths(knowledge, "demo").ensure()
@@ -306,7 +318,7 @@ _STDLIB_IN_BLOCK = (
 ) + _HEALTHY
 
 
-def test_the_corpus_artifact_loses_its_stdlib_entry_and_keeps_the_rest(tmp_path):
+def test_the_corpus_artifact_loses_its_stdlib_entry_and_keeps_the_rest():
     """The repair itself, against the corpus file verbatim.
 
     `stdlib_dependency_block.txt` declares `glob` among five real packages. uv
