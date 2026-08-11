@@ -102,10 +102,20 @@ class ReportingCapability(BaseCapability):
             # context. Written once from `metrics.json` and never re-derived.
             # M20 criterion 4, found reviewing this branch.
             derived_note(
-                source_of_record="metrics.json",
+                # Not `metrics.json`: that file lives in the *workspace*, is
+                # shared by every execution, and the next run overwrites it — so
+                # a reader following it to check these numbers finds a different
+                # execution's. The per-execution durable record is this
+                # execution's own evidence. Reported reviewing this branch, and
+                # the third time a stamp named the wrong thing.
+                source_of_record=(
+                    f"research/executions/{context.execution.id}/evidence/"
+                ),
                 warning=(
-                    "The metrics below are the metrics at report time. A rerun "
-                    "overwrites metrics.json and leaves this file alone."
+                    "A snapshot of the workspace's metrics.json when this report "
+                    "was written. That file is shared across executions and is "
+                    "overwritten by the next run, so it cannot confirm these "
+                    "numbers; the evidence above can."
                 ),
                 dated=True,
             ),

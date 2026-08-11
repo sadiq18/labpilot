@@ -53,6 +53,8 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
+
 from labpilot.accessor.common.derived import (
     derived_note,
     derived_stamp,
@@ -330,3 +332,123 @@ def test_read_derived_leaves_a_file_that_was_never_stamped_alone(tmp_path):
     plain.write_text("# Notes\n\n> a quotation\n", encoding="utf-8")
 
     assert read_derived(plain) == "# Notes\n\n> a quotation\n"
+
+
+def _stamped_brief(tmp_path):
+    """A knowledge tree whose brief is stamped, by the real writer."""
+    from labpilot.research_engine.intelligence.brief.models import ResearchBrief
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.intelligence.renderers.markdown import write_brief
+
+    knowledge = tmp_path / "knowledge"
+    paths = ResearchPaths(knowledge, "demo").ensure()
+    write_brief(ResearchBrief(competition="demo"), paths.brief_path)
+    assert paths.brief_path.read_text(encoding="utf-8").lstrip().startswith(">")
+    return knowledge, paths
+
+
+def _reader_retrieval(knowledge) -> str:
+    from labpilot.research_engine.planner.retrieval import _brief_excerpt
+
+    return _brief_excerpt(knowledge, "demo")
+
+
+def _reader_workspace_provider(knowledge) -> str:
+    from labpilot.research_engine.context.models import ContextRequest
+    from labpilot.research_engine.context.providers.workspace import WorkspaceProvider
+
+    request = ContextRequest(competition="demo", knowledge_dir=str(knowledge), goal="g")
+    items = WorkspaceProvider()._fetch_sync(request)
+    return "\n".join(item.text for item in items)
+
+
+_READERS = [
+    pytest.param(_reader_retrieval, id="planner_retrieval"),
+    pytest.param(_reader_workspace_provider, id="workspace_provider"),
+]
+
+
+@pytest.mark.parametrize("read", _READERS)
+def test_no_reader_hands_an_llm_the_provenance_block(tmp_path, read):
+    """Reported reviewing this branch: the *routing* was untested.
+
+    Round 4 covered `read_derived`'s body through one call site, and reverting
+    any of the other three to a plain `read_text` left the whole suite green —
+    including the codegen prompt, which is the regression an earlier round
+    actually fixed. The helper was guarded and the wiring was not.
+
+    Driven per reader, over a brief the real writer stamped, because a fixture
+    with an unstamped brief never enters the strip path at all — which is why
+    the existing planner and context tests could not see this.
+    """
+    knowledge, _ = _stamped_brief(tmp_path)
+
+    text = read(knowledge)
+
+    assert text.strip(), "the reader returned nothing; the fixture is not reaching it"
+    assert "not authoritative" not in text.lower()
+    assert "Derived view" not in text
+
+
+def test_the_codegen_prompt_never_carries_the_provenance_block(tmp_path):
+    """The fourth reader, and the one the block actually reached.
+
+    `_write_code` puts the brief in `StructuredContext.text`, which the code
+    engineer's template renders verbatim under *"Research brief / Analyze
+    excerpt"*. Unstripped, the first 277 characters of that window told the model
+    to distrust the context it was being handed — in the role the surrounding
+    code calls the one that must never degrade.
+
+    Driven through the real capability with a recording agent, because that is
+    the only path that reaches the line.
+    """
+    import json
+
+    from helpers.capability_context import capability_context
+
+    from labpilot.research_engine.execution.capabilities.code_engineering import (
+        CodeEngineeringCapability,
+    )
+    from labpilot.research_engine.intelligence.brief.models import ResearchBrief
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.intelligence.renderers.markdown import write_brief
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    context = capability_context(tmp_path, task_type=TaskType.WRITE_CODE)
+    paths = ResearchPaths(context.paths.base_dir, context.competition).ensure()
+    write_brief(ResearchBrief(competition=context.competition), paths.brief_path)
+    assert paths.brief_path.read_text(encoding="utf-8").lstrip().startswith(">")
+    (context.workspace_root / "profile.json").write_text(
+        json.dumps(
+            {
+                "competition": context.competition,
+                "files": ["train.csv"],
+                "train_file": "train.csv",
+                "target_column": "y",
+                "id_column": "id",
+                "columns": [{"name": "y", "dtype": "float"}],
+                "row_count": 10,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    seen: dict = {}
+
+    class _Records:
+        last_used_llm = True
+
+        def run(self, ctx):
+            seen["text"] = ctx.text
+            raise RuntimeError("stop here — the prompt context is what is under test")
+
+    capability = CodeEngineeringCapability()
+    capability._agent = _Records()
+    try:
+        capability.execute(context)
+    except RuntimeError:
+        pass
+
+    assert "text" in seen, "the capability never reached the agent"
+    assert seen["text"].strip(), "the brief did not reach the prompt at all"
+    assert "not authoritative" not in seen["text"].lower()
