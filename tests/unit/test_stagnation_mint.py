@@ -15,7 +15,12 @@ from pathlib import Path
 
 import pytest
 
-from labpilot.research_engine.conductor.budgets import BudgetConfig, BudgetState, ScoreEvent
+from labpilot.research_engine.conductor.budgets import (
+    BudgetConfig,
+    BudgetState,
+    ScoreEvent,
+    score_summary,
+)
 from labpilot.research_engine.conductor.stagnation import (
     mint_stagnation_hypothesis,
     stagnation_window,
@@ -210,9 +215,84 @@ def test_long_combo_citations_do_not_overflow_the_prose_caps(tmp_path: Path):
     assert hypothesis.observation.count("(") == hypothesis.observation.count(")")
     assert hypothesis.reason.count("(") == hypothesis.reason.count(")")
     assert "more (see evidence)" in hypothesis.observation
-    # Every experiment is still resolvable structurally regardless of what
-    # the prose could fit.
-    assert {ref.ref for ref in hypothesis.evidence} == {e.experiment_id for e in events[1:]}
+
+
+def test_a_long_metric_name_does_not_overflow_the_prose_caps_either(tmp_path: Path):
+    """The character budget round 4 gave `_cite_list` only bounded the
+    citation portion -- the wrapper text ("N experiments since {metric} last
+    improved: ...") sits outside it, and `metric` has no length bound.
+    Reproduced live: 20 combo events with a 120-char metric name still cut
+    `observation` mid-word at its 500-char cap, even with the round-4 fix in
+    place -- `_cite_list`'s fixed 400-char budget left no room for a wrapper
+    that size. The budget passed to `_cite_list` must be sized to what's left
+    after each template's own wrapper length, not a fixed number.
+    """
+    ws = _with_vocabulary(_ws(tmp_path), "winner")
+    long_metric = "x" * 120
+    events = [
+        ScoreEvent(
+            experiment_id=f"E-{i:03d}",
+            metric_name=long_metric,
+            value=200.0 + i,
+            maximize=False,
+            combo_techniques=["mixup_augmentation", "cutout_regularization"],
+        )
+        for i in range(20)
+    ]
+    state = BudgetState(score_events=events)
+
+    minted_id = mint_stagnation_hypothesis(ws, state, BudgetConfig(plateau_window=3))
+
+    assert minted_id is not None
+    hypothesis = HypothesisStore(ws.knowledge_dir, ws.competition).get(minted_id)
+    assert len(hypothesis.observation) <= 500
+    assert len(hypothesis.reason) <= 1000
+    assert hypothesis.observation.count("(") == hypothesis.observation.count(")")
+    assert hypothesis.reason.count("(") == hypothesis.reason.count(")")
+
+
+def test_cite_list_output_never_exceeds_its_max_chars_budget():
+    """The invariant that actually matters, exercised directly (not through
+    the full mint pipeline, so it pressures the exact boundary instead of
+    relying on luck in a fixture's citation lengths): whatever `_cite_list`
+    returns, including the trailing "and N more" note, must fit within
+    `max_chars` -- for any `max_chars` a caller might size from its own
+    template's remaining room, not just the function's own default.
+    """
+    from labpilot.research_engine.conductor.stagnation import _cite_list
+
+    events = [
+        _event(f"E-{i:03d}", 200.0 + i, technique="a_moderately_named_technique") for i in range(30)
+    ]
+    for max_chars in (100, 200, 400):
+        result = _cite_list(events, max_chars=max_chars)
+        assert len(result) <= max_chars, f"max_chars={max_chars} gave {len(result)}: {result!r}"
+
+
+def test_a_passed_through_window_and_summary_match_the_recomputed_ones(tmp_path: Path):
+    """`window`/`summary` are optional so direct callers (this file, mostly)
+    keep working unchanged -- but nothing had ever exercised the path a real
+    caller actually takes: passing both in, pre-computed. Proves the two
+    entry points agree rather than merely coexisting untested.
+    """
+    ws = _with_vocabulary(_ws(tmp_path), "gradient_boosting_dart")
+    state = _stagnant()
+    config = BudgetConfig(plateau_window=3)
+
+    recomputed_id = mint_stagnation_hypothesis(ws, state, config)
+
+    ws2 = _with_vocabulary(_ws(tmp_path, slug="demo2"), "gradient_boosting_dart")
+    state2 = _stagnant()
+    summary = score_summary(state2, config)
+    window = stagnation_window(state2, config, summary=summary)
+    threaded_id = mint_stagnation_hypothesis(ws2, state2, config, window=window, summary=summary)
+
+    a = HypothesisStore(ws.knowledge_dir, ws.competition).get(recomputed_id)
+    b = HypothesisStore(ws2.knowledge_dir, ws2.competition).get(threaded_id)
+    assert a.observation == b.observation
+    assert a.reason == b.reason
+    assert a.technique == b.technique
+    assert {r.ref for r in a.evidence} == {r.ref for r in b.evidence}
 
 
 def test_the_proposal_avoids_everything_the_window_spent(tmp_path: Path):

@@ -42,6 +42,7 @@ from labpilot.research_engine.conductor.budgets import (
     comparable_tail,
     evaluate_stops,
     metric_names_match,
+    score_summary,
     submit_tools_allowed,
 )
 from labpilot.research_engine.conductor.checkpoint import (
@@ -320,16 +321,19 @@ def _maybe_mint_on_stagnation(
     """
     try:
         # Computed once and threaded through: this runs on every recorded
-        # experiment, not just stagnant ones, so re-deriving the same window
-        # a second time inside mint_stagnation_hypothesis would pay its
-        # comparable_tail/score_summary scan twice on every single step.
-        window = stagnation_window(budget_state, budget_cfg)
+        # experiment, not just stagnant ones, so re-deriving the same
+        # summary/window a second time inside mint_stagnation_hypothesis
+        # would pay the comparable_tail scan twice on every single step.
+        summary = score_summary(budget_state, budget_cfg)
+        window = stagnation_window(budget_state, budget_cfg, summary=summary)
         if not window:
             budget_state.stagnation_mint_fired = False
             return
         if budget_state.stagnation_mint_fired:
             return
-        minted = mint_stagnation_hypothesis(workspace, budget_state, budget_cfg, window=window)
+        minted = mint_stagnation_hypothesis(
+            workspace, budget_state, budget_cfg, window=window, summary=summary
+        )
         if minted is not None:
             budget_state.stagnation_mint_fired = True
     except Exception:  # noqa: BLE001 — a failed mint must not cost the score its record

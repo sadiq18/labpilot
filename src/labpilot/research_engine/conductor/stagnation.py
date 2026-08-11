@@ -17,6 +17,7 @@ from labpilot.research_engine.conductor.budgets import (
     BudgetConfig,
     BudgetState,
     ScoreEvent,
+    ScoreSummary,
     comparable_tail,
     score_summary,
 )
@@ -46,14 +47,21 @@ def techniques_in(events: list[ScoreEvent]) -> list[str]:
     return names
 
 
-def stagnation_window(state: BudgetState, config: BudgetConfig) -> list[ScoreEvent]:
+def stagnation_window(
+    state: BudgetState, config: BudgetConfig, *, summary: ScoreSummary | None = None
+) -> list[ScoreEvent]:
     """The experiments that have run since the score last improved.
 
     Empty when the campaign is not stagnant. Read from the comparable tail, so
     readings from before a metric change never join a window whose whole point
     is that none of them beat the others.
+
+    `summary` lets a caller that already has one (it computes `score_summary`
+    internally either way) skip a second `comparable_tail` scan. Optional so
+    direct callers (tests) keep working unchanged.
     """
-    summary = score_summary(state, config)
+    if summary is None:
+        summary = score_summary(state, config)
     window = max(1, config.plateau_window)
     if summary.steps_since_improvement < window:
         return []
@@ -130,33 +138,40 @@ def _cite(event: ScoreEvent) -> str:
     return event.experiment_id
 
 
+_MORE_NOTE_RESERVE = len(", and 999 more (see evidence)")
+
+
 def _cite_list(events: list[ScoreEvent], *, limit: int = 12, max_chars: int = 400) -> str:
-    """Every experiment named, unless there are too many to fit in prose.
+    """Every experiment named, unless there are too many to fit in `max_chars`.
 
     `reason`/`observation` used to be built by joining every citation and
-    then hard-truncating the whole string to a length cap — for a plateau
-    long enough to push the joined string past that cap, the cut landed
-    mid-citation and silently dropped whichever ids came after it. A pure
-    count cap fixed the common case, but a combo citation ("E-013 (mixup +
-    cutout)") can still be long enough that a dozen of them blow past
-    `observation`'s 500-char cap — reproduced live with 12 two-technique
-    combo citations landing at 500 exactly, cut mid-word. Capping by
-    *character budget* as well keeps every printed id whole regardless of how
-    long individual citations are; the ones left out are named by number, and
-    the structured `evidence` list (never truncated) is still where a reader
-    resolves every id, which is the guarantee that actually matters.
+    then hard-truncating the *whole assembled string* (wrapper text and all)
+    to a length cap — for a plateau long enough, or wrapper text (the metric
+    name) long enough, to push the joined string past that cap, the cut
+    landed mid-citation and silently dropped whichever ids came after it.
+    Reproduced live twice: once with 12 two-technique combo citations alone,
+    and again with a merely-realistic metric name added on top of a fixed
+    per-citation char budget — the wrapper text sat outside that budget
+    entirely. `max_chars` here must be sized by the caller to what's actually
+    left over after its own wrapper text, not to the field's raw cap.
+
+    The trailing "and N more" note's own length is reserved up front, not
+    just the citations' — appending it after an unbudgeted citation list
+    would silently blow the cap the same way. The ones left out are named by
+    number; the structured `evidence` list (never truncated) is still where a
+    reader resolves every id, which is the guarantee that actually matters.
     """
     cites = [_cite(event) for event in events]
+    budget = max_chars - _MORE_NOTE_RESERVE
     shown: list[str] = []
-    used = 0
+    joined = ""
     for cite in cites[:limit]:
-        added = len(cite) if not shown else len(cite) + 2  # ", "
-        if shown and used + added > max_chars:
+        candidate = f"{joined}, {cite}" if joined else cite
+        if shown and len(candidate) > budget:
             break
+        joined = candidate
         shown.append(cite)
-        used += added
     remaining = len(cites) - len(shown)
-    joined = ", ".join(shown)
     if remaining <= 0:
         return joined
     return f"{joined}, and {remaining} more (see evidence)"
@@ -168,6 +183,7 @@ def mint_stagnation_hypothesis(
     config: BudgetConfig,
     *,
     window: list[ScoreEvent] | None = None,
+    summary: ScoreSummary | None = None,
 ) -> str | None:
     """Propose a change of direction, or None with the reason logged.
 
@@ -181,8 +197,13 @@ def mint_stagnation_hypothesis(
     this function deriving it again — `_maybe_mint_on_stagnation` runs on
     every recorded experiment, stagnant or not, so recomputing the window's
     `comparable_tail`/`score_summary` scan a second time here was paid on
-    every step for no reason. Left optional so direct callers (tests) keep
-    working unchanged.
+    every step for no reason. `summary` is the same trade for the same
+    reason: `stagnation_window` already computes one internally to decide
+    the window's size, so a caller that has *that* summary in hand can skip
+    this function's own `score_summary` call too — the first cut of this
+    optimization only threaded `window` and missed that `score_summary` was
+    still running unconditionally right below it. Both left optional so
+    direct callers (tests) keep working unchanged.
     """
     from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
     from labpilot.research_engine.shared.experiments.models import (
@@ -196,7 +217,8 @@ def mint_stagnation_hypothesis(
     if not window:
         return None
 
-    summary = score_summary(state, config)
+    if summary is None:
+        summary = score_summary(state, config)
     spent = techniques_in(window)
     proposal = _untried_technique(workspace, spent)
     if proposal is None:
@@ -210,16 +232,26 @@ def mint_stagnation_hypothesis(
         )
         return None
 
-    cited = _cite_list(window)
     best = summary.best_so_far
     metric = summary.metric_name or "the primary metric"
-    observation = (
-        f"{len(window)} experiments since {metric} last improved: {cited}. Best remains {best}."
-    )
-    reason = (
-        f"None of {cited} improved on {metric}={best}, so the pattern they share "
-        f"is not what is holding the score back."
-    )
+
+    def _observation(cited: str) -> str:
+        return (
+            f"{len(window)} experiments since {metric} last improved: {cited}. Best remains {best}."
+        )
+
+    def _reason(cited: str) -> str:
+        return (
+            f"None of {cited} improved on {metric}={best}, so the pattern they share "
+            f"is not what is holding the score back."
+        )
+
+    # `_cite_list`'s budget must be sized to what's actually left after each
+    # template's own wrapper text (dominated by `metric`, which has no length
+    # bound) -- a fixed citation budget alone still let a long metric name
+    # push the assembled string past its cap, cutting a citation mid-word.
+    observation = _observation(_cite_list(window, max_chars=max(0, 500 - len(_observation("")))))
+    reason = _reason(_cite_list(window, max_chars=max(0, 1000 - len(_reason("")))))
     prediction = (
         f"Testing {proposal}, which none of those experiments used, moves {metric} "
         f"where repeating their approach has not."
