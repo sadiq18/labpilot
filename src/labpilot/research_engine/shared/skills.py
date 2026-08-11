@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from labpilot.accessor.common.derived import derived_note, strip_derived_note
+
 DEFAULT_OVERLAY_DIRNAME = ".labpilot/skills"
 #: Soft budget before rewriting the on-disk overlay to a compact summary.
 ON_DISK_CHAR_BUDGET = 5000
@@ -40,6 +42,24 @@ def overlay_path(workspace_root: Path | str | None, agent_key: str) -> Path | No
     return root / f"{safe}.md"
 
 
+#: Overlays are rebuilt from the cards only in part — `Try:` and `Note:` lines
+#: are prose the repair pass deliberately preserves — so they carry a stamp.
+OVERLAY_NOTE = derived_note(
+    source_of_record="research/evidence/ (the evidence cards)",
+    warning="Lessons here are rewritten when their card is repaired; the notes are not.",
+)
+
+
+def overlay_body(text: str) -> str:
+    """Overlay content without its provenance note."""
+    return strip_derived_note(text)
+
+
+def stamped_overlay(body: str) -> str:
+    """Overlay content with its provenance note."""
+    return OVERLAY_NOTE + "\n\n" + body.lstrip("\n")
+
+
 def load_skill_overlay(
     workspace_root: Path | str | None,
     agent_key: str,
@@ -50,7 +70,7 @@ def load_skill_overlay(
     path = overlay_path(workspace_root, agent_key)
     if path is None or not path.is_file():
         return ""
-    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    text = overlay_body(path.read_text(encoding="utf-8", errors="replace")).strip()
     if len(text) <= max_chars:
         return text
     return summarize_skill_text(text, max_chars=max_chars)
@@ -71,7 +91,9 @@ def upsert_skill_overlay(
     path = overlay_path(workspace_root, agent_key)
     assert path is not None
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    existing = (
+        overlay_body(path.read_text(encoding="utf-8", errors="replace")) if path.is_file() else ""
+    )
     marker = f"<!-- lesson:{lesson_id} -->"
     if marker in existing:
         return path
@@ -94,7 +116,8 @@ def upsert_skill_overlay(
     )
     if len(updated) > on_disk_budget:
         updated = summarize_skill_text(updated, max_chars=on_disk_budget)
-    path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+    # Stamped after summarising, so the note is never what gets truncated.
+    path.write_text(stamped_overlay(updated.rstrip() + "\n"), encoding="utf-8")
     return path
 
 

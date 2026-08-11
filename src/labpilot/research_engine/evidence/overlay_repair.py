@@ -60,7 +60,7 @@ from pathlib import Path
 from labpilot.research_engine.evidence.models import EvidenceDecision
 from labpilot.research_engine.evidence.store import EvidenceCardStore
 from labpilot.research_engine.shared.labels import is_record_reference
-from labpilot.research_engine.shared.skills import overlay_dir
+from labpilot.research_engine.shared.skills import overlay_body, overlay_dir, stamped_overlay
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,7 @@ def repair_skill_overlays(
     changed: list[str] = []
     for path in sorted(root.glob("*.md")):
         try:
-            original = path.read_text(encoding="utf-8", errors="replace")
+            original = overlay_body(path.read_text(encoding="utf-8", errors="replace"))
         except OSError as exc:
             logger.warning("could not read overlay %s: %s", path.name, exc)
             continue
@@ -170,9 +170,11 @@ def repair_skill_overlays(
                 kept.append(rewritten)
 
         updated = ("\n\n".join(kept).rstrip() + "\n") if kept else ""
-        if updated != original:
+        # Compared on content: reading strips the provenance note, which does not
+        # restore the trailing newline, so a raw compare rewrites every run.
+        if updated.strip() != original.strip():
             try:
-                path.write_text(updated, encoding="utf-8")
+                path.write_text(stamped_overlay(updated), encoding="utf-8")
             except OSError as exc:
                 logger.warning("could not rewrite overlay %s: %s", path.name, exc)
                 continue

@@ -42,6 +42,10 @@ def derived_note(*, source_of_record: str, warning: str, dated: bool = False) ->
     plan projections; leave it where the source is rewritten in place and the
     warning is what acts.
     """
+    if not source_of_record.strip():
+        raise ValueError(
+            "a stamp without a source of record says distrust this and not where to go"
+        )
     stamp = derived_stamp(source_of_record=source_of_record, warning=warning)
     dateline = f"Generated {stamp['generated_at']} from" if dated else "Generated from"
     return (

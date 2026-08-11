@@ -15,7 +15,7 @@ from labpilot.accessor.common.derived import derived_note, strip_derived_note
 from labpilot.research_engine.evidence.models import EvidenceCard, EvidenceDecision
 from labpilot.research_engine.evidence.overlay_repair import repair_skill_overlays
 from labpilot.research_engine.evidence.store import EvidenceCardStore
-from labpilot.research_engine.shared.skills import overlay_dir
+from labpilot.research_engine.shared.skills import overlay_dir, stamped_overlay
 
 
 def is_stamped(text: str) -> bool:
@@ -23,28 +23,12 @@ def is_stamped(text: str) -> bool:
     return strip_derived_note(text) != text
 
 
-def rederived_dirs(root: Path) -> set[Path]:
-    """Directories whose markdown is rebuilt rather than stamped.
-
-    Resolved through `overlay_dir`, production's own answer for where overlays
-    live, so the exemption cannot drift wider than the thing it names.
-    """
-    found = set()
-    for competition_root in root.glob("competitions/*"):
-        directory = overlay_dir(competition_root)
-        if directory is not None:
-            found.add(directory.resolve())
-    return found
-
-
 def unexplained_views(root: Path) -> list[str]:
-    """Markdown under `root` that neither carries a stamp nor is rebuilt."""
-    exempt = rederived_dirs(root)
+    """Markdown under `root` that carries no provenance stamp."""
     return [
         path.as_posix()[len(root.as_posix()) :]
         for path in sorted(root.rglob("*.md"))
-        if path.parent.resolve() not in exempt
-        and not is_stamped(path.read_text(encoding="utf-8", errors="ignore"))
+        if not is_stamped(path.read_text(encoding="utf-8", errors="ignore"))
     ]
 
 
@@ -71,7 +55,7 @@ def test_the_walk_reaches_the_views_that_exist(tmp_path, monkeypatch):
     names = {path.name for path in tmp_path.rglob("*.md")}
 
     assert {"profile.md", "P-001.md", "E-001_report.md", "report.md"} <= names
-    assert any(path.parent.resolve() in rederived_dirs(tmp_path) for path in tmp_path.rglob("*.md"))
+    assert any(overlay_dir(root) for root in tmp_path.glob("competitions/*"))
 
 
 def test_a_view_added_without_a_stamp_is_reported(tmp_path):
@@ -83,52 +67,29 @@ def test_a_view_added_without_a_stamp_is_reported(tmp_path):
     assert unexplained_views(tmp_path) == ["/nested/summary.md"]
 
 
-def test_a_stamped_view_and_a_rebuilt_one_are_both_accepted(tmp_path):
-    """Both of criterion 4's options, so the check cannot pass by rejecting one."""
+def test_a_stamped_view_is_accepted(tmp_path):
+    """So the check cannot pass by rejecting everything."""
     note = derived_note(source_of_record="x.json", warning="read the json")
     (tmp_path / "stamped.md").write_text(note + "\n\n# Title\n")
-    overlays = overlay_dir(tmp_path / "competitions" / "demo")
-    overlays.mkdir(parents=True)
-    (overlays / "agent.md").write_text("- Keep: nothing\n")
 
     assert unexplained_views(tmp_path) == []
 
 
-def test_only_the_overlay_directory_itself_is_exempt(tmp_path):
-    """A neighbour of the exempt directory is not exempt. Substring matching on
-    the path made `skills_v2/`, `skills-archive/` and nested files exempt too,
-    while the rebuilder only ever rewrites `<overlays>/*.md`."""
-    competition = tmp_path / "competitions" / "demo"
-    exempt = overlay_dir(competition)
-    exempt.mkdir(parents=True)
-    (exempt / "agent.md").write_text("- Keep: nothing\n")
-    for neighbour in ("skills_v2", "skills-archive"):
-        directory = exempt.parent / neighbour
-        directory.mkdir()
-        (directory / "view.md").write_text("# Archived\n")
-    nested = exempt / "deep"
-    nested.mkdir()
-    (nested / "view.md").write_text("# Nested\n")
-
-    reported = unexplained_views(tmp_path)
-
-    assert len(reported) == 3
-    assert all("agent.md" not in entry for entry in reported)
-
-
-def test_the_exempt_directory_is_rebuilt_from_its_source(tmp_path):
-    """The exemption, earned rather than named.
-
-    Asserting the rebuilder merely *exists* passed for any module attribute —
-    `logger` satisfied it. This corrupts an overlay and requires the named
-    rebuilder to correct it from the cards.
+def test_an_overlay_keeps_its_stamp_when_the_repair_pass_rewrites_it(tmp_path):
+    """Overlays are rebuilt from the cards *in part* — `Try:` and `Note:` lines
+    are prose the repair deliberately preserves — so they are stamped like any
+    other view. The repair rebuilds a file from its blocks, and a stamp is not a
+    block, so it has to be re-applied or the next walk reports the file.
     """
     competition = "demo"
     knowledge = tmp_path / "knowledge"
     overlays = overlay_dir(tmp_path)
     overlays.mkdir(parents=True)
     stale = overlays / "code_engineer.md"
-    stale.write_text("<!-- lesson:E-001 -->\n## Lesson `E-001`\n- Avoid: SWA\n", encoding="utf-8")
+    stale.write_text(
+        stamped_overlay("<!-- lesson:E-001 -->\n## Lesson `E-001`\n- Avoid: SWA\n"),
+        encoding="utf-8",
+    )
     EvidenceCardStore(knowledge, competition).save(
         EvidenceCard(
             competition=competition,
@@ -140,4 +101,7 @@ def test_the_exempt_directory_is_rebuilt_from_its_source(tmp_path):
     changed = repair_skill_overlays(tmp_path, knowledge, competition)
 
     assert changed == ["code_engineer.md"]
-    assert "Avoid: SWA" not in stale.read_text(encoding="utf-8")
+    text = stale.read_text(encoding="utf-8")
+    assert "Avoid: SWA" not in text
+    assert is_stamped(text), "the repair dropped the stamp; the next walk would report it"
+    assert unexplained_views(tmp_path) == []

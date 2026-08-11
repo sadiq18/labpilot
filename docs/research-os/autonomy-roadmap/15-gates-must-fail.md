@@ -114,7 +114,7 @@ The rule catches the fourth instance before it is written.
 | 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
-| 4 — a derived artifact re-derives or says it is derived | **mostly done.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites**. Enforcement is by **discovery** for the markdown a baseline campaign leaves; the hand list still carries two off-path writers and the JSON views — see *Finding the views instead of listing them*, below, which states both gaps |
+| 4 — a derived artifact re-derives or says it is derived | **mostly done.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites**. Enforcement is by **discovery** for the markdown a baseline campaign leaves, with no exemption list; the hand list still carries two off-path writers and the JSON views — see *Finding the views instead of listing them*, below, which states both gaps |
 | 5 — a broken artifact fails at the gate that owns it | **done.** Five broken artifacts driven through the real sixteen-task baseline plan, each entering as the proposal a codegen agent returns, each asserted to stop at the task that owns it **for that task's own reason** — with every task before it passed and every task after it never run. Plus a healthy control and a repaired case — see *Where each defect stops*, below |
 
 ### Three of the first nine rejection tests proved nothing
@@ -146,40 +146,42 @@ reviewer rather than by the rule. A hand list is review with a test's name on it
 it cannot see the writer nobody thought of, which is the only one that matters.
 
 So the rule runs a campaign and walks what it leaves. Every `.md` must carry a
-provenance stamp or sit in the directory a rebuilder rewrites — criterion 4's two
-options, asked of the filesystem rather than of a list. Ten files on a real
-campaign: four stamped, six skill overlays.
+provenance stamp. There is no exemption list, and that took two review rounds to
+arrive at.
 
-**What review had to correct.** The first version of the discovery rule
-reproduced the defect it was written to remove, one level along:
+**The exemption was the hand list again, twice over.** Skill overlays were
+excused on the grounds that `repair_skill_overlays` rebuilds them:
 
-* The exemption was a **path substring**, `".labpilot/skills"`, so
-  `skills_v2/`, `skills-archive/`, `skills.md` and any nested file were exempt
-  too — while `repair_skill_overlays` rewrites exactly `<overlays>/*.md`. It now
-  resolves the directory through `overlay_dir`, production's own answer, and
-  compares the parent exactly.
-* The exemption's justification was `hasattr(module, "repair_skill_overlays")`,
-  which **any module attribute satisfies** — `logger` passed. Gutting the
-  rebuilder to `return []` left every test green. The exemption is now earned:
-  the test corrupts an overlay and requires the named rebuilder to correct it
-  from the cards.
+* The exemption was a path **substring**, so `skills_v2/`, `skills-archive/` and
+  nested files were excused too, while the rebuilder rewrites exactly
+  `<overlays>/*.md`.
+* Its justification was `hasattr(module, "repair_skill_overlays")`, which **any
+  module attribute satisfies** — `logger` passed — and gutting the rebuilder to
+  `return []` left every test green.
+* Then the premise itself turned out to be false. A campaign leaves **no**
+  evidence cards, so the rebuild is a no-op on the tree the rule walks; and the
+  overlays it writes carry only `Try:` and `Note:` bullets, which the repair pass
+  *deliberately* never rewrites. Those six files took **neither** of criterion
+  4's two options — no stamp, and nothing re-deriving them. A `Note:` line is a
+  snapshot of the evidence at write time, which is the rogii failure exactly.
+
+So the overlays are stamped like every other view, and the exemption is deleted.
+`load_skill_overlay` strips the note before the prompt budget applies, and the
+repair pass re-applies it — a stamp is not a lesson block, so a rebuild would
+otherwise drop it and the next walk would report the file. That last one has its
+own test.
 
 **Two gaps, stated rather than implied.**
 
 * **Markdown only.** A campaign leaves ~30 JSON files and nearly all are sources
   of record — evidence, metrics, `profile.json`. Widening the glob would need an
-  exemption list longer than the thing it guards, which is the trap this section
-  is about. `P-001.json` carries `_projection` and is covered by the hand list in
-  `test_derived_views_say_so.py`, not by discovery.
+  exemption list longer than the thing it guards, which is what this section is
+  about. `P-001.json`'s `_projection` stamp is covered by
+  `test_projections_announce_they_are_derived.py`, not by discovery.
 * **Baseline-plan path only.** `write_brief` and `write_comparison` are not
   reached by a baseline campaign, so discovery does not see them; unstamping
-  either is caught by the hand list alone. The list is still load-bearing for two
-  of the five writers.
-
-One more correction worth keeping: `repair_skill_overlays` runs in the conductor
-loop, **not** during a campaign — it was called zero times in the run these tests
-drive. An earlier draft of this section said the overlays are "rebuilt on every
-run", which overstated what the exemption rests on.
+  either is caught by `test_derived_views_say_so.py` alone. That file is still
+  load-bearing for two of the five writers.
 
 A tree walk rather than a patched `Path.write_text`: both see exactly the same
 ten files, and the walk needs no monkeypatching and is immune to how a file was
