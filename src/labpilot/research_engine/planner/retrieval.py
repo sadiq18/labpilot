@@ -13,8 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from labpilot.research_engine.shared.experiments.models import Hypothesis
+from labpilot.accessor.common.derived import read_derived
 from labpilot.research_engine.intelligence.paths import ResearchPaths
+from labpilot.research_engine.shared.experiments.models import Hypothesis
 
 #: Retrieval budgets (README L1–L3): keep context small and stable.
 MAX_BELIEFS = 8
@@ -74,5 +75,5 @@ def _brief_excerpt(knowledge_dir: Path, competition: str) -> str:
     brief_path = paths.brief_path
     if not brief_path.is_file():
         return ""
-    text = brief_path.read_text(errors="ignore").strip()
+    text = read_derived(brief_path, errors="ignore").strip()
     return text[:MAX_BRIEF_CHARS]

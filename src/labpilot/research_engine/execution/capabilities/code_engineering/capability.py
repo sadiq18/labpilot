@@ -21,6 +21,7 @@ import json
 import logging
 from pathlib import Path
 
+from labpilot.accessor.common.derived import read_derived
 from labpilot.accessor.common.micro_agents import StructuredContext, run_or_none
 from labpilot.research_engine.execution.capabilities._helpers import (
     evidence,
@@ -506,7 +507,9 @@ class CodeEngineeringCapability(BaseCapability):
         brief = ""
         brief_path = context.paths.brief_path
         if brief_path.is_file():
-            brief = brief_path.read_text(encoding="utf-8")[:3000]
+            # Stripped: the block would head this prompt's research context
+            # with ~250 characters telling the model to distrust it.
+            brief = read_derived(brief_path)[:3000]
 
         hyp_fields = self._hypothesis_fields(context)
         plan_meta = dict(context.plan.metadata or {})

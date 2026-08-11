@@ -1511,8 +1511,12 @@ def experiments_compare(
         console.print(f"[red]Compare run not found:[/red] {compare_id} (check --runs-dir).")
         raise typer.Exit(code=1)
 
-    # Prefer on-disk comparison.json when it already records this exact pair so
-    # `--format markdown` matches the persisted comparison.md byte-for-byte.
+    # Prefer on-disk comparison.json when it already records this exact pair, so
+    # this reports the stored comparison rather than recomputing one that may
+    # differ. It no longer matches `comparison.md` byte-for-byte: that file
+    # carries a provenance stamp applied by `write_comparison`, and this path
+    # renders live — being told to "read the JSON" for a comparison recomputed
+    # here would misdirect. M20 criterion 4.
     stored = load_comparison(compare_dir)
     if stored is not None and stored.base_id == base_id and stored.compare_id == compare_id:
         comparison = stored
@@ -1533,7 +1537,8 @@ def experiments_compare(
         return
 
     if output_format == "markdown":
-        # Plain print — same deterministic string as comparison.md on disk.
+        # Deterministic, and *not* stamped: this is a live render, so
+        # `comparison.md`'s provenance block does not apply to it.
         sys.stdout.write(render_markdown(comparison))
         return
 

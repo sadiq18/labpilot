@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from labpilot.accessor.common.derived import derived_note
 from labpilot.accessor.profiler.tabular import DatasetProfile
 
 
@@ -8,13 +9,25 @@ def write_profile(run_dir: Path, profile: DatasetProfile) -> tuple[Path, Path]:
     json_path = run_dir / "profile.json"
     md_path = run_dir / "profile.md"
 
-    json_path.write_text(profile.model_dump_json(indent=2))
-    md_path.write_text(render_markdown(profile))
+    json_path.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
+    md_path.write_text(
+        derived_note(
+            source_of_record="profile.json",
+            warning=(
+                "Written from the same profile as the JSON beside it, so the two "
+                "never disagree. Every consumer reads `profile.json`."
+            ),
+        )
+        + "\n\n"
+        + render_markdown(profile),
+        encoding="utf-8",
+    )
 
     return json_path, md_path
 
 
 def render_markdown(profile: DatasetProfile) -> str:
+    """Markdown view over a DatasetProfile. `write_profile` stamps it."""
     lines = [
         f"# Dataset Profile: {profile.competition}",
         "",

@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from labpilot.accessor.common.derived import derived_note
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.research_engine.shared.experiments.models import (
     ChangeCategory,
@@ -145,7 +146,11 @@ def resolve_primary_metric_key_and_direction(
 
 
 def render_markdown(comparison: ExperimentComparison) -> str:
-    """Deterministic markdown view over an ExperimentComparison (no LLM)."""
+    """Deterministic markdown view over an ExperimentComparison (no LLM).
+
+    Unstamped: the stamp belongs to `write_comparison`, because this is also what
+    `experiments compare --format markdown` prints from a live recomputation.
+    """
     lines: list[str] = [
         f"# Comparison: {comparison.base_id} → {comparison.compare_id}",
         "",
@@ -204,7 +209,22 @@ def render_markdown(comparison: ExperimentComparison) -> str:
 def write_comparison(run_dir: Path, comparison: ExperimentComparison) -> None:
     """Persist comparison.json (source of truth) and comparison.md (view)."""
     (run_dir / "comparison.json").write_text(comparison.model_dump_json(indent=2) + "\n")
-    (run_dir / "comparison.md").write_text(render_markdown(comparison))
+    # Stamped here and not in `render_markdown`: that renderer also serves
+    # `experiments compare --format markdown`, which renders live, and a stamp
+    # there would point that reader at a JSON which may not exist.
+    (run_dir / "comparison.md").write_text(
+        derived_note(
+            source_of_record="comparison.json",
+            warning=(
+                "Written from the same object as the JSON beside it, so the two "
+                "never disagree. `load_comparison` and every consumer read the "
+                "JSON; edits here are lost on the next write."
+            ),
+        )
+        + "\n\n"
+        + render_markdown(comparison),
+        encoding="utf-8",
+    )
 
 
 def load_comparison(run_dir: Path) -> ExperimentComparison | None:

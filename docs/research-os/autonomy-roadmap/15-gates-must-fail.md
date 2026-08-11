@@ -114,7 +114,7 @@ The rule catches the fourth instance before it is written.
 | 1 — every pass/fail module has a red-then-green rejection test | **done, and the markers are now earned rather than declared.** The requirement was per-*module* for one round, which let one marker stand for four gates; keyed on `capability:check` it surfaced **20 gates nobody had shown could say no**. Eight check nothing and declare it on their own evidence; twelve have a rejection test, each verified red-then-green. Every `rejects` marker is checked against the verdicts the run actually produced — see *The parser that had to go*, below |
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
-| 4 — a derived artifact re-derives or says it is derived | not started |
+| 4 — a derived artifact re-derives or says it is derived | **in progress.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites** and enforced by reading the files back. Enforcing it found **four more unstamped views already shipped** — see *Four more of the same shape*, below. Auto-discovery of a future writer is not built |
 | 5 — a broken artifact fails at the gate that owns it | not started |
 
 ### Three of the first nine rejection tests proved nothing
@@ -138,6 +138,103 @@ figure, while the verdict lives one branch up in `if ok and not fresh:`. A
 red-then-green run against the wrong line proves nothing just as surely as a weak
 test does, which is worth saying because the sweep is the thing everything else
 here rests on.
+
+### Four more of the same shape
+
+Criterion 4 named four artifacts and each had been answered individually —
+`repair_card_directions`, `rederive_beliefs_from_cards`, `repair_skill_overlays`,
+and a staleness stamp on plan projections. What none of them had was a *rule*, so
+the criterion asks for one enforced over the writers.
+
+Writing that rule found four more views, already shipped and unstamped:
+
+* **`comparison.md`**, written beside `comparison.json` by `write_comparison` —
+  whose own docstring calls the JSON *"(source of truth)"* and the markdown
+  *"(view)"*. The author knew.
+* **`profile.md`**, beside the `profile.json` the same call writes.
+* **`research_brief.md`**, rendered from `analyze.json` and *not written with
+  it*: `research analyze --skip-hypothesize` rewrites the JSON and skips the
+  brief, so the previous run's file survives and the next `plan create` feeds it
+  forward. This is the one that matters most: four separate readers feed it to
+  an LLM, and it is where the pair genuinely diverges.
+* **`<execution>_report.md`**, written once from the workspace's `metrics.json`
+  into `reports_dir` — the directory `WorkspaceProvider` rglobs into LLM context,
+  so an unstamped copy travels further than any of the others.
+
+A fifth candidate turned out already compliant and is worth recording:
+`JournalProjector.render_markdown` is printed by `cli/reflect.py` and never
+written to disk, so it takes the criterion's *other* option and re-derives on
+every read. "Renders markdown from a source" is not the test; "a file persists
+after its source moves" is.
+
+#### The stamp belongs to the writer, and the strip belongs to one reader
+
+Both halves were wrong first, and both were found by review rather than by the
+tests written alongside them.
+
+**The stamp went in the renderer.** Two callers render *live* rather than
+persisting — `experiments compare --format markdown` recomputes whenever the
+stored JSON records a different pair, and `plan show --format markdown` reads the
+DB directly — and both were then told to "read the JSON" for a file that may not
+exist or may describe something else. A stamp that misdirects is worse than none,
+which is the failure it exists to prevent. Moving it to the four write sites
+fixed that, and fixed it for plan projections too, where the stale warning had
+been printed on live reads since before this branch.
+
+**The strip was per-caller.** `research_brief.md` is the only one of these read
+back as *machine* input, and of its **four** readers two stripped the block and
+two did not: the codegen prompt, which spent ~250 of its 3000 characters telling
+the model to distrust the context it was being handed, and the context provider,
+which emitted it twice against an 8000-character retrieval budget. `read_derived` is now
+the single reader, so the next consumer gets stripping without knowing to ask —
+the same argument as the single stamp, on the other side of the file.
+
+#### A stamp must not overstate either
+
+The generic note read *"...which is the source of record **and may have changed
+since**"*, and for two of the five that is false: `comparison.md` and
+`profile.md` are written from the same object as their JSON, in the same call, so
+the pair can never disagree. Worse, `comparison.md`'s warning named
+`repair_card_directions` as the thing that would invalidate it — that pass
+rewrites evidence cards under `research/evidence/` and never touches this file,
+and the `comparison.json` production actually writes comes from
+`evidence/builder.py` under a different schema. A reader following that pointer
+would have opened the JSON, found the identical verdict, and believed they had
+confirmed it against the source of record.
+
+Overstating is the same defect as misdirecting, in the document whose entire
+purpose is to be accurate about what it knows. The generic text now says only
+what is true of every view — that it is a copy, and of what — and each writer's
+`warning` says what its own risk actually is.
+
+#### The stamp got its own source wrong, twice
+
+`comparison.md`'s warning named a repair pass that never touches it. Then the
+report added for the fifth view named `metrics.json` — a file that lives in the
+*workspace*, is shared by every execution, and is overwritten by the next run, so
+a reader following it to check a per-execution report finds different numbers.
+Both were caught by review, not by the tests written beside them, and both are
+the same mistake: asserting a relationship without checking that it holds. The
+report now names `research/executions/<id>/evidence/`, which is per-execution and
+durable.
+
+**The routing needed testing as much as the helper.** Reverting any of the four
+`read_derived` call sites to a plain `read_text` left the whole suite green,
+including the codegen prompt — the regression an earlier round had already fixed
+once. Every fixture that reached a reader used an *unstamped* brief, so the strip
+path was never entered: the coverage was of the helper in isolation and of call
+sites with nothing to strip. All four are now driven over a brief the real writer
+stamped, and each reversion goes red — including `compile_baseline_plan`, which
+was the one the first attempt at this claim still missed. Its excerpt reaches two
+durable sinks: `H-BASELINE.observation` keeps 280 characters and the baseline
+plan's goal keeps 120, so the 250-character block would have filled almost all of
+both, and both are stored and re-read as model input.
+
+**What is not built:** discovering a *future* writer automatically. The five are
+enumerated by hand, so a sixth added later is invisible until someone adds it —
+and the fifth was found by review, not by the rule.
+Stated rather than left to be found, the same limit shape as the verdict
+observer's.
 
 ### The half of the command nobody shared
 

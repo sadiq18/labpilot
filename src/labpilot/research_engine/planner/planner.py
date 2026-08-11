@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from labpilot.accessor.common.derived import read_derived
 from labpilot.accessor.common.ids import task_id as make_task_id
 from labpilot.accessor.common.micro_agents import StructuredContext
 from labpilot.research_engine.intelligence.paths import ResearchPaths
@@ -165,7 +166,9 @@ def compile_baseline_plan(
 
         brief = ""
         if paths.brief_path.is_file():
-            brief = paths.brief_path.read_text(encoding="utf-8")[:2000]
+            # Stripped before the budget applies, or the block displaces the
+            # brief inside the window.
+            brief = read_derived(paths.brief_path)[:2000]
 
         baseline_hyp = HypothesisStore(knowledge_dir, competition).ensure_baseline(
             brief_excerpt=brief

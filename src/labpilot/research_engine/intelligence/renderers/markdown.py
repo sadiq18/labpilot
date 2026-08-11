@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from labpilot.accessor.common.derived import derived_note
 from labpilot.research_engine.intelligence.brief.models import ResearchBrief
 
 _SECTIONS: tuple[tuple[str, str], ...] = (
@@ -50,7 +51,22 @@ def render_brief_markdown(brief: ResearchBrief) -> str:
 
 
 def write_brief(brief: ResearchBrief, path: Path) -> Path:
-    """Write ``research_brief.md`` (creating parent dirs) and return the path."""
+    """Write ``research_brief.md`` (creating parent dirs) and return the path.
+
+    Stamped: `analyze.json` is the source of record, and the two are not written
+    together — `research analyze --skip-hypothesize` updates the JSON and skips
+    this file.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_brief_markdown(brief) + "\n")
+    note = derived_note(
+        source_of_record="analyze.json",
+        warning=(
+            "Rendered when the analysis last ran with hypothesis generation. "
+            "`research analyze --skip-hypothesize` updates analyze.json and not "
+            "this file."
+        ),
+    )
+    # Explicit encoding: the stamp's em dash is the first non-ASCII byte this
+    # file carries, and every reader specifies utf-8.
+    path.write_text(note + "\n\n" + render_brief_markdown(brief) + "\n", encoding="utf-8")
     return path
