@@ -108,16 +108,32 @@ def set_branch_cpu_share(cpus: int | None) -> Token:
     `None` or `0` clears the cap, which is how the sequential path stays
     byte-for-byte identical to its behaviour before this module existed.
 
-    Anything else must be a positive count. A negative slipping through would
-    be written verbatim into every variable, and these do not treat a negative
-    as an error uniformly — an implementation that ignores it leaves the run
-    *uncapped*, which is silently the oversubscription this module exists to
-    prevent. `cpu_share()` cannot produce one, but this is public API and task
-    7 calls it with a computed value, so the check belongs here rather than in
+    Anything else must be a plausible count, and both directions are checked.
+    A negative would be written verbatim into every variable, and these do not
+    treat a negative as an error uniformly — an implementation that ignores it
+    leaves the run *uncapped*, silently the oversubscription this module
+    exists to prevent. A value far above the machine's own capacity is the
+    same mistake mirrored: honoured rather than ignored, it produces
+    thread-pool thrashing worse than no cap at all.
+
+    `cpu_share()` cannot produce either, but this is public API and task 7
+    calls it with a computed value, so the check belongs here rather than in
     the one caller that happens to be careful.
     """
     if cpus is not None and cpus < 0:
         raise ValueError(f"cpu share must be positive or None/0 to clear, got {cpus}")
+    ceiling = available_cpus()
+    if cpus and ceiling and cpus > ceiling:
+        # Clamped rather than refused: the share is an upper bound on threads,
+        # so asking for more than the machine has is a caller's arithmetic
+        # error, not a reason to abort a campaign mid-fan-out.
+        logger.warning(
+            "cpu share %d exceeds the %d CPUs available; clamping to %d",
+            cpus,
+            ceiling,
+            ceiling,
+        )
+        cpus = ceiling
     return _branch_cpu_share.set(cpus or None)
 
 

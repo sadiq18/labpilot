@@ -172,6 +172,14 @@ def child_environment(
     defaults to on so that no launcher can lose the cap by omission — the
     failure mode of the opposite default is an uncapped branch, which is
     silent.
+
+    It has no production caller today, which is a fair thing to challenge
+    against "no configurability that wasn't requested". It is kept because the
+    alternative is worse: without it, `base` is documented as determining the
+    result and quietly does not, so a caller building an environment for
+    comparison gets six keys it never supplied and cannot see in its own
+    argument. The parameter is how that contract is stated honestly rather
+    than a knob speculating about a future need.
     """
     source = dict(os.environ if base is None else base)
     kept = {k: v for k, v in source.items() if not is_secret_env(k)}

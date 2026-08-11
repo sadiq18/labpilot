@@ -193,11 +193,19 @@ def test_a_real_subprocess_receives_the_cap() -> None:
     assert proc.stdout.split() == ["3", "3"]
 
 
-def test_a_real_subprocess_is_uncapped_on_the_sequential_path() -> None:
-    """No fan-out, no caps — the child sees whatever the operator set."""
+def test_a_real_subprocess_is_uncapped_on_the_sequential_path(monkeypatch) -> None:
+    """No fan-out, no caps — the child sees whatever the operator set.
+
+    The variable is cleared first because `child_environment()` inherits
+    `os.environ` and `LOKY_MAX_CPU_COUNT` is not a secret, so a developer who
+    exports it — the documented way to silence loky's core-count warning —
+    would otherwise see this fail and read it as a bug in the module rather
+    than an assumption in the test.
+    """
     import subprocess
     import sys
 
+    monkeypatch.delenv("LOKY_MAX_CPU_COUNT", raising=False)
     proc = subprocess.run(
         [sys.executable, "-c", "import os;print(os.environ.get('LOKY_MAX_CPU_COUNT'))"],
         env=child_environment(),
@@ -206,6 +214,38 @@ def test_a_real_subprocess_is_uncapped_on_the_sequential_path() -> None:
         check=True,
     )
     assert proc.stdout.strip() == "None"
+
+
+def test_a_share_larger_than_the_machine_is_clamped(caplog) -> None:
+    """The mirror of the negative case, and honoured rather than ignored.
+
+    A five-digit thread count is not rejected by OpenMP or the BLAS families —
+    it is obeyed, producing pool thrashing worse than the uncapped default
+    this module exists to improve on.
+    """
+    import logging
+
+    ceiling = available_cpus()
+    assert ceiling, "this test needs a discoverable CPU count"
+
+    with caplog.at_level(logging.WARNING):
+        token = set_branch_cpu_share(ceiling * 1000)
+    try:
+        assert thread_limit_env()["OMP_NUM_THREADS"] == str(ceiling)
+    finally:
+        reset_branch_cpu_share(token)
+    assert any("clamping to" in r.getMessage() for r in caplog.records)
+
+
+def test_a_share_within_the_machine_is_left_alone() -> None:
+    """Clamping must not quietly rewrite a legitimate share."""
+    ceiling = available_cpus()
+    assert ceiling and ceiling >= 1
+    token = set_branch_cpu_share(1)
+    try:
+        assert thread_limit_env()["OMP_NUM_THREADS"] == "1"
+    finally:
+        reset_branch_cpu_share(token)
 
 
 def test_a_negative_share_is_refused() -> None:
