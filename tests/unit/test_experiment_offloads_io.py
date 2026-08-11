@@ -24,6 +24,36 @@ from labpilot.research_engine.agents import experiment as experiment_mod
 from labpilot.research_engine.agents.experiment import ExperimentSpecialist
 
 
+@pytest.mark.parametrize(
+    ("contents", "expected"),
+    [
+        (None, ({}, False)),
+        ("{not json", ({}, True)),
+        ('{"rmse": 1.5}', ({"rmse": 1.5}, True)),
+        ("[1, 2]", ({"value": [1, 2]}, True)),
+    ],
+    ids=["absent", "corrupt", "valid-dict", "valid-non-dict"],
+)
+def test_load_metrics_reports_contents_and_existence(
+    tmp_path: Path, contents: str | None, expected: tuple[dict[str, Any], bool]
+) -> None:
+    """Existence is answered without a stat when the read already proves it.
+
+    The corrupt case is the one that needs the stat: no metrics, but the file
+    is still an artifact worth pointing at.
+    """
+    if contents is not None:
+        (tmp_path / "metrics.json").write_text(contents, encoding="utf-8")
+
+    assert experiment_mod._load_metrics(tmp_path) == expected
+
+
+def test_load_metrics_treats_a_directory_as_absent(tmp_path: Path) -> None:
+    (tmp_path / "metrics.json").mkdir()
+
+    assert experiment_mod._load_metrics(tmp_path) == ({}, False)
+
+
 def test_the_metrics_read_and_record_write_leave_the_loop_thread(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

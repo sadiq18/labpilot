@@ -27,11 +27,12 @@ from labpilot.research_engine.workspace_facade import Workspace
 
 _EXPERIMENT_SCHEMA = "labpilot.artifact.experiment/v1"
 _METRICS_SCHEMA = "labpilot.artifact.metrics/v1"
+_METRICS_FILE = "metrics.json"
 
 
 def _load_metrics(root: Path) -> tuple[dict[str, Any], bool]:
     """Parsed `metrics.json`, and whether the file is there to be referenced."""
-    path = root / "metrics.json"
+    path = root / _METRICS_FILE
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -117,9 +118,7 @@ class ExperimentSpecialist:
         # Read before the write so that no `await` — and so no cancellation
         # point — sits between the record landing on disk and the event that
         # announces it.
-        metrics, has_metrics_file = await anyio.to_thread.run_sync(
-            _load_metrics, workspace.root
-        )
+        metrics, has_metrics_file = await anyio.to_thread.run_sync(_load_metrics, workspace.root)
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
         status = str(result.data.get("status") or "unknown")
         experiment_id = f"exp_{workspace.competition}_{execution_id}"
@@ -157,7 +156,7 @@ class ExperimentSpecialist:
                     kind="metrics",
                     id=f"metrics:{execution_id}",
                     schema_id=_METRICS_SCHEMA,
-                    path=str(workspace.root / "metrics.json"),
+                    path=str(workspace.root / _METRICS_FILE),
                     competition=workspace.competition,
                 )
             )
