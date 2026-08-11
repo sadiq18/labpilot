@@ -115,7 +115,7 @@ The rule catches the fourth instance before it is written.
 | 2 — no verification path rebuilds a command production owns | **done.** The command was already shared; the *environment around it* was not. All **three** places that execute model-written code — both verification gates and `pip install` — now strip credentials the way `TrainingRunner` does, and all three are bounded in time with the timeout reported as a verdict rather than raised. See *The half of the command nobody shared*, below |
 | 3 — `tests/fixtures/real_failures/`, dated and sourced | **done.** The 2026-08-08 corpus, previously inline across nine test files |
 | 4 — a derived artifact re-derives or says it is derived | **in progress.** One stamp helper and one reader (`accessor/common/derived.py`) instead of a copy per writer, applied at the five **write sites** and enforced by reading the files back. Enforcing it found **four more unstamped views already shipped** — see *Four more of the same shape*, below. Auto-discovery of a future writer is not built |
-| 5 — a broken artifact fails at the gate that owns it | **done.** Six artifacts driven through the real sixteen-task baseline plan, each entering as the proposal a codegen agent returns. Every one stops at the task that owns it, with every task before it passed and every task after it never run — see *Where each defect stops*, below |
+| 5 — a broken artifact fails at the gate that owns it | **done.** Five broken artifacts driven through the real sixteen-task baseline plan, each entering as the proposal a codegen agent returns, each asserted to stop at the task that owns it **for that task's own reason** — with every task before it passed and every task after it never run. Plus a healthy control and a repaired case — see *Where each defect stops*, below |
 
 ### Three of the first nine rejection tests proved nothing
 
@@ -156,7 +156,8 @@ Measured, against the real baseline plan's sixteen tasks:
 | runs, raises immediately | `run_smoke_test` (8) | 7 |
 | trains, writes no metrics | `run_training` (10) | 9 |
 | metrics but no predictions | `run_inference` (11) | 10 |
-| a healthy pipeline | — | 16 |
+| a healthy pipeline (the control) | — | 16 |
+| a stdlib name in the PEP 723 block | — | 16 |
 
 On rogii 2026-08-08 the first of those passed `research_review` **and**
 `run_smoke_test` and failed at `run_training` — seven steps from the codegen that
@@ -167,9 +168,16 @@ Planting it would test the gates against a file nothing in the system claims to
 have written, which is a different and easier question.
 
 **Each case asserts ownership, not failure.** That the campaign stopped at the
-owning task is the weakest of the three assertions; the two that carry it are
-that every task *before* passed — so the defect was not caught early by luck —
-and that every task *after* never ran.
+owning task is the weakest of the assertions. The others carry it: every task
+*before* passed, so the defect was not caught early by luck; every task *after*
+never ran; and the recorded error names *that gate's own* reason.
+
+The last of those was added on review. Asserting the task type alone could not
+tell which of a task's gates fired, and `write_code` has two that this file
+exercises — the corpus artifact trips the PEP 723 check **and** the entry-point
+check. Neutering the first left every test green, with case 1 falling through to
+the second: two cases collapsed into one, and a gate the table credits went
+uncovered.
 
 Two things the work turned up:
 
@@ -178,15 +186,21 @@ Two things the work turned up:
   it runs completes all sixteen tasks. The existing end-to-end test uses those
   constraints, which is right for what it checks and would have made this
   criterion vacuous.
-* **The repaired artifact stops somewhere else, and that is the point.** The
-  corpus's stdlib dependency block once made uv refuse all six dependencies
-  before the run started. `strip_stdlib_dependencies` removes the offending entry
-  during apply, so that defect gates nothing now — and the file, which is a
-  runnable script that writes no metrics, then stops at `run_training` for the
-  thing actually wrong with it. Prevention moved the stopping point from a
-  resolver that could not name the problem to the gate that owns the one it has.
-  The first version of that test asserted the campaign *succeeds*, which is only
-  true under `train_stub`, where nothing runs it.
+* **The repaired defect stops nothing, which is the correct outcome for one
+  that is prevented rather than caught.** The corpus's stdlib dependency block
+  once made uv refuse all six dependencies before the run started — defect 11, a
+  failure at the very front of the campaign whose error named none of them.
+  `strip_stdlib_dependencies` removes the offending entry during apply, and a
+  script carrying that defect and nothing else now completes all sixteen tasks.
+
+  The corpus file itself is asserted at the apply layer instead of through a
+  campaign, and that split was forced by review: after `glob` is stripped the
+  file still declares pandas, numpy, scikit-learn, lightgbm and pyarrow, so the
+  smoke gate routed to `uv run --script` and resolved five packages **against
+  PyPI**. It was the one non-hermetic test in the suite — a PyPI blip would have
+  turned this criterion's evidence red for a reason unrelated to any gate, and a
+  cold run left ~600 MB in `~/.cache/uv`. The file now passes under
+  `UV_OFFLINE=1`.
 
 Each gate was confirmed load-bearing by removing it: disabling the entry-point
 check, the smoke verdict, the training metrics check, or the stdlib strip each
