@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -65,6 +66,33 @@ from labpilot.research_engine.git import GitTool, open_git_tool
 from labpilot.workspace import WORKTREE_DIRNAME
 
 logger = logging.getLogger(__name__)
+
+# Why creation retries at all — this is git's race, not ours.
+#
+# `git worktree add` registers itself by writing `.git/worktrees/<name>/gitdir`
+# and *then* `.git/worktrees/<name>/commondir`, neither atomically. Every git
+# command that enumerates worktrees — `add` and `remove` included, because both
+# call `get_worktrees()` before doing anything — reads that registration, and a
+# registration whose `gitdir` exists while `commondir` is still zero bytes is
+# fatal rather than skipped:
+#
+#     fatal: failed to read .git/worktrees/exp-3/commondir: Undefined error: 0
+#
+# So K threads calling `add` at once fail each other, at a measured ~3.6% of
+# 6-way and 8-way fan-outs on git 2.47.1 (250 rounds each). That was enough to
+# flake this module's concurrency test once in a full-suite run and then hide
+# for three clean reruns. Under M11 task 7 it would abort a campaign branch.
+#
+# The window is microseconds wide and closes on its own, so a retry is the
+# whole fix. It retries *any* failure rather than matching git's message
+# because that message is translated (`fatal: failed to read %s` goes through
+# gettext), so a non-English git would sail past a string match — and every
+# operation the retry repeats is idempotent by construction anyway:
+# `_force_unregister` tolerates absence and `add -B` force-resets. A permanent
+# failure therefore costs the backoff budget below and is then re-raised as
+# git wrote it.
+_WORKTREE_ADD_ATTEMPTS = 4
+_WORKTREE_RETRY_BASE_SECONDS = 0.05
 
 __all__ = [
     "WORKTREE_DIRNAME",
@@ -213,16 +241,57 @@ def create_experiment_worktree(
     Any worktree already registered at the target path is removed first —
     a stale registration from a previous crash would otherwise make `add`
     fail and take the branch down with it.
+
+    Retries a failing `add` a bounded number of times, because K branches
+    creating worktrees at once make each other fail through a race inside git
+    itself — see `_WORKTREE_ADD_ATTEMPTS` for the mechanism and the measured
+    rate. Path validation stays outside the retry: a branch that resolves out
+    of the worktree root is wrong on every attempt, not transiently.
     """
     repo_root = Path(repo_root).resolve()
     tool = git or open_git_tool(repo_root)
     branch = research_branch_name(session_id, experiment_key)
     target = _worktree_path(repo_root, branch)
 
-    _force_unregister(tool, target)
-    target.value.parent.mkdir(parents=True, exist_ok=True)
-    tool.execute("worktree", "add", "-B", branch, str(target.value), "HEAD")
+    _add_with_retry(tool, branch, target)
     return ExperimentWorktree(path=target.value, branch=branch, repo_root=repo_root)
+
+
+def _add_with_retry(tool: GitTool, branch: str, target: _SafeTarget) -> None:
+    """`worktree add`, repeated through git's concurrent-registration window.
+
+    The unregister and the `mkdir` are inside the loop deliberately rather
+    than hoisted above it: a concurrent `add` can break *this* call's
+    `worktree remove` too (it enumerates worktrees the same way), and that
+    failure is swallowed by design in `_force_unregister` — so an attempt can
+    fail with "already registered" purely because its own cleanup was the
+    casualty. Repeating the cleanup is what makes the next attempt a real
+    retry rather than a rerun of the same broken state.
+    """
+    for attempt in range(1, _WORKTREE_ADD_ATTEMPTS + 1):
+        _force_unregister(tool, target)
+        target.value.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            tool.execute("worktree", "add", "-B", branch, str(target.value), "HEAD")
+            return
+        except Exception as exc:  # noqa: BLE001 — re-raised below once spent
+            if attempt == _WORKTREE_ADD_ATTEMPTS:
+                logger.warning(
+                    "git worktree add for branch %s failed on all %d attempts; "
+                    "surfacing git's own error",
+                    branch,
+                    _WORKTREE_ADD_ATTEMPTS,
+                )
+                raise
+            logger.debug(
+                "git worktree add for branch %s failed on attempt %d/%d (%s); "
+                "retrying",
+                branch,
+                attempt,
+                _WORKTREE_ADD_ATTEMPTS,
+                exc,
+            )
+            time.sleep(_WORKTREE_RETRY_BASE_SECONDS * 2 ** (attempt - 1))
 
 
 def remove_experiment_worktree(

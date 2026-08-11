@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import traceback
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ from labpilot.research_engine.agents.git_worktree import (
     reconcile_worktrees,
     remove_experiment_worktree,
 )
+from labpilot.research_engine.git import open_git_tool
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -168,19 +170,34 @@ def test_worktree_isolates_edits_between_branches(tmp_path: Path) -> None:
 
 
 def test_concurrent_creation_gives_each_thread_its_own_tree(tmp_path: Path) -> None:
-    """K branches created in parallel, as the fan-out will do."""
+    """K branches created in parallel, as the fan-out will do.
+
+    Each worker captures its own exception instead of letting it die inside
+    `Thread.run`. Without that, a failure surfaced only as `len(made) != n` —
+    a count, naming neither the thread nor git's error — and this test did
+    exactly that once in a full-suite run, then passed three reruns with
+    nothing to go on. The traceback in the assertion message is the point:
+    the next occurrence has to arrive already diagnosed.
+    """
     root = _repo(tmp_path)
     n = 6
     barrier = threading.Barrier(n)
     made: list[tuple[str, Path]] = []
+    errors: list[str] = []
     lock = threading.Lock()
 
     def branch(i: int) -> None:
-        barrier.wait()
-        wt = create_experiment_worktree(root, session_id="s1", experiment_key=f"exp-{i}")
-        (wt.path / "train.py").write_text(f"print({i})\n", encoding="utf-8")
-        with lock:
-            made.append((wt.branch, wt.path))
+        try:
+            barrier.wait()
+            wt = create_experiment_worktree(
+                root, session_id="s1", experiment_key=f"exp-{i}"
+            )
+            (wt.path / "train.py").write_text(f"print({i})\n", encoding="utf-8")
+            with lock:
+                made.append((wt.branch, wt.path))
+        except Exception:  # noqa: BLE001 — reporting the cause IS the job here
+            with lock:
+                errors.append(f"--- thread {i} ---\n{traceback.format_exc()}")
 
     threads = [threading.Thread(target=branch, args=(i,)) for i in range(n)]
     for t in threads:
@@ -188,11 +205,106 @@ def test_concurrent_creation_gives_each_thread_its_own_tree(tmp_path: Path) -> N
     for t in threads:
         t.join()
 
+    # Assert the cause before the symptom, so a failure reads as git's error
+    # rather than as arithmetic.
+    assert not errors, "concurrent worktree creation failed:\n" + "\n".join(errors)
     assert len(made) == n
     assert len({b for b, _ in made}) == n
     # Every branch kept its own content — no clobbering.
     for i, (_, path) in enumerate(sorted(made, key=lambda m: m[0])):
         assert (path / "train.py").read_text() == f"print({i})\n"
+
+
+class _FlakyAdd:
+    """A GitTool that fails `worktree add` a fixed number of times first.
+
+    Reproduces git's concurrent-registration window deterministically. The
+    real thing needs two threads inside a microsecond-wide race, which is why
+    the bug this covers reached main: the concurrency test hit it roughly once
+    in thirty runs and could not be made to do it again on demand.
+    """
+
+    # git's actual message for the window, verbatim — including that errno is
+    # 0, because the read hits EOF on a zero-byte file rather than erroring.
+    TRANSIENT = (
+        "Preparing worktree (new branch 'research/s1/exp-a')\n"
+        "fatal: failed to read .git/worktrees/exp-other/commondir: Undefined error: 0"
+    )
+
+    def __init__(self, inner: object, *, failures: int) -> None:
+        self._inner = inner
+        self._remaining = failures
+        self.add_attempts = 0
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+    def execute(self, *git_args: str) -> str:
+        if git_args[:2] == ("worktree", "add"):
+            self.add_attempts += 1
+            if self._remaining > 0:
+                self._remaining -= 1
+                raise RuntimeError(self.TRANSIENT)
+        return self._inner.execute(*git_args)  # type: ignore[attr-defined]
+
+
+def test_create_retries_gits_concurrent_registration_window(tmp_path: Path) -> None:
+    """A transient `add` failure must not abort the branch.
+
+    `git worktree add` writes `.git/worktrees/<name>/gitdir` before
+    `commondir`, and any concurrent git command that enumerates worktrees
+    treats that half-written pair as fatal instead of skipping it. K-way
+    fan-out therefore makes branches fail each other at a few percent per
+    round — survivable only because the window closes on its own.
+    """
+    root = _repo(tmp_path)
+    flaky = _FlakyAdd(open_git_tool(root), failures=2)
+
+    wt = create_experiment_worktree(
+        root, session_id="s1", experiment_key="exp-a", git=flaky
+    )
+
+    assert wt.path.is_dir()
+    assert flaky.add_attempts == 3, "did not retry through the transient window"
+    remove_experiment_worktree(wt, git=flaky)
+
+
+def test_create_surfaces_gits_own_error_once_retries_are_spent(tmp_path: Path) -> None:
+    """Bounded, and the error that escapes is git's — not a retry wrapper.
+
+    Retrying blind would turn a permanent failure ("already checked out
+    elsewhere") into a silent stall; the budget is what keeps it a failure,
+    and re-raising unwrapped is what keeps it diagnosable.
+    """
+    import labpilot.research_engine.agents.git_worktree as gw
+
+    root = _repo(tmp_path)
+    flaky = _FlakyAdd(open_git_tool(root), failures=999)
+
+    with pytest.raises(RuntimeError, match="commondir"):
+        create_experiment_worktree(
+            root, session_id="s1", experiment_key="exp-a", git=flaky
+        )
+
+    assert flaky.add_attempts == gw._WORKTREE_ADD_ATTEMPTS
+
+
+def test_a_traversing_id_is_refused_without_being_retried(tmp_path: Path) -> None:
+    """The retry covers git's window, not the containment guard.
+
+    A branch resolving outside `.worktrees/` is wrong on every attempt, so
+    retrying it would only delay the refusal — and would re-run the deleting
+    path three more times against a target already judged unsafe.
+    """
+    root = _repo(tmp_path)
+    flaky = _FlakyAdd(open_git_tool(root), failures=0)
+
+    with pytest.raises(ValueError, match="outside the experiment worktree root"):
+        create_experiment_worktree(
+            root, session_id="..", experiment_key="knowledge", git=flaky
+        )
+
+    assert flaky.add_attempts == 0, "validation ran inside the retry loop"
 
 
 def test_context_manager_removes_on_success(tmp_path: Path) -> None:
