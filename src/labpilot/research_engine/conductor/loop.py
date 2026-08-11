@@ -319,12 +319,18 @@ def _maybe_mint_on_stagnation(
     the circuit breaker.
     """
     try:
-        if not stagnation_window(budget_state, budget_cfg):
+        # Computed once and threaded through: this runs on every recorded
+        # experiment, not just stagnant ones, so re-deriving the same window
+        # a second time inside mint_stagnation_hypothesis would pay its
+        # comparable_tail/score_summary scan twice on every single step.
+        window = stagnation_window(budget_state, budget_cfg)
+        if not window:
             budget_state.stagnation_mint_fired = False
             return
         if budget_state.stagnation_mint_fired:
             return
-        if mint_stagnation_hypothesis(workspace, budget_state, budget_cfg) is not None:
+        minted = mint_stagnation_hypothesis(workspace, budget_state, budget_cfg, window=window)
+        if minted is not None:
             budget_state.stagnation_mint_fired = True
     except Exception:  # noqa: BLE001 — a failed mint must not cost the score its record
         logger.exception("stagnation mint failed; recording the score without it")

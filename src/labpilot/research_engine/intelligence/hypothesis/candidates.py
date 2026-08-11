@@ -151,7 +151,7 @@ def generate_candidates(
         name = str(card.get("name") or "").strip()
         if not name:
             continue
-        if statuses.get(normalize_label(name), "candidate") not in PLANNER_VISIBLE_STATUSES:
+        if not is_planner_visible(statuses.get(normalize_label(name))):
             continue
         key_label = normalize_label(name)
         evidence = _evidence_from_card(card)

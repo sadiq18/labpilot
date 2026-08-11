@@ -17,13 +17,19 @@ def is_planner_visible(
 ) -> bool:
     """Whether a technique's vocabulary status may reach the planner.
 
-    Unknown names default to `"candidate"` so the vocabulary can still grow —
-    every caller filtering a technique by status needs this same default, and
-    the two that existed before this helper (`filter_by_technique_status`,
-    the stagnation minter's `_untried_technique`) had drifted into
-    reimplementing it separately.
+    A missing status defaults to `"candidate"` so the vocabulary can still
+    grow — every caller filtering a technique by status needs this same
+    default, and four call sites (`filter_by_technique_status`, the
+    stagnation minter's `_untried_technique`, `_select_techniques` in
+    `retrieval/fetchers.py`, and `generate_candidates`) had drifted into
+    reimplementing it separately. Checked against `status is None`, not
+    truthiness: `dict.get(key, "candidate")`, the pattern this replaces,
+    only applies the default when the *key* is absent — an explicit empty
+    status stored against a present key stays empty (and so is correctly
+    filtered out) rather than being treated as `"candidate"`.
     """
-    return str(status or "candidate") in visible
+    resolved = status if status is not None else "candidate"
+    return resolved in visible
 
 
 #: Claims never promote rejected/dormant; measurement remains the confirmed bar.

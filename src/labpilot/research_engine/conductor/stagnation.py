@@ -130,29 +130,44 @@ def _cite(event: ScoreEvent) -> str:
     return event.experiment_id
 
 
-def _cite_list(events: list[ScoreEvent], *, limit: int = 12) -> str:
+def _cite_list(events: list[ScoreEvent], *, limit: int = 12, max_chars: int = 400) -> str:
     """Every experiment named, unless there are too many to fit in prose.
 
     `reason`/`observation` used to be built by joining every citation and
     then hard-truncating the whole string to a length cap — for a plateau
     long enough to push the joined string past that cap, the cut landed
-    mid-citation and silently dropped whichever ids came after it. Capping by
-    *count* instead keeps every printed id whole; the ones left out are named
-    by number, and the structured `evidence` list (never truncated) is still
-    where a reader resolves every id, which is the guarantee that actually
-    matters.
+    mid-citation and silently dropped whichever ids came after it. A pure
+    count cap fixed the common case, but a combo citation ("E-013 (mixup +
+    cutout)") can still be long enough that a dozen of them blow past
+    `observation`'s 500-char cap — reproduced live with 12 two-technique
+    combo citations landing at 500 exactly, cut mid-word. Capping by
+    *character budget* as well keeps every printed id whole regardless of how
+    long individual citations are; the ones left out are named by number, and
+    the structured `evidence` list (never truncated) is still where a reader
+    resolves every id, which is the guarantee that actually matters.
     """
     cites = [_cite(event) for event in events]
-    if len(cites) <= limit:
-        return ", ".join(cites)
-    shown = ", ".join(cites[:limit])
-    return f"{shown}, and {len(cites) - limit} more (see evidence)"
+    shown: list[str] = []
+    used = 0
+    for cite in cites[:limit]:
+        added = len(cite) if not shown else len(cite) + 2  # ", "
+        if shown and used + added > max_chars:
+            break
+        shown.append(cite)
+        used += added
+    remaining = len(cites) - len(shown)
+    joined = ", ".join(shown)
+    if remaining <= 0:
+        return joined
+    return f"{joined}, and {remaining} more (see evidence)"
 
 
 def mint_stagnation_hypothesis(
     workspace: Workspace,
     state: BudgetState,
     config: BudgetConfig,
+    *,
+    window: list[ScoreEvent] | None = None,
 ) -> str | None:
     """Propose a change of direction, or None with the reason logged.
 
@@ -160,6 +175,14 @@ def mint_stagnation_hypothesis(
     campaign is stagnant *and* that no mint has fired for this plateau —
     firing on every step of a long one would flood the backlog with
     near-duplicates, which content dedup alone does not prevent.
+
+    `window` lets a caller that already computed `stagnation_window` (to
+    decide whether to call this at all) pass it straight through instead of
+    this function deriving it again — `_maybe_mint_on_stagnation` runs on
+    every recorded experiment, stagnant or not, so recomputing the window's
+    `comparable_tail`/`score_summary` scan a second time here was paid on
+    every step for no reason. Left optional so direct callers (tests) keep
+    working unchanged.
     """
     from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
     from labpilot.research_engine.shared.experiments.models import (
@@ -168,7 +191,8 @@ def mint_stagnation_hypothesis(
         HypothesisOrigin,
     )
 
-    window = stagnation_window(state, config)
+    if window is None:
+        window = stagnation_window(state, config)
     if not window:
         return None
 

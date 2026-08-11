@@ -180,6 +180,41 @@ def test_a_long_window_still_names_every_shown_id_whole(tmp_path: Path):
     assert "E-039" not in hypothesis.reason
 
 
+def test_long_combo_citations_do_not_overflow_the_prose_caps(tmp_path: Path):
+    """The count cap alone (limit=12) isn't enough: a dozen two-technique
+    combo citations run long enough to blow past `observation`'s 500-char
+    cap on their own, and that hard slice used to land mid-word -- reproduced
+    live with exactly this fixture before `_cite_list` grew a character
+    budget too. `reason` (cap 1000) had the same exposure, just at a higher
+    citation count.
+    """
+    ws = _with_vocabulary(_ws(tmp_path), "winner")
+    events = [
+        _event(
+            f"E-{i:03d}",
+            200.0 + i,
+            combo=["mixup_augmentation", "cutout_regularization"],
+        )
+        for i in range(14)
+    ]
+    state = BudgetState(score_events=events)
+
+    minted_id = mint_stagnation_hypothesis(ws, state, BudgetConfig(plateau_window=3))
+
+    assert minted_id is not None
+    hypothesis = HypothesisStore(ws.knowledge_dir, ws.competition).get(minted_id)
+    assert len(hypothesis.observation) <= 500
+    assert len(hypothesis.reason) <= 1000
+    # No citation appears cut mid-word: a cut mid-citation leaves an opening
+    # "(" with no matching ")", which balanced parens rules out directly.
+    assert hypothesis.observation.count("(") == hypothesis.observation.count(")")
+    assert hypothesis.reason.count("(") == hypothesis.reason.count(")")
+    assert "more (see evidence)" in hypothesis.observation
+    # Every experiment is still resolvable structurally regardless of what
+    # the prose could fit.
+    assert {ref.ref for ref in hypothesis.evidence} == {e.experiment_id for e in events[1:]}
+
+
 def test_the_proposal_avoids_everything_the_window_spent(tmp_path: Path):
     """Re-proposing a technique the stagnant window already ran is the one
     thing this must not do.
