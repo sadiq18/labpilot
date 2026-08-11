@@ -22,6 +22,7 @@ from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_l
 from labpilot.research_engine.intelligence.retrieval.models import ResearchContext
 from labpilot.research_engine.execution.technique.status_constants import (
     PLANNER_VISIBLE_STATUSES,
+    is_planner_visible,
 )
 
 if TYPE_CHECKING:
@@ -42,9 +43,7 @@ def filter_by_technique_status(
         if not tech:
             kept.append(candidate)
             continue
-        # Unknown names default to candidate so the vocabulary can still grow.
-        status = str(statuses.get(normalize_label(tech), "candidate"))
-        if status in visible:
+        if is_planner_visible(statuses.get(normalize_label(tech)), visible=visible):
             kept.append(candidate)
         else:
             dropped.append(tech)
@@ -152,7 +151,7 @@ def generate_candidates(
         name = str(card.get("name") or "").strip()
         if not name:
             continue
-        if statuses.get(normalize_label(name), "candidate") not in PLANNER_VISIBLE_STATUSES:
+        if not is_planner_visible(statuses.get(normalize_label(name))):
             continue
         key_label = normalize_label(name)
         evidence = _evidence_from_card(card)
