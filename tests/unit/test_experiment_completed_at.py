@@ -22,7 +22,8 @@ import pytest
 from helpers.experiment_harness import (
     bundle,
     experiment_workspace,
-    stub_experiment_io,
+    stub_git_snapshot,
+    stub_run_plan,
     training_task,
 )
 
@@ -44,8 +45,10 @@ def stub_run(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
     to call the setter still cannot reach the real plan runner.
     """
 
+    stub_git_snapshot(monkeypatch)
+
     def _set(**data: Any) -> None:
-        stub_experiment_io(monkeypatch, **data)
+        stub_run_plan(monkeypatch, **data)
 
     _set()
     return _set

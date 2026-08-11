@@ -470,8 +470,9 @@ the fan-out would serialise on exactly the work §5 argues is cheap. Both now
 go through `anyio.to_thread.run_sync`, matching the two calls that already
 did. The stat that decided the metrics `ArtifactRef` folded into the read —
 a successful `read_text` already proves the file exists, so it is only needed
-to tell an absent file from a corrupt one. This had to land before the budget-pacing test, which measures whether
-fan-out beats sequential and would otherwise have measured this instead.
+to tell an absent file from a corrupt one. This had to land before the
+budget-pacing test, which measures whether fan-out beats sequential and would
+otherwise have measured this instead.
 
 Two consequences worth naming. **The per-branch worktree is now load-bearing
 for write safety, not just for checkout isolation.** `write_experiment_git_record`

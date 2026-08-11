@@ -30,8 +30,8 @@ def training_task() -> AgentTask:
     return AgentTask(id="T-1", capability="run_training", description="train")
 
 
-def stub_experiment_io(monkeypatch: pytest.MonkeyPatch, **run_plan_data: Any) -> None:
-    """Replace the git snapshot and the plan runner with the given outcome."""
+def stub_git_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop `execute` branching and committing. Install once per test."""
 
     def _no_snapshot(
         workspace_root: Path, *, session_id: str, experiment_key: str, message: str
@@ -39,8 +39,19 @@ def stub_experiment_io(monkeypatch: pytest.MonkeyPatch, **run_plan_data: Any) ->
         # Signature-faithful: `lambda *a, **k` would swallow a renamed kwarg.
         del workspace_root, session_id, experiment_key, message
 
+    monkeypatch.setattr(experiment_mod, "snapshot_before_experiment", _no_snapshot)
+
+
+def stub_run_plan(monkeypatch: pytest.MonkeyPatch, **run_plan_data: Any) -> None:
+    """Report `run_plan_data` as the run's outcome. Safe to call repeatedly."""
+
     def _fake_run_plan(*_a: object, **_k: object) -> ToolResult:
         return ToolResult(data=dict(run_plan_data), refs=[])
 
-    monkeypatch.setattr(experiment_mod, "snapshot_before_experiment", _no_snapshot)
     monkeypatch.setattr("labpilot.research_engine.tools.handlers.run.run_plan", _fake_run_plan)
+
+
+def stub_experiment_io(monkeypatch: pytest.MonkeyPatch, **run_plan_data: Any) -> None:
+    """Both stubs at once, for a test that sets its outcome only once."""
+    stub_git_snapshot(monkeypatch)
+    stub_run_plan(monkeypatch, **run_plan_data)

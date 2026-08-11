@@ -6,6 +6,7 @@ and record write would stall its siblings. Rationale: design doc §8.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -63,6 +64,24 @@ def test_load_metrics_survives_a_file_that_is_not_utf8(tmp_path: Path) -> None:
     (tmp_path / "metrics.json").write_bytes(b"\x80\x81\x82 not utf-8")
 
     assert experiment_mod._load_metrics(tmp_path) == ({}, True)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads regardless of mode")
+def test_load_metrics_still_references_an_unreadable_file(tmp_path: Path) -> None:
+    """Present but unreadable: no metrics, yet still an artifact to point at.
+
+    The only case where the `OSError` arm must answer True, so it is what
+    stops that arm being "simplified" to `return {}, False` on the reasoning
+    that an OSError means the file is not there. Absent and directory both
+    take the same arm and want False.
+    """
+    metrics = tmp_path / "metrics.json"
+    metrics.write_text('{"rmse": 1.5}', encoding="utf-8")
+    metrics.chmod(0o000)
+    try:
+        assert experiment_mod._load_metrics(tmp_path) == ({}, True)
+    finally:
+        metrics.chmod(0o644)
 
 
 def test_the_metrics_read_and_record_write_leave_the_loop_thread(

@@ -31,17 +31,13 @@ _METRICS_FILE = "metrics.json"
 
 
 def _load_metrics(root: Path) -> tuple[dict[str, Any], bool]:
-    """Parsed `metrics.json`, and whether the file is there to be referenced."""
+    """Parsed metrics, and whether the file exists to be referenced at all."""
     path = root / _METRICS_FILE
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        # ValueError, not JSONDecodeError: a file that is not valid UTF-8
-        # raises UnicodeDecodeError from `read_text`, and losing a finished
-        # experiment to an unreadable side file is worse than no metrics.
-        # Absent and corrupt both yield none, but only the corrupt one is
-        # still an artifact worth pointing at — hence the stat here, and not
-        # on the path where the read already proved existence.
+        # ValueError covers UnicodeDecodeError, which a non-UTF-8 file raises
+        # from `read_text` and which JSONDecodeError alone would miss.
         return {}, path.is_file()
     return (data if isinstance(data, dict) else {"value": data}), True
 
@@ -118,9 +114,8 @@ class ExperimentSpecialist:
         # docs/research-os/autonomy-roadmap/design/05-parallel-branches.md §8,
         # "Tie-break".
         run_finished_at = datetime.now(UTC).isoformat()
-        # Read before the write so that no `await` — and so no cancellation
-        # point — sits between the record landing on disk and the event that
-        # announces it.
+        # Read before the write, deliberately — see design doc §8, "Branch
+        # bookkeeping runs off the event loop".
         metrics, has_metrics_file = await anyio.to_thread.run_sync(_load_metrics, workspace.root)
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
         status = str(result.data.get("status") or "unknown")
