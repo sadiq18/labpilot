@@ -84,10 +84,9 @@ async def run_parallel_async(
 
     Raises ``ValueError`` — before any item starts, so nothing runs — for
     ``max_workers < 1`` or an item whose ``runtime`` is not `LOCAL_RUNTIME`.
-    Both are the caller's mistake rather than a worker fault, and both are
-    knowable without running anything, so the batch is refused up front rather
-    than after it has spent budget and compute on siblings that were never
-    going to add up to the fan-out that was asked for.
+    Why refused up front rather than per item:
+    docs/research-os/autonomy-roadmap/design/05-parallel-branches.md §8,
+    "The `runtime` field".
     """
     if max_workers < 1:
         raise ValueError("max_workers must be >= 1")

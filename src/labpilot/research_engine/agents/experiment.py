@@ -30,11 +30,13 @@ _METRICS_SCHEMA = "labpilot.artifact.metrics/v1"
 
 
 def _load_metrics(root: Path) -> dict[str, Any]:
-    path = root / "metrics.json"
-    if not path.is_file():
-        return {}
+    # No `is_file()` guard: a missing (or non-regular) path raises `OSError`
+    # from `read_text()` itself — `FileNotFoundError`/`IsADirectoryError` are
+    # both subclasses — so a separate check would only add a second stat on
+    # the same path the caller already stats once more, below, to decide
+    # whether to attach the metrics `ArtifactRef`.
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {"value": data}
@@ -108,11 +110,9 @@ class ExperimentSpecialist:
             )
         )
 
-        # Taken here, not at publish: everything below is bookkeeping —
-        # loading metrics, writing the git record — and its cost scales with
-        # `files_changed`. Stamping after it would time the record write as
-        # well as the run, so a branch that finished first but wrote a large
-        # record could lose a tie-break to one that finished later.
+        # Taken here, not at publish — why:
+        # docs/research-os/autonomy-roadmap/design/05-parallel-branches.md §8,
+        # "Tie-break".
         run_finished_at = datetime.now(UTC).isoformat()
         metrics = _load_metrics(workspace.root)
         execution_id = str(result.data.get("execution_id") or f"E-agent-{agent_task.id}")
@@ -192,11 +192,9 @@ class ExperimentSpecialist:
             # Both subscribers of this event — the evidence-refresh note and the
             # experience-memory writer — record a *result*, and a crash has none.
             return refs
-        # Attached here rather than in the literal above because that dict is
-        # also the `ModelFailed` payload: a `completed_at` on a run that died
-        # asserts the completion the block above exists to deny. M11's
-        # promotion breaks a tie on the metric by earliest finisher, so this
-        # is read as a result, and a crash has no finish time.
+        # Attached here, not in the literal above, because that dict is also
+        # the `ModelFailed` payload — see the "Tie-break" comment above and
+        # design doc §8.
         event_payload["completed_at"] = run_finished_at
         self._emit(EXPERIMENT_COMPLETED, event_payload)
         return refs
