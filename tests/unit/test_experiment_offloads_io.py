@@ -13,7 +13,12 @@ from typing import Any
 
 import anyio
 import pytest
-from helpers.experiment_harness import bundle, stub_experiment_io, training_task, workspace
+from helpers.experiment_harness import (
+    bundle,
+    experiment_workspace,
+    stub_experiment_io,
+    training_task,
+)
 
 from labpilot.research_engine.agents import experiment as experiment_mod
 from labpilot.research_engine.agents.experiment import ExperimentSpecialist
@@ -22,6 +27,7 @@ from labpilot.research_engine.agents.experiment import ExperimentSpecialist
 def test_the_metrics_read_and_record_write_leave_the_loop_thread(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Both are dispatched to a worker rather than run inline."""
     stub_experiment_io(monkeypatch, execution_id="E-1", status="succeeded")
     ran_on: dict[str, str] = {}
     real_load = experiment_mod._load_metrics
@@ -39,7 +45,9 @@ def test_the_metrics_read_and_record_write_leave_the_loop_thread(
     monkeypatch.setattr(experiment_mod, "write_experiment_git_record", _write)
 
     anyio.run(
-        lambda: ExperimentSpecialist().execute(training_task(), workspace(tmp_path), bundle())
+        lambda: ExperimentSpecialist().execute(
+            training_task(), experiment_workspace(tmp_path), bundle()
+        )
     )
 
     loop_thread = threading.main_thread().name
@@ -53,14 +61,17 @@ def test_the_metrics_stat_leaves_the_loop_thread(
 ) -> None:
     """The `is_file` deciding the metrics ArtifactRef is the third blocking call."""
     stub_experiment_io(monkeypatch, execution_id="E-1", status="succeeded")
-    ws = workspace(tmp_path)
-    (ws.root / "metrics.json").write_text('{"rmse": 1.0}', encoding="utf-8")
+    ws = experiment_workspace(tmp_path)
+    metrics_path = ws.root / "metrics.json"
+    metrics_path.write_text('{"rmse": 1.0}', encoding="utf-8")
 
     real_is_file = Path.is_file
     stat_threads: list[str] = []
 
     def _is_file(self: Path) -> bool:
-        if self.name == "metrics.json":
+        # Matched on the exact path, not the filename: a stat of some other
+        # `metrics.json` must not be mistaken for the call under test.
+        if self == metrics_path:
             stat_threads.append(threading.current_thread().name)
         return real_is_file(self)
 
@@ -68,8 +79,36 @@ def test_the_metrics_stat_leaves_the_loop_thread(
 
     anyio.run(lambda: ExperimentSpecialist().execute(training_task(), ws, bundle()))
 
-    assert stat_threads, "metrics.json was never stat'd"
+    assert stat_threads, "the metrics path was never stat'd"
     assert threading.main_thread().name not in stat_threads
+
+
+def test_the_offloaded_calls_still_read_and_write_the_right_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where a call runs says nothing about whether it still works.
+
+    `run_sync` takes the argument separately from the callable, so a wrong
+    path stays off the loop and still returns — silently emptying `metrics`
+    for every run. The thread assertions above cannot see that.
+    """
+    stub_experiment_io(monkeypatch, execution_id="E-1", status="succeeded")
+    ws = experiment_workspace(tmp_path)
+    (ws.root / "metrics.json").write_text('{"rmse": 1.5}', encoding="utf-8")
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    agent = ExperimentSpecialist(on_event=lambda e, p: seen.append((e, p)))
+    anyio.run(lambda: agent.execute(training_task(), ws, bundle()))
+
+    ((_, payload),) = seen
+    assert payload["metrics"] == {"rmse": 1.5}
+    refs = {r["kind"]: r for r in payload["refs"]}
+    assert "metrics" in refs
+    record = Path(refs["experiment"]["path"])
+    # Under the workspace root, not merely somewhere: handing the write a
+    # different directory still produces a file that exists.
+    assert record.is_file()
+    assert record.is_relative_to(ws.root)
 
 
 def test_a_slow_record_write_does_not_stall_the_loop(
@@ -87,7 +126,7 @@ def test_a_slow_record_write_does_not_stall_the_loop(
 
     def _slow_write(root: Path, payload: dict[str, Any]) -> Path:
         window.append(ticks)
-        time.sleep(0.3)
+        time.sleep(0.15)
         window.append(ticks)
         return real_write(root, payload)
 
@@ -96,17 +135,19 @@ def test_a_slow_record_write_does_not_stall_the_loop(
     async def _ticker() -> None:
         nonlocal ticks
         while True:
-            await anyio.sleep(0.01)
+            await anyio.sleep(0.005)
             ticks += 1
 
     async def _main() -> None:
         async with anyio.create_task_group() as tg:
             tg.start_soon(_ticker)
-            await ExperimentSpecialist().execute(training_task(), workspace(tmp_path), bundle())
+            await ExperimentSpecialist().execute(
+                training_task(), experiment_workspace(tmp_path), bundle()
+            )
             tg.cancel_scope.cancel()
 
     anyio.run(_main)
 
     assert len(window) == 2, "the slow write never ran"
-    # ~30 ticks fit in 0.3s; 0 if the write held the loop.
+    # ~30 ticks fit in 0.15s; 0 if the write held the loop.
     assert window[1] - window[0] >= 5

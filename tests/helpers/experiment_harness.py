@@ -16,7 +16,7 @@ from labpilot.research_engine.workspace_facade import Workspace
 COMPETITION = "demo"
 
 
-def workspace(tmp_path: Path) -> Workspace:
+def experiment_workspace(tmp_path: Path) -> Workspace:
     return Workspace.from_competition(
         tmp_path / "knowledge", COMPETITION, code_root=tmp_path / "ws"
     ).ensure_roots()

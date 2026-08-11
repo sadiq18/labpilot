@@ -3,7 +3,8 @@
 The promotion subscriber ranks branches on the metric and breaks a tie by
 earliest finisher, so the payload carries a finish time. The stamp is only
 meaningful on a run that actually finished: the failure path shares this
-dict, and a `completed_at` on a run that died would assert the completion
+dict, and a
+`completed_at` on a run that died would assert the completion
 `test_failed_run_is_not_completed.py` exists to deny.
 """
 
@@ -18,7 +19,12 @@ from typing import Any
 
 import anyio
 import pytest
-from helpers.experiment_harness import bundle, stub_experiment_io, training_task, workspace
+from helpers.experiment_harness import (
+    bundle,
+    experiment_workspace,
+    stub_experiment_io,
+    training_task,
+)
 
 from labpilot.research_engine.agents import experiment as experiment_mod
 from labpilot.research_engine.agents.events import (
@@ -50,7 +56,7 @@ def _run(tmp_path: Path) -> list[tuple[str, dict[str, Any]]]:
     seen: list[tuple[str, dict[str, Any]]] = []
     agent = ExperimentSpecialist(on_event=lambda e, p: seen.append((e, p)))
 
-    anyio.run(lambda: agent.execute(training_task(), workspace(tmp_path), bundle()))
+    anyio.run(lambda: agent.execute(training_task(), experiment_workspace(tmp_path), bundle()))
     return seen
 
 
