@@ -29,6 +29,7 @@ from labpilot.research_engine.agents.git_worktree import (
 )
 from labpilot.research_engine.agents.parallel import ParallelWorkItem, run_parallel_sync
 from labpilot.research_engine.execution.training.compute_budget import (
+    available_cpus,
     cpu_share,
     reset_branch_cpu_share,
     set_branch_cpu_share,
@@ -89,10 +90,29 @@ def resolve_k(requested: int, *, available: int) -> int:
     there. This is public and takes the two counts separately; enforcing only
     the clamp that happens to bind today would make it wrong for a caller that
     passes an untruncated list.
+
+    A third clamp is the machine itself. Nothing else bounds K: `--branches`
+    takes any positive integer, so `-k 64` on a ten-core box checked out 64
+    worktrees and started 64 training runs, with `cpu_share` quietly handing
+    each of them 1 core and no indication the request was degenerate. Capped at
+    the CPUs actually available, and said out loud — a ceiling nobody can see is
+    the same surprise one step later.
     """
     if requested < 2 or available < 2:
         return 1
-    return min(requested, available)
+    k = min(requested, available)
+    cpus = available_cpus()
+    if cpus is not None and k > cpus:
+        logger.warning(
+            "%d branches requested but only %d CPUs are available; running %d "
+            "— more branches than cores oversubscribes the machine and gives "
+            "each of them a 1-core share",
+            k,
+            cpus,
+            cpus,
+        )
+        return cpus
+    return k
 
 
 def select_hypotheses(workspace: Workspace, limit: int) -> list[str]:
@@ -209,12 +229,16 @@ def prepare_branches(
                 _release(workspace, hypothesis_id)
                 claimed = None
                 continue
+            # Rebound so `Branch` is not handed the handler's Optional: the
+            # declaration above is `| None` only because the exception handler
+            # reads it before it can be set.
+            checked_out = worktree
             branches.append(
                 Branch(
                     hypothesis_id=hypothesis_id,
                     plan_id=plan_id,
-                    worktree=worktree,
-                    workspace=workspace.for_branch(worktree.path),
+                    worktree=checked_out,
+                    workspace=workspace.for_branch(checked_out.path),
                 )
             )
             claimed, worktree = None, None
@@ -228,7 +252,7 @@ def prepare_branches(
         # guard: three hypotheses, Ctrl-C at the second prompt, two left
         # `testing` and one worktree registered.
         if worktree is not None:
-            _remove_quietly(worktree)
+            _removed(worktree)
         if claimed is not None:
             _release(workspace, claimed)
         teardown_branches(workspace, branches, [])
@@ -236,12 +260,21 @@ def prepare_branches(
     return branches
 
 
-def _remove_quietly(worktree: ExperimentWorktree) -> None:
-    """Drop one worktree without displacing the exception being handled."""
+def _removed(worktree: ExperimentWorktree) -> bool:
+    """Drop one worktree; report whether it went.
+
+    The one guarded removal in this module. Both callers need the same
+    tolerance — a worktree that will not go must not stop the others, and must
+    not displace an exception already being handled — and the caller's response
+    differs only in what it then does about the claim, which is why this returns
+    a bool instead of deciding for them.
+    """
     try:
         remove_experiment_worktree(worktree)
     except Exception:  # noqa: BLE001 — startup reconciliation sweeps the rest
-        logger.exception("cannot remove worktree %s during teardown", worktree.path)
+        logger.exception("cannot remove worktree %s", worktree.path)
+        return False
+    return True
 
 
 def teardown_branches(
@@ -269,20 +302,16 @@ def teardown_branches(
     """
     succeeded = {o.hypothesis_id for o in outcomes if o.ok}
     for branch in branches:
-        try:
-            remove_experiment_worktree(branch.worktree)
-        except Exception:  # noqa: BLE001 — reconcile_worktrees sweeps the rest
+        if not _removed(branch.worktree):
             # Claim deliberately kept: the branch is still checked out, so
             # `create_experiment_worktree` for this experiment key would hit
             # git's "already checked out". Releasing here would make the
-            # hypothesis selectable again and every later step would claim
-            # it, fail to check it out, and release it — burning a fan-out
-            # slot each time until the next startup sweep clears the
-            # registration. Left `testing`, it is skipped instead.
-            logger.exception(
-                "cannot remove worktree %s; leaving %s claimed until startup "
-                "reconciliation clears it",
-                branch.worktree.path,
+            # hypothesis selectable again and every later step would claim it,
+            # fail to check it out, and release it — burning a fan-out slot each
+            # time until the next startup sweep clears the registration. Left
+            # `testing`, it is skipped instead.
+            logger.warning(
+                "leaving %s claimed until startup reconciliation clears its worktree",
                 branch.hypothesis_id,
             )
             continue

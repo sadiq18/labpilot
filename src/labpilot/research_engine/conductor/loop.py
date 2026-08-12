@@ -15,6 +15,8 @@ not by copying the two-call pattern used below.
 from __future__ import annotations
 
 import logging
+import os
+import socket
 import time
 from collections.abc import Callable
 from typing import Any
@@ -330,6 +332,60 @@ def _reconcile_stale_worktrees(store, workspace: Workspace) -> None:
 #: Session statuses whose worktrees a startup sweep must leave alone.
 _LIVE_SESSION_STATUSES = frozenset({"running", "paused"})
 
+#: Where a campaign records the process running it, so a later sweep can tell a
+#: live campaign from one that died without saying so.
+_OWNER_KEY = "owner"
+
+
+def claim_session_ownership(store, session_id: str) -> None:
+    """Record which process is running this campaign.
+
+    Status alone cannot answer "is this campaign alive?". Every transition to a
+    terminal state runs inside this loop, so a process killed by SIGKILL, OOM or
+    power loss leaves its session `running` for good — and the startup sweep,
+    which preserves live sessions' worktrees, then preserves exactly the ones it
+    exists to reclaim. Their experiment keys stay checked out and every later
+    fan-out over them fails with git's "already checked out".
+
+    A pid and host answer it directly, with no threshold to tune: on this host a
+    dead pid means the campaign is gone. Kept in `metadata` rather than a new
+    column, so no migration is needed.
+    """
+    session = store.get_session(session_id)
+    if session is None:
+        return
+    metadata = dict(session.metadata or {})
+    metadata[_OWNER_KEY] = {"pid": os.getpid(), "host": socket.gethostname()}
+    try:
+        store.update_session_metadata(session_id, metadata)
+    except Exception:  # noqa: BLE001 — a campaign runs fine without the stamp
+        logger.exception("cannot record session ownership for %s", session_id)
+
+
+def _owner_is_gone(session: Any) -> bool:
+    """True only when this host can prove the owning process is dead.
+
+    Conservative in every other case — no stamp (a session from before this
+    existed), another host, an unreadable value — because guessing wrong deletes
+    a running campaign's checkouts mid-experiment, while over-keeping costs a
+    stale worktree that the next provable case clears.
+    """
+    owner = (getattr(session, "metadata", None) or {}).get(_OWNER_KEY)
+    if not isinstance(owner, dict) or owner.get("host") != socket.gethostname():
+        return False
+    pid = owner.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        # Signal 0 checks existence without delivering anything.
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        # PermissionError and friends mean it exists but is not ours.
+        return False
+    return False
+
 
 def _live_branches(store, workspace: Workspace) -> set[str]:
     """Branch names the startup sweep must leave alone.
@@ -354,10 +410,7 @@ def _live_branches(store, workspace: Workspace) -> set[str]:
     from labpilot.research_engine.agents.git_worktree import list_registered_worktrees
 
     try:
-        known = {
-            session.id: str(session.status).strip().lower()
-            for session in store.list_sessions()
-        }
+        known = {session.id: session for session in store.list_sessions()}
     except Exception:  # noqa: BLE001 — an unreadable store means sweep nothing
         logger.exception("cannot list sessions; leaving every worktree in place")
         return _all_registered_branches(workspace)
@@ -371,8 +424,14 @@ def _live_branches(store, workspace: Workspace) -> set[str]:
     for branch in registered.values():
         if not branch:
             continue
-        status = known.get(_session_of(branch))
-        if status is None or status in _LIVE_SESSION_STATUSES:
+        session = known.get(_session_of(branch))
+        if session is None:
+            preserve.add(branch)
+            continue
+        if (
+            str(session.status).strip().lower() in _LIVE_SESSION_STATUSES
+            and not _owner_is_gone(session)
+        ):
             preserve.add(branch)
     return preserve
 
@@ -464,6 +523,29 @@ def _as_pathspecs(patterns: tuple[str, ...]) -> list[str]:
     added there cannot silently go unhandled here.
     """
     return [pattern.lstrip("/") for pattern in patterns]
+
+
+def _fan_out_with_task_cleanup(store, task_id: str, *args: Any, **kwargs: Any) -> Any:
+    """`_fan_out_experiment`, cancelling the superseded task if it raises.
+
+    The task was enqueued for the sequential dispatch this step is about to
+    replace. When the fan-out returns records the caller cancels it, and when
+    the fan-out *declines* the caller goes on to dispatch it — but an exception
+    escaping in between left it `pending` forever, with no worker that would
+    ever claim it. A `KeyboardInterrupt` at the approval prompt is the ordinary
+    way that happens.
+
+    `BaseException`, for that reason, and re-raised untouched: the operator's
+    interrupt still ends the campaign.
+    """
+    try:
+        return _fan_out_experiment(store, *args, **kwargs)
+    except BaseException:
+        try:
+            store.update_task_status(task_id, "cancelled", error="fan-out interrupted")
+        except Exception:  # noqa: BLE001 — must not displace the original
+            logger.exception("cannot cancel task %s after a failed fan-out", task_id)
+        raise
 
 
 def _experiment_agent(*, llm_client: Any | None) -> Any | None:
@@ -877,6 +959,9 @@ def _run_until_stop_inner(
         raise ValueError(f"unknown session: {session_id}")
     branch_agent: Any = None
     if branches > 1:
+        # Stamped before the sweep, so this campaign's own worktrees can never
+        # be candidates for it.
+        claim_session_ownership(store, session_id)
         _reconcile_stale_worktrees(store, workspace)
         branch_agent = _experiment_agent(llm_client=llm_client)
 
@@ -1215,8 +1300,9 @@ def _run_until_stop_inner(
                         _progress(f"Rejected {tool_step.tool}")
                         break
                 if tool_step.tool in _EXPERIMENT_TOOLS and branches > 1:
-                    fanned = _fan_out_experiment(
+                    fanned = _fan_out_with_task_cleanup(
                         store,
+                        task.id,
                         workspace,
                         session_id,
                         step=step,

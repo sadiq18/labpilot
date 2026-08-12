@@ -234,11 +234,14 @@ def _read_state(path: Path) -> dict[str, Any]:
     return state if isinstance(state, dict) else {}
 
 
-def _metric_for(payload: dict[str, Any]) -> tuple[str | None, bool]:
+def _metric_for(payload: dict[str, Any]) -> tuple[str | None, bool | None]:
     """The metric key and direction to rank by, or `(None, True)` to decline.
 
     A `None` key means "do not rank" — including when the *direction* is what
-    could not be resolved. Promotion has no direction of its own to fall back
+    could not be resolved, in which case the direction is returned as `None`
+    too rather than as a stand-in value. Nothing reads it while the key is
+    `None`, but a fabricated `True` there is one reordered check away from being
+    the wrong-winner bug again. Promotion has no direction of its own to fall back
     on: the conductor steers by `BudgetConfig.maximize` and this cannot read
     it (`agents` may not import `conductor`), so guessing means assuming
     "higher is better" for a metric nobody classified. Measured on a
@@ -265,9 +268,9 @@ def _metric_for(payload: dict[str, Any]) -> tuple[str | None, bool]:
     # competition, which is worse than declining to resolve one.
     competition = str(payload.get("competition") or "").strip()
     if not knowledge_dir or not execution_id or not competition:
-        return None, True
+        return None, None
     if not isinstance(metrics, dict):
-        return None, True
+        return None, None
 
     runs_dir = payload.get("runs_dir")
     workspace = Workspace(
@@ -287,7 +290,7 @@ def _metric_for(payload: dict[str, Any]) -> tuple[str | None, bool]:
                 payload.get("competition"),
                 metric_key,
             )
-        return None, True
+        return None, None
     return metric_key, maximize
 
 

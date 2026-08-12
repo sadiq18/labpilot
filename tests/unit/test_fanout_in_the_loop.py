@@ -486,6 +486,106 @@ def test_a_paused_campaign_keeps_its_worktrees(
     assert tree.path.is_dir()
 
 
+def test_a_dead_owners_worktrees_are_swept_despite_a_running_status(
+    workspace: Workspace,
+) -> None:
+    """The case the sweep exists for and could not reach.
+
+    Every terminal status update runs inside the loop, so a process killed by
+    SIGKILL, OOM or power loss leaves its session `running` for good — and the
+    liveness rule then preserved exactly the worktrees the sweep was written to
+    reclaim, permanently, with `create_experiment_worktree` failing on those
+    experiment keys forever after. A pid answers "is it alive?" directly.
+    """
+    import os
+    import socket
+
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        dead = store.create_session("killed mid-run")
+        # Still `running`, as a hard kill leaves it, but owned by a pid that is
+        # gone. 2**22 is above every real pid on Linux and macOS defaults.
+        store.update_session_metadata(
+            dead.id, {"owner": {"pid": 2**22, "host": socket.gethostname()}}
+        )
+        live = store.create_session("actually running")
+        store.update_session_metadata(
+            live.id, {"owner": {"pid": os.getpid(), "host": socket.gethostname()}}
+        )
+
+        dead_tree = create_experiment_worktree(root, session_id=dead.id, experiment_key="H-d")
+        live_tree = create_experiment_worktree(root, session_id=live.id, experiment_key="H-l")
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert not dead_tree.path.exists(), "a dead campaign's worktree was preserved forever"
+    assert live_tree.path.is_dir(), "a live campaign lost its worktree"
+
+
+def test_a_dead_owner_on_another_host_is_left_alone(workspace: Workspace) -> None:
+    """A pid means nothing on a different machine, so it cannot be checked —
+    and over-keeping costs a stale worktree while over-deleting costs a running
+    experiment."""
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        elsewhere = store.create_session("running on the cluster")
+        store.update_session_metadata(
+            elsewhere.id, {"owner": {"pid": 2**22, "host": "some-other-box"}}
+        )
+        tree = create_experiment_worktree(
+            root, session_id=elsewhere.id, experiment_key="H-x"
+        )
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert tree.path.is_dir()
+
+
+def test_a_campaign_stamps_the_process_running_it(workspace: Workspace) -> None:
+    """Without the stamp there is nothing to check, and every crashed session
+    stays indistinguishable from a live one."""
+    import os
+
+    from labpilot.research_engine.conductor.loop import claim_session_ownership
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("g")
+
+        claim_session_ownership(store, session.id)
+
+        owner = store.get_session(session.id).metadata["owner"]
+    assert owner["pid"] == os.getpid()
+
+
+def test_an_interrupted_fan_out_cancels_the_task_it_superseded(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The task was enqueued for a sequential dispatch the fan-out replaced.
+    When the fan-out returns records the caller cancels it, and when the fan-out
+    declines the caller dispatches it — but an interrupt in between left it
+    `pending` forever with no worker that would ever claim it."""
+    from labpilot.research_engine.conductor.loop import _fan_out_with_task_cleanup
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("g")
+        task = store.enqueue(session.id, "run_plan")
+        monkeypatch.setattr(
+            "labpilot.research_engine.conductor.loop._fan_out_experiment",
+            lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()),
+        )
+
+        with pytest.raises(KeyboardInterrupt):
+            _fan_out_with_task_cleanup(store, task.id, workspace, session.id)
+
+        assert store.get_task(task.id).status == "cancelled"
+
+
 def test_an_unreadable_session_table_sweeps_nothing(
     workspace: Workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:

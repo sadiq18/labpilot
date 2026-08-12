@@ -14,16 +14,21 @@ rounds: promotion asked the shared resolver without a `fallback_maximize` and
 took its `True` default, so on `cv_rmse` it promoted 0.50 over 0.20 — the worse
 branch. Nothing looked at a real verdict, so nothing noticed.
 
-Runs the real `ExperimentSpecialist` through `build_default_specialist_registry`
-— the same construction `_experiment_agent` uses, subscribers included — with
+Runs the real `ExperimentSpecialist` through
+`build_default_specialist_registry`, built once per test as
+`_experiment_agent` builds it once per campaign, subscribers included — with
 only the git snapshot and the training run stubbed. What ranks, and which way,
 is entirely production code.
+
+The branches run in sequence here; concurrent arrivals into one cohort file are
+covered in `test_promotion_cohort.py` under the cohort lock.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from helpers.experiment_harness import (
@@ -56,9 +61,22 @@ def _profile(workspace: Workspace, direction: str) -> None:
     )
 
 
+@pytest.fixture
+def agent():
+    """The one specialist every branch of a campaign runs.
+
+    Built once, because `_experiment_agent` is called once per campaign — so all
+    K branches publish to a single bus and a single subscriber set. A registry
+    per branch would give each its own and quietly stop covering that.
+    """
+    registry = build_default_specialist_registry(dry_run_default=False)
+    return registry.require("experiment").agent
+
+
 def _run_branch(
     workspace: Workspace,
     monkeypatch: pytest.MonkeyPatch,
+    agent: Any,
     *,
     execution_id: str,
     metrics: dict[str, object],
@@ -67,9 +85,8 @@ def _run_branch(
     stub_experiment_io(monkeypatch, execution_id=execution_id, status="succeeded")
     # What a finished training run leaves behind for the specialist to read.
     (workspace.root / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
-    registry = build_default_specialist_registry(dry_run_default=False)
     execute_agent_sync(
-        registry.require("experiment").agent,
+        agent,
         training_task(plan_id=f"P-{execution_id}", cohort_id=_COHORT, dry_run=False),
         workspace,
         bundle(),
@@ -90,15 +107,15 @@ def workspace(tmp_path: Path) -> Workspace:
 
 
 def test_the_lower_error_branch_wins_on_a_minimised_metric(
-    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch, agent: Any
 ) -> None:
     """The bug this file was written for. `cv_rmse` is an error metric, so 0.20
     beats 0.50 — and promotion has to learn that from the competition rather
     than from a default."""
     _profile(workspace, "minimize")
 
-    _run_branch(workspace, monkeypatch, execution_id="E-1", metrics={"cv_rmse": 0.50})
-    _run_branch(workspace, monkeypatch, execution_id="E-2", metrics={"cv_rmse": 0.20})
+    _run_branch(workspace, monkeypatch, agent, execution_id="E-1", metrics={"cv_rmse": 0.50})
+    _run_branch(workspace, monkeypatch, agent, execution_id="E-2", metrics={"cv_rmse": 0.20})
 
     state = _verdict(workspace)
     assert sorted(m["id"] for m in state["members"]) == ["E-1", "E-2"]
@@ -109,14 +126,14 @@ def test_the_lower_error_branch_wins_on_a_minimised_metric(
 
 
 def test_the_higher_score_branch_wins_on_a_maximised_metric(
-    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch, agent: Any
 ) -> None:
     """The mirror, so a verdict that ignores the direction entirely cannot pass
     both halves."""
     _profile(workspace, "maximize")
 
-    _run_branch(workspace, monkeypatch, execution_id="E-1", metrics={"cv_rmse": 0.50})
-    _run_branch(workspace, monkeypatch, execution_id="E-2", metrics={"cv_rmse": 0.20})
+    _run_branch(workspace, monkeypatch, agent, execution_id="E-1", metrics={"cv_rmse": 0.50})
+    _run_branch(workspace, monkeypatch, agent, execution_id="E-2", metrics={"cv_rmse": 0.20})
 
     state = _verdict(workspace)
     assert state["maximize"] is True
@@ -125,15 +142,15 @@ def test_the_higher_score_branch_wins_on_a_maximised_metric(
 
 
 def test_without_a_profile_the_cohort_records_members_but_no_winner(
-    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch, agent: Any
 ) -> None:
     """No profile means no direction, and promotion has none of its own to fall
     back on — the conductor's `BudgetConfig.maximize` is unreachable from
     `agents`. Declining is the fix for the wrong-winner bug: this is the exact
     case that used to promote 0.50 over 0.20.
     """
-    _run_branch(workspace, monkeypatch, execution_id="E-1", metrics={"cv_rmse": 0.50})
-    _run_branch(workspace, monkeypatch, execution_id="E-2", metrics={"cv_rmse": 0.20})
+    _run_branch(workspace, monkeypatch, agent, execution_id="E-1", metrics={"cv_rmse": 0.50})
+    _run_branch(workspace, monkeypatch, agent, execution_id="E-2", metrics={"cv_rmse": 0.20})
 
     state = _verdict(workspace)
     assert sorted(m["id"] for m in state["members"]) == ["E-1", "E-2"]
@@ -142,7 +159,7 @@ def test_without_a_profile_the_cohort_records_members_but_no_winner(
 
 
 def test_a_dry_run_cohort_records_members_but_promotes_nobody(
-    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch, agent: Any
 ) -> None:
     """`run_experiment` defaults to a dry run, and a dry run writes
     `status: dry_run_stub`. The placeholder guard refuses those, so the whole
@@ -156,6 +173,7 @@ def test_a_dry_run_cohort_records_members_but_promotes_nobody(
         _run_branch(
             workspace,
             monkeypatch,
+            agent,
             execution_id=execution_id,
             metrics={"status": "dry_run_stub", "cv_rmse": score},
         )
@@ -166,7 +184,7 @@ def test_a_dry_run_cohort_records_members_but_promotes_nobody(
 
 
 def test_the_cohort_survives_its_branch_workspaces_being_torn_down(
-    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch, agent: Any
 ) -> None:
     """The verdict has to outlive the worktrees it compared. Written under
     `effective_runs_dir`, which `for_branch` pins to the shared workspace, so a
@@ -177,8 +195,8 @@ def test_the_cohort_survives_its_branch_workspaces_being_torn_down(
     (branch_root / "pipeline").mkdir()
     branch = workspace.for_branch(branch_root)
 
-    _run_branch(branch, monkeypatch, execution_id="E-1", metrics={"cv_rmse": 0.50})
-    _run_branch(branch, monkeypatch, execution_id="E-2", metrics={"cv_rmse": 0.20})
+    _run_branch(branch, monkeypatch, agent, execution_id="E-1", metrics={"cv_rmse": 0.50})
+    _run_branch(branch, monkeypatch, agent, execution_id="E-2", metrics={"cv_rmse": 0.20})
 
     import shutil
 

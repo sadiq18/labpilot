@@ -26,6 +26,7 @@ from labpilot.research_engine.conductor.fanout import (
 )
 from labpilot.research_engine.execution.training.compute_budget import (
     THREAD_LIMIT_VARS,
+    available_cpus,
     cpu_share,
     thread_limit_env,
 )
@@ -35,16 +36,27 @@ from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import scaffold_workspace
 
 
+def _git(path: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=path, capture_output=True, text=True, check=True
+    ).stdout
+
+
 def _repo(path: Path) -> Path:
     """A git repo with one commit — `worktree add` needs a HEAD to branch."""
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=path, check=True)
+    _git(path, "init", "-q")
+    _git(path, "config", "user.email", "t@t")
+    _git(path, "config", "user.name", "t")
     (path / "seed.txt").write_text("seed\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
-    subprocess.run(["git", "commit", "-qm", "seed"], cwd=path, check=True)
+    _git(path, "add", "-A")
+    _git(path, "commit", "-qm", "seed")
     return path
+
+
+def _assert_no_worktrees(workspace: Workspace) -> None:
+    """No experiment worktree is still registered with git."""
+    assert ".worktrees" not in _git(Path(workspace.root), "worktree", "list")
 
 
 @pytest.fixture
@@ -135,6 +147,27 @@ def test_k_is_clamped_by_both_the_request_and_what_exists(
     requested: int, available: int, expected: int
 ) -> None:
     assert resolve_k(requested, available=available) == expected
+
+
+def test_k_is_capped_by_the_cores_the_machine_actually_has() -> None:
+    """Nothing else bounded K. `--branches` takes any positive integer, so
+    `-k 64` on a ten-core box checked out 64 worktrees and started 64 training
+    runs, with `cpu_share` quietly handing each a 1-core share and no sign the
+    request was degenerate.
+
+    Derived from `available_cpus()` rather than a literal, so this asserts the
+    rule on whatever machine runs it.
+    """
+    cpus = available_cpus()
+    if cpus is None:  # pragma: no cover — undiscoverable, so nothing to cap by
+        pytest.skip("this machine does not report its CPU count")
+
+    over = cpus * 4
+    assert resolve_k(over, available=over) == cpus
+    # And it must not cap a request the machine can actually honour.
+    assert resolve_k(cpus, available=cpus) == cpus
+    if cpus > 2:
+        assert resolve_k(2, available=cpus) == 2
 
 
 def test_one_hypothesis_is_never_a_fan_out() -> None:
@@ -320,12 +353,7 @@ def test_an_interrupt_at_the_approval_prompt_leaves_nothing_claimed(
     # Including the branch that had completed setup, and the one interrupted
     # between its claim and its worktree.
     assert [_status(workspace, i) for i in ids] == [HypothesisStatus.PROPOSED] * 3
-    assert ".worktrees" not in subprocess.run(
-        ["git", "worktree", "list"],
-        cwd=workspace.root,
-        capture_output=True,
-        text=True,
-    ).stdout
+    _assert_no_worktrees(workspace)
 
 
 def test_an_interrupt_after_a_worktree_is_checked_out_removes_it(
@@ -352,12 +380,7 @@ def test_an_interrupt_after_a_worktree_is_checked_out_removes_it(
         )
 
     assert _status(workspace, ids[0]) == HypothesisStatus.PROPOSED
-    assert ".worktrees" not in subprocess.run(
-        ["git", "worktree", "list"],
-        cwd=workspace.root,
-        capture_output=True,
-        text=True,
-    ).stdout
+    _assert_no_worktrees(workspace)
 
 
 def test_a_branch_whose_worktree_fails_gives_its_claim_back(
