@@ -325,12 +325,19 @@ def test_each_branch_feeds_the_circuit_breaker_separately(
     with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
         session = store.create_session("beat baseline")
 
-        _fan_out(
+        decisions = _fan_out(
             store, workspace, monkeypatch, session_id=session.id, agent=agent, branches=3
         )
 
+        # Against the branches that actually ran, not the number requested:
+        # `resolve_k` caps K at the machine's cores, so a two-core CI runner
+        # gets two branches where a ten-core laptop gets three. Asserting the
+        # request asserted the runner.
+        assert decisions is not None
+        ran = len(decisions) - 1  # the cohort record, then one per branch
+        assert ran >= 2, "not a fan-out"
         _, state = load_budget_pair(store.get_session(session.id))
-        assert state.consecutive_failures == 3
+        assert state.consecutive_failures == ran
 
 
 def test_a_successful_fan_out_resets_the_breaker(
