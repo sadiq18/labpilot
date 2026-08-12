@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from labpilot.research_engine.conductor.approvals import ApprovalResult
 from labpilot.research_engine.conductor.checkpoint import load_budget_pair
 from labpilot.research_engine.conductor.loop import (
     _DRY_RUN_DEFAULTS,
@@ -81,6 +82,8 @@ def _fan_out(
     session_id: str,
     agent: _Agent,
     branches: int = 2,
+    autonomy: int = 1,
+    approval_prompt: Any = None,
 ) -> Any:
     """Run a fan-out with plan compilation and the specialist stubbed out."""
     del monkeypatch  # the agent is injected now, not patched in
@@ -95,6 +98,12 @@ def _fan_out(
         dry_run=True,
         submit=False,
         agent=agent,
+        auto_approve=True,
+        approval_prompt=approval_prompt,
+        # 1, not 0: `generate_plan` is gated at autonomy 0, and these tests are
+        # about the fan-out rather than about the gate. The gate has its own
+        # tests below.
+        autonomy=autonomy,
         progress=lambda _m: None,
     )
 
@@ -211,6 +220,81 @@ def test_a_store_failure_while_naming_the_cohort_still_tears_down(
         with pytest.raises(RuntimeError):
             _fan_out(store, workspace, monkeypatch, session_id=session.id, agent=_Agent())
 
+    hypotheses = HypothesisStore(workspace.knowledge_dir, workspace.competition)
+    assert [hypotheses.get(i).status for i in ids] == [
+        HypothesisStatus.PROPOSED,
+        HypothesisStatus.PROPOSED,
+    ]
+    assert ".worktrees" not in _git(Path(workspace.root), "worktree", "list")
+
+
+def test_each_branchs_plan_goes_through_the_approval_gate(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`generate_plan` is in `PLAN_TOOLS`, gated at autonomy 0. Calling the
+    handler directly would fan out K billable LLM calls past a gate the
+    operator was given once, for the step's single task.
+    """
+    _propose(workspace, "a", "b")
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan",
+        lambda ws, **kw: type("R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}})(),
+    )
+    asked: list[str] = []
+
+    def prompt(tool_name: str) -> ApprovalResult:
+        asked.append(tool_name)
+        return ApprovalResult(decision="approve", comment="", gated_tool=tool_name)
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+
+        decisions = _fan_out(
+            store,
+            workspace,
+            monkeypatch,
+            session_id=session.id,
+            agent=_Agent(),
+            autonomy=0,
+            approval_prompt=prompt,
+        )
+
+    assert asked == ["generate_plan", "generate_plan"], (
+        "each branch's plan must be approved, not just the step's one task"
+    )
+    assert decisions is not None
+
+
+def test_a_rejected_plan_drops_its_branch_and_frees_the_hypothesis(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rejection has to leave nothing behind: `prepare_branches` releases the
+    claim of a branch whose planning raised, so an operator saying no does not
+    strand the hypothesis in `testing`."""
+    ids = _propose(workspace, "a", "b")
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan",
+        lambda ws, **kw: type("R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}})(),
+    )
+
+    def refuse(tool_name: str) -> ApprovalResult:
+        return ApprovalResult(decision="reject", comment="not now", gated_tool=tool_name)
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+
+        result = _fan_out(
+            store,
+            workspace,
+            monkeypatch,
+            session_id=session.id,
+            agent=_Agent(),
+            autonomy=0,
+            approval_prompt=refuse,
+        )
+
+    # Nothing could be planned, so there is no fan-out and no claim held.
+    assert result is None
     hypotheses = HypothesisStore(workspace.knowledge_dir, workspace.competition)
     assert [hypotheses.get(i).status for i in ids] == [
         HypothesisStatus.PROPOSED,

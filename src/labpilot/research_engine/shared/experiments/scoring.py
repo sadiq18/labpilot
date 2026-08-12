@@ -61,6 +61,36 @@ def resolve_metric_and_direction(
     under. It is used only when the competition profile cannot answer, so
     every caller agrees with the campaign rather than inventing a second
     opinion.
+
+    A caller with no such direction to fall back on must use
+    :func:`resolve_metric_key_and_optional_direction` and decline, rather than
+    letting this function's default stand in for an answer nobody has.
+    """
+    metric_name, resolved = resolve_metric_key_and_optional_direction(
+        workspace, execution_id, metrics
+    )
+    return metric_name, resolved if resolved is not None else fallback_maximize
+
+
+def resolve_metric_key_and_optional_direction(
+    workspace: Workspace,
+    execution_id: str,
+    metrics: dict[str, Any],
+) -> tuple[str | None, bool | None]:
+    """`(metric_key, maximize)` where `maximize` is None if truly unknowable.
+
+    The honest shape of the answer. `resolve_metric_and_direction` collapses
+    the `None` into a caller-supplied default, which is right for the
+    conductor — it is already steering by `BudgetConfig.maximize` and wants
+    every reading to agree with that — and wrong for anyone without such a
+    direction of their own.
+
+    Promotion is the second kind of caller, and taking the collapsed form's
+    default meant assuming "higher is better" for a metric it could not
+    classify: measured on a two-branch cohort, `cv_rmse` 0.50 was promoted over
+    0.20. Distinguishing "maximise" from "nobody knows" is what lets it decline
+    instead, and a cohort with no verdict is worth far more than one with the
+    wrong winner.
     """
     from labpilot.research_engine.evidence.builder import (
         is_placeholder_metrics,
@@ -75,7 +105,7 @@ def resolve_metric_and_direction(
         # A run that never trained a model has no key worth agreeing on, and
         # letting it name the cohort's metric would be that run steering a
         # comparison it cannot take part in.
-        return None, fallback_maximize
+        return None, None
 
     paths = ResearchPaths(workspace.knowledge_dir, workspace.competition)
     experiment = metrics_as_experiment(execution_id, workspace.competition, metrics)
@@ -98,17 +128,16 @@ def resolve_metric_and_direction(
         ),
     )
     if metric_name is None:
-        return None, fallback_maximize
+        return None, None
 
     # The comparator's own direction flag is discarded: it defaults to `True`
     # when it finds no spec, so trusting it records "higher is better" for an
     # error metric — and the whole reason `maximize` travels with the value is
     # that the sign is not re-derived later.
     #
-    # `None` is a real answer here. Rather than guess, fall back to the
-    # direction the caller is already running under.
-    resolved = _direction_for(workspace, execution_id, paths)
-    return metric_name, resolved if resolved is not None else fallback_maximize
+    # `None` is a real answer here, and it is returned as one — the caller
+    # decides whether it has a direction to fall back on or should decline.
+    return metric_name, _direction_for(workspace, execution_id, paths)
 
 
 def _direction_for(workspace: Workspace, execution_id: str, paths: Any) -> bool | None:

@@ -126,6 +126,9 @@ def _fan_out_experiment(
     dry_run: bool,
     submit: bool,
     agent: Any,
+    auto_approve: bool,
+    approval_prompt: ApprovalPrompt | None,
+    autonomy: int,
     progress: Callable[[str], None],
 ) -> list[DecisionRecord] | None:
     """Run this step as K parallel branches, or return None to stay sequential.
@@ -159,7 +162,29 @@ def _fan_out_experiment(
         return None
 
     def make_plan(ws: Workspace, hypothesis_id: str) -> str:
+        """Compile one branch's plan, through the same gate as a planned step.
+
+        `generate_plan` is in `PLAN_TOOLS`, which `gated_tools_for_autonomy(0)`
+        gates — so at autonomy 0 the operator approves every plan compilation
+        on the sequential path. Calling the handler directly would fan out K
+        billable LLM calls past that gate on one approval given for the step's
+        single task. Asked per branch, because that is what is being approved.
+
+        A rejection raises, which `prepare_branches` already handles the right
+        way: the claim goes back and the branch is dropped whole.
+        """
         from labpilot.research_engine.tools.handlers.plan import generate_plan
+
+        approval = maybe_approve(
+            store,
+            session_id=session_id,
+            tool_name="generate_plan",
+            auto=auto_approve,
+            prompt=approval_prompt,
+            autonomy=autonomy,
+        )
+        if approval is not None and approval.decision == "reject":
+            raise PermissionError(f"operator rejected a plan for {hypothesis_id}")
 
         result = generate_plan(ws, hypothesis_id=hypothesis_id, llm_client=llm_client)
         plan_id = str((getattr(result, "data", None) or {}).get("plan_id") or "")
@@ -1201,6 +1226,9 @@ def _run_until_stop_inner(
                         ),
                         submit=bool(step_args.get("submit", False)),
                         agent=branch_agent,
+                        auto_approve=auto_approve,
+                        approval_prompt=approval_prompt,
+                        autonomy=autonomy,
                         progress=_progress,
                     )
                     if fanned is not None:

@@ -235,7 +235,15 @@ def _read_state(path: Path) -> dict[str, Any]:
 
 
 def _metric_for(payload: dict[str, Any]) -> tuple[str | None, bool]:
-    """The metric key and direction the campaign is steering by.
+    """The metric key and direction to rank by, or `(None, True)` to decline.
+
+    A `None` key means "do not rank" — including when the *direction* is what
+    could not be resolved. Promotion has no direction of its own to fall back
+    on: the conductor steers by `BudgetConfig.maximize` and this cannot read
+    it (`agents` may not import `conductor`), so guessing means assuming
+    "higher is better" for a metric nobody classified. Measured on a
+    two-branch cohort, that promoted `cv_rmse` 0.50 over 0.20 — the worse
+    branch, which is worse than no verdict at all.
 
     Asks the resolver the conductor's own scoring uses, rather than reading a
     key off the payload's metrics: a cohort ranked on a different key than the
@@ -244,7 +252,7 @@ def _metric_for(payload: dict[str, Any]) -> tuple[str | None, bool]:
     a specialist can ask it — see `test_agents_do_not_import_conductor`.
     """
     from labpilot.research_engine.shared.experiments.scoring import (
-        resolve_metric_and_direction,
+        resolve_metric_key_and_optional_direction,
     )
     from labpilot.research_engine.workspace_facade import Workspace
 
@@ -268,7 +276,19 @@ def _metric_for(payload: dict[str, Any]) -> tuple[str | None, bool]:
         root=Path(str(payload.get("workspace_root") or knowledge_dir)),
         runs_dir=Path(str(runs_dir)) if runs_dir else None,
     )
-    return resolve_metric_and_direction(workspace, str(execution_id), metrics)
+    metric_key, maximize = resolve_metric_key_and_optional_direction(
+        workspace, str(execution_id), metrics
+    )
+    if metric_key is None or maximize is None:
+        if metric_key is not None:
+            logger.info(
+                "no resolvable direction for %s on %s; recording members without "
+                "a verdict rather than assuming higher-is-better",
+                payload.get("competition"),
+                metric_key,
+            )
+        return None, True
+    return metric_key, maximize
 
 
 def promote_from_completion(payload: dict[str, Any]) -> dict[str, Any] | None:

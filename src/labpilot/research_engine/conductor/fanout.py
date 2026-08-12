@@ -70,6 +70,12 @@ def resolve_k(requested: int, *, available: int) -> int:
     `cpu_share` divides the machine by this number, and a K that exceeded the
     worker pool would hand each branch a share of cores that more branches
     than can run are supposedly using. Design §6.
+
+    Both clamps are kept even though the current caller truncates its candidate
+    list to `requested` before asking, which makes `available <= requested`
+    there. This is public and takes the two counts separately; enforcing only
+    the clamp that happens to bind today would make it wrong for a caller that
+    passes an untruncated list.
     """
     if requested < 2 or available < 2:
         return 1
