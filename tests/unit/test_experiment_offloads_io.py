@@ -138,10 +138,13 @@ def test_the_offloaded_calls_still_read_and_write_the_right_paths(
     refs = {r["kind"]: r for r in payload["refs"]}
     assert "metrics" in refs
     record = Path(refs["experiment"]["path"])
-    # Under the workspace root, not merely somewhere: handing the write a
-    # different directory still produces a file that exists.
+    # Under the shared runs dir, not the code root: handing the write a
+    # different directory still produces a file that exists, and the shared
+    # location is what makes the record visible after a per-branch worktree
+    # (M11 task 7) is torn down.
     assert record.is_file()
-    assert record.is_relative_to(ws.root)
+    assert record.is_relative_to(ws.effective_runs_dir)
+    assert payload["runs_dir"] == str(ws.effective_runs_dir)
 
 
 def test_a_slow_record_write_does_not_stall_the_loop(

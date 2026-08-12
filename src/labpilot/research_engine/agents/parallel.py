@@ -37,6 +37,12 @@ class ParallelWorkItem:
     task: object
     cost: float = 1.0
     context: ContextBundle | None = None
+    #: This item's own workspace, or None to share the caller's — the same
+    #: per-item-else-shared rule as `context` above. M11 fan-out needs it:
+    #: each branch's code root is its own worktree, and a single shared
+    #: workspace would send every branch's writes back into the directory the
+    #: worktrees exist to keep them out of.
+    workspace: Workspace | None = None
     #: Where this item is meant to run; see `LOCAL_RUNTIME` above.
     runtime: str = LOCAL_RUNTIME
 
@@ -79,6 +85,15 @@ async def run_parallel_async(
 ) -> list[ParallelResult]:
     """Run work items concurrently; a *failing* item does not cancel siblings.
 
+    **Each agent must offload its blocking work.** Items are awaited on one
+    event loop, so an ``execute`` that computes inline rather than going
+    through ``anyio.to_thread.run_sync`` runs to completion before the next
+    item starts — the fan-out still sets up K worktrees, K claims and K
+    compute shares, and gets no concurrency at all, silently.
+    ``ExperimentSpecialist`` offloads (M11 task 9); a new specialist that does
+    not is the way this regresses. Pinned by
+    `test_an_agent_that_blocks_the_loop_gets_no_parallelism`.
+
     ``max_workers`` caps in-flight tasks. When ``budget_limit`` is set, items
     whose ``cost`` would exceed the remaining budget are skipped with an error.
 
@@ -120,7 +135,8 @@ async def run_parallel_async(
                     return
             try:
                 ctx = item.context if item.context is not None else context
-                refs = await item.agent.execute(item.task, workspace, ctx)
+                ws = item.workspace if item.workspace is not None else workspace
+                refs = await item.agent.execute(item.task, ws, ctx)
                 by_id[item.id] = ParallelResult(id=item.id, ok=True, refs=list(refs))
             except Exception as exc:  # noqa: BLE001 — isolate worker faults
                 by_id[item.id] = ParallelResult(

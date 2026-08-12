@@ -122,7 +122,7 @@ def test_m5_capstone_registry_events_parallel_git(tmp_path: Path) -> None:
     )
     assert exp_refs
     assert seen and seen[0].get("git_commit")
-    record = find_experiment_record(ws.root, "E-042")
+    record = find_experiment_record(ws.effective_runs_dir, "E-042")
     assert record is not None
     assert record["git_commit"] == seen[0]["git_commit"]
     assert record.get("git_branch") == "research/S-001/E-042"
@@ -144,4 +144,6 @@ def test_m5_capstone_registry_events_parallel_git(tmp_path: Path) -> None:
 
     # Submit remains a gated catalog tool, not auto-invoked by experiment.
     assert tools.get("submit") is not None
-    assert json.loads((ws.root / "experiment" / "record.json").read_text())["git_commit"]
+    assert json.loads(
+        (ws.effective_runs_dir / "experiment" / "record.json").read_text()
+    )["git_commit"]

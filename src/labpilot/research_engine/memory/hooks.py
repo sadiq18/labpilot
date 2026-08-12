@@ -74,6 +74,7 @@ def persist_experience_from_completion(
 
         reflection = payload.get("reflection")
         workspace_root = payload.get("workspace_root")
+        runs_dir = payload.get("runs_dir")
 
         extractor = ExperienceExtractor(knowledge_dir)
         try:
@@ -89,6 +90,12 @@ def persist_experience_from_completion(
                 reflection=reflection if isinstance(reflection, dict) else None,
                 comparison=comparison if isinstance(comparison, dict) else None,
                 workspace_path=Path(workspace_root) if workspace_root else None,
+                # `runs_dir` is where `ExperimentSpecialist` actually writes
+                # the record (shared, survives a per-branch worktree being
+                # torn down); `workspace_root` above is the code root, kept
+                # separately for facet extraction. Older payloads without
+                # `runs_dir` (pre-M11) fall back inside `extract()`.
+                runs_dir=Path(runs_dir) if runs_dir else None,
                 persist=True,
             )
         finally:

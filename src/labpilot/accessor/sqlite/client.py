@@ -86,14 +86,44 @@ class SqliteClient:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=not allow_cross_thread)
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
-        self.conn.execute("PRAGMA journal_mode = WAL")
+        # `busy_timeout` before anything that can contend, so the busy handler
+        # is armed for the rest of this constructor.
         self.conn.execute("PRAGMA busy_timeout = 5000")
-        if migrate:
-            self.migrate()
+        self.conn.execute("PRAGMA foreign_keys = ON")
+        # One lock over the WAL switch *and* the migration (M11). Both are
+        # writes that K branches opening their own store would otherwise run
+        # at once, and neither is safe to race:
+        #
+        # * `PRAGMA journal_mode = WAL` needs an exclusive lock and returns
+        #   SQLITE_BUSY without invoking the busy handler, so `busy_timeout`
+        #   does not cover it — a branch could lose the open to `database is
+        #   locked` before running a single query. (Skipping it when the mode
+        #   is already WAL was measured *slower* than reissuing it: the read
+        #   costs more than the no-op write.);
+        # * `run_migration` checks whether a column exists and then adds it,
+        #   so two openers that both read "absent" both run the `ALTER` and
+        #   the loser gets `duplicate column name`.
+        #
+        # Serialising the whole block rather than guarding each statement
+        # means the next migration added inherits the safety. Costs ~1ms per
+        # open, against a step that runs a training job.
+        with write_lock_for(self.db_path):
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            if migrate:
+                self._migrate_unlocked()
+
+    def _migrate_unlocked(self) -> None:
+        """`migrate()` without taking the lock — the caller already holds it.
+
+        Separate because `write_lock_for` is not reentrant, so the constructor
+        cannot reach the public method from inside its own lock.
+        """
+        run_migration(self.conn)
 
     def migrate(self) -> None:
-        run_migration(self.conn)
+        """Apply the schema, serialised against other openers (M11)."""
+        with write_lock_for(self.db_path):
+            self._migrate_unlocked()
 
     def schema_version(self) -> str:
         row = self.conn.execute(

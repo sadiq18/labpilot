@@ -15,6 +15,7 @@ from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.workspace import (
     MARKER_NAME,
     CompetitionWorkspace,
+    WorkspacePaths,
     competition_workspace_path,
     discover_workspace,
     ensure_required_ignores,
@@ -22,6 +23,10 @@ from labpilot.workspace import (
 )
 
 LayoutKind = Literal["client", "legacy"]
+
+# Legacy layout has no marker to read relative names from, and its hardcoded
+# ones have always matched these defaults.
+_DEFAULT_PATHS = WorkspacePaths()
 
 
 class Workspace(BaseModel):
@@ -37,8 +42,14 @@ class Workspace(BaseModel):
     layout: LayoutKind = "legacy"
     goal: str | None = None
     runs_dir: Path | None = None
+    data_dir_override: Path | None = None
+    cache_dir_override: Path | None = None
 
     _client: CompetitionWorkspace | None = PrivateAttr(default=None)
+    #: Set by :meth:`for_branch`. Marks a workspace whose `root` is a worktree
+    #: checkout rather than the campaign's own, so `ensure_roots` leaves the
+    #: tracked files in it alone.
+    _branched: bool = PrivateAttr(default=False)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -155,12 +166,55 @@ class Workspace(BaseModel):
         kd = Path(knowledge_dir).resolve() if knowledge_dir else (base / "knowledge")
         return cls.from_competition(kd, competition, goal=goal, runs_dir=runs_dir)
 
+    def for_branch(self, code_root: Path) -> Workspace:
+        """Copy whose *code* lives in a per-branch worktree (M11).
+
+        Code paths follow ``code_root``: ``root``, ``pipeline_dir`` and
+        ``artifacts_dir`` become branch-private, which is the isolation a
+        worktree exists to give. Everything shared stays pinned where the
+        campaign put it — ``data_dir`` and ``cache_dir`` so K branches don't
+        each re-download a competition into a worktree that is about to be
+        deleted, ``effective_runs_dir`` so a branch's experiment record
+        outlives the branch (see `agents/experiment.py`).
+
+        Pins resolve before the copy, so branching a branch keeps the original
+        shared locations rather than compounding.
+        """
+        branch = self.model_copy(
+            update={
+                "root": Path(code_root).resolve(),
+                "data_dir_override": self.data_dir,
+                "cache_dir_override": self.cache_dir,
+                "runs_dir": self.effective_runs_dir,
+            }
+        )
+        branch._branched = True
+        return branch
+
+    @property
+    def _paths(self) -> WorkspacePaths:
+        """Relative directory names this workspace's layout uses."""
+        return self._client.paths if self._client is not None else _DEFAULT_PATHS
+
+    def _under_root(self, relative: str) -> Path:
+        """Resolve a layout-relative name against the current code root.
+
+        Against ``self.root`` rather than ``self._client.root``: the two are the
+        same until :meth:`for_branch` moves the code into a worktree, and a path
+        that kept pointing at the client root would send every branch's writes
+        back into the shared workspace the worktree exists to protect.
+        """
+        return (self.root / relative).resolve()
+
     @property
     def data_dir(self) -> Path:
-        """Competition data root (``data/``)."""
-        if self._client is not None:
-            return self._client.data_dir
-        return (self.root / "data").resolve()
+        """Competition data root (``data/``).
+
+        Follows ``data_dir_override`` when pinned — see :meth:`for_branch`.
+        """
+        if self.data_dir_override is not None:
+            return Path(self.data_dir_override).resolve()
+        return self._under_root(self._paths.data)
 
     @property
     def raw_data_dir(self) -> Path:
@@ -170,23 +224,22 @@ class Workspace(BaseModel):
     @property
     def pipeline_dir(self) -> Path:
         """Pipeline / code package root."""
-        if self._client is not None:
-            return self._client.pipeline_dir
-        return (self.root / "pipeline").resolve()
+        return self._under_root(self._paths.pipeline)
 
     @property
     def artifacts_dir(self) -> Path:
         """Workspace artifacts root (submissions, copies)."""
-        if self._client is not None:
-            return self._client.artifacts_dir
-        return (self.root / "artifacts").resolve()
+        return self._under_root(self._paths.artifacts)
 
     @property
     def cache_dir(self) -> Path:
-        """Local cache root."""
-        if self._client is not None:
-            return self._client.cache_dir
-        return (self.root / ".cache").resolve()
+        """Local cache root.
+
+        Follows ``cache_dir_override`` when pinned — see :meth:`for_branch`.
+        """
+        if self.cache_dir_override is not None:
+            return Path(self.cache_dir_override).resolve()
+        return self._under_root(self._paths.cache)
 
     @property
     def research_paths(self) -> ResearchPaths:
@@ -209,6 +262,12 @@ class Workspace(BaseModel):
         only path that runs against an *existing* workspace, so it is where a
         newly-added lock/temp pattern can actually reach the workspaces that
         generate those files. `scaffold_workspace` only covers fresh ones.
+
+        Not on a branch, though: ``.gitignore`` is tracked, so appending to
+        the copy inside a worktree would dirty the branch before its
+        experiment starts and fold an unrelated edit into the snapshot commit
+        and ``files_changed``. The shared workspace this branch came from runs
+        the reconciliation itself, and that is the copy under version control.
         """
         self.research_paths.ensure()
         for path in (
@@ -220,5 +279,6 @@ class Workspace(BaseModel):
             self.effective_runs_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
-        ensure_required_ignores(self.root)
+        if not self._branched:
+            ensure_required_ignores(self.root)
         return self

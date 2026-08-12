@@ -158,12 +158,36 @@ against the same, correctly-locked ledger. That is exactly the "wait for the
 next-retry time and resume" behavior the budget question needed, and it costs
 M11 nothing — `ExperimentSpecialist` already calls through this gateway.
 
-**No pre-split, no `fitroute` change, no M10 sign-off needed.** The only
-residual property worth naming, not fixing: if K branches simultaneously
-exhaust the *same* provider, each independently waits and retries — correct,
-bounded by `max_wait_seconds`, but not perfectly efficient (a small
-thundering-herd retry burst when the cooldown lifts). Not a defect in this
-milestone's scope.
+**No pre-split, no `fitroute` change, no M10 sign-off needed.**
+
+**Measured limit — a branch gets exactly one wait** (task 8,
+`tests/unit/test_branches_pace_independently.py`). The residual above was first
+written as "each independently waits and retries — not perfectly efficient (a
+small thundering-herd retry burst)", which reads as a throughput note. It is not.
+
+`_complete_once` sleeps `wait_seconds`, re-selects once, and raises
+`RoleUnavailable` if the provider is still spent; the outer `complete` retry
+loop passes `allow_wait=allow_wait and attempt == 1`, so nothing waits a second
+time. One window's worth of branches is served after that single wait and the
+rest **fail** — they do not run slower.
+
+The consequence is accounting, not efficiency: each excess branch is recorded as
+a *failed experiment* and counts against the circuit breaker
+(`max_consecutive_failures`, default 3). A wide fan-out against a slow provider
+spends K worktrees to get a window's worth of results and a run of breaker
+strikes — for a rate limit, not for anything the science did.
+
+So **K is bounded by the provider's rpm, not only by cores**: keep K within a
+small multiple of the narrowest provider the role can reach, or give the role a
+second provider so exhaustion degrades sideways instead of waiting.
+
+*An earlier version of this section tabulated exact served/failed counts per
+(K, rpm) as `served = min(K, 2 × rpm)`. That table was wrong to state as
+behaviour: `select_route` and the ledger `record` are not atomic, so how many
+branches slip through before the first one records is a property of thread
+scheduling. Identical code served 2-of-3 in 40/40 trials on a ten-core machine
+and 3-of-3 on a two-core CI runner. The rule above — one wait per branch — is
+what the code guarantees; the counts were the scheduler.*
 
 ## 6. Design
 
@@ -558,31 +582,79 @@ every branch must agree on.
 
 **Ignoring is only half of it.** Keeping these paths untracked stops them being
 *copied*; it does not make a branch read the shared ones. That needs the
-`Workspace` facade, which already takes `knowledge_dir`, `runs_dir` and
-`code_root` independently: task 7 points `code_root` at the worktree and leaves
-the other two on the shared workspace. Without that, a branch simply recreates
-an empty `knowledge/` inside its worktree and the drift returns.
+`Workspace` facade to split "where the code is" from "where the research state
+is". Without it, a branch simply recreates an empty `knowledge/` inside its
+worktree and the drift returns.
 
-That independence does not extend to `data_dir`/`cache_dir` — both are
-computed properties on `Workspace`, derived from `root`, with no field of
-their own the way `runs_dir` has. Once `code_root` points at a worktree those
-two move with it, and since `LARGE_INPUT_IGNORES` now keeps `data/`/`.cache/`
-out of every worktree's checkout, a branch that reaches for either finds it
-merely empty rather than duplicated — a competition dataset a branch expects
-to read, or a Kaggle cache it expects to reuse, simply isn't there. Task 7
-needs to close this the same way it closes it for `knowledge_dir`/`runs_dir`,
-or the fan-out re-downloads/re-materializes these per branch, which is the
-K-times cost this section exists to avoid, just moved from disk to network
-and wall-clock.
+**Resolved — `Workspace.for_branch(code_root)`.** Of the two options this
+section offered (overridable fields, or symlinking `data/` and `.cache/` into
+each worktree), the fields won. Symlinks looked cheaper — read-only data, no
+copy, relative paths unchanged — but they put a second source of truth on
+disk for every branch, and `git worktree remove` refuses to delete a tree
+whose contents it does not recognise, so teardown would have had to unpick
+them in the right order. Fields keep the whole question in one process.
 
-**Migration gap.** A `.gitignore` pattern does not untrack a file that is
-already tracked, so workspaces scaffolded before this change keep copying
-`knowledge.db` and `runs/` into every worktree. `ensure_required_ignores` fixes
-the pattern but cannot fix the index. Task 7 runs `reconcile_worktrees` at
-campaign start and already shells out to git; untracking there
-(`git rm -r --cached`) is the natural home, and is deliberately not done
-automatically here — it rewrites a user's index and belongs with the change
-that actually depends on it.
+`for_branch` points `root` at the worktree, so `pipeline_dir` and
+`artifacts_dir` follow it — that is the isolation — and *pins* the shared
+locations: `data_dir` and `cache_dir` through the new
+`data_dir_override`/`cache_dir_override` fields, `effective_runs_dir` through
+the `runs_dir` field that already existed. Pins resolve before the copy, so
+branching a branch keeps the original locations rather than compounding.
+
+The path properties had to change to make this work at all. Each one
+short-circuited to `self._client` first, so under the client layout they
+returned the shared workspace's directory no matter what `root` said — asking
+for a worktree root changed nothing. They now resolve the layout's *relative*
+name against the current `root`, which also keeps a workspace with custom
+directory names working on a branch.
+
+One consequence worth stating: `ensure_roots()` skips
+`ensure_required_ignores` on a branch. `.gitignore` is tracked, so appending
+to the copy inside a worktree would dirty the branch before its experiment
+starts and fold an unrelated edit into the snapshot commit and
+`files_changed`.
+
+**Session liveness — a status cannot answer it.** The startup sweep preserves
+worktrees belonging to `running` or `paused` sessions, because sweeping on
+"unknown means dead" would delete a concurrent campaign's checkouts
+mid-experiment. But every transition to a terminal status runs *inside* the
+loop, so a process killed by SIGKILL, OOM or power loss leaves its session
+`running` for good — and the sweep then preserved exactly the worktrees it was
+written to reclaim, permanently, with `create_experiment_worktree` failing on
+those experiment keys forever after.
+
+Campaigns therefore stamp `metadata.owner = {pid, host}` at start
+(`claim_session_ownership`), and the sweep treats a session as dead only when it
+can *prove* it: same host, and `os.kill(pid, 0)` raising `ProcessLookupError`.
+No stamp, a different host, or an unreadable value all count as live — guessing
+wrong deletes a running experiment, while over-keeping costs one stale worktree
+that the next provable case clears. A heartbeat threshold was the alternative
+and needs a number nobody can pick: a training step can legitimately run for
+hours without touching the row.
+
+**Fan-out width is bounded by cores too.** `resolve_k` caps K at
+`available_cpus()` and logs when it does. Nothing else bounded it — `-k 64` on a
+ten-core box checked out 64 worktrees and started 64 training runs, with
+`cpu_share` handing each a 1-core share and no sign the request was degenerate.
+This is the disk/CPU half of the ceiling; §5 has the LLM half
+(`served = min(K, 2 × rpm)`).
+
+**Migration gap — closed in `_untrack_shared_state`.** A `.gitignore` pattern
+does not untrack a file that is already tracked, so workspaces scaffolded
+before this change keep copying `knowledge.db` and `runs/` into every
+worktree. `ensure_required_ignores` fixes the pattern but cannot fix the
+index. The conductor now untracks them (`git rm -r --cached`) beside
+`reconcile_worktrees` at campaign start, and only when `branches > 1` — it
+rewrites a user's index, so it belongs with the feature that depends on it
+rather than in a helper every command runs.
+
+Two details that bit: `SHARED_STATE_IGNORES` holds *gitignore patterns*, and a
+leading `/` anchors those to the repository root but means an absolute path to
+a git pathspec — `git ls-files -- '/runs/'` dies with `fatal: Invalid path
+'/runs'`. `_as_pathspecs` strips it, deriving from the constant so a pattern
+added there cannot go unhandled. And `git rm` aborts the whole invocation when
+any one pathspec matches nothing, so a workspace with `runs/` tracked but no
+`knowledge.db` would have untracked neither without `--ignore-unmatch`.
 
 **Compute budget (CPU/threads) — real, unaddressed gap.** Nothing sets thread
 or core limits today — confirmed via a repo-wide search: zero hits for

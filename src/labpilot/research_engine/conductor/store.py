@@ -31,7 +31,19 @@ _FEEDBACK_PREFIX = "F"
 
 
 class ConductorStore:
-    """CRUD for OS session / queue / decision log under a competition knowledge DB."""
+    """CRUD for OS session / queue / decision log under a competition knowledge DB.
+
+    Cheap enough to open per unit of work, and that is how a K-way fan-out
+    (M11) uses it: each branch opens its own rather than sharing the
+    campaign's. The connection is thread-confined — `SqliteClient` defaults
+    `check_same_thread` on and this class does not opt out — and a branch's
+    work runs on a worker thread, so a shared handle would raise there. Writes
+    that span statements serialise on `write_lock_for`, which is a file lock,
+    so it keeps holding when a branch becomes a separate process.
+
+    Measured warm: ~1.7ms to open, ~14ms for a K=8 step, against a step that
+    runs a training job.
+    """
 
     def __init__(self, knowledge_dir: Path, competition: str) -> None:
         self.knowledge_dir = Path(knowledge_dir)
@@ -42,6 +54,14 @@ class ConductorStore:
 
     def close(self) -> None:
         self._client.close()
+
+    def __enter__(self) -> ConductorStore:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        # Matches `KnowledgeStore`, so a branch that opens one closes it
+        # without hand-written try/finally at every call site.
+        self.close()
 
     # -- sessions ----------------------------------------------------------
 
@@ -112,30 +132,49 @@ class ConductorStore:
         decision_id: str | None = None,
         max_retries: int = 1,
     ) -> OsTask:
-        tid = self._new_id(_TASK_PREFIX, "os_tasks")
-        now = _now()
-        self._conn.execute(
-            """
-            INSERT INTO os_tasks (
-                id, session_id, tool_name, status, priority, retry_count, max_retries,
-                args_json, dependencies_json, artifact_refs_json, error, decision_id,
-                created_at, updated_at, started_at, completed_at
-            ) VALUES (?, ?, ?, 'pending', ?, 0, ?, ?, ?, '[]', NULL, ?, ?, ?, NULL, NULL)
-            """,
-            (
-                tid,
-                session_id,
-                tool_name,
-                priority,
-                max_retries,
-                dumps(args or {}),
-                dumps(dependencies or []),
-                decision_id,
-                now,
-                now,
-            ),
-        )
-        self._conn.commit()
+        """Queue one tool call; allocate its id and insert it as one locked step.
+
+        Same allocate-then-insert race as `_append_new` guards, and the same
+        fix (M11). It matters here for a different reason: decisions are
+        recorded once per branch, but a task is what a branch *is* — K-way
+        fan-out enqueues K of them at once. Measured unlocked, with each
+        branch on its own connection as fan-out requires: 8 concurrent
+        enqueues produced one task and seven `UNIQUE constraint failed:
+        os_tasks.id`.
+
+        `get_task` reads outside the lock deliberately — the row is committed
+        by then, and a single `SELECT` needs no serialising.
+
+        The timestamp is taken inside the lock, with the id: stamped before
+        the wait, K branches queued at once would all record roughly the
+        caller's time rather than the insert's, and a row written later could
+        carry an earlier `created_at` than one written before it.
+        """
+        with write_lock_for(self.paths.db_path):
+            now = _now()
+            tid = self._new_id(_TASK_PREFIX, "os_tasks")
+            self._conn.execute(
+                """
+                INSERT INTO os_tasks (
+                    id, session_id, tool_name, status, priority, retry_count, max_retries,
+                    args_json, dependencies_json, artifact_refs_json, error, decision_id,
+                    created_at, updated_at, started_at, completed_at
+                ) VALUES (?, ?, ?, 'pending', ?, 0, ?, ?, ?, '[]', NULL, ?, ?, ?, NULL, NULL)
+                """,
+                (
+                    tid,
+                    session_id,
+                    tool_name,
+                    priority,
+                    max_retries,
+                    dumps(args or {}),
+                    dumps(dependencies or []),
+                    decision_id,
+                    now,
+                    now,
+                ),
+            )
+            self._conn.commit()
         task = self.get_task(tid)
         assert task is not None
         return task

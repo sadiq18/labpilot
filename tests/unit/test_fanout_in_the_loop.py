@@ -1,0 +1,714 @@
+"""The conductor's side of a fan-out (M11 task 7).
+
+Covers what `test_fanout_branches.py` cannot: that each branch gets its own
+audit record and its own entry in the circuit breaker's counters, and that
+asking for one branch leaves the sequential path exactly as it was.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from labpilot.research_engine.conductor.approvals import ApprovalResult
+from labpilot.research_engine.conductor.checkpoint import load_budget_pair
+from labpilot.research_engine.conductor.loop import (
+    _DRY_RUN_DEFAULTS,
+    _as_pathspecs,
+    _fan_out_experiment,
+    _untrack_shared_state,
+)
+from labpilot.research_engine.conductor.store import ConductorStore
+from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+from labpilot.research_engine.shared.experiments.models import HypothesisStatus
+from labpilot.research_engine.workspace_facade import Workspace
+from labpilot.workspace import SHARED_STATE_IGNORES, scaffold_workspace
+
+
+def _git(path: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=path, capture_output=True, text=True, check=True
+    ).stdout
+
+
+@pytest.fixture
+def workspace(tmp_path: Path) -> Workspace:
+    client = scaffold_workspace(tmp_path / "titanic", "titanic")
+    root = Path(client.root)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@t")
+    _git(root, "config", "user.name", "t")
+    (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "seed")
+    return Workspace.from_client(client)
+
+
+def _propose(workspace: Workspace, *names: str) -> list[str]:
+    store = HypothesisStore(workspace.knowledge_dir, workspace.competition)
+    return [
+        store.create(
+            observation=f"observed {n}",
+            reason=f"because {n}",
+            prediction=f"{n} helps",
+            confidence=0.5,
+            technique=n,
+        ).id
+        for n in names
+    ]
+
+
+class _Agent:
+    """An experiment specialist that succeeds or fails per branch."""
+
+    def __init__(self, fail_plans: set[str] | None = None) -> None:
+        self.fail_plans = fail_plans or set()
+
+    async def execute(self, task: Any, workspace: Workspace, context: Any) -> list[Any]:
+        del workspace, context
+        if task.metadata["plan_id"] in self.fail_plans:
+            raise RuntimeError("training diverged")
+        return []
+
+
+def _fan_out(
+    store: ConductorStore,
+    workspace: Workspace,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    session_id: str,
+    agent: _Agent,
+    branches: int = 2,
+    autonomy: int = 1,
+    approval_prompt: Any = None,
+) -> Any:
+    """Run a fan-out with plan compilation and the specialist stubbed out."""
+    del monkeypatch  # the agent is injected now, not patched in
+    return _fan_out_experiment(
+        store,
+        workspace,
+        session_id,
+        step=3,
+        branches=branches,
+        rationale="test the top hypotheses",
+        llm_client=None,
+        dry_run=True,
+        submit=False,
+        agent=agent,
+        auto_approve=True,
+        approval_prompt=approval_prompt,
+        # 1, not 0: `generate_plan` is gated at autonomy 0, and these tests are
+        # about the fan-out rather than about the gate. The gate has its own
+        # tests below.
+        autonomy=autonomy,
+        progress=lambda _m: None,
+    )
+
+
+def test_every_branch_gets_its_own_decision_record(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One decision for K experiments would make the audit log unable to say
+    which branch did what."""
+    _propose(workspace, "a", "b")
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan",
+        lambda ws, **kw: type("R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}})(),
+    )
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+
+        decisions = _fan_out(
+            store, workspace, monkeypatch, session_id=session.id, agent=_Agent()
+        )
+
+        assert decisions is not None
+        # One record naming the fan-out, then one per branch.
+        assert [d.tool_name for d in decisions] == [
+            "fan_out",
+            "run_experiment",
+            "run_experiment",
+        ]
+        assert len({d.id for d in decisions}) == 3, "decisions must be distinct"
+        branch_records = decisions[1:]
+        cohorts = {d.observe["cohort_id"] for d in branch_records}
+        assert len(cohorts) == 1, "branches of one step must share one cohort"
+        assert cohorts.pop() == f"{session.id}-{decisions[0].id}"
+        assert {d.observe["branch"] for d in branch_records} == {
+            d.args["hypothesis_id"] for d in branch_records
+        }
+        assert len(store.list_decisions(session.id)) == 3
+
+
+def test_two_fan_outs_in_one_session_never_share_a_cohort(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`new_decision_id()` computes MAX+1 and reserves nothing, so naming the
+    cohort with a peeked id handed the next fan-out the same one whenever the
+    previous had recorded no decisions — merging two cohorts' members into one
+    verdict, the same bug the step-number key had.
+
+    The discriminating case is a fan-out that records nothing because it
+    raised. One that completes advances MAX(id) either way and cannot tell the
+    two implementations apart.
+    """
+    _plan_ok = lambda ws, **kw: type(  # noqa: E731
+        "R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}}
+    )()
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan", _plan_ok
+    )
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+
+        _propose(workspace, "a0", "b0")
+        monkeypatch.setattr(
+            "labpilot.research_engine.conductor.fanout.run_parallel_sync",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("worker pool died")),
+        )
+        with pytest.raises(RuntimeError):
+            _fan_out(store, workspace, monkeypatch, session_id=session.id, agent=_Agent())
+
+        after_failure = store.list_decisions(session.id)
+        assert [d.tool_name for d in after_failure] == ["fan_out"], (
+            "the fan-out must name itself before running, or the id it claimed "
+            "is not reserved against the next one"
+        )
+        first_cohort = f"{session.id}-{after_failure[-1].id}"
+
+        monkeypatch.setattr(
+            "labpilot.research_engine.conductor.fanout.run_parallel_sync",
+            _real_run_parallel_sync(),
+        )
+        _propose(workspace, "a1", "b1")
+        decisions = _fan_out(
+            store, workspace, monkeypatch, session_id=session.id, agent=_Agent()
+        )
+        assert decisions is not None
+        second_cohort = decisions[1].observe["cohort_id"]
+
+    assert second_cohort != first_cohort, (
+        f"a fan-out that recorded nothing handed its cohort id on: {first_cohort}"
+    )
+
+
+def test_a_store_failure_while_naming_the_cohort_still_tears_down(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The branches exist by the time the cohort is named, so everything from
+    that point on has to be inside the teardown's `try`. Naming the cohort
+    writes to the store and can fail; above the `try` it would leave K claims
+    held and K worktrees checked out with nothing to release them.
+    """
+    ids = _propose(workspace, "a", "b")
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan",
+        lambda ws, **kw: type("R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}})(),
+    )
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+        monkeypatch.setattr(
+            type(store),
+            "append_new_decision",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db is gone")),
+        )
+
+        with pytest.raises(RuntimeError):
+            _fan_out(store, workspace, monkeypatch, session_id=session.id, agent=_Agent())
+
+    hypotheses = HypothesisStore(workspace.knowledge_dir, workspace.competition)
+    assert [hypotheses.get(i).status for i in ids] == [
+        HypothesisStatus.PROPOSED,
+        HypothesisStatus.PROPOSED,
+    ]
+    assert ".worktrees" not in _git(Path(workspace.root), "worktree", "list")
+
+
+def test_each_branchs_plan_goes_through_the_approval_gate(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`generate_plan` is in `PLAN_TOOLS`, gated at autonomy 0. Calling the
+    handler directly would fan out K billable LLM calls past a gate the
+    operator was given once, for the step's single task.
+    """
+    _propose(workspace, "a", "b")
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan",
+        lambda ws, **kw: type("R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}})(),
+    )
+    asked: list[str] = []
+
+    def prompt(tool_name: str) -> ApprovalResult:
+        asked.append(tool_name)
+        return ApprovalResult(decision="approve", comment="", gated_tool=tool_name)
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+
+        decisions = _fan_out(
+            store,
+            workspace,
+            monkeypatch,
+            session_id=session.id,
+            agent=_Agent(),
+            autonomy=0,
+            approval_prompt=prompt,
+        )
+
+    assert asked == ["generate_plan", "generate_plan"], (
+        "each branch's plan must be approved, not just the step's one task"
+    )
+    assert decisions is not None
+
+
+def test_a_rejected_plan_drops_its_branch_and_frees_the_hypothesis(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rejection has to leave nothing behind: `prepare_branches` releases the
+    claim of a branch whose planning raised, so an operator saying no does not
+    strand the hypothesis in `testing`."""
+    ids = _propose(workspace, "a", "b")
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan",
+        lambda ws, **kw: type("R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}})(),
+    )
+
+    def refuse(tool_name: str) -> ApprovalResult:
+        return ApprovalResult(decision="reject", comment="not now", gated_tool=tool_name)
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+
+        result = _fan_out(
+            store,
+            workspace,
+            monkeypatch,
+            session_id=session.id,
+            agent=_Agent(),
+            autonomy=0,
+            approval_prompt=refuse,
+        )
+
+    # Nothing could be planned, so there is no fan-out and no claim held.
+    assert result is None
+    hypotheses = HypothesisStore(workspace.knowledge_dir, workspace.competition)
+    assert [hypotheses.get(i).status for i in ids] == [
+        HypothesisStatus.PROPOSED,
+        HypothesisStatus.PROPOSED,
+    ]
+    assert ".worktrees" not in _git(Path(workspace.root), "worktree", "list")
+
+
+def _real_run_parallel_sync() -> Any:
+    from labpilot.research_engine.agents.parallel import run_parallel_sync
+
+    return run_parallel_sync
+
+
+def test_each_branch_feeds_the_circuit_breaker_separately(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counting K failures as one lets a campaign run past the point the
+    breaker exists to stop it at — the exact defect measured on 2026-08-09,
+    one layer up."""
+    ids = _propose(workspace, "a", "b", "c")
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan",
+        lambda ws, **kw: type("R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}})(),
+    )
+    agent = _Agent(fail_plans={f"P-{i}" for i in ids})
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+
+        decisions = _fan_out(
+            store, workspace, monkeypatch, session_id=session.id, agent=agent, branches=3
+        )
+
+        # Against the branches that actually ran, not the number requested:
+        # `resolve_k` caps K at the machine's cores, so a two-core CI runner
+        # gets two branches where a ten-core laptop gets three. Asserting the
+        # request asserted the runner.
+        assert decisions is not None
+        ran = len(decisions) - 1  # the cohort record, then one per branch
+        assert ran >= 2, "not a fan-out"
+        _, state = load_budget_pair(store.get_session(session.id))
+        assert state.consecutive_failures == ran
+
+
+def test_a_successful_fan_out_resets_the_breaker(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _propose(workspace, "a", "b")
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan",
+        lambda ws, **kw: type("R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}})(),
+    )
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+
+        _fan_out(store, workspace, monkeypatch, session_id=session.id, agent=_Agent())
+
+        _, state = load_budget_pair(store.get_session(session.id))
+        assert state.consecutive_failures == 0
+
+
+def test_asking_for_one_branch_is_not_a_fan_out(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`None` means "I did nothing, dispatch normally" — the guarantee that
+    the K=1 path is untouched."""
+    _propose(workspace, "a", "b")
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("g")
+        assert (
+            _fan_out(
+                store,
+                workspace,
+                monkeypatch,
+                session_id=session.id,
+                agent=_Agent(),
+                branches=1,
+            )
+            is None
+        )
+
+
+def test_a_single_untested_hypothesis_is_not_a_fan_out(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing to compare against, so the branch machinery buys nothing and
+    the hypothesis must be left unclaimed for the sequential path."""
+    ids = _propose(workspace, "only-one")
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("g")
+
+        assert (
+            _fan_out(store, workspace, monkeypatch, session_id=session.id, agent=_Agent())
+            is None
+        )
+
+    store = HypothesisStore(workspace.knowledge_dir, workspace.competition)
+    assert store.get(ids[0]).status == HypothesisStatus.PROPOSED
+
+
+def test_a_fan_out_leaves_no_worktrees_behind(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _propose(workspace, "a", "b")
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan",
+        lambda ws, **kw: type("R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}})(),
+    )
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("g")
+        _fan_out(store, workspace, monkeypatch, session_id=session.id, agent=_Agent())
+
+    registered = _git(Path(workspace.root), "worktree", "list")
+    assert ".worktrees" not in registered
+
+
+# -- startup reconciliation -----------------------------------------------
+
+
+def test_a_running_campaigns_worktrees_are_not_swept(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two campaigns on one workspace is ordinary. A sweep that assumed
+    nothing else was live would delete a running campaign's checkouts out
+    from under its branches, mid-experiment."""
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        live = store.create_session("still going")
+        finished = store.create_session("all done")
+        store.update_session_status(finished.id, "completed")
+
+        live_tree = create_experiment_worktree(
+            root, session_id=live.id, experiment_key="H-live"
+        )
+        dead_tree = create_experiment_worktree(
+            root, session_id=finished.id, experiment_key="H-dead"
+        )
+        assert live_tree.path.is_dir() and dead_tree.path.is_dir()
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert live_tree.path.is_dir(), "a running campaign lost its worktree"
+    assert not dead_tree.path.exists(), "a finished campaign's worktree was kept"
+
+
+def test_another_competitions_worktrees_are_left_alone(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    """`list_sessions()` filters by competition and every competition keeps its
+    own knowledge.db, so a sibling campaign's session is not merely absent from
+    the live set — it is unreadable from here. Sweeping on "not known means
+    dead" would delete its worktrees mid-experiment."""
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    # A worktree whose session id this store has never heard of.
+    foreign = create_experiment_worktree(
+        root, session_id="S-999", experiment_key="H-foreign"
+    )
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        mine = store.create_session("mine")
+        store.update_session_status(mine.id, "completed")
+        stale = create_experiment_worktree(
+            root, session_id=mine.id, experiment_key="H-mine"
+        )
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert foreign.path.is_dir(), "another competition's worktree was swept"
+    assert not stale.path.exists(), "our own finished worktree was kept"
+
+
+def test_a_paused_campaign_keeps_its_worktrees(
+    workspace: Workspace,
+) -> None:
+    """Resuming a paused campaign needs its branches still checked out —
+    sweeping them turns a pause into a silent loss of work."""
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        paused = store.create_session("held")
+        store.update_session_status(paused.id, "paused")
+        tree = create_experiment_worktree(
+            root, session_id=paused.id, experiment_key="H-1"
+        )
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert tree.path.is_dir()
+
+
+def test_a_dead_owners_worktrees_are_swept_despite_a_running_status(
+    workspace: Workspace,
+) -> None:
+    """The case the sweep exists for and could not reach.
+
+    Every terminal status update runs inside the loop, so a process killed by
+    SIGKILL, OOM or power loss leaves its session `running` for good — and the
+    liveness rule then preserved exactly the worktrees the sweep was written to
+    reclaim, permanently, with `create_experiment_worktree` failing on those
+    experiment keys forever after. A pid answers "is it alive?" directly.
+    """
+    import os
+    import socket
+
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        dead = store.create_session("killed mid-run")
+        # Still `running`, as a hard kill leaves it, but owned by a pid that is
+        # gone. 2**22 is above every real pid on Linux and macOS defaults.
+        store.update_session_metadata(
+            dead.id, {"owner": {"pid": 2**22, "host": socket.gethostname()}}
+        )
+        live = store.create_session("actually running")
+        store.update_session_metadata(
+            live.id, {"owner": {"pid": os.getpid(), "host": socket.gethostname()}}
+        )
+
+        dead_tree = create_experiment_worktree(root, session_id=dead.id, experiment_key="H-d")
+        live_tree = create_experiment_worktree(root, session_id=live.id, experiment_key="H-l")
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert not dead_tree.path.exists(), "a dead campaign's worktree was preserved forever"
+    assert live_tree.path.is_dir(), "a live campaign lost its worktree"
+
+
+def test_a_dead_owner_on_another_host_is_left_alone(workspace: Workspace) -> None:
+    """A pid means nothing on a different machine, so it cannot be checked —
+    and over-keeping costs a stale worktree while over-deleting costs a running
+    experiment."""
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        elsewhere = store.create_session("running on the cluster")
+        store.update_session_metadata(
+            elsewhere.id, {"owner": {"pid": 2**22, "host": "some-other-box"}}
+        )
+        tree = create_experiment_worktree(
+            root, session_id=elsewhere.id, experiment_key="H-x"
+        )
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert tree.path.is_dir()
+
+
+def test_a_campaign_stamps_the_process_running_it(workspace: Workspace) -> None:
+    """Without the stamp there is nothing to check, and every crashed session
+    stays indistinguishable from a live one."""
+    import os
+
+    from labpilot.research_engine.conductor.loop import claim_session_ownership
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("g")
+
+        claim_session_ownership(store, session.id)
+
+        owner = store.get_session(session.id).metadata["owner"]
+    assert owner["pid"] == os.getpid()
+
+
+def test_an_interrupted_fan_out_cancels_the_task_it_superseded(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The task was enqueued for a sequential dispatch the fan-out replaced.
+    When the fan-out returns records the caller cancels it, and when the fan-out
+    declines the caller dispatches it — but an interrupt in between left it
+    `pending` forever with no worker that would ever claim it."""
+    from labpilot.research_engine.conductor.loop import _fan_out_with_task_cleanup
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("g")
+        task = store.enqueue(session.id, "run_plan")
+        monkeypatch.setattr(
+            "labpilot.research_engine.conductor.loop._fan_out_experiment",
+            lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()),
+        )
+
+        with pytest.raises(KeyboardInterrupt):
+            _fan_out_with_task_cleanup(store, task.id, workspace, session.id)
+
+        assert store.get_task(task.id).status == "cancelled"
+
+
+def test_an_unreadable_session_table_sweeps_nothing(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not knowing which campaigns are live is a reason to delete nothing: a
+    stale worktree costs the next sweep, a deleted one costs a running run."""
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("g")
+        store.update_session_status(session.id, "completed")
+        tree = create_experiment_worktree(root, session_id=session.id, experiment_key="H-1")
+        monkeypatch.setattr(
+            type(store),
+            "list_sessions",
+            lambda self: (_ for _ in ()).throw(RuntimeError("db gone")),
+        )
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert tree.path.is_dir()
+
+
+# -- the index migration --------------------------------------------------
+
+
+def test_pathspecs_drop_the_gitignore_anchor() -> None:
+    """A leading `/` anchors a gitignore pattern but means an absolute path to
+    a pathspec — git rejects `/runs/` with `fatal: Invalid path '/runs'`."""
+    assert _as_pathspecs(("/runs/", "/knowledge/**/knowledge.db")) == [
+        "runs/",
+        "knowledge/**/knowledge.db",
+    ]
+    assert all(not p.startswith("/") for p in _as_pathspecs(SHARED_STATE_IGNORES))
+
+
+def test_already_tracked_shared_state_is_untracked(workspace: Workspace) -> None:
+    """A `.gitignore` pattern does not untrack an existing file, so a
+    workspace scaffolded before the pattern keeps copying its database into
+    every worktree — measured at 105 MB per branch."""
+    root = Path(workspace.root)
+    db = root / "knowledge" / "research" / "knowledge.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    db.write_text("db", encoding="utf-8")
+    runs = root / "runs" / "E-1"
+    runs.mkdir(parents=True, exist_ok=True)
+    (runs / "out.json").write_text("{}", encoding="utf-8")
+    _git(root, "add", "-A", "-f")
+    _git(root, "commit", "-qm", "pre-migration workspace")
+    assert "knowledge.db" in _git(root, "ls-files")
+
+    _untrack_shared_state(workspace)
+
+    tracked = _git(root, "ls-files")
+    assert "knowledge.db" not in tracked
+    assert "runs/" not in tracked
+    assert "seed.txt" in tracked, "unrelated files must stay tracked"
+    assert db.is_file(), "--cached must not delete the database from disk"
+
+
+def test_untracking_is_a_no_op_when_nothing_is_tracked(workspace: Workspace) -> None:
+    before = _git(Path(workspace.root), "ls-files")
+
+    _untrack_shared_state(workspace)
+
+    assert _git(Path(workspace.root), "ls-files") == before
+
+
+def test_untracking_does_not_create_a_repo_where_there_is_none(
+    tmp_path: Path,
+) -> None:
+    """`open_git_tool` runs `Repo.init()` plus a bootstrap commit on a
+    directory that is not a repository, so reaching for it before checking
+    created one in a workspace the user had deliberately kept out of version
+    control — the same side effect `reconcile_worktrees` refuses, from the same
+    unattended startup path.
+
+    Asserting the absence, not just that nothing raised: creating a repo does
+    not raise, so the earlier "must not raise" test was green while the bug
+    happened.
+    """
+    client = scaffold_workspace(tmp_path / "plain", "plain")
+    root = Path(client.root)
+    assert not (root / ".git").exists()
+
+    _untrack_shared_state(Workspace.from_client(client))
+
+    assert not (root / ".git").exists(), "a git repository was created"
+
+
+def test_the_fan_out_dry_run_default_matches_the_tool_it_replaces() -> None:
+    """`run_plan` trains for real unless told otherwise; `run_experiment` does
+    not. Hardcoding either default made the other wrong — defaulting to a dry
+    run turned an unset `run_plan` fan-out into K branches that trained
+    nothing and, once the placeholder guard refused their stub metrics,
+    promoted nobody."""
+    from labpilot.research_engine.tools.handlers import run as run_mod
+
+    assert _DRY_RUN_DEFAULTS["run_plan"] == _signature_default(run_mod.run_plan, "dry_run")
+    assert _DRY_RUN_DEFAULTS["run_experiment"] == _signature_default(
+        _run_experiment_handler(), "dry_run"
+    )
+    assert set(_DRY_RUN_DEFAULTS) == {"run_plan", "run_experiment"}, (
+        "a new experiment tool needs its own default here, or it silently "
+        "inherits the wrong one"
+    )
+
+
+def _signature_default(fn: Any, name: str) -> Any:
+    import inspect
+
+    return inspect.signature(fn).parameters[name].default
+
+
+def _run_experiment_handler() -> Any:
+    from labpilot.research_engine.tools.handlers.specialists import run_experiment
+
+    return run_experiment

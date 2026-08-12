@@ -14,13 +14,12 @@ not by copying the two-call pattern used below.
 
 from __future__ import annotations
 
-import json
 import logging
+import os
+import socket
 import time
 from collections.abc import Callable
 from typing import Any
-
-from pydantic import ValidationError
 
 from labpilot.accessor.common.micro_agents import LLMDegradedError
 from labpilot.research_engine.conductor.actions import (
@@ -38,7 +37,6 @@ from labpilot.research_engine.conductor.approvals import (
 from labpilot.research_engine.conductor.budgets import (
     BudgetConfig,
     BudgetState,
-    ScoreEvent,
     comparable_tail,
     evaluate_stops,
     metric_names_match,
@@ -55,6 +53,7 @@ from labpilot.research_engine.conductor.metrics import ensure_metrics, record_su
 from labpilot.research_engine.conductor.models import DecisionRecord
 from labpilot.research_engine.conductor.policy import decide_next
 from labpilot.research_engine.conductor.scheduler import Scheduler
+from labpilot.research_engine.conductor.scoring import score_event_for
 from labpilot.research_engine.conductor.stagnation import (
     mint_stagnation_hypothesis,
     stagnation_window,
@@ -77,6 +76,16 @@ _MAX_STOP_OVERRIDES = 2
 #: to produce) an experiment; a failed `analyze_competition` is a bad step, not
 #: evidence that the campaign cannot work.
 _EXPERIMENT_TOOLS = frozenset({"run_experiment", "run_plan"})
+
+
+#: Each experiment tool's own `dry_run` default, so a fan-out of a step that
+#: did not set one behaves like the sequential dispatch of that same step.
+#: They genuinely differ — `run_plan` trains for real unless told otherwise,
+#: `run_experiment` does not — and hardcoding either made the other wrong:
+#: defaulting to a dry run turned every unset `run_plan` fan-out into K
+#: branches that trained nothing, wrote placeholder metrics, and promoted
+#: nobody once the placeholder guard refused them.
+_DRY_RUN_DEFAULTS: dict[str, bool] = {"run_plan": False, "run_experiment": True}
 
 
 #: Execution statuses that mean the experiment actually produced a result.
@@ -107,180 +116,494 @@ def _experiment_outcome(result: object) -> tuple[bool, str]:
     return False, error or f"execution status={status or 'unknown'}"
 
 
-def _score_event_for(
-    workspace: Workspace, execution_id: str, *, fallback_maximize: bool = True
-) -> ScoreEvent | None:
-    """The comparable score this execution produced, or None with a reason logged.
+def _fan_out_experiment(
+    store,
+    workspace: Workspace,
+    session_id: str,
+    *,
+    step: int,
+    branches: int,
+    rationale: str,
+    llm_client: Any | None,
+    dry_run: bool,
+    submit: bool,
+    agent: Any,
+    auto_approve: bool,
+    approval_prompt: ApprovalPrompt | None,
+    autonomy: int,
+    progress: Callable[[str], None],
+) -> list[DecisionRecord] | None:
+    """Run this step as K parallel branches, or return None to stay sequential.
 
-    Reads `execution_outcome.json` for *this* execution id rather than the
-    `metrics.json` at the workspace root. The root file survives a failed run,
-    so "is there a file?" and "did this run write one?" are different
-    questions — `run_experiment` needed an explicit freshness guard for
-    exactly that. Keyed by execution id, the outcome artifact cannot belong to
-    a different run.
+    None — not an empty list — when the step is not a fan-out after all: too
+    few untested hypotheses, or none that could be claimed and set up. The
+    caller then dispatches its single task exactly as before, so every path
+    that is not a fan-out keeps the behaviour it had before this existed.
 
-    `fallback_maximize` is the direction the campaign is already running under
-    (`BudgetConfig.maximize`, resolved once at session start). It is used only
-    when the competition profile cannot answer, so the event agrees with the
-    campaign rather than inventing a second opinion.
-
-    Returns None — never a partial event — when the execution produced nothing
-    comparable. Each reason is logged, because a silent skip here is
-    invisible from outside and leaves the series quietly short.
+    Each branch gets its own `DecisionRecord` and feeds the circuit breaker
+    individually, which is the audit parity the sequential path already has:
+    a fan-out that recorded one decision for K experiments would let the
+    breaker count K failures as one, and a campaign would run past the point
+    it was built to stop at. Design §7.
     """
-    from labpilot.research_engine.evidence.builder import (
-        is_placeholder_metrics,
-        metrics_as_experiment,
+    from labpilot.research_engine.conductor.fanout import (
+        PlanRejected,
+        prepare_branches,
+        resolve_k,
+        run_branches,
+        select_hypotheses,
+        teardown_branches,
     )
-    from labpilot.research_engine.intelligence.paths import ResearchPaths
-    from labpilot.research_engine.shared.experiments.comparator import (
-        resolve_primary_metric_key_and_direction,
+
+    candidates = select_hypotheses(workspace, branches)
+    k = resolve_k(branches, available=len(candidates))
+    if k < 2:
+        return None
+
+    if agent is None:
+        logger.warning("no experiment specialist registered; not fanning out")
+        return None
+
+    def make_plan(ws: Workspace, hypothesis_id: str) -> str:
+        """Compile one branch's plan, through the same gate as a planned step.
+
+        `generate_plan` is in `PLAN_TOOLS`, which `gated_tools_for_autonomy(0)`
+        gates — so at autonomy 0 the operator approves every plan compilation
+        on the sequential path. Calling the handler directly would fan out K
+        billable LLM calls past that gate on one approval given for the step's
+        single task. Asked per branch, because that is what is being approved.
+
+        A rejection raises, which `prepare_branches` already handles the right
+        way: the claim goes back and the branch is dropped whole.
+        """
+        from labpilot.research_engine.tools.handlers.plan import generate_plan
+
+        approval = maybe_approve(
+            store,
+            session_id=session_id,
+            tool_name="generate_plan",
+            auto=auto_approve,
+            prompt=approval_prompt,
+            autonomy=autonomy,
+        )
+        if approval is not None and approval.decision == "reject":
+            # `PlanRejected`, not a builtin: `prepare_branches` reports a
+            # decline at info and a genuine planning fault at error, and it can
+            # only tell them apart by type.
+            raise PlanRejected(f"operator declined a plan for {hypothesis_id}")
+
+        result = generate_plan(ws, hypothesis_id=hypothesis_id, llm_client=llm_client)
+        plan_id = str((getattr(result, "data", None) or {}).get("plan_id") or "")
+        if not plan_id:
+            raise ValueError(f"generate_plan returned no plan_id for {hypothesis_id}")
+        return plan_id
+
+    prepared = prepare_branches(
+        workspace,
+        candidates[:k],
+        session_id=session_id,
+        repo_root=workspace.root,
+        make_plan=make_plan,
     )
-
-    paths = ResearchPaths(workspace.knowledge_dir, workspace.competition)
-    outcome_path = paths.executions_dir / execution_id / "artifacts" / "execution_outcome.json"
-    if not outcome_path.is_file():
-        # The specialist `run_experiment` path writes no execution outcome, so
-        # this is the ordinary way a non-`run_plan` experiment lands here.
-        logger.info("no execution outcome for %s; no score recorded", execution_id)
-        return None
-    try:
-        outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        logger.warning("unreadable execution outcome for %s; no score recorded", execution_id)
-        return None
-    if not isinstance(outcome, dict):
-        # A truncated or half-written file can still parse — as `null`, a
-        # list, a bare string. Letting that raise here would surface as a
-        # dispatch error and record a *successful* experiment as a failure
-        # against the circuit breaker.
-        logger.warning("malformed execution outcome for %s; no score recorded", execution_id)
+    if len(prepared) < 2:
+        # Whatever was set up is torn down before falling back, so the
+        # sequential path does not start with claims held and worktrees
+        # checked out by a fan-out that never ran.
+        teardown_branches(workspace, prepared, [])
+        logger.info("only %d branch(es) could be set up; staying sequential", len(prepared))
         return None
 
-    metrics = outcome.get("metrics")
-    if not isinstance(metrics, dict):
-        logger.info("execution %s recorded no metrics; no score recorded", execution_id)
-        return None
-    if is_placeholder_metrics(metrics):
-        # A run that never trained a model has no score to compare, for the
-        # same reason it must not reach an evidence card.
-        logger.info("execution %s produced placeholder metrics; no score recorded", execution_id)
-        return None
-
-    experiment = metrics_as_experiment(execution_id, workspace.competition, metrics)
-    # The one competition-aware resolver, called with the single execution on
-    # both sides: `shared` degenerates to this run's own metric keys, which is
-    # the lookup wanted here. Using a second, ad-hoc resolver is how four of
-    # them ended up disagreeing about the "primary" key.
+    # The cohort is named by a decision that is actually written, not by the
+    # step number and not by a peeked id.
     #
-    # The search has to cover everywhere a spec is kept, not just the run
-    # directory: `analyze` writes the knowledge copy under `paths.root`, and a
-    # workspace with only that copy otherwise falls through to the
-    # alphabetically-first metric — picking `cv_mae` over `cv_rmse` and
-    # calling it primary.
-    metric_name, _ = resolve_primary_metric_key_and_direction(
-        experiment,
-        experiment,
-        competition_dirs=(
-            workspace.effective_runs_dir / execution_id,
-            workspace.root,
-            paths.root,
-        ),
-    )
-    if metric_name is None:
-        logger.info("no resolvable primary metric for %s; no score recorded", execution_id)
-        return None
-
-    # The comparator's own direction flag is discarded: it defaults to `True`
-    # when it finds no spec, so trusting it records "higher is better" for an
-    # error metric — and the whole reason `maximize` travels with the value is
-    # that the sign is not re-derived later.
+    # `step` restarts with every `conduct resume`, so a resumed session
+    # reaching step 3 again reused `S-001-step3` and `promote_within_cohort`
+    # re-ranked the new branches against the abandoned attempt's members.
+    # `new_decision_id()` is no better on its own: it computes `MAX(id)+1` and
+    # reserves nothing, so a fan-out that raised before recording any decision
+    # handed the next one the same id and the same merged cohort.
     #
-    # `None` is a real answer here. Rather than guess, fall back to the
-    # direction the campaign is already running under, so the event and the
-    # campaign cannot disagree.
-    resolved = _direction_for(workspace, execution_id, paths)
-    maximize = resolved if resolved is not None else fallback_maximize
-
-    hypothesis_id = outcome.get("hypothesis_id") or None
-    technique, combo = _techniques_for(workspace, hypothesis_id)
+    # Appending the record first allocates the id under the store's write lock
+    # and gives the audit log the thing it was missing anyway — one entry
+    # saying the campaign chose to fan out, above the per-branch entries.
+    outcomes = []
+    # Everything after the branches exist is inside the `try`, including
+    # naming the cohort: `append_new_decision` writes to the store and can
+    # fail, and a failure above the `try` would leave K claims held and K
+    # worktrees checked out with nothing to release them.
     try:
-        return ScoreEvent(
-            experiment_id=execution_id,
-            hypothesis_id=hypothesis_id,
-            technique=technique,
-            combo_techniques=combo,
-            metric_name=metric_name,
-            value=float(experiment.metrics[metric_name]),
-            maximize=maximize,
+        cohort_record = store.append_new_decision(
+            session_id,
+            "fan_out",
+            rationale,
+            observe={
+                "step": step,
+                "branches": [b.hypothesis_id for b in prepared],
+            },
         )
-    except ValidationError:
-        # `ScoreEvent` refuses a non-finite value: a diverged run's NaN is not
-        # a comparable score, and admitting one would silently disable the
-        # plateau and metric_target stops that read this series.
-        logger.info(
-            "execution %s scored %r on %s, which is not a comparable value; no score recorded",
-            execution_id,
-            metrics.get(metric_name),
-            metric_name,
+        cohort_id = f"{session_id}-{cohort_record.id}"
+        progress(f"Fan-out {len(prepared)} branches (cohort {cohort_id})")
+        outcomes = run_branches(
+            prepared,
+            agent=agent,
+            cohort_id=cohort_id,
+            workspace=workspace,
+            context=_branch_context(workspace),
+            build_task=lambda branch, cohort: _branch_task(
+                branch, cohort, dry_run=dry_run, submit=submit
+            ),
         )
-        return None
+    finally:
+        # `outcomes` is empty when the block raised, which teardown reads as
+        # "nothing succeeded" and releases every claim.
+        teardown_branches(workspace, prepared, outcomes)
+
+    decisions: list[DecisionRecord] = [cohort_record]
+    for outcome in outcomes:
+        record = store.append_new_decision(
+            session_id,
+            "run_experiment",
+            rationale,
+            args={"plan_id": outcome.plan_id, "hypothesis_id": outcome.hypothesis_id},
+            artifact_refs=[r.model_dump() for r in outcome.refs],
+            observe={
+                "step": step,
+                "cohort_id": cohort_id,
+                "branch": outcome.hypothesis_id,
+                "ok": outcome.ok,
+                "error": outcome.error,
+            },
+        )
+        decisions.append(record)
+        _record_experiment_outcome(
+            store,
+            session_id,
+            succeeded=outcome.ok,
+            error=outcome.error or "",
+            workspace=workspace,
+            execution_id=outcome.execution_id,
+        )
+        progress(
+            f"Branch {outcome.hypothesis_id}: {'ok' if outcome.ok else outcome.error}"
+        )
+    return decisions
 
 
-def _direction_for(workspace: Workspace, execution_id: str, paths: Any) -> bool | None:
-    """Whether this competition maximises its metric, or None if unknowable.
+def _reconcile_stale_worktrees(store, workspace: Workspace) -> None:
+    """Clear worktrees left by a fan-out that never reached teardown.
 
-    Chooses *where* to look and leaves *how to read it* to `resolve_maximize`,
-    which owns that question — the conductor must not answer it differently
-    from the module that defines it.
+    Runs before the first branch of a campaign, because a worktree still
+    registered keeps its branch checked out and `worktree add -B` for that
+    same experiment key then fails — a crash in one campaign would otherwise
+    make the next one unable to re-test those hypotheses at all.
 
-    Two calls because `resolve_maximize` takes a nearest-first pair of
-    directories, and there are three worth asking before the profile artifact.
+    `live_branches` covers the campaigns that are still running, asked of the
+    store here rather than inside the sweep so `git_worktree` keeps no
+    conductor dependency. It is not empty even at our own start: a second
+    campaign on the same workspace is an ordinary thing to do, and sweeping
+    on the assumption that nothing else is live would delete a running
+    campaign's worktrees out from under its branches mid-experiment.
+
+    Best-effort throughout — a campaign that cannot tidy up is still a
+    campaign that can run, and `create_experiment_worktree` reports the real
+    error later for any branch that actually collides.
     """
-    from labpilot.research_engine.intelligence.competition.direction import resolve_maximize
-
-    resolved = resolve_maximize(
-        competition=workspace.competition,
-        workspace_root=workspace.effective_runs_dir / execution_id,
-        knowledge_root=workspace.root,
-    )
-    if resolved is not None:
-        return resolved
-    return resolve_maximize(
-        competition=workspace.competition,
-        workspace_root=paths.root,
-        extracted_dir=paths.extracted_dir,
-    )
-
-
-def _techniques_for(
-    workspace: Workspace, hypothesis_id: str | None
-) -> tuple[str | None, list[str]]:
-    """`(technique, combo_techniques)` for the hypothesis under test.
-
-    `combo_techniques`, not `technique_stack`: the stack is cumulative
-    lineage, so a five-generation chain would name every ancestor for a change
-    that tested one thing.
-    """
-    if not hypothesis_id:
-        return None, []
-    from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
+    from labpilot.research_engine.agents.git_worktree import reconcile_worktrees
 
     try:
-        hypothesis = HypothesisStore(workspace.knowledge_dir, workspace.competition).get(
-            hypothesis_id
+        result = reconcile_worktrees(
+            workspace.root, live_branches=_live_branches(store, workspace)
         )
-        if hypothesis is None:
-            return None, []
-        # Inside the guard with the lookup: reading the fields is as able to
-        # fail as fetching them, and an escape here does not stay local —
-        # `_record_experiment_outcome` runs inside the dispatch try block, so
-        # it would land as a dispatch error and count a *successful*
-        # experiment against the circuit breaker.
-        return hypothesis.technique, list(hypothesis.combo_techniques)
-    except Exception:  # noqa: BLE001 — a missing hypothesis must not lose the score
-        logger.info("cannot read hypothesis %s; recording the score without it", hypothesis_id)
-        return None, []
+    except Exception:  # noqa: BLE001 — startup tidying must not stop a campaign
+        logger.exception("worktree reconciliation failed; continuing")
+        return
+    if result.removed:
+        logger.info("cleared %d stale experiment worktree(s)", len(result.removed))
+    if result.failed:
+        logger.warning(
+            "%d stale worktree(s) could not be cleared; branches for those "
+            "experiment keys will fail to check out: %s",
+            len(result.failed),
+            ", ".join(str(p) for p in result.failed),
+        )
+    _untrack_shared_state(workspace)
+
+
+#: Session statuses whose worktrees a startup sweep must leave alone.
+_LIVE_SESSION_STATUSES = frozenset({"running", "paused"})
+
+#: Where a campaign records the process running it, so a later sweep can tell a
+#: live campaign from one that died without saying so.
+_OWNER_KEY = "owner"
+
+
+def claim_session_ownership(store, session_id: str) -> None:
+    """Record which process is running this campaign.
+
+    Status alone cannot answer "is this campaign alive?". Every transition to a
+    terminal state runs inside this loop, so a process killed by SIGKILL, OOM or
+    power loss leaves its session `running` for good — and the startup sweep,
+    which preserves live sessions' worktrees, then preserves exactly the ones it
+    exists to reclaim. Their experiment keys stay checked out and every later
+    fan-out over them fails with git's "already checked out".
+
+    A pid and host answer it directly, with no threshold to tune: on this host a
+    dead pid means the campaign is gone. Kept in `metadata` rather than a new
+    column, so no migration is needed.
+    """
+    session = store.get_session(session_id)
+    if session is None:
+        return
+    metadata = dict(session.metadata or {})
+    metadata[_OWNER_KEY] = {"pid": os.getpid(), "host": socket.gethostname()}
+    try:
+        store.update_session_metadata(session_id, metadata)
+    except Exception:  # noqa: BLE001 — a campaign runs fine without the stamp
+        logger.exception("cannot record session ownership for %s", session_id)
+
+
+def _owner_is_gone(session: Any) -> bool:
+    """True only when this host can prove the owning process is dead.
+
+    Conservative in every other case — no stamp (a session from before this
+    existed), another host, an unreadable value — because guessing wrong deletes
+    a running campaign's checkouts mid-experiment, while over-keeping costs a
+    stale worktree that the next provable case clears.
+    """
+    owner = (getattr(session, "metadata", None) or {}).get(_OWNER_KEY)
+    if not isinstance(owner, dict) or owner.get("host") != socket.gethostname():
+        return False
+    pid = owner.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        # Signal 0 checks existence without delivering anything.
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        # PermissionError and friends mean it exists but is not ours.
+        return False
+    return False
+
+
+def _live_branches(store, workspace: Workspace) -> set[str]:
+    """Branch names the startup sweep must leave alone.
+
+    Inverted from "which are live" to "which are not provably ours to delete",
+    because this store cannot see every campaign that shares the repository.
+    `list_sessions()` filters by competition, and each competition keeps its
+    own `knowledge.db`, so another competition's running campaign is not merely
+    absent from the live set — it is unreadable from here. Treating unknown as
+    dead would delete its worktrees mid-experiment, which is the failure the
+    empty-set version had, narrowed rather than removed.
+
+    So a worktree is swept only when its session is one this store knows *and*
+    reports finished. Live sessions, sessions belonging to another
+    competition, and branches whose name does not parse are all kept. Keeping
+    a stale worktree costs one `create_experiment_worktree` retry that the
+    next sweep clears; deleting a live one costs a running experiment.
+
+    `paused` counts as live. Resuming needs those branches still checked out,
+    so sweeping them would turn a pause into a silent loss of work.
+    """
+    from labpilot.research_engine.agents.git_worktree import list_registered_worktrees
+
+    try:
+        known = {session.id: session for session in store.list_sessions()}
+    except Exception:  # noqa: BLE001 — an unreadable store means sweep nothing
+        logger.exception("cannot list sessions; leaving every worktree in place")
+        return _all_registered_branches(workspace)
+    try:
+        registered = list_registered_worktrees(workspace.root)
+    except Exception:  # noqa: BLE001
+        logger.exception("cannot list worktrees; leaving every worktree in place")
+        return set()
+
+    preserve: set[str] = set()
+    for branch in registered.values():
+        if not branch:
+            continue
+        session = known.get(_session_of(branch))
+        if session is None:
+            preserve.add(branch)
+            continue
+        if (
+            str(session.status).strip().lower() in _LIVE_SESSION_STATUSES
+            and not _owner_is_gone(session)
+        ):
+            preserve.add(branch)
+    return preserve
+
+
+def _all_registered_branches(workspace: Workspace) -> set[str]:
+    """Every registered branch — the set that makes a sweep a no-op.
+
+    Used when the session table cannot be read: not knowing which campaigns
+    are live is a reason to delete nothing, since the cost of over-keeping is
+    a stale worktree that the next successful sweep clears, and the cost of
+    over-deleting is a running campaign losing its checkout.
+    """
+    from labpilot.research_engine.agents.git_worktree import list_registered_worktrees
+
+    try:
+        return {b for b in list_registered_worktrees(workspace.root).values() if b}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _session_of(branch: str) -> str:
+    """The session segment of a `research/<session>/<experiment>` branch."""
+    parts = branch.split("/")
+    return parts[1] if len(parts) > 2 and parts[0] == "research" else ""
+
+
+def _untrack_shared_state(workspace: Workspace) -> None:
+    """Stop git copying shared research state into every worktree.
+
+    A `.gitignore` pattern does not untrack a file that is already tracked, so
+    a workspace scaffolded before `SHARED_STATE_IGNORES` still has
+    `knowledge.db` and `runs/` in the index — and every worktree checkout
+    copies them (measured 105 MB per branch). Ignoring fixes new workspaces;
+    only the index fixes existing ones.
+
+    Done here rather than in `ensure_required_ignores` because it rewrites a
+    user's index, which belongs with the feature that actually needs it and
+    not in a helper every command runs. `--cached` keeps the files on disk:
+    this unstages them, it does not delete anyone's database.
+
+    Returns early when there is no repository, and checks that *before*
+    reaching for a git tool: `open_git_tool` runs `Repo.init()` plus a
+    bootstrap commit on a directory that is not one, so calling it first
+    created a repository in a workspace the user had deliberately kept out of
+    version control — the same side effect `reconcile_worktrees` refuses, from
+    the same unattended startup path, one call later.
+    """
+    from labpilot.research_engine.agents.git_worktree import is_git_repo
+    from labpilot.research_engine.git import open_git_tool
+    from labpilot.workspace import SHARED_STATE_IGNORES
+
+    if not is_git_repo(workspace.root):
+        logger.debug("%s is not a git repository; nothing to untrack", workspace.root)
+        return
+
+    pathspecs = _as_pathspecs(SHARED_STATE_IGNORES)
+    try:
+        tool = open_git_tool(workspace.root)
+        tracked = tool.execute("ls-files", "--", *pathspecs).strip()
+    except Exception:  # noqa: BLE001 — no repo, or git unavailable
+        logger.debug("cannot inspect the index for shared state; skipping untrack")
+        return
+    if not tracked:
+        return
+    try:
+        # `--ignore-unmatch` because `git rm` aborts on the *whole* invocation
+        # when any one pathspec matches nothing — a workspace with `runs/`
+        # tracked but no `knowledge.db` would otherwise untrack neither.
+        tool.execute("rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", *pathspecs)
+    except Exception:  # noqa: BLE001
+        logger.exception("cannot untrack shared research state; worktrees will copy it")
+        return
+    logger.info(
+        "untracked %d shared research file(s) so branch worktrees stop copying them",
+        len(tracked.splitlines()),
+    )
+
+
+def _as_pathspecs(patterns: tuple[str, ...]) -> list[str]:
+    """Gitignore patterns as git pathspecs.
+
+    Not the same language, despite looking alike: a leading `/` anchors a
+    gitignore pattern to the repository root, but means an absolute path to a
+    pathspec — git rejects `/runs/` outright with `fatal: Invalid path
+    '/runs'`. Stripping it gives the same meaning, since pathspecs are already
+    relative to the repository root.
+
+    Derived from the constant rather than written out again so a pattern
+    added there cannot silently go unhandled here.
+    """
+    return [pattern.lstrip("/") for pattern in patterns]
+
+
+def _fan_out_with_task_cleanup(store, task_id: str, *args: Any, **kwargs: Any) -> Any:
+    """`_fan_out_experiment`, cancelling the superseded task if it raises.
+
+    The task was enqueued for the sequential dispatch this step is about to
+    replace. When the fan-out returns records the caller cancels it, and when
+    the fan-out *declines* the caller goes on to dispatch it — but an exception
+    escaping in between left it `pending` forever, with no worker that would
+    ever claim it. A `KeyboardInterrupt` at the approval prompt is the ordinary
+    way that happens.
+
+    `BaseException`, for that reason, and re-raised untouched: the operator's
+    interrupt still ends the campaign.
+    """
+    try:
+        return _fan_out_experiment(store, *args, **kwargs)
+    except BaseException:
+        try:
+            store.update_task_status(task_id, "cancelled", error="fan-out interrupted")
+        except Exception:  # noqa: BLE001 — must not displace the original
+            logger.exception("cannot cancel task %s after a failed fan-out", task_id)
+        raise
+
+
+def _experiment_agent(*, llm_client: Any | None) -> Any | None:
+    """The specialist every branch runs, or None when none is registered.
+
+    Built once per campaign rather than per fan-out step. Each call
+    constructs a coding tool, two specialists, a fresh event bus and a fresh
+    subscriber set, and every step's branches would otherwise publish to a
+    different bus than the last — so no subscriber could hold state across
+    steps even if it wanted to.
+
+    No `dry_run` argument: `_branch_task` always writes `dry_run` into the
+    task metadata, and `ExperimentSpecialist` prefers metadata over its own
+    default (`agents/experiment.py:78`), so a registry-level default could
+    only ever disagree with the step it was built for.
+    """
+    from labpilot.research_engine.agents.catalog import build_default_specialist_registry
+
+    registry = build_default_specialist_registry(llm_client=llm_client)
+    candidates = registry.candidates(capability="run_experiment")
+    return candidates[0].agent if candidates else None
+
+
+def _branch_task(branch: Any, cohort_id: str, *, dry_run: bool, submit: bool) -> Any:
+    """The `AgentTask` one branch runs.
+
+    `cohort_id` travels in metadata because that is how it reaches the
+    `ExperimentCompleted` event, and the promotion subscriber returns early
+    without one — a fan-out whose branches carry no cohort id runs K
+    experiments and compares none of them.
+    """
+    from labpilot.research_engine.agents.models import AgentTask
+
+    return AgentTask(
+        id=f"T-{branch.hypothesis_id}",
+        capability="run_experiment",
+        description=f"branch {branch.hypothesis_id}",
+        metadata={
+            "plan_id": branch.plan_id,
+            "hypothesis_id": branch.hypothesis_id,
+            "cohort_id": cohort_id,
+            "dry_run": dry_run,
+            # Carried from the step rather than pinned off: `dry_run` is read
+            # from the step's args, and silently dropping its sibling is how
+            # a step that asked to submit stops submitting once fanned out.
+            "submit": submit,
+        },
+    )
+
+
+def _branch_context(workspace: Workspace) -> Any:
+    from labpilot.research_engine.context.models import ContextBundle, ContextRequest
+
+    return ContextBundle(
+        request=ContextRequest(
+            competition=workspace.competition, goal=workspace.goal or ""
+        )
+    )
 
 
 def _maybe_mint_on_stagnation(
@@ -313,7 +636,7 @@ def _maybe_mint_on_stagnation(
     given up on. Suppressing repeats of a mint that happened is the intent;
     suppressing retries of one that did not is a different thing.
 
-    Wrapped in its own guard for the same reason `_techniques_for` above is:
+    Wrapped in its own guard for the same reason `scoring._techniques_for` is:
     `_record_experiment_outcome` runs inside the dispatch loop's outer
     try/except, so an escape here would not stay local — it would land as a
     dispatch error and count a *successful* experiment as a failure against
@@ -366,7 +689,7 @@ def _record_experiment_outcome(
     budget_cfg, budget_state = load_budget_pair(session)
     budget_state.record_execution(succeeded=succeeded, error=error)
     if succeeded and workspace is not None and execution_id:
-        event = _score_event_for(workspace, execution_id, fallback_maximize=budget_cfg.maximize)
+        event = score_event_for(workspace, execution_id, fallback_maximize=budget_cfg.maximize)
         if event is not None:
             # A resumed session's stored readings name no metric, so they
             # cannot be compared against a keyed one. They leave the derived
@@ -574,8 +897,14 @@ def run_until_stop(
     campaign_mode: bool = True,
     prefer_offline: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+    branches: int = 1,
 ) -> list[DecisionRecord]:
     """Run until stop, budget, max_steps, or operator pause status.
+
+    ``branches`` is the fan-out width (M11). The default of 1 is the
+    sequential path this loop has always run, unchanged: every fan-out
+    decision is guarded on ``branches > 1``, so a caller that does not ask
+    for parallel branches cannot get one.
 
     When online policy fails, asks the operator (allow / deny / retry) before
     using the deterministic offline order — unless ``prefer_offline`` or
@@ -602,6 +931,7 @@ def run_until_stop(
             campaign_mode=campaign_mode,
             prefer_offline=prefer_offline,
             offline_fallback_prompt=offline_fallback_prompt,
+            branches=branches,
         )
 
 
@@ -620,12 +950,20 @@ def _run_until_stop_inner(
     campaign_mode: bool = True,
     prefer_offline: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+    branches: int = 1,
 ) -> list[DecisionRecord]:
     scheduler = Scheduler(store, registry, workspace, llm_client=llm_client)
     decisions: list[DecisionRecord] = []
     session = store.get_session(session_id)
     if session is None:
         raise ValueError(f"unknown session: {session_id}")
+    branch_agent: Any = None
+    if branches > 1:
+        # Stamped before the sweep, so this campaign's own worktrees can never
+        # be candidates for it.
+        claim_session_ownership(store, session_id)
+        _reconcile_stale_worktrees(store, workspace)
+        branch_agent = _experiment_agent(llm_client=llm_client)
 
     ensure_metrics(store, session_id)
     budget_cfg, budget_state = load_budget_pair(session)
@@ -961,6 +1299,40 @@ def _run_until_stop_inner(
                         decisions.append(record)
                         _progress(f"Rejected {tool_step.tool}")
                         break
+                if tool_step.tool in _EXPERIMENT_TOOLS and branches > 1:
+                    fanned = _fan_out_with_task_cleanup(
+                        store,
+                        task.id,
+                        workspace,
+                        session_id,
+                        step=step,
+                        branches=branches,
+                        rationale=research.rationale or research.intent,
+                        llm_client=llm_client,
+                        dry_run=bool(
+                            step_args.get(
+                                "dry_run", _DRY_RUN_DEFAULTS.get(tool_step.tool, True)
+                            )
+                        ),
+                        submit=bool(step_args.get("submit", False)),
+                        agent=branch_agent,
+                        auto_approve=auto_approve,
+                        approval_prompt=approval_prompt,
+                        autonomy=autonomy,
+                        progress=_progress,
+                    )
+                    if fanned is not None:
+                        # The task enqueued for the sequential dispatch is not
+                        # what ran: the branches did. Cancel it rather than
+                        # leaving a pending row no worker will ever claim —
+                        # with no `error`, because nothing failed. A non-null
+                        # error here makes every fan-out step look like one
+                        # more failure to anything scanning os_tasks. The
+                        # reason lives on each branch's DecisionRecord instead.
+                        store.update_task_status(task.id, "cancelled")
+                        decisions.extend(fanned)
+                        prev_id = None
+                        continue
                 _progress(f"Dispatch {tool_step.tool} ({task.id})")
                 try:
                     result = scheduler.dispatch(task)
