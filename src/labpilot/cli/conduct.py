@@ -248,7 +248,10 @@ def conduct_run(
         min=1,
         help=(
             "Test the top K untested hypotheses in parallel, each in its own "
-            "git worktree with a share of the cores. 1 runs them one at a time."
+            "git worktree with a share of the cores. 1 runs them one at a time. "
+            "Keep K within twice your LLM provider's per-minute limit: a branch "
+            "waits out one rate-limit window and then fails, so wider fan-outs "
+            "lose branches to the limiter and count them as failed experiments."
         ),
     ),
     yes: bool = typer.Option(
@@ -415,7 +418,10 @@ def conduct_continue(
         "--branches",
         "-k",
         min=1,
-        help="Test the top K untested hypotheses in parallel (1 = one at a time)",
+        help=(
+            "Test the top K untested hypotheses in parallel (1 = one at a time). "
+            "Keep K within twice your provider's per-minute limit."
+        ),
     ),
     yes: bool = typer.Option(False, "--yes", "-y"),
     offline: bool = typer.Option(False, "--offline"),
@@ -449,7 +455,10 @@ def conduct_resume(
         "--branches",
         "-k",
         min=1,
-        help="Test the top K untested hypotheses in parallel (1 = one at a time)",
+        help=(
+            "Test the top K untested hypotheses in parallel (1 = one at a time). "
+            "Keep K within twice your provider's per-minute limit."
+        ),
     ),
     yes: bool = typer.Option(False, "--yes", "-y"),
     offline: bool = typer.Option(False, "--offline"),

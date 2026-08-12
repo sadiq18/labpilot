@@ -158,12 +158,41 @@ against the same, correctly-locked ledger. That is exactly the "wait for the
 next-retry time and resume" behavior the budget question needed, and it costs
 M11 nothing — `ExperimentSpecialist` already calls through this gateway.
 
-**No pre-split, no `fitroute` change, no M10 sign-off needed.** The only
-residual property worth naming, not fixing: if K branches simultaneously
-exhaust the *same* provider, each independently waits and retries — correct,
-bounded by `max_wait_seconds`, but not perfectly efficient (a small
-thundering-herd retry burst when the cooldown lifts). Not a defect in this
-milestone's scope.
+**No pre-split, no `fitroute` change, no M10 sign-off needed.**
+
+**Measured limit — `served = min(K, 2 × rpm)`** (task 8,
+`tests/unit/test_branches_pace_independently.py`). The residual above was
+first written as "each independently waits and retries — not perfectly
+efficient (a small thundering-herd retry burst)", which reads as a throughput
+note. Building the regression test showed it is not one.
+
+A branch gets exactly **one** wait. `_complete_once` sleeps `wait_seconds`,
+re-selects once, and raises `RoleUnavailable` if the provider is still spent;
+the outer `complete` retry loop passes `allow_wait=allow_wait and attempt ==
+1`, so nothing waits a second time. One window's worth of branches is served
+immediately, one more after that single wait, and the rest **fail** — they do
+not run slower. Measured, with one provider and no failover:
+
+| K | rpm | served | failed |
+|---|-----|--------|--------|
+| 2 | 1   | 2      | 0      |
+| 3 | 1   | 2      | 1      |
+| 4 | 1   | 2      | 2      |
+| 4 | 2   | 4      | 0      |
+| 5 | 2   | 4      | 1      |
+
+The consequence is not efficiency, it is accounting: each excess branch is
+recorded as a *failed experiment* and counts against the circuit breaker
+(`max_consecutive_failures`, default 3). `--branches 4` against a
+one-call-per-minute provider spends four worktrees to get two results and two
+breaker strikes — for a rate limit, not for anything the science did.
+
+So **K is bounded by the provider's rpm, not only by cores**: keep
+`K ≤ 2 × rpm` of the narrowest provider the role can reach, or give the role a
+second provider so exhaustion degrades sideways instead of waiting. Left as a
+pinned property rather than fixed, because fixing it means retry-with-wait
+inside `fitroute`, which this section deliberately scoped out — but pinned so
+choosing K is a decision someone can look up instead of rediscover.
 
 ## 6. Design
 
