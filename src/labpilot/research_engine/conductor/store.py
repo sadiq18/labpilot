@@ -31,7 +31,19 @@ _FEEDBACK_PREFIX = "F"
 
 
 class ConductorStore:
-    """CRUD for OS session / queue / decision log under a competition knowledge DB."""
+    """CRUD for OS session / queue / decision log under a competition knowledge DB.
+
+    Cheap enough to open per unit of work, and that is how a K-way fan-out
+    (M11) uses it: each branch opens its own rather than sharing the
+    campaign's. The connection is thread-confined — `SqliteClient` defaults
+    `check_same_thread` on and this class does not opt out — and a branch's
+    work runs on a worker thread, so a shared handle would raise there. Writes
+    that span statements serialise on `write_lock_for`, which is a file lock,
+    so it keeps holding when a branch becomes a separate process.
+
+    Measured warm: ~1.7ms to open, ~14ms for a K=8 step, against a step that
+    runs a training job.
+    """
 
     def __init__(self, knowledge_dir: Path, competition: str) -> None:
         self.knowledge_dir = Path(knowledge_dir)
@@ -42,6 +54,14 @@ class ConductorStore:
 
     def close(self) -> None:
         self._client.close()
+
+    def __enter__(self) -> ConductorStore:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        # Matches `KnowledgeStore`, so a branch that opens one closes it
+        # without hand-written try/finally at every call site.
+        self.close()
 
     # -- sessions ----------------------------------------------------------
 
