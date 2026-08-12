@@ -1,7 +1,8 @@
 # M17 — Run until plateau or goal, and show progress
 
-**Status:** not started · **Blocked by:** [M7](01-technique-to-model.md) (scores
-must be able to move for plateau to mean anything)
+**Status:** not started · **Blocker cleared:** [M7](01-technique-to-model.md)
+done 2026-08-07, and M8's score writer (PR #125) supplies the durable metric this
+shares with it — unblocked, not started
 
 ---
 

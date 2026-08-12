@@ -40,19 +40,25 @@ asserted.
 | **0** | ~~M14~~ **complete 2026-08-07** — phases 1, 2a, 2b, 3 | Degradation is now visible *and* fatal on request; the 20 rule engines are gone |
 | **1** | ~~M10 wiring ⇄ thin M7 slice~~ **both done 2026-08-07** | The cycle closed: a real codegen call produced working training code, and two hypotheses produced different scores. [Evidence](evidence-log-2026-08-07.md) |
 | **2** | ~~**M7** full~~ **done** · ~~**M18**~~ **done** | M7's differ-table showed every `applied` technique changes the emitted code; M18 gave the vocabulary derived status |
-| **3** | ~~**M19**~~ **done 2026-08-09** · then **M8 + M17** together | M19 retired the templates that M7 exposed as the narrow path. M8/M17 still need the same missing writer — `metric_history` / `last_metric` are read in four places and written in none |
-| **4** | **M13** (needs M7+M8) · **M11** (needs M7 only) | M11 does **not** need M8 and can start as soon as M7 lands |
+| **3** | ~~**M19**~~ **done 2026-08-09** · ~~**M8**~~ **shipped 2026-08-11**, unmeasured · **M17** | The missing writer landed with M8's score writer (PR #125), which is what M17 also needed |
+| **4** | **M13** (needs M7+M8) · ~~**M11**~~ **shipped 2026-08-11/12**, unmeasured | M11 did not need M8; both are now in and neither has been demonstrated on a campaign |
 | **5** | **M16** (needs M11 + M14 full) · **M12** (needs M7 + M8) | Last |
 
 Standing throughout: **M9** (verification-first), **M15** (capability audit),
 **M20** (gates must be able to fail), **M14** phases 2–3 once the test
 migration is budgeted.
 
-**M20 is blocked by nothing and can start at any point.** It is listed as
-standing rather than phased because its items are independent of the research
-loop — but note the cost of deferring it: on 2026-08-08, eight gates reporting
-`pass` on things that could not run cost nine campaign runs to find, and four of
-them had been read and approved.
+~~**M20 is blocked by nothing and can start at any point.**~~ **Done
+2026-08-12.** It was listed as standing rather than phased because its items are
+independent of the research loop — and the cost of having deferred it was real:
+on 2026-08-08, eight gates reporting `pass` on things that could not run took
+nine campaign runs to find, and four of them had been read and approved.
+
+**What is now unmeasured is the loop itself.** M8 and M11 both ship
+implementations whose exit criteria can only be met by a campaign log, and no
+campaign has been run since the template pack was retired. That is the next
+piece of evidence this roadmap needs, and no amount of further mechanism work
+substitutes for it.
 
 ### The one cycle: M10 ⇄ M7
 
@@ -94,22 +100,22 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 |---|------|---------|--------|
 | **M10** | [LLM tiering & routing](04-llm-tiering.md) | **A trustworthy reasoning substrate. Everything downstream inherits its quality.** | **v0.1 shipped + exit criterion 3 met 2026-08-07** — a real codegen call produced a working `train.py` that ran and wrote metrics ([evidence](evidence-log-2026-08-07.md)) |
 | **M7** | [Technique → model](01-technique-to-model.md) | Anything at all. Without it there is nothing to optimise over. | **Done 2026-08-07: MSE 194.80 → 190.97**, the first distinct scores, via the LLM path. A differ-table confirmed every `applied` technique changes the emitted code and every `not_applicable` one says why — so the real blocker was undeclared dependencies, not the technique path ([evidence](evidence-log-2026-08-07.md)) |
-| **M8** | [Objective feedback loop](02-objective-loop.md) | The system noticing it is making no progress | Not started |
+| **M8** | [Objective feedback loop](02-objective-loop.md) | The system noticing it is making no progress | **Implementation shipped 2026-08-11** (PRs #123, #125, #128, #131): score writer, score summary, stagnation mint. **Exit criteria not demonstrated** — all three ask for evidence from a campaign log, and no campaign has been run since |
 | **M9** | [Verification-first execution](03-verification-first.md) | Trusting any result | Partly done |
-| **M11** | [Parallel branches](05-parallel-branches.md) | Iteration speed | Not started |
+| **M11** | [Parallel branches](05-parallel-branches.md) | Iteration speed | **Implementation shipped 2026-08-11/12** (PRs #122, #126, #127, #132, #135, #136, #138): parallel branches, worktree isolation and disk accounting, compute budget, k-way fan-out. **Exit criteria not demonstrated** — all three need a campaign that actually fans out |
 | **M12** | [Beyond Kaggle](06-beyond-kaggle.md) | The actual product thesis | Not started |
 | **M13** | [Policy reasons about state](08-policy-reasoning.md) | Decisions instead of keyword matches | Not started |
 | **M14** | [LLM required; delete rule engines](09-llm-required.md) | Failure becomes impossible to miss | **Complete 2026-08-07.** 2b ships default-off against a measured 3.2% fallback rate; a 30-step campaign completed with strict mode on. Phase 3 retired all 20 rule engines (PR #104) behind the `structured_output` precondition (PR #98) that makes removal safe |
 | **M18** | [Technique vocabulary earns its entries](13-technique-vocabulary.md) | Attention goes somewhere defensible | **shipped 2026-08-07** (PR #100 step 1, PR #101 step 2). Status derived from evidence; the junk (`the`, `Breath Focus practice`) no longer reaches the planner and `SWA` still does |
 | **M19** | [An experiment is a change to its parent](14-experiments-as-deltas.md) | Validation discipline is preserved, and violations are visible | **All five exit criteria met 2026-08-09** (PRs #110–#118). `codegen.strategy` defaults to `delta`; the Jinja pack is deleted in the same commit. Measured over 18 attempts: 1 failure (5.6%), 0 template fallbacks since the codegen fixes. §5's fifth check (validation-region flagging) shipped the same day, with F7 leakage discipline alongside it — the region is derived from the validation plan the workspace already declares, so nothing is curated by hand |
-| **M20** | [A gate that cannot fail is not a gate](15-gates-must-fail.md) | Verification you can believe — the checks stop reporting pass on things that cannot run | Not started. Fifteen defects found 2026-08-08; **eight were one shape**: a gate testing something easier than it promises ([evidence](evidence-log-2026-08-08.md)) |
+| **M20** | [A gate that cannot fail is not a gate](15-gates-must-fail.md) | Verification you can believe — the checks stop reporting pass on things that cannot run | **All five exit criteria addressed 2026-08-12** (PRs #120, #121, #124, #130, #134, #137). Criterion 4 is *mostly* done and names its two gaps. Found and fixed along the way: 20 gates nobody had shown could say no, two `rejects` markers that had never been earned, three paths running model-written code with the operator's credentials, and seven unstamped derived views ([evidence](evidence-log-2026-08-08.md)) |
 | **M21** | [A hypothesis earns its turn](16-hypothesis-selection.md) | The campaign stops re-testing work it has already done | **shipped 2026-08-09** (PR #116), which unblocked M19 step 2. Four delta campaigns had produced no experiment because the hypothesis was already implemented and nothing retired it; 46 stale `proposed` rows held evidence gathering shut permanently |
 | **M22** | [An inference without evidence is a guess](17-dataset-understanding.md) | **Ground truth.** Every result above is a conclusion about whichever column the profiler happened to pick | Not started. Re-profiling rogii today infers the target as `EGFDU`, a horizon depth; it stayed invisible because `profile.json` was written 2026-08-02 and never re-derived |
 | **M23** | [A model that loses to a constant is not a baseline](18-baseline-correctness.md) | Telling "improving" from "below chance" | Not started. rogii's pipeline scored RMSE 1380 where carrying one column forward scores 15.1 — and the campaign reported `1789 → 1409 → 1380` as progress for fourteen steps |
 | **M24** | [Understanding is measured, not asserted](19-competition-benchmark.md) | The instrument M22 and M23 need, and the answer to *"the loop itself is unmeasured"* | Not started. `tests/integration/` has held only stale `.pyc` since `109745c` |
 | **M25** | [A finding is a statistic, not a plot](20-eda-findings.md) | Understanding the signal, once the problem is framed correctly | Not started. Both promotion triggers in [future-specialists.md](../backlog/future-specialists.md) are now met |
 | **M26** | [A feature is a claim its code must honour](21-feature-specs.md) | Creating signal, with attribution that survives | Not started. rogii produced 31 engineered features and nothing can say which of them helped |
-| **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | Not started |
+| **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | In progress — PR #129 open |
 | **M16** | [Evidence routine as background producer](11-background-routine.md) | Gathering stops blocking testing | Gating shipped |
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
 | — | [Interaction modes](07-interaction-modes.md) | Auto / accept-edits / plan UX | Not started |

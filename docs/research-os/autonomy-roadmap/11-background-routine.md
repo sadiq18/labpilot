@@ -1,7 +1,8 @@
 # M16 — Evidence routine as a background producer
 
-**Status:** gating shipped, routine not started · **Blocked by:** M11
-(concurrency), M14 (a trustworthy LLM path)
+**Status:** gating shipped, routine not started · **Blockers cleared:** M11
+(concurrency) shipped 2026-08-11/12 and M14 completed 2026-08-07, so this is
+unblocked and waiting on a decision, not on other work
 
 ---
 
