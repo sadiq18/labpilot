@@ -182,13 +182,29 @@ def _fan_out_experiment(
         logger.info("only %d branch(es) could be set up; staying sequential", len(prepared))
         return None
 
-    # Keyed on a decision id, not on the step number: `step` restarts with
-    # every `conduct resume`, so a resumed session reaching step 3 again would
-    # reuse `S-001-step3` and `promote_within_cohort` would re-rank the new
-    # branches against the abandoned attempt's members — promoting a branch
-    # the campaign had already discarded. Decision ids are monotonic per
-    # session, so this names one fan-out and never a second.
-    cohort_id = f"{session_id}-{store.new_decision_id()}"
+    # The cohort is named by a decision that is actually written, not by the
+    # step number and not by a peeked id.
+    #
+    # `step` restarts with every `conduct resume`, so a resumed session
+    # reaching step 3 again reused `S-001-step3` and `promote_within_cohort`
+    # re-ranked the new branches against the abandoned attempt's members.
+    # `new_decision_id()` is no better on its own: it computes `MAX(id)+1` and
+    # reserves nothing, so a fan-out that raised before recording any decision
+    # handed the next one the same id and the same merged cohort.
+    #
+    # Appending the record first allocates the id under the store's write lock
+    # and gives the audit log the thing it was missing anyway — one entry
+    # saying the campaign chose to fan out, above the per-branch entries.
+    cohort_record = store.append_new_decision(
+        session_id,
+        "fan_out",
+        rationale,
+        observe={
+            "step": step,
+            "branches": [b.hypothesis_id for b in prepared],
+        },
+    )
+    cohort_id = f"{session_id}-{cohort_record.id}"
     progress(f"Fan-out {len(prepared)} branches (cohort {cohort_id})")
     outcomes = []
     try:
@@ -208,7 +224,7 @@ def _fan_out_experiment(
         # succeeded" and releases every claim.
         teardown_branches(workspace, prepared, outcomes)
 
-    decisions: list[DecisionRecord] = []
+    decisions: list[DecisionRecord] = [cohort_record]
     for outcome in outcomes:
         record = store.append_new_decision(
             session_id,

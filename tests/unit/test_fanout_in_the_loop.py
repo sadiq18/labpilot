@@ -117,15 +117,80 @@ def test_every_branch_gets_its_own_decision_record(
         )
 
         assert decisions is not None
-        assert len(decisions) == 2
-        assert len({d.id for d in decisions}) == 2, "branch decisions must be distinct"
-        cohorts = {d.observe["cohort_id"] for d in decisions}
+        # One record naming the fan-out, then one per branch.
+        assert [d.tool_name for d in decisions] == [
+            "fan_out",
+            "run_experiment",
+            "run_experiment",
+        ]
+        assert len({d.id for d in decisions}) == 3, "decisions must be distinct"
+        branch_records = decisions[1:]
+        cohorts = {d.observe["cohort_id"] for d in branch_records}
         assert len(cohorts) == 1, "branches of one step must share one cohort"
-        assert cohorts.pop().startswith(f"{session.id}-")
-        assert {d.observe["branch"] for d in decisions} == {
-            d.args["hypothesis_id"] for d in decisions
+        assert cohorts.pop() == f"{session.id}-{decisions[0].id}"
+        assert {d.observe["branch"] for d in branch_records} == {
+            d.args["hypothesis_id"] for d in branch_records
         }
-        assert len(store.list_decisions(session.id)) == 2
+        assert len(store.list_decisions(session.id)) == 3
+
+
+def test_two_fan_outs_in_one_session_never_share_a_cohort(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`new_decision_id()` computes MAX+1 and reserves nothing, so naming the
+    cohort with a peeked id handed the next fan-out the same one whenever the
+    previous had recorded no decisions — merging two cohorts' members into one
+    verdict, the same bug the step-number key had.
+
+    The discriminating case is a fan-out that records nothing because it
+    raised. One that completes advances MAX(id) either way and cannot tell the
+    two implementations apart.
+    """
+    _plan_ok = lambda ws, **kw: type(  # noqa: E731
+        "R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}}
+    )()
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan", _plan_ok
+    )
+
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+
+        _propose(workspace, "a0", "b0")
+        monkeypatch.setattr(
+            "labpilot.research_engine.conductor.fanout.run_parallel_sync",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("worker pool died")),
+        )
+        with pytest.raises(RuntimeError):
+            _fan_out(store, workspace, monkeypatch, session_id=session.id, agent=_Agent())
+
+        after_failure = store.list_decisions(session.id)
+        assert [d.tool_name for d in after_failure] == ["fan_out"], (
+            "the fan-out must name itself before running, or the id it claimed "
+            "is not reserved against the next one"
+        )
+        first_cohort = f"{session.id}-{after_failure[-1].id}"
+
+        monkeypatch.setattr(
+            "labpilot.research_engine.conductor.fanout.run_parallel_sync",
+            _real_run_parallel_sync(),
+        )
+        _propose(workspace, "a1", "b1")
+        decisions = _fan_out(
+            store, workspace, monkeypatch, session_id=session.id, agent=_Agent()
+        )
+        assert decisions is not None
+        second_cohort = decisions[1].observe["cohort_id"]
+
+    assert second_cohort != first_cohort, (
+        f"a fan-out that recorded nothing handed its cohort id on: {first_cohort}"
+    )
+
+
+def _real_run_parallel_sync() -> Any:
+    from labpilot.research_engine.agents.parallel import run_parallel_sync
+
+    return run_parallel_sync
 
 
 def test_each_branch_feeds_the_circuit_breaker_separately(
