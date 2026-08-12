@@ -229,11 +229,12 @@ def _reconcile_stale_worktrees(store, workspace: Workspace) -> None:
     same experiment key then fails — a crash in one campaign would otherwise
     make the next one unable to re-test those hypotheses at all.
 
-    `live_branches` is empty: this process is the only campaign this store
-    knows about and it has not dispatched anything yet, so every experiment
-    worktree under `.worktrees/` is by definition abandoned. Passing the set
-    explicitly rather than having the sweep query it is what keeps
-    `git_worktree` free of any conductor dependency.
+    `live_branches` covers the campaigns that are still running, asked of the
+    store here rather than inside the sweep so `git_worktree` keeps no
+    conductor dependency. It is not empty even at our own start: a second
+    campaign on the same workspace is an ordinary thing to do, and sweeping
+    on the assumption that nothing else is live would delete a running
+    campaign's worktrees out from under its branches mid-experiment.
 
     Best-effort throughout — a campaign that cannot tidy up is still a
     campaign that can run, and `create_experiment_worktree` reports the real
@@ -241,9 +242,10 @@ def _reconcile_stale_worktrees(store, workspace: Workspace) -> None:
     """
     from labpilot.research_engine.agents.git_worktree import reconcile_worktrees
 
-    del store
     try:
-        result = reconcile_worktrees(workspace.root, live_branches=set())
+        result = reconcile_worktrees(
+            workspace.root, live_branches=_live_branches(store, workspace)
+        )
     except Exception:  # noqa: BLE001 — startup tidying must not stop a campaign
         logger.exception("worktree reconciliation failed; continuing")
         return
@@ -257,6 +259,71 @@ def _reconcile_stale_worktrees(store, workspace: Workspace) -> None:
             ", ".join(str(p) for p in result.failed),
         )
     _untrack_shared_state(workspace)
+
+
+#: Session statuses whose worktrees a startup sweep must leave alone.
+_LIVE_SESSION_STATUSES = frozenset({"running", "paused"})
+
+
+def _live_branches(store, workspace: Workspace) -> set[str]:
+    """Branch names belonging to campaigns that are still going.
+
+    Matched by *session*, not by experiment key: a branch is
+    `research/<session>/<experiment>` (`research_branch_name`), and the
+    sessions are knowable from the store while the experiment keys a running
+    campaign is currently branching on are not — they live in that process,
+    not in a table. Reading the session segment back off the registered
+    branches is what makes the set derivable at all.
+
+    `paused` counts as live. A paused campaign is resumable, and resuming it
+    needs its branches still checked out; sweeping them would turn a pause
+    into a silent loss of work.
+    """
+    from labpilot.research_engine.agents.git_worktree import list_registered_worktrees
+
+    try:
+        live_sessions = {
+            session.id
+            for session in store.list_sessions()
+            if str(session.status).strip().lower() in _LIVE_SESSION_STATUSES
+        }
+    except Exception:  # noqa: BLE001 — an unreadable store means sweep nothing
+        logger.exception("cannot list sessions; leaving every worktree in place")
+        return _all_registered_branches(workspace)
+    if not live_sessions:
+        return set()
+    try:
+        registered = list_registered_worktrees(workspace.root)
+    except Exception:  # noqa: BLE001
+        logger.exception("cannot list worktrees; leaving every worktree in place")
+        return set()
+    return {
+        branch
+        for branch in registered.values()
+        if branch and _session_of(branch) in live_sessions
+    }
+
+
+def _all_registered_branches(workspace: Workspace) -> set[str]:
+    """Every registered branch — the set that makes a sweep a no-op.
+
+    Used when the session table cannot be read: not knowing which campaigns
+    are live is a reason to delete nothing, since the cost of over-keeping is
+    a stale worktree that the next successful sweep clears, and the cost of
+    over-deleting is a running campaign losing its checkout.
+    """
+    from labpilot.research_engine.agents.git_worktree import list_registered_worktrees
+
+    try:
+        return {b for b in list_registered_worktrees(workspace.root).values() if b}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _session_of(branch: str) -> str:
+    """The session segment of a `research/<session>/<experiment>` branch."""
+    parts = branch.split("/")
+    return parts[1] if len(parts) > 2 and parts[0] == "research" else ""
 
 
 def _untrack_shared_state(workspace: Workspace) -> None:

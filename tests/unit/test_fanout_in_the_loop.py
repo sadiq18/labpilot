@@ -223,6 +223,83 @@ def test_a_fan_out_leaves_no_worktrees_behind(
     assert ".worktrees" not in registered
 
 
+# -- startup reconciliation -----------------------------------------------
+
+
+def test_a_running_campaigns_worktrees_are_not_swept(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two campaigns on one workspace is ordinary. A sweep that assumed
+    nothing else was live would delete a running campaign's checkouts out
+    from under its branches, mid-experiment."""
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        live = store.create_session("still going")
+        finished = store.create_session("all done")
+        store.update_session_status(finished.id, "completed")
+
+        live_tree = create_experiment_worktree(
+            root, session_id=live.id, experiment_key="H-live"
+        )
+        dead_tree = create_experiment_worktree(
+            root, session_id=finished.id, experiment_key="H-dead"
+        )
+        assert live_tree.path.is_dir() and dead_tree.path.is_dir()
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert live_tree.path.is_dir(), "a running campaign lost its worktree"
+    assert not dead_tree.path.exists(), "a finished campaign's worktree was kept"
+
+
+def test_a_paused_campaign_keeps_its_worktrees(
+    workspace: Workspace,
+) -> None:
+    """Resuming a paused campaign needs its branches still checked out —
+    sweeping them turns a pause into a silent loss of work."""
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        paused = store.create_session("held")
+        store.update_session_status(paused.id, "paused")
+        tree = create_experiment_worktree(
+            root, session_id=paused.id, experiment_key="H-1"
+        )
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert tree.path.is_dir()
+
+
+def test_an_unreadable_session_table_sweeps_nothing(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not knowing which campaigns are live is a reason to delete nothing: a
+    stale worktree costs the next sweep, a deleted one costs a running run."""
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("g")
+        store.update_session_status(session.id, "completed")
+        tree = create_experiment_worktree(root, session_id=session.id, experiment_key="H-1")
+        monkeypatch.setattr(
+            type(store),
+            "list_sessions",
+            lambda self: (_ for _ in ()).throw(RuntimeError("db gone")),
+        )
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert tree.path.is_dir()
+
+
 # -- the index migration --------------------------------------------------
 
 
