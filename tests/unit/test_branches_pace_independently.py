@@ -177,33 +177,49 @@ def _run_branches(gateway, count: int) -> tuple[list[str], list[BaseException]]:
     return results, errors
 
 
-def test_two_branches_on_a_one_call_window_are_both_served(
+def _spend_the_window(gateway, ledger) -> None:
+    """Use up the provider before any branch starts.
+
+    Every branch then *must* wait, which is what makes these assertions
+    deterministic. Racing K branches against a fresh window instead makes the
+    number served an artifact of thread scheduling: measured 2-of-3 in 40/40
+    trials on a ten-core box and 3-of-3 on a two-core CI runner, from identical
+    code. Anything asserting that count is asserting the scheduler.
+    """
+    gateway.for_role("default").complete("s", "u", json_mode=True)
+    del ledger
+
+
+def test_every_branch_that_finds_the_window_spent_waits_for_it(
     monkeypatch, ledger, clock
 ) -> None:
-    """Pacing, working: one branch takes the slot, the other waits out the
-    window and is served. Were `allow_wait` not the default, the second would
-    die on a rate limit rather than on its science, and the fan-out would
-    record it as a failed experiment.
-    """
+    """Exhaustion paces a branch; it does not fail one. Were `allow_wait` not
+    the default, each of these would raise `RoleUnavailable` and the fan-out
+    would record a rate limit as a failed experiment."""
     gateway, adapter = _gateway(monkeypatch, ledger)
+    _spend_the_window(gateway, ledger)
+    served_before = adapter.calls
 
-    results, errors = _run_branches(gateway, 2)
+    results, errors = _run_branches(gateway, _BRANCHES)
 
-    assert errors == [], f"a branch failed instead of waiting: {errors}"
-    assert len(results) == 2
-    assert adapter.calls == 2
-    assert len(clock.sleeps) == 1, "the second branch did not wait for its turn"
-    assert 0 < clock.sleeps[0] <= _WINDOW_S
+    assert len(clock.sleeps) == _BRANCHES, (
+        f"{_BRANCHES} branches found the window spent; {len(clock.sleeps)} waited"
+    )
+    assert all(0 < s <= _WINDOW_S for s in clock.sleeps), clock.sleeps
+    # Whoever the post-wait race admits, nobody fails for another reason.
+    assert all(isinstance(e, RoleUnavailable) for e in errors), errors
+    assert results, "the window rolled over and still served nobody"
+    assert adapter.calls == served_before + len(results)
 
 
 def test_waiting_branches_wait_at_the_same_time(monkeypatch, ledger, clock) -> None:
     """What makes pacing tolerable: a branch sleeping on a rate limit holds
-    nothing its siblings need, so the waits overlap. If the gateway slept
-    while holding the ledger — or the ledger's lock were taken across the
-    sleep — the waits would queue and a K-branch fan-out would pay K windows
-    instead of one.
+    nothing its siblings need, so the waits overlap. If the gateway slept while
+    holding the ledger — or the ledger's lock were taken across the sleep — the
+    waits would queue and a K-branch fan-out would pay K windows instead of one.
     """
     gateway, _ = _gateway(monkeypatch, ledger)
+    _spend_the_window(gateway, ledger)
 
     _run_branches(gateway, _BRANCHES)
 
@@ -213,48 +229,34 @@ def test_waiting_branches_wait_at_the_same_time(monkeypatch, ledger, clock) -> N
     )
 
 
-@pytest.mark.parametrize(
-    ("branches", "rpm", "served"),
-    [
-        (2, 1, 2),  # one immediately, one after a wait
-        (3, 1, 2),  # the third has no second wait left
-        (4, 1, 2),
-        (3, 2, 3),
-        (4, 2, 4),
-        (5, 2, 4),
-    ],
-)
-def test_a_fan_out_wider_than_two_windows_loses_branches(
-    monkeypatch, ledger, clock, branches: int, rpm: int, served: int
-) -> None:
-    """The measured limit of §5's resolution: **served = min(K, 2 x rpm)**.
+@pytest.mark.parametrize("rpm", [1, 2])
+def test_a_branch_gets_one_wait_and_no_more(monkeypatch, ledger, clock, rpm: int) -> None:
+    """The limit of §5's resolution, stated as the rule rather than a count.
 
-    A branch gets exactly *one* wait. `_complete_once` sleeps once, re-selects,
-    and raises `RoleUnavailable` if the provider is still spent; the outer
-    `complete` retry loop passes `allow_wait=False` on every attempt after the
-    first, so nothing waits twice. One window's worth of branches is served
-    immediately and one more window's worth after that single wait — the rest
-    fail.
+    `_complete_once` sleeps once, re-selects, and raises if the provider is
+    still spent; the outer `complete` passes `allow_wait=allow_wait and attempt
+    == 1`, so nothing waits twice. One window's worth is served after that
+    single wait and the rest fail — they do not run slower, and the fan-out
+    records each as a failed experiment against the circuit breaker.
 
-    §5 called this "a small thundering-herd retry burst ... not perfectly
-    efficient", which reads as a throughput note. It is not: the excess
-    branches do not run slower, they fail, and the fan-out records each as a
-    failed experiment against the circuit breaker. `--branches 4` on a
-    one-call-per-minute provider spends four worktrees to get two results and
-    two breaker strikes.
-
-    Pinned rather than fixed: fixing it means retry-with-wait in `fitroute`,
-    which §5 explicitly scoped out. Pinned so that choosing K against a known
-    rpm is a decision someone can look up instead of rediscover.
+    Asserted as `served <= rpm`, because *which* branches win the post-wait
+    race is scheduling, not code.
     """
     gateway, adapter = _gateway(monkeypatch, ledger, routing=_routing(rpm=rpm))
+    for _ in range(rpm):
+        gateway.for_role("default").complete("s", "u", json_mode=True)
+    served_before = adapter.calls
+    branches = rpm * 3
 
     results, errors = _run_branches(gateway, branches)
 
-    assert len(results) == served
-    assert adapter.calls == served
-    assert len(errors) == branches - served
+    assert len(clock.sleeps) == branches, "a branch skipped its wait"
+    assert 0 < len(results) <= rpm, (
+        f"one wait should admit at most {rpm}; {len(results)} of {branches} got through"
+    )
+    assert len(errors) == branches - len(results)
     assert all(isinstance(e, RoleUnavailable) for e in errors), errors
+    assert adapter.calls == served_before + len(results)
 
 
 def test_a_wait_longer_than_the_bound_fails_instead_of_hanging(

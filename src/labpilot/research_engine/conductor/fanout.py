@@ -38,6 +38,9 @@ from labpilot.research_engine.workspace_facade import Workspace
 
 logger = logging.getLogger(__name__)
 
+#: Distinguishes "ask the machine" from an explicit `cpus=None` meaning "no cap".
+_UNSET: Any = object()
+
 
 class PlanRejected(Exception):
     """An operator declined to compile a plan for a branch.
@@ -74,7 +77,7 @@ class BranchOutcome:
     refs: list[Any] = field(default_factory=list)
 
 
-def resolve_k(requested: int, *, available: int) -> int:
+def resolve_k(requested: int, *, available: int, cpus: int | None = _UNSET) -> int:
     """How many branches to actually run.
 
     Clamped by what there is to run: asking for 4 branches with 2 untested
@@ -97,21 +100,32 @@ def resolve_k(requested: int, *, available: int) -> int:
     each of them 1 core and no indication the request was degenerate. Capped at
     the CPUs actually available, and said out loud — a ceiling nobody can see is
     the same surprise one step later.
+
+    Never below 2, though. A one-core machine would otherwise turn every
+    requested fan-out into a sequential step: technically the honest answer to
+    "how many cores can I give each branch", but it silently removes the feature
+    the operator asked for, and two branches sharing a core still measure two
+    hypotheses. Caught by CI on a 2-core runner, where this capped a K=3 test to
+    2 and would have capped K=2 to 1 on a smaller one.
+
+    `cpus` is injectable so a test can assert the rule without depending on the
+    machine running it — which is exactly how this reached CI green-locally.
     """
     if requested < 2 or available < 2:
         return 1
     k = min(requested, available)
-    cpus = available_cpus()
-    if cpus is not None and k > cpus:
-        logger.warning(
-            "%d branches requested but only %d CPUs are available; running %d "
-            "— more branches than cores oversubscribes the machine and gives "
-            "each of them a 1-core share",
-            k,
-            cpus,
-            cpus,
-        )
-        return cpus
+    budget = available_cpus() if cpus is _UNSET else cpus
+    if budget is not None and k > budget:
+        capped = max(2, budget)
+        if capped < k:
+            logger.warning(
+                "%d branches requested but only %d CPU(s) available; running %d "
+                "— more branches than cores oversubscribes the machine",
+                k,
+                budget,
+                capped,
+            )
+            return capped
     return k
 
 

@@ -18,6 +18,7 @@ from typing import Any
 
 import anyio
 import pytest
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from labpilot.cli.conduct import conduct_app
@@ -168,13 +169,25 @@ def test_an_agent_that_blocks_the_loop_gets_no_parallelism(
     assert agent.peak == 1
 
 
+def _declared_options(command_name: str) -> set[str]:
+    """Every option name a `conduct` subcommand declares.
+
+    Read off the command's parameters rather than its rendered `--help`. Rich
+    wraps the help panel to the terminal, and a narrow one truncates long option
+    names — measured: `--branches` is present at COLUMNS=50 and gone at 40, so
+    the rendered-text version of this passed on a laptop and failed on CI.
+    """
+    command = get_command(conduct_app).commands[command_name]
+    return {opt for param in command.params for opt in param.opts}
+
+
 def test_the_cli_exposes_the_fan_out_width() -> None:
     """Without a flag the whole feature is unreachable: `branches` defaults to
     1 everywhere, and nothing else sets it."""
-    runner = CliRunner()
     for command in ("run", "continue", "resume"):
-        output = runner.invoke(conduct_app, [command, "--help"]).output
-        assert "--branches" in output, f"{command} cannot ask for parallel branches"
+        assert "--branches" in _declared_options(command), (
+            f"{command} cannot ask for parallel branches"
+        )
 
 
 def test_the_cli_refuses_a_nonsense_width() -> None:

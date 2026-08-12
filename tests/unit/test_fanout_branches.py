@@ -146,7 +146,10 @@ def _status(workspace: Workspace, hypothesis_id: str) -> HypothesisStatus:
 def test_k_is_clamped_by_both_the_request_and_what_exists(
     requested: int, available: int, expected: int
 ) -> None:
-    assert resolve_k(requested, available=available) == expected
+    # `cpus=None` isolates the two clamps under test from the machine's. The
+    # first version of this omitted it and passed on a ten-core laptop while
+    # failing on a two-core CI runner.
+    assert resolve_k(requested, available=available, cpus=None) == expected
 
 
 def test_k_is_capped_by_the_cores_the_machine_actually_has() -> None:
@@ -155,19 +158,22 @@ def test_k_is_capped_by_the_cores_the_machine_actually_has() -> None:
     runs, with `cpu_share` quietly handing each a 1-core share and no sign the
     request was degenerate.
 
-    Derived from `available_cpus()` rather than a literal, so this asserts the
-    rule on whatever machine runs it.
+    The cap is injected rather than read from the machine, so the assertions
+    mean the same thing on every runner — the earlier version read
+    `available_cpus()` and therefore asserted something different on a two-core
+    CI box than on a ten-core laptop.
     """
-    cpus = available_cpus()
-    if cpus is None:  # pragma: no cover — undiscoverable, so nothing to cap by
-        pytest.skip("this machine does not report its CPU count")
-
-    over = cpus * 4
-    assert resolve_k(over, available=over) == cpus
-    # And it must not cap a request the machine can actually honour.
-    assert resolve_k(cpus, available=cpus) == cpus
-    if cpus > 2:
-        assert resolve_k(2, available=cpus) == 2
+    assert resolve_k(64, available=64, cpus=10) == 10
+    # Not below two: a one-core box must still be able to compare two
+    # hypotheses, or the cap silently removes the feature that was asked for.
+    assert resolve_k(4, available=4, cpus=1) == 2
+    assert resolve_k(2, available=2, cpus=1) == 2
+    # And it must not cap a request the machine can honour.
+    assert resolve_k(4, available=4, cpus=8) == 4
+    # The default asks the machine, and must stay within it.
+    machine = available_cpus()
+    if machine is not None:
+        assert resolve_k(machine * 4, available=machine * 4) <= max(2, machine)
 
 
 def test_one_hypothesis_is_never_a_fan_out() -> None:

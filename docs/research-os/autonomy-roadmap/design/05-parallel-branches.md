@@ -160,39 +160,34 @@ M11 nothing — `ExperimentSpecialist` already calls through this gateway.
 
 **No pre-split, no `fitroute` change, no M10 sign-off needed.**
 
-**Measured limit — `served = min(K, 2 × rpm)`** (task 8,
-`tests/unit/test_branches_pace_independently.py`). The residual above was
-first written as "each independently waits and retries — not perfectly
-efficient (a small thundering-herd retry burst)", which reads as a throughput
-note. Building the regression test showed it is not one.
+**Measured limit — a branch gets exactly one wait** (task 8,
+`tests/unit/test_branches_pace_independently.py`). The residual above was first
+written as "each independently waits and retries — not perfectly efficient (a
+small thundering-herd retry burst)", which reads as a throughput note. It is not.
 
-A branch gets exactly **one** wait. `_complete_once` sleeps `wait_seconds`,
-re-selects once, and raises `RoleUnavailable` if the provider is still spent;
-the outer `complete` retry loop passes `allow_wait=allow_wait and attempt ==
-1`, so nothing waits a second time. One window's worth of branches is served
-immediately, one more after that single wait, and the rest **fail** — they do
-not run slower. Measured, with one provider and no failover:
+`_complete_once` sleeps `wait_seconds`, re-selects once, and raises
+`RoleUnavailable` if the provider is still spent; the outer `complete` retry
+loop passes `allow_wait=allow_wait and attempt == 1`, so nothing waits a second
+time. One window's worth of branches is served after that single wait and the
+rest **fail** — they do not run slower.
 
-| K | rpm | served | failed |
-|---|-----|--------|--------|
-| 2 | 1   | 2      | 0      |
-| 3 | 1   | 2      | 1      |
-| 4 | 1   | 2      | 2      |
-| 4 | 2   | 4      | 0      |
-| 5 | 2   | 4      | 1      |
+The consequence is accounting, not efficiency: each excess branch is recorded as
+a *failed experiment* and counts against the circuit breaker
+(`max_consecutive_failures`, default 3). A wide fan-out against a slow provider
+spends K worktrees to get a window's worth of results and a run of breaker
+strikes — for a rate limit, not for anything the science did.
 
-The consequence is not efficiency, it is accounting: each excess branch is
-recorded as a *failed experiment* and counts against the circuit breaker
-(`max_consecutive_failures`, default 3). `--branches 4` against a
-one-call-per-minute provider spends four worktrees to get two results and two
-breaker strikes — for a rate limit, not for anything the science did.
+So **K is bounded by the provider's rpm, not only by cores**: keep K within a
+small multiple of the narrowest provider the role can reach, or give the role a
+second provider so exhaustion degrades sideways instead of waiting.
 
-So **K is bounded by the provider's rpm, not only by cores**: keep
-`K ≤ 2 × rpm` of the narrowest provider the role can reach, or give the role a
-second provider so exhaustion degrades sideways instead of waiting. Left as a
-pinned property rather than fixed, because fixing it means retry-with-wait
-inside `fitroute`, which this section deliberately scoped out — but pinned so
-choosing K is a decision someone can look up instead of rediscover.
+*An earlier version of this section tabulated exact served/failed counts per
+(K, rpm) as `served = min(K, 2 × rpm)`. That table was wrong to state as
+behaviour: `select_route` and the ledger `record` are not atomic, so how many
+branches slip through before the first one records is a property of thread
+scheduling. Identical code served 2-of-3 in 40/40 trials on a ten-core machine
+and 3-of-3 on a two-core CI runner. The rule above — one wait per branch — is
+what the code guarantees; the counts were the scheduler.*
 
 ## 6. Design
 
