@@ -311,7 +311,6 @@ def test_running_branches_gives_each_agent_its_own_workspace(
         cohort_id="C-1",
         workspace=workspace,
         context=None,
-        dry_run=True,
         build_task=lambda branch, cohort: {"plan_id": branch.plan_id, "cohort_id": cohort},
     )
 
@@ -339,7 +338,6 @@ def test_running_branches_divides_the_machine_and_restores_it(
         cohort_id="C-1",
         workspace=workspace,
         context=None,
-        dry_run=True,
         build_task=lambda branch, cohort: {},
     )
 
@@ -367,7 +365,6 @@ def test_one_failing_branch_does_not_take_its_siblings_down(
         cohort_id="C-1",
         workspace=workspace,
         context=None,
-        dry_run=True,
         build_task=lambda branch, cohort: {},
     )
 
@@ -394,7 +391,6 @@ def test_a_branchs_execution_id_is_read_off_its_refs(workspace: Workspace) -> No
         cohort_id="C-1",
         workspace=workspace,
         context=None,
-        dry_run=True,
         build_task=lambda branch, cohort: {},
     )
 
@@ -416,12 +412,82 @@ def test_the_cohort_id_reaches_every_branchs_task(workspace: Workspace) -> None:
         cohort_id="C-7",
         workspace=workspace,
         context=None,
-        dry_run=True,
         build_task=lambda branch, cohort: {"cohort_id": cohort, "plan_id": branch.plan_id},
     )
 
     assert [t["cohort_id"] for t in agent.tasks] == ["C-7", "C-7"]
     assert sorted(t["plan_id"] for t in agent.tasks) == sorted(b.plan_id for b in branches)
+
+
+def test_teardown_with_no_outcomes_releases_every_claim(
+    workspace: Workspace,
+) -> None:
+    """The shape the production fallback actually passes: branches prepared,
+    outcomes empty — when too few branches could be set up, or when the
+    fan-out raised before producing any.
+
+    Deriving the release set from the *failures* released nobody here, so every
+    worktree was deleted while every hypothesis stayed `testing`. Selection
+    only ever lists `proposed`, so those hypotheses became permanently
+    unreachable by any later step.
+    """
+    ids = _propose(workspace, "a", "b")
+    branches = prepare_branches(
+        workspace, ids, session_id="S-1", repo_root=Path(workspace.root), make_plan=_plans({})
+    )
+    assert all(_status(workspace, i) == HypothesisStatus.TESTING for i in ids)
+
+    teardown_branches(workspace, branches, [])
+
+    assert [_status(workspace, i) for i in ids] == [
+        HypothesisStatus.PROPOSED,
+        HypothesisStatus.PROPOSED,
+    ]
+    assert all(not b.worktree.path.exists() for b in branches)
+
+
+def test_a_single_prepared_branch_is_released_when_the_fan_out_backs_out(
+    workspace: Workspace,
+) -> None:
+    """The likeliest route into the bug above: one claimable hypothesis, so
+    the caller tears down and falls back to the sequential path. If the claim
+    were not returned, the sequential path could not test it either."""
+    ids = _propose(workspace, "only-one")
+    branches = prepare_branches(
+        workspace, ids, session_id="S-1", repo_root=Path(workspace.root), make_plan=_plans({})
+    )
+
+    teardown_branches(workspace, branches, [])
+
+    assert _status(workspace, ids[0]) == HypothesisStatus.PROPOSED
+
+
+def test_a_branch_whose_worktree_will_not_go_keeps_its_claim(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Releasing a hypothesis whose branch is still checked out makes it
+    selectable again, and every later step then claims it, fails
+    `worktree add` with "already checked out", and releases it — burning a
+    fan-out slot each time. Left claimed, it is simply skipped."""
+    ids = _propose(workspace, "stuck", "fine")
+    branches = prepare_branches(
+        workspace, ids, session_id="S-1", repo_root=Path(workspace.root), make_plan=_plans({})
+    )
+    real_remove = teardown_branches.__globals__["remove_experiment_worktree"]
+
+    def flaky(worktree: Any, **kw: Any) -> None:
+        if worktree.path == branches[0].worktree.path:
+            raise RuntimeError("directory busy")
+        real_remove(worktree, **kw)
+
+    monkeypatch.setattr(
+        "labpilot.research_engine.conductor.fanout.remove_experiment_worktree", flaky
+    )
+
+    teardown_branches(workspace, branches, [])
+
+    assert _status(workspace, branches[0].hypothesis_id) == HypothesisStatus.TESTING
+    assert _status(workspace, branches[1].hypothesis_id) == HypothesisStatus.PROPOSED
 
 
 def test_one_unremovable_worktree_does_not_strand_the_others(

@@ -15,6 +15,7 @@ import pytest
 
 from labpilot.research_engine.conductor.checkpoint import load_budget_pair
 from labpilot.research_engine.conductor.loop import (
+    _DRY_RUN_DEFAULTS,
     _as_pathspecs,
     _fan_out_experiment,
     _untrack_shared_state,
@@ -82,10 +83,7 @@ def _fan_out(
     branches: int = 2,
 ) -> Any:
     """Run a fan-out with plan compilation and the specialist stubbed out."""
-    monkeypatch.setattr(
-        "labpilot.research_engine.conductor.loop._experiment_agent",
-        lambda **kw: agent,
-    )
+    del monkeypatch  # the agent is injected now, not patched in
     return _fan_out_experiment(
         store,
         workspace,
@@ -95,6 +93,8 @@ def _fan_out(
         rationale="test the top hypotheses",
         llm_client=None,
         dry_run=True,
+        submit=False,
+        agent=agent,
         progress=lambda _m: None,
     )
 
@@ -120,7 +120,8 @@ def test_every_branch_gets_its_own_decision_record(
         assert len(decisions) == 2
         assert len({d.id for d in decisions}) == 2, "branch decisions must be distinct"
         cohorts = {d.observe["cohort_id"] for d in decisions}
-        assert cohorts == {f"{session.id}-step3"}
+        assert len(cohorts) == 1, "branches of one step must share one cohort"
+        assert cohorts.pop().startswith(f"{session.id}-")
         assert {d.observe["branch"] for d in decisions} == {
             d.args["hypothesis_id"] for d in decisions
         }
@@ -255,6 +256,34 @@ def test_a_running_campaigns_worktrees_are_not_swept(
     assert not dead_tree.path.exists(), "a finished campaign's worktree was kept"
 
 
+def test_another_competitions_worktrees_are_left_alone(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    """`list_sessions()` filters by competition and every competition keeps its
+    own knowledge.db, so a sibling campaign's session is not merely absent from
+    the live set — it is unreadable from here. Sweeping on "not known means
+    dead" would delete its worktrees mid-experiment."""
+    from labpilot.research_engine.agents.git_worktree import create_experiment_worktree
+    from labpilot.research_engine.conductor.loop import _reconcile_stale_worktrees
+
+    root = Path(workspace.root)
+    # A worktree whose session id this store has never heard of.
+    foreign = create_experiment_worktree(
+        root, session_id="S-999", experiment_key="H-foreign"
+    )
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        mine = store.create_session("mine")
+        store.update_session_status(mine.id, "completed")
+        stale = create_experiment_worktree(
+            root, session_id=mine.id, experiment_key="H-mine"
+        )
+
+        _reconcile_stale_worktrees(store, workspace)
+
+    assert foreign.path.is_dir(), "another competition's worktree was swept"
+    assert not stale.path.exists(), "our own finished worktree was kept"
+
+
 def test_a_paused_campaign_keeps_its_worktrees(
     workspace: Workspace,
 ) -> None:
@@ -345,6 +374,53 @@ def test_untracking_is_a_no_op_when_nothing_is_tracked(workspace: Workspace) -> 
     assert _git(Path(workspace.root), "ls-files") == before
 
 
-def test_untracking_survives_a_workspace_that_is_not_a_repo(tmp_path: Path) -> None:
+def test_untracking_does_not_create_a_repo_where_there_is_none(
+    tmp_path: Path,
+) -> None:
+    """`open_git_tool` runs `Repo.init()` plus a bootstrap commit on a
+    directory that is not a repository, so reaching for it before checking
+    created one in a workspace the user had deliberately kept out of version
+    control — the same side effect `reconcile_worktrees` refuses, from the same
+    unattended startup path.
+
+    Asserting the absence, not just that nothing raised: creating a repo does
+    not raise, so the earlier "must not raise" test was green while the bug
+    happened.
+    """
     client = scaffold_workspace(tmp_path / "plain", "plain")
-    _untrack_shared_state(Workspace.from_client(client))  # must not raise
+    root = Path(client.root)
+    assert not (root / ".git").exists()
+
+    _untrack_shared_state(Workspace.from_client(client))
+
+    assert not (root / ".git").exists(), "a git repository was created"
+
+
+def test_the_fan_out_dry_run_default_matches_the_tool_it_replaces() -> None:
+    """`run_plan` trains for real unless told otherwise; `run_experiment` does
+    not. Hardcoding either default made the other wrong — defaulting to a dry
+    run turned an unset `run_plan` fan-out into K branches that trained
+    nothing and, once the placeholder guard refused their stub metrics,
+    promoted nobody."""
+    from labpilot.research_engine.tools.handlers import run as run_mod
+
+    assert _DRY_RUN_DEFAULTS["run_plan"] == _signature_default(run_mod.run_plan, "dry_run")
+    assert _DRY_RUN_DEFAULTS["run_experiment"] == _signature_default(
+        _run_experiment_handler(), "dry_run"
+    )
+    assert set(_DRY_RUN_DEFAULTS) == {"run_plan", "run_experiment"}, (
+        "a new experiment tool needs its own default here, or it silently "
+        "inherits the wrong one"
+    )
+
+
+def _signature_default(fn: Any, name: str) -> Any:
+    import inspect
+
+    return inspect.signature(fn).parameters[name].default
+
+
+def _run_experiment_handler() -> Any:
+    from labpilot.research_engine.tools.handlers.specialists import run_experiment
+
+    return run_experiment

@@ -101,6 +101,7 @@ __all__ = [
     "create_experiment_worktree",
     "experiment_worktree",
     "experiment_worktree_root",
+    "is_git_repo",
     "list_registered_worktrees",
     "reconcile_worktrees",
     "remove_experiment_worktree",
@@ -392,7 +393,7 @@ def reconcile_worktrees(
     this runs unattended at startup.
     """
     repo_root = Path(repo_root).resolve()
-    if git is None and not _is_git_repo(repo_root):
+    if git is None and not is_git_repo(repo_root):
         # `open_git_tool` runs `Repo.init()` plus a bootstrap commit when the
         # directory is not a repository. That is tolerable for the paths that
         # exist to *do* git work, but this one is an unattended startup sweep:
@@ -454,8 +455,13 @@ def reconcile_worktrees(
     return ReconcileResult(removed=tuple(removed), failed=tuple(failed))
 
 
-def _is_git_repo(root: Path) -> bool:
+def is_git_repo(root: Path) -> bool:
     """Does `root` hold a repository, without creating one to find out?
+
+    Public because every unattended caller needs it: `open_git_tool` runs
+    `Repo.init()` plus a bootstrap commit on a directory that is not a
+    repository, so anything reaching for git on a startup path has to ask
+    first or risk creating one where the user wanted none.
 
     Matches what `open_git_tool` would accept: GitPython's `Repo(root)` does
     not search parent directories, so a plain subdirectory of a repo is not

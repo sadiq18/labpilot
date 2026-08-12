@@ -187,28 +187,47 @@ def prepare_branches(
 def teardown_branches(
     workspace: Workspace, branches: list[Branch], outcomes: list[BranchOutcome]
 ) -> None:
-    """Remove every worktree; release the claims of branches that failed.
+    """Remove every worktree; release the claim of every branch that did not
+    succeed.
 
     A successful branch keeps its `testing` claim — the reflection its own run
     files is what resolves the hypothesis, and handing it back here would let
-    the next step re-test something already answered. A failed branch produced
-    no such answer, so its hypothesis returns to the pool.
+    the next step re-test something already answered.
 
-    Each removal is guarded separately: one worktree that will not go must not
-    strand the rest, since a worktree left registered keeps its branch checked
-    out and the next run of that experiment key cannot claim it.
+    Derived from the *successes*, not the failures, so a branch with no outcome
+    at all is released. That is the case that matters: the caller passes an
+    empty `outcomes` both when it gives up before running (too few branches
+    prepared) and when the fan-out raised, and reading the failures instead
+    released nobody while still deleting every worktree — leaving each
+    hypothesis `testing` with nothing running it and nothing able to pick it
+    up, since selection only ever lists `proposed`.
+
+    The removal is attempted after the release and guarded per branch: one
+    worktree that will not go must not strand the rest, since a worktree left
+    registered keeps its branch checked out and the next run of that
+    experiment key cannot claim it.
     """
-    failed = {o.hypothesis_id for o in outcomes if not o.ok}
+    succeeded = {o.hypothesis_id for o in outcomes if o.ok}
     for branch in branches:
-        if branch.hypothesis_id in failed:
-            _release(workspace, branch.hypothesis_id)
         try:
             remove_experiment_worktree(branch.worktree)
         except Exception:  # noqa: BLE001 — reconcile_worktrees sweeps the rest
+            # Claim deliberately kept: the branch is still checked out, so
+            # `create_experiment_worktree` for this experiment key would hit
+            # git's "already checked out". Releasing here would make the
+            # hypothesis selectable again and every later step would claim
+            # it, fail to check it out, and release it — burning a fan-out
+            # slot each time until the next startup sweep clears the
+            # registration. Left `testing`, it is skipped instead.
             logger.exception(
-                "cannot remove worktree %s; startup reconciliation will retry",
+                "cannot remove worktree %s; leaving %s claimed until startup "
+                "reconciliation clears it",
                 branch.worktree.path,
+                branch.hypothesis_id,
             )
+            continue
+        if branch.hypothesis_id not in succeeded:
+            _release(workspace, branch.hypothesis_id)
 
 
 def run_branches(
@@ -218,7 +237,6 @@ def run_branches(
     cohort_id: str,
     workspace: Workspace,
     context: Any,
-    dry_run: bool,
     build_task: Callable[[Branch, str], Any],
 ) -> list[BranchOutcome]:
     """Run every branch concurrently and report each one's outcome.

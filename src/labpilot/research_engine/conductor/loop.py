@@ -76,6 +76,16 @@ _MAX_STOP_OVERRIDES = 2
 _EXPERIMENT_TOOLS = frozenset({"run_experiment", "run_plan"})
 
 
+#: Each experiment tool's own `dry_run` default, so a fan-out of a step that
+#: did not set one behaves like the sequential dispatch of that same step.
+#: They genuinely differ — `run_plan` trains for real unless told otherwise,
+#: `run_experiment` does not — and hardcoding either made the other wrong:
+#: defaulting to a dry run turned every unset `run_plan` fan-out into K
+#: branches that trained nothing, wrote placeholder metrics, and promoted
+#: nobody once the placeholder guard refused them.
+_DRY_RUN_DEFAULTS: dict[str, bool] = {"run_plan": False, "run_experiment": True}
+
+
 #: Execution statuses that mean the experiment actually produced a result.
 #: `pending` and `running` are not successes — an execution left mid-flight has
 #: produced nothing, and treating it as a win would reset the breaker on a
@@ -114,6 +124,8 @@ def _fan_out_experiment(
     rationale: str,
     llm_client: Any | None,
     dry_run: bool,
+    submit: bool,
+    agent: Any,
     progress: Callable[[str], None],
 ) -> list[DecisionRecord] | None:
     """Run this step as K parallel branches, or return None to stay sequential.
@@ -142,7 +154,6 @@ def _fan_out_experiment(
     if k < 2:
         return None
 
-    agent = _experiment_agent(llm_client=llm_client, dry_run=dry_run)
     if agent is None:
         logger.warning("no experiment specialist registered; not fanning out")
         return None
@@ -171,7 +182,13 @@ def _fan_out_experiment(
         logger.info("only %d branch(es) could be set up; staying sequential", len(prepared))
         return None
 
-    cohort_id = f"{session_id}-step{step}"
+    # Keyed on a decision id, not on the step number: `step` restarts with
+    # every `conduct resume`, so a resumed session reaching step 3 again would
+    # reuse `S-001-step3` and `promote_within_cohort` would re-rank the new
+    # branches against the abandoned attempt's members — promoting a branch
+    # the campaign had already discarded. Decision ids are monotonic per
+    # session, so this names one fan-out and never a second.
+    cohort_id = f"{session_id}-{store.new_decision_id()}"
     progress(f"Fan-out {len(prepared)} branches (cohort {cohort_id})")
     outcomes = []
     try:
@@ -181,8 +198,9 @@ def _fan_out_experiment(
             cohort_id=cohort_id,
             workspace=workspace,
             context=_branch_context(workspace),
-            dry_run=dry_run,
-            build_task=lambda branch, cohort: _branch_task(branch, cohort, dry_run=dry_run),
+            build_task=lambda branch, cohort: _branch_task(
+                branch, cohort, dry_run=dry_run, submit=submit
+            ),
         )
     finally:
         # In a `finally` so a raising fan-out still returns its worktrees and
@@ -266,42 +284,49 @@ _LIVE_SESSION_STATUSES = frozenset({"running", "paused"})
 
 
 def _live_branches(store, workspace: Workspace) -> set[str]:
-    """Branch names belonging to campaigns that are still going.
+    """Branch names the startup sweep must leave alone.
 
-    Matched by *session*, not by experiment key: a branch is
-    `research/<session>/<experiment>` (`research_branch_name`), and the
-    sessions are knowable from the store while the experiment keys a running
-    campaign is currently branching on are not — they live in that process,
-    not in a table. Reading the session segment back off the registered
-    branches is what makes the set derivable at all.
+    Inverted from "which are live" to "which are not provably ours to delete",
+    because this store cannot see every campaign that shares the repository.
+    `list_sessions()` filters by competition, and each competition keeps its
+    own `knowledge.db`, so another competition's running campaign is not merely
+    absent from the live set — it is unreadable from here. Treating unknown as
+    dead would delete its worktrees mid-experiment, which is the failure the
+    empty-set version had, narrowed rather than removed.
 
-    `paused` counts as live. A paused campaign is resumable, and resuming it
-    needs its branches still checked out; sweeping them would turn a pause
-    into a silent loss of work.
+    So a worktree is swept only when its session is one this store knows *and*
+    reports finished. Live sessions, sessions belonging to another
+    competition, and branches whose name does not parse are all kept. Keeping
+    a stale worktree costs one `create_experiment_worktree` retry that the
+    next sweep clears; deleting a live one costs a running experiment.
+
+    `paused` counts as live. Resuming needs those branches still checked out,
+    so sweeping them would turn a pause into a silent loss of work.
     """
     from labpilot.research_engine.agents.git_worktree import list_registered_worktrees
 
     try:
-        live_sessions = {
-            session.id
+        known = {
+            session.id: str(session.status).strip().lower()
             for session in store.list_sessions()
-            if str(session.status).strip().lower() in _LIVE_SESSION_STATUSES
         }
     except Exception:  # noqa: BLE001 — an unreadable store means sweep nothing
         logger.exception("cannot list sessions; leaving every worktree in place")
         return _all_registered_branches(workspace)
-    if not live_sessions:
-        return set()
     try:
         registered = list_registered_worktrees(workspace.root)
     except Exception:  # noqa: BLE001
         logger.exception("cannot list worktrees; leaving every worktree in place")
         return set()
-    return {
-        branch
-        for branch in registered.values()
-        if branch and _session_of(branch) in live_sessions
-    }
+
+    preserve: set[str] = set()
+    for branch in registered.values():
+        if not branch:
+            continue
+        status = known.get(_session_of(branch))
+        if status is None or status in _LIVE_SESSION_STATUSES:
+            preserve.add(branch)
+    return preserve
 
 
 def _all_registered_branches(workspace: Workspace) -> set[str]:
@@ -339,9 +364,21 @@ def _untrack_shared_state(workspace: Workspace) -> None:
     user's index, which belongs with the feature that actually needs it and
     not in a helper every command runs. `--cached` keeps the files on disk:
     this unstages them, it does not delete anyone's database.
+
+    Returns early when there is no repository, and checks that *before*
+    reaching for a git tool: `open_git_tool` runs `Repo.init()` plus a
+    bootstrap commit on a directory that is not one, so calling it first
+    created a repository in a workspace the user had deliberately kept out of
+    version control — the same side effect `reconcile_worktrees` refuses, from
+    the same unattended startup path, one call later.
     """
+    from labpilot.research_engine.agents.git_worktree import is_git_repo
     from labpilot.research_engine.git import open_git_tool
     from labpilot.workspace import SHARED_STATE_IGNORES
+
+    if not is_git_repo(workspace.root):
+        logger.debug("%s is not a git repository; nothing to untrack", workspace.root)
+        return
 
     pathspecs = _as_pathspecs(SHARED_STATE_IGNORES)
     try:
@@ -381,18 +418,28 @@ def _as_pathspecs(patterns: tuple[str, ...]) -> list[str]:
     return [pattern.lstrip("/") for pattern in patterns]
 
 
-def _experiment_agent(*, llm_client: Any | None, dry_run: bool) -> Any | None:
-    """The specialist each branch runs, or None when none is registered."""
+def _experiment_agent(*, llm_client: Any | None) -> Any | None:
+    """The specialist every branch runs, or None when none is registered.
+
+    Built once per campaign rather than per fan-out step. Each call
+    constructs a coding tool, two specialists, a fresh event bus and a fresh
+    subscriber set, and every step's branches would otherwise publish to a
+    different bus than the last — so no subscriber could hold state across
+    steps even if it wanted to.
+
+    No `dry_run` argument: `_branch_task` always writes `dry_run` into the
+    task metadata, and `ExperimentSpecialist` prefers metadata over its own
+    default (`agents/experiment.py:78`), so a registry-level default could
+    only ever disagree with the step it was built for.
+    """
     from labpilot.research_engine.agents.catalog import build_default_specialist_registry
 
-    registry = build_default_specialist_registry(
-        llm_client=llm_client, dry_run_default=dry_run
-    )
+    registry = build_default_specialist_registry(llm_client=llm_client)
     candidates = registry.candidates(capability="run_experiment")
     return candidates[0].agent if candidates else None
 
 
-def _branch_task(branch: Any, cohort_id: str, *, dry_run: bool) -> Any:
+def _branch_task(branch: Any, cohort_id: str, *, dry_run: bool, submit: bool) -> Any:
     """The `AgentTask` one branch runs.
 
     `cohort_id` travels in metadata because that is how it reaches the
@@ -411,8 +458,10 @@ def _branch_task(branch: Any, cohort_id: str, *, dry_run: bool) -> Any:
             "hypothesis_id": branch.hypothesis_id,
             "cohort_id": cohort_id,
             "dry_run": dry_run,
-            # The specialist path never uploads, matching `run_experiment`.
-            "submit": False,
+            # Carried from the step rather than pinned off: `dry_run` is read
+            # from the step's args, and silently dropping its sibling is how
+            # a step that asked to submit stops submitting once fanned out.
+            "submit": submit,
         },
     )
 
@@ -778,8 +827,10 @@ def _run_until_stop_inner(
     session = store.get_session(session_id)
     if session is None:
         raise ValueError(f"unknown session: {session_id}")
+    branch_agent: Any = None
     if branches > 1:
         _reconcile_stale_worktrees(store, workspace)
+        branch_agent = _experiment_agent(llm_client=llm_client)
 
     ensure_metrics(store, session_id)
     budget_cfg, budget_state = load_budget_pair(session)
@@ -1124,16 +1175,24 @@ def _run_until_stop_inner(
                         branches=branches,
                         rationale=research.rationale or research.intent,
                         llm_client=llm_client,
-                        dry_run=bool(step_args.get("dry_run", True)),
+                        dry_run=bool(
+                            step_args.get(
+                                "dry_run", _DRY_RUN_DEFAULTS.get(tool_step.tool, True)
+                            )
+                        ),
+                        submit=bool(step_args.get("submit", False)),
+                        agent=branch_agent,
                         progress=_progress,
                     )
                     if fanned is not None:
                         # The task enqueued for the sequential dispatch is not
                         # what ran: the branches did. Cancel it rather than
-                        # leaving a pending row no worker will ever claim.
-                        store.update_task_status(
-                            task.id, "cancelled", error="superseded by fan-out"
-                        )
+                        # leaving a pending row no worker will ever claim —
+                        # with no `error`, because nothing failed. A non-null
+                        # error here makes every fan-out step look like one
+                        # more failure to anything scanning os_tasks. The
+                        # reason lives on each branch's DecisionRecord instead.
+                        store.update_task_status(task.id, "cancelled")
                         decisions.extend(fanned)
                         prev_id = None
                         continue

@@ -112,7 +112,6 @@ def test_branches_run_at_the_same_time_not_one_after_another(
         cohort_id="C-1",
         workspace=workspace,
         context=None,
-        dry_run=True,
         build_task=lambda branch, cohort: {},
     )
     elapsed = time.perf_counter() - started
@@ -163,7 +162,6 @@ def test_an_agent_that_blocks_the_loop_gets_no_parallelism(
         cohort_id="C-2",
         workspace=workspace,
         context=None,
-        dry_run=True,
         build_task=lambda branch, cohort: {},
     )
 
