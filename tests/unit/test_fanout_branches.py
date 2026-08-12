@@ -7,6 +7,7 @@ something goes wrong part-way and the question is what got given back.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ import pytest
 from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.conductor.fanout import (
     BranchOutcome,
+    PlanRejected,
     prepare_branches,
     resolve_k,
     run_branches,
@@ -233,6 +235,55 @@ def test_a_branch_whose_plan_fails_gives_its_claim_back(
     assert [b.hypothesis_id for b in branches] == [ids[1]]
     assert _status(workspace, ids[0]) == HypothesisStatus.PROPOSED
     assert _status(workspace, ids[1]) == HypothesisStatus.TESTING
+
+
+def test_a_declined_plan_is_reported_as_a_decision_not_a_fault(
+    workspace: Workspace, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An operator using the approval gate is the gate working. Logged at ERROR
+    with a traceback — which is what the broad `except Exception` did before
+    `PlanRejected` existed — it trains operators to ignore the level that
+    carries real faults, and buries a genuinely broken plan compiler among
+    routine declines.
+    """
+    ids = _propose(workspace, "a")
+
+    def decline(_ws: Workspace, hypothesis_id: str) -> str:
+        raise PlanRejected(f"operator declined a plan for {hypothesis_id}")
+
+    with caplog.at_level(logging.INFO, logger="labpilot.research_engine.conductor.fanout"):
+        branches = prepare_branches(
+            workspace, ids, session_id="S-1", repo_root=Path(workspace.root), make_plan=decline
+        )
+
+    assert branches == []
+    assert _status(workspace, ids[0]) == HypothesisStatus.PROPOSED
+    declines = [r for r in caplog.records if "declined" in r.getMessage()]
+    assert declines, "the decline was not reported at all"
+    assert all(r.levelno == logging.INFO for r in declines), (
+        f"a decline was logged at {[r.levelname for r in declines]}"
+    )
+    assert all(r.exc_info is None for r in declines), "a decline carried a traceback"
+
+
+def test_a_genuine_planning_failure_is_still_an_error(
+    workspace: Workspace, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The other half — quietening declines must not quieten faults. A broken
+    plan compiler is exactly what the ERROR level is for."""
+    ids = _propose(workspace, "a")
+
+    def explode(_ws: Workspace, _hypothesis_id: str) -> str:
+        raise RuntimeError("planner is down")
+
+    with caplog.at_level(logging.INFO, logger="labpilot.research_engine.conductor.fanout"):
+        prepare_branches(
+            workspace, ids, session_id="S-1", repo_root=Path(workspace.root), make_plan=explode
+        )
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors, "a real planning failure was swallowed"
+    assert any(r.exc_info is not None for r in errors), "the fault lost its traceback"
 
 
 def test_a_branch_whose_worktree_fails_gives_its_claim_back(

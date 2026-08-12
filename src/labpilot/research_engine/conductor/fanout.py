@@ -38,6 +38,19 @@ from labpilot.research_engine.workspace_facade import Workspace
 logger = logging.getLogger(__name__)
 
 
+class PlanRejected(Exception):
+    """An operator declined to compile a plan for a branch.
+
+    Its own type because `prepare_branches` has to tell it apart from a
+    planning *failure*: declining is the approval gate being used as intended,
+    and reporting it the same way as a broken plan compiler — at ERROR, with a
+    traceback — trains operators to ignore the level that carries real faults.
+
+    Raised by the caller's `make_plan`, since the gate and the prompt belong to
+    the conductor; caught here, since this is where a branch is dropped.
+    """
+
+
 @dataclass(frozen=True)
 class Branch:
     """One hypothesis, set up and ready to run."""
@@ -167,6 +180,12 @@ def prepare_branches(
             continue
         try:
             plan_id = make_plan(workspace, hypothesis_id)
+        except PlanRejected as exc:
+            # Before the broad handler below, and at info: an operator saying
+            # no is the gate working, not a fault to be investigated.
+            logger.info("not branching %s: %s", hypothesis_id, exc)
+            _release(workspace, hypothesis_id)
+            continue
         except Exception:
             logger.exception("cannot plan for %s; releasing the claim", hypothesis_id)
             _release(workspace, hypothesis_id)

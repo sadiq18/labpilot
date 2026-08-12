@@ -145,6 +145,7 @@ def _fan_out_experiment(
     it was built to stop at. Design §7.
     """
     from labpilot.research_engine.conductor.fanout import (
+        PlanRejected,
         prepare_branches,
         resolve_k,
         run_branches,
@@ -184,7 +185,10 @@ def _fan_out_experiment(
             autonomy=autonomy,
         )
         if approval is not None and approval.decision == "reject":
-            raise PermissionError(f"operator rejected a plan for {hypothesis_id}")
+            # `PlanRejected`, not a builtin: `prepare_branches` reports a
+            # decline at info and a genuine planning fault at error, and it can
+            # only tell them apart by type.
+            raise PlanRejected(f"operator declined a plan for {hypothesis_id}")
 
         result = generate_plan(ws, hypothesis_id=hypothesis_id, llm_client=llm_client)
         plan_id = str((getattr(result, "data", None) or {}).get("plan_id") or "")
