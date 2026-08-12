@@ -37,6 +37,12 @@ class ParallelWorkItem:
     task: object
     cost: float = 1.0
     context: ContextBundle | None = None
+    #: This item's own workspace, or None to share the caller's — the same
+    #: per-item-else-shared rule as `context` above. M11 fan-out needs it:
+    #: each branch's code root is its own worktree, and a single shared
+    #: workspace would send every branch's writes back into the directory the
+    #: worktrees exist to keep them out of.
+    workspace: Workspace | None = None
     #: Where this item is meant to run; see `LOCAL_RUNTIME` above.
     runtime: str = LOCAL_RUNTIME
 
@@ -120,7 +126,8 @@ async def run_parallel_async(
                     return
             try:
                 ctx = item.context if item.context is not None else context
-                refs = await item.agent.execute(item.task, workspace, ctx)
+                ws = item.workspace if item.workspace is not None else workspace
+                refs = await item.agent.execute(item.task, ws, ctx)
                 by_id[item.id] = ParallelResult(id=item.id, ok=True, refs=list(refs))
             except Exception as exc:  # noqa: BLE001 — isolate worker faults
                 by_id[item.id] = ParallelResult(

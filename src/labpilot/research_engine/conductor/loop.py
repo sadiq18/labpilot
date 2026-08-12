@@ -104,6 +104,262 @@ def _experiment_outcome(result: object) -> tuple[bool, str]:
     return False, error or f"execution status={status or 'unknown'}"
 
 
+def _fan_out_experiment(
+    store,
+    workspace: Workspace,
+    session_id: str,
+    *,
+    step: int,
+    branches: int,
+    rationale: str,
+    llm_client: Any | None,
+    dry_run: bool,
+    progress: Callable[[str], None],
+) -> list[DecisionRecord] | None:
+    """Run this step as K parallel branches, or return None to stay sequential.
+
+    None — not an empty list — when the step is not a fan-out after all: too
+    few untested hypotheses, or none that could be claimed and set up. The
+    caller then dispatches its single task exactly as before, so every path
+    that is not a fan-out keeps the behaviour it had before this existed.
+
+    Each branch gets its own `DecisionRecord` and feeds the circuit breaker
+    individually, which is the audit parity the sequential path already has:
+    a fan-out that recorded one decision for K experiments would let the
+    breaker count K failures as one, and a campaign would run past the point
+    it was built to stop at. Design §7.
+    """
+    from labpilot.research_engine.conductor.fanout import (
+        prepare_branches,
+        resolve_k,
+        run_branches,
+        select_hypotheses,
+        teardown_branches,
+    )
+
+    candidates = select_hypotheses(workspace, branches)
+    k = resolve_k(branches, available=len(candidates))
+    if k < 2:
+        return None
+
+    agent = _experiment_agent(llm_client=llm_client, dry_run=dry_run)
+    if agent is None:
+        logger.warning("no experiment specialist registered; not fanning out")
+        return None
+
+    def make_plan(ws: Workspace, hypothesis_id: str) -> str:
+        from labpilot.research_engine.tools.handlers.plan import generate_plan
+
+        result = generate_plan(ws, hypothesis_id=hypothesis_id, llm_client=llm_client)
+        plan_id = str((getattr(result, "data", None) or {}).get("plan_id") or "")
+        if not plan_id:
+            raise ValueError(f"generate_plan returned no plan_id for {hypothesis_id}")
+        return plan_id
+
+    prepared = prepare_branches(
+        workspace,
+        candidates[:k],
+        session_id=session_id,
+        repo_root=workspace.root,
+        make_plan=make_plan,
+    )
+    if len(prepared) < 2:
+        # Whatever was set up is torn down before falling back, so the
+        # sequential path does not start with claims held and worktrees
+        # checked out by a fan-out that never ran.
+        teardown_branches(workspace, prepared, [])
+        logger.info("only %d branch(es) could be set up; staying sequential", len(prepared))
+        return None
+
+    cohort_id = f"{session_id}-step{step}"
+    progress(f"Fan-out {len(prepared)} branches (cohort {cohort_id})")
+    outcomes = []
+    try:
+        outcomes = run_branches(
+            prepared,
+            agent=agent,
+            cohort_id=cohort_id,
+            workspace=workspace,
+            context=_branch_context(workspace),
+            dry_run=dry_run,
+            build_task=lambda branch, cohort: _branch_task(branch, cohort, dry_run=dry_run),
+        )
+    finally:
+        # In a `finally` so a raising fan-out still returns its worktrees and
+        # claims; `outcomes` is empty then, which teardown reads as "nothing
+        # succeeded" and releases every claim.
+        teardown_branches(workspace, prepared, outcomes)
+
+    decisions: list[DecisionRecord] = []
+    for outcome in outcomes:
+        record = store.append_new_decision(
+            session_id,
+            "run_experiment",
+            rationale,
+            args={"plan_id": outcome.plan_id, "hypothesis_id": outcome.hypothesis_id},
+            artifact_refs=[r.model_dump() for r in outcome.refs],
+            observe={
+                "step": step,
+                "cohort_id": cohort_id,
+                "branch": outcome.hypothesis_id,
+                "ok": outcome.ok,
+                "error": outcome.error,
+            },
+        )
+        decisions.append(record)
+        _record_experiment_outcome(
+            store,
+            session_id,
+            succeeded=outcome.ok,
+            error=outcome.error or "",
+            workspace=workspace,
+            execution_id=outcome.execution_id,
+        )
+        progress(
+            f"Branch {outcome.hypothesis_id}: {'ok' if outcome.ok else outcome.error}"
+        )
+    return decisions
+
+
+def _reconcile_stale_worktrees(store, workspace: Workspace) -> None:
+    """Clear worktrees left by a fan-out that never reached teardown.
+
+    Runs before the first branch of a campaign, because a worktree still
+    registered keeps its branch checked out and `worktree add -B` for that
+    same experiment key then fails — a crash in one campaign would otherwise
+    make the next one unable to re-test those hypotheses at all.
+
+    `live_branches` is empty: this process is the only campaign this store
+    knows about and it has not dispatched anything yet, so every experiment
+    worktree under `.worktrees/` is by definition abandoned. Passing the set
+    explicitly rather than having the sweep query it is what keeps
+    `git_worktree` free of any conductor dependency.
+
+    Best-effort throughout — a campaign that cannot tidy up is still a
+    campaign that can run, and `create_experiment_worktree` reports the real
+    error later for any branch that actually collides.
+    """
+    from labpilot.research_engine.agents.git_worktree import reconcile_worktrees
+
+    del store
+    try:
+        result = reconcile_worktrees(workspace.root, live_branches=set())
+    except Exception:  # noqa: BLE001 — startup tidying must not stop a campaign
+        logger.exception("worktree reconciliation failed; continuing")
+        return
+    if result.removed:
+        logger.info("cleared %d stale experiment worktree(s)", len(result.removed))
+    if result.failed:
+        logger.warning(
+            "%d stale worktree(s) could not be cleared; branches for those "
+            "experiment keys will fail to check out: %s",
+            len(result.failed),
+            ", ".join(str(p) for p in result.failed),
+        )
+    _untrack_shared_state(workspace)
+
+
+def _untrack_shared_state(workspace: Workspace) -> None:
+    """Stop git copying shared research state into every worktree.
+
+    A `.gitignore` pattern does not untrack a file that is already tracked, so
+    a workspace scaffolded before `SHARED_STATE_IGNORES` still has
+    `knowledge.db` and `runs/` in the index — and every worktree checkout
+    copies them (measured 105 MB per branch). Ignoring fixes new workspaces;
+    only the index fixes existing ones.
+
+    Done here rather than in `ensure_required_ignores` because it rewrites a
+    user's index, which belongs with the feature that actually needs it and
+    not in a helper every command runs. `--cached` keeps the files on disk:
+    this unstages them, it does not delete anyone's database.
+    """
+    from labpilot.research_engine.git import open_git_tool
+    from labpilot.workspace import SHARED_STATE_IGNORES
+
+    pathspecs = _as_pathspecs(SHARED_STATE_IGNORES)
+    try:
+        tool = open_git_tool(workspace.root)
+        tracked = tool.execute("ls-files", "--", *pathspecs).strip()
+    except Exception:  # noqa: BLE001 — no repo, or git unavailable
+        logger.debug("cannot inspect the index for shared state; skipping untrack")
+        return
+    if not tracked:
+        return
+    try:
+        # `--ignore-unmatch` because `git rm` aborts on the *whole* invocation
+        # when any one pathspec matches nothing — a workspace with `runs/`
+        # tracked but no `knowledge.db` would otherwise untrack neither.
+        tool.execute("rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", *pathspecs)
+    except Exception:  # noqa: BLE001
+        logger.exception("cannot untrack shared research state; worktrees will copy it")
+        return
+    logger.info(
+        "untracked %d shared research file(s) so branch worktrees stop copying them",
+        len(tracked.splitlines()),
+    )
+
+
+def _as_pathspecs(patterns: tuple[str, ...]) -> list[str]:
+    """Gitignore patterns as git pathspecs.
+
+    Not the same language, despite looking alike: a leading `/` anchors a
+    gitignore pattern to the repository root, but means an absolute path to a
+    pathspec — git rejects `/runs/` outright with `fatal: Invalid path
+    '/runs'`. Stripping it gives the same meaning, since pathspecs are already
+    relative to the repository root.
+
+    Derived from the constant rather than written out again so a pattern
+    added there cannot silently go unhandled here.
+    """
+    return [pattern.lstrip("/") for pattern in patterns]
+
+
+def _experiment_agent(*, llm_client: Any | None, dry_run: bool) -> Any | None:
+    """The specialist each branch runs, or None when none is registered."""
+    from labpilot.research_engine.agents.catalog import build_default_specialist_registry
+
+    registry = build_default_specialist_registry(
+        llm_client=llm_client, dry_run_default=dry_run
+    )
+    candidates = registry.candidates(capability="run_experiment")
+    return candidates[0].agent if candidates else None
+
+
+def _branch_task(branch: Any, cohort_id: str, *, dry_run: bool) -> Any:
+    """The `AgentTask` one branch runs.
+
+    `cohort_id` travels in metadata because that is how it reaches the
+    `ExperimentCompleted` event, and the promotion subscriber returns early
+    without one — a fan-out whose branches carry no cohort id runs K
+    experiments and compares none of them.
+    """
+    from labpilot.research_engine.agents.models import AgentTask
+
+    return AgentTask(
+        id=f"T-{branch.hypothesis_id}",
+        capability="run_experiment",
+        description=f"branch {branch.hypothesis_id}",
+        metadata={
+            "plan_id": branch.plan_id,
+            "hypothesis_id": branch.hypothesis_id,
+            "cohort_id": cohort_id,
+            "dry_run": dry_run,
+            # The specialist path never uploads, matching `run_experiment`.
+            "submit": False,
+        },
+    )
+
+
+def _branch_context(workspace: Workspace) -> Any:
+    from labpilot.research_engine.context.models import ContextBundle, ContextRequest
+
+    return ContextBundle(
+        request=ContextRequest(
+            competition=workspace.competition, goal=workspace.goal or ""
+        )
+    )
+
+
 def _maybe_mint_on_stagnation(
     workspace: Workspace, budget_state: BudgetState, budget_cfg: BudgetConfig
 ) -> None:
@@ -395,8 +651,14 @@ def run_until_stop(
     campaign_mode: bool = True,
     prefer_offline: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+    branches: int = 1,
 ) -> list[DecisionRecord]:
     """Run until stop, budget, max_steps, or operator pause status.
+
+    ``branches`` is the fan-out width (M11). The default of 1 is the
+    sequential path this loop has always run, unchanged: every fan-out
+    decision is guarded on ``branches > 1``, so a caller that does not ask
+    for parallel branches cannot get one.
 
     When online policy fails, asks the operator (allow / deny / retry) before
     using the deterministic offline order — unless ``prefer_offline`` or
@@ -423,6 +685,7 @@ def run_until_stop(
             campaign_mode=campaign_mode,
             prefer_offline=prefer_offline,
             offline_fallback_prompt=offline_fallback_prompt,
+            branches=branches,
         )
 
 
@@ -441,12 +704,15 @@ def _run_until_stop_inner(
     campaign_mode: bool = True,
     prefer_offline: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+    branches: int = 1,
 ) -> list[DecisionRecord]:
     scheduler = Scheduler(store, registry, workspace, llm_client=llm_client)
     decisions: list[DecisionRecord] = []
     session = store.get_session(session_id)
     if session is None:
         raise ValueError(f"unknown session: {session_id}")
+    if branches > 1:
+        _reconcile_stale_worktrees(store, workspace)
 
     ensure_metrics(store, session_id)
     budget_cfg, budget_state = load_budget_pair(session)
@@ -782,6 +1048,28 @@ def _run_until_stop_inner(
                         decisions.append(record)
                         _progress(f"Rejected {tool_step.tool}")
                         break
+                if tool_step.tool in _EXPERIMENT_TOOLS and branches > 1:
+                    fanned = _fan_out_experiment(
+                        store,
+                        workspace,
+                        session_id,
+                        step=step,
+                        branches=branches,
+                        rationale=research.rationale or research.intent,
+                        llm_client=llm_client,
+                        dry_run=bool(step_args.get("dry_run", True)),
+                        progress=_progress,
+                    )
+                    if fanned is not None:
+                        # The task enqueued for the sequential dispatch is not
+                        # what ran: the branches did. Cancel it rather than
+                        # leaving a pending row no worker will ever claim.
+                        store.update_task_status(
+                            task.id, "cancelled", error="superseded by fan-out"
+                        )
+                        decisions.extend(fanned)
+                        prev_id = None
+                        continue
                 _progress(f"Dispatch {tool_step.tool} ({task.id})")
                 try:
                     result = scheduler.dispatch(task)
