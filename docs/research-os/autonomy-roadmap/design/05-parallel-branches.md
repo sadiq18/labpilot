@@ -619,6 +619,31 @@ to the copy inside a worktree would dirty the branch before its experiment
 starts and fold an unrelated edit into the snapshot commit and
 `files_changed`.
 
+**Session liveness — a status cannot answer it.** The startup sweep preserves
+worktrees belonging to `running` or `paused` sessions, because sweeping on
+"unknown means dead" would delete a concurrent campaign's checkouts
+mid-experiment. But every transition to a terminal status runs *inside* the
+loop, so a process killed by SIGKILL, OOM or power loss leaves its session
+`running` for good — and the sweep then preserved exactly the worktrees it was
+written to reclaim, permanently, with `create_experiment_worktree` failing on
+those experiment keys forever after.
+
+Campaigns therefore stamp `metadata.owner = {pid, host}` at start
+(`claim_session_ownership`), and the sweep treats a session as dead only when it
+can *prove* it: same host, and `os.kill(pid, 0)` raising `ProcessLookupError`.
+No stamp, a different host, or an unreadable value all count as live — guessing
+wrong deletes a running experiment, while over-keeping costs one stale worktree
+that the next provable case clears. A heartbeat threshold was the alternative
+and needs a number nobody can pick: a training step can legitimately run for
+hours without touching the row.
+
+**Fan-out width is bounded by cores too.** `resolve_k` caps K at
+`available_cpus()` and logs when it does. Nothing else bounded it — `-k 64` on a
+ten-core box checked out 64 worktrees and started 64 training runs, with
+`cpu_share` handing each a 1-core share and no sign the request was degenerate.
+This is the disk/CPU half of the ceiling; §5 has the LLM half
+(`served = min(K, 2 × rpm)`).
+
 **Migration gap — closed in `_untrack_shared_state`.** A `.gitignore` pattern
 does not untrack a file that is already tracked, so workspaces scaffolded
 before this change keep copying `knowledge.db` and `runs/` into every
