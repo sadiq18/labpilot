@@ -286,6 +286,80 @@ def test_a_genuine_planning_failure_is_still_an_error(
     assert any(r.exc_info is not None for r in errors), "the fault lost its traceback"
 
 
+def test_an_interrupt_at_the_approval_prompt_leaves_nothing_claimed(
+    workspace: Workspace,
+) -> None:
+    """`make_plan` blocks on an operator approval prompt, so Ctrl-C there is an
+    ordinary keystroke rather than a crash.
+
+    `KeyboardInterrupt` is a `BaseException`, so the per-branch `except
+    Exception` handlers never saw it and everything claimed so far was
+    abandoned — stuck in `testing`, which selection never lists again, leaving
+    those hypotheses unreachable by any later step or campaign. Measured before
+    the guard: of three hypotheses, two were left `testing` and one worktree
+    stayed registered.
+    """
+    ids = _propose(workspace, "a", "b", "c")
+    calls = {"n": 0}
+
+    def interrupt_the_second(_ws: Workspace, hypothesis_id: str) -> str:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt
+        return f"P-{hypothesis_id}"
+
+    with pytest.raises(KeyboardInterrupt):
+        prepare_branches(
+            workspace,
+            ids,
+            session_id="S-1",
+            repo_root=Path(workspace.root),
+            make_plan=interrupt_the_second,
+        )
+
+    # Including the branch that had completed setup, and the one interrupted
+    # between its claim and its worktree.
+    assert [_status(workspace, i) for i in ids] == [HypothesisStatus.PROPOSED] * 3
+    assert ".worktrees" not in subprocess.run(
+        ["git", "worktree", "list"],
+        cwd=workspace.root,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def test_an_interrupt_after_a_worktree_is_checked_out_removes_it(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The narrow window the claim alone does not cover: the worktree exists but
+    its `Branch` has not been appended yet, so teardown of `branches` cannot see
+    it. `for_branch` is the only call in between, and it is what fails here.
+    """
+    ids = _propose(workspace, "a")
+    monkeypatch.setattr(
+        Workspace,
+        "for_branch",
+        lambda self, code_root: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        prepare_branches(
+            workspace,
+            ids,
+            session_id="S-1",
+            repo_root=Path(workspace.root),
+            make_plan=_plans({}),
+        )
+
+    assert _status(workspace, ids[0]) == HypothesisStatus.PROPOSED
+    assert ".worktrees" not in subprocess.run(
+        ["git", "worktree", "list"],
+        cwd=workspace.root,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
 def test_a_branch_whose_worktree_fails_gives_its_claim_back(
     workspace: Workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:

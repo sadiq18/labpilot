@@ -170,43 +170,78 @@ def prepare_branches(
 
     store = HypothesisStore(workspace.knowledge_dir, workspace.competition)
     branches: list[Branch] = []
-    for hypothesis_id in hypothesis_ids:
-        # `claim_if_proposed`, not `mark_testing_if_proposed`: only the caller
-        # that actually made the claim may release it, and the older method
-        # hands every racer a `testing` hypothesis and no way to tell which
-        # one of them won.
-        if store.claim_if_proposed(hypothesis_id) is None:
-            logger.info("hypothesis %s already claimed; not branching it", hypothesis_id)
-            continue
-        try:
-            plan_id = make_plan(workspace, hypothesis_id)
-        except PlanRejected as exc:
-            # Before the broad handler below, and at info: an operator saying
-            # no is the gate working, not a fault to be investigated.
-            logger.info("not branching %s: %s", hypothesis_id, exc)
-            _release(workspace, hypothesis_id)
-            continue
-        except Exception:
-            logger.exception("cannot plan for %s; releasing the claim", hypothesis_id)
-            _release(workspace, hypothesis_id)
-            continue
-        try:
-            worktree = create_experiment_worktree(
-                repo_root, session_id=session_id, experiment_key=hypothesis_id
+    # What this iteration has taken and not yet handed to `branches`. The
+    # `BaseException` handler below is the only reader; tracked here because by
+    # the time it runs, the loop variable says nothing about how far the
+    # current branch got.
+    claimed: str | None = None
+    worktree: ExperimentWorktree | None = None
+    try:
+        for hypothesis_id in hypothesis_ids:
+            # `claim_if_proposed`, not `mark_testing_if_proposed`: only the
+            # caller that actually made the claim may release it, and the older
+            # method hands every racer a `testing` hypothesis and no way to
+            # tell which one of them won.
+            if store.claim_if_proposed(hypothesis_id) is None:
+                logger.info("hypothesis %s already claimed; not branching it", hypothesis_id)
+                continue
+            claimed, worktree = hypothesis_id, None
+            try:
+                plan_id = make_plan(workspace, hypothesis_id)
+            except PlanRejected as exc:
+                # Before the broad handler below, and at info: an operator
+                # saying no is the gate working, not a fault to investigate.
+                logger.info("not branching %s: %s", hypothesis_id, exc)
+                _release(workspace, hypothesis_id)
+                claimed = None
+                continue
+            except Exception:
+                logger.exception("cannot plan for %s; releasing the claim", hypothesis_id)
+                _release(workspace, hypothesis_id)
+                claimed = None
+                continue
+            try:
+                worktree = create_experiment_worktree(
+                    repo_root, session_id=session_id, experiment_key=hypothesis_id
+                )
+            except Exception:
+                logger.exception("cannot check out a worktree for %s", hypothesis_id)
+                _release(workspace, hypothesis_id)
+                claimed = None
+                continue
+            branches.append(
+                Branch(
+                    hypothesis_id=hypothesis_id,
+                    plan_id=plan_id,
+                    worktree=worktree,
+                    workspace=workspace.for_branch(worktree.path),
+                )
             )
-        except Exception:
-            logger.exception("cannot check out a worktree for %s", hypothesis_id)
-            _release(workspace, hypothesis_id)
-            continue
-        branches.append(
-            Branch(
-                hypothesis_id=hypothesis_id,
-                plan_id=plan_id,
-                worktree=worktree,
-                workspace=workspace.for_branch(worktree.path),
-            )
-        )
+            claimed, worktree = None, None
+    except BaseException:
+        # `BaseException`, not `Exception`: the one that matters is
+        # `KeyboardInterrupt`, and `make_plan` now blocks on an operator
+        # approval prompt — so Ctrl-C here is an ordinary keystroke, not a
+        # crash. Uncaught, it left every hypothesis claimed so far stuck in
+        # `testing`, which selection never lists again, so they were
+        # unreachable by any later step or campaign. Measured before this
+        # guard: three hypotheses, Ctrl-C at the second prompt, two left
+        # `testing` and one worktree registered.
+        if worktree is not None:
+            _remove_quietly(worktree)
+        if claimed is not None:
+            _release(workspace, claimed)
+        teardown_branches(workspace, branches, [])
+        raise
     return branches
+
+
+def _remove_quietly(worktree: ExperimentWorktree) -> None:
+    """Drop one worktree without displacing the exception being handled."""
+    try:
+        remove_experiment_worktree(worktree)
+    except Exception:  # noqa: BLE001 — startup reconciliation sweeps the rest
+        logger.exception("cannot remove worktree %s during teardown", worktree.path)
 
 
 def teardown_branches(
