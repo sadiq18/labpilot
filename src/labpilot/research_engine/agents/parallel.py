@@ -85,6 +85,15 @@ async def run_parallel_async(
 ) -> list[ParallelResult]:
     """Run work items concurrently; a *failing* item does not cancel siblings.
 
+    **Each agent must offload its blocking work.** Items are awaited on one
+    event loop, so an ``execute`` that computes inline rather than going
+    through ``anyio.to_thread.run_sync`` runs to completion before the next
+    item starts — the fan-out still sets up K worktrees, K claims and K
+    compute shares, and gets no concurrency at all, silently.
+    ``ExperimentSpecialist`` offloads (M11 task 9); a new specialist that does
+    not is the way this regresses. Pinned by
+    `test_an_agent_that_blocks_the_loop_gets_no_parallelism`.
+
     ``max_workers`` caps in-flight tasks. When ``budget_limit`` is set, items
     whose ``cost`` would exceed the remaining budget are skipped with an error.
 

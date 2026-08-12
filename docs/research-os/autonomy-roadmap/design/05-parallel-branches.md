@@ -558,31 +558,54 @@ every branch must agree on.
 
 **Ignoring is only half of it.** Keeping these paths untracked stops them being
 *copied*; it does not make a branch read the shared ones. That needs the
-`Workspace` facade, which already takes `knowledge_dir`, `runs_dir` and
-`code_root` independently: task 7 points `code_root` at the worktree and leaves
-the other two on the shared workspace. Without that, a branch simply recreates
-an empty `knowledge/` inside its worktree and the drift returns.
+`Workspace` facade to split "where the code is" from "where the research state
+is". Without it, a branch simply recreates an empty `knowledge/` inside its
+worktree and the drift returns.
 
-That independence does not extend to `data_dir`/`cache_dir` — both are
-computed properties on `Workspace`, derived from `root`, with no field of
-their own the way `runs_dir` has. Once `code_root` points at a worktree those
-two move with it, and since `LARGE_INPUT_IGNORES` now keeps `data/`/`.cache/`
-out of every worktree's checkout, a branch that reaches for either finds it
-merely empty rather than duplicated — a competition dataset a branch expects
-to read, or a Kaggle cache it expects to reuse, simply isn't there. Task 7
-needs to close this the same way it closes it for `knowledge_dir`/`runs_dir`,
-or the fan-out re-downloads/re-materializes these per branch, which is the
-K-times cost this section exists to avoid, just moved from disk to network
-and wall-clock.
+**Resolved — `Workspace.for_branch(code_root)`.** Of the two options this
+section offered (overridable fields, or symlinking `data/` and `.cache/` into
+each worktree), the fields won. Symlinks looked cheaper — read-only data, no
+copy, relative paths unchanged — but they put a second source of truth on
+disk for every branch, and `git worktree remove` refuses to delete a tree
+whose contents it does not recognise, so teardown would have had to unpick
+them in the right order. Fields keep the whole question in one process.
 
-**Migration gap.** A `.gitignore` pattern does not untrack a file that is
-already tracked, so workspaces scaffolded before this change keep copying
-`knowledge.db` and `runs/` into every worktree. `ensure_required_ignores` fixes
-the pattern but cannot fix the index. Task 7 runs `reconcile_worktrees` at
-campaign start and already shells out to git; untracking there
-(`git rm -r --cached`) is the natural home, and is deliberately not done
-automatically here — it rewrites a user's index and belongs with the change
-that actually depends on it.
+`for_branch` points `root` at the worktree, so `pipeline_dir` and
+`artifacts_dir` follow it — that is the isolation — and *pins* the shared
+locations: `data_dir` and `cache_dir` through the new
+`data_dir_override`/`cache_dir_override` fields, `effective_runs_dir` through
+the `runs_dir` field that already existed. Pins resolve before the copy, so
+branching a branch keeps the original locations rather than compounding.
+
+The path properties had to change to make this work at all. Each one
+short-circuited to `self._client` first, so under the client layout they
+returned the shared workspace's directory no matter what `root` said — asking
+for a worktree root changed nothing. They now resolve the layout's *relative*
+name against the current `root`, which also keeps a workspace with custom
+directory names working on a branch.
+
+One consequence worth stating: `ensure_roots()` skips
+`ensure_required_ignores` on a branch. `.gitignore` is tracked, so appending
+to the copy inside a worktree would dirty the branch before its experiment
+starts and fold an unrelated edit into the snapshot commit and
+`files_changed`.
+
+**Migration gap — closed in `_untrack_shared_state`.** A `.gitignore` pattern
+does not untrack a file that is already tracked, so workspaces scaffolded
+before this change keep copying `knowledge.db` and `runs/` into every
+worktree. `ensure_required_ignores` fixes the pattern but cannot fix the
+index. The conductor now untracks them (`git rm -r --cached`) beside
+`reconcile_worktrees` at campaign start, and only when `branches > 1` — it
+rewrites a user's index, so it belongs with the feature that depends on it
+rather than in a helper every command runs.
+
+Two details that bit: `SHARED_STATE_IGNORES` holds *gitignore patterns*, and a
+leading `/` anchors those to the repository root but means an absolute path to
+a git pathspec — `git ls-files -- '/runs/'` dies with `fatal: Invalid path
+'/runs'`. `_as_pathspecs` strips it, deriving from the constant so a pattern
+added there cannot go unhandled. And `git rm` aborts the whole invocation when
+any one pathspec matches nothing, so a workspace with `runs/` tracked but no
+`knowledge.db` would have untracked neither without `--ignore-unmatch`.
 
 **Compute budget (CPU/threads) — real, unaddressed gap.** Nothing sets thread
 or core limits today — confirmed via a repo-wide search: zero hits for

@@ -241,6 +241,16 @@ def conduct_run(
     goal: str = typer.Argument(..., help='Research goal, e.g. "Win Rogii"'),
     competition: str | None = typer.Option(None, "--competition", "-c"),
     max_steps: int = typer.Option(8, "--max-steps", help="Stop after N policy steps"),
+    branches: int = typer.Option(
+        1,
+        "--branches",
+        "-k",
+        min=1,
+        help=(
+            "Test the top K untested hypotheses in parallel, each in its own "
+            "git worktree with a share of the cores. 1 runs them one at a time."
+        ),
+    ),
     yes: bool = typer.Option(
         False,
         "--yes",
@@ -326,6 +336,7 @@ def conduct_run(
             autonomy=autonomy,
             prefer_offline=offline,
             offline_fallback_prompt=None if yes else _offline_fallback_prompt(yes),
+            branches=branches,
         )
     finally:
         store.close()
@@ -342,6 +353,7 @@ def _continue_session(
     session_id: str | None,
     competition: str | None,
     max_steps: int,
+    branches: int,
     yes: bool,
     offline: bool,
     autonomy: int | None,
@@ -385,6 +397,7 @@ def _continue_session(
             autonomy=level,
             prefer_offline=offline,
             offline_fallback_prompt=None if yes else _offline_fallback_prompt(yes),
+            branches=branches,
         )
     finally:
         store.close()
@@ -397,6 +410,13 @@ def conduct_continue(
     session: str | None = typer.Option(None, "--session", help="Session id (default: latest active)"),
     competition: str | None = typer.Option(None, "--competition", "-c"),
     max_steps: int = typer.Option(8, "--max-steps"),
+    branches: int = typer.Option(
+        1,
+        "--branches",
+        "-k",
+        min=1,
+        help="Test the top K untested hypotheses in parallel (1 = one at a time)",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y"),
     offline: bool = typer.Option(False, "--offline"),
     autonomy: int | None = typer.Option(None, "--autonomy", min=0, max=1),
@@ -409,6 +429,7 @@ def conduct_continue(
         session_id=session,
         competition=competition,
         max_steps=max_steps,
+        branches=branches,
         yes=yes,
         offline=offline,
         autonomy=autonomy,
@@ -423,6 +444,13 @@ def conduct_resume(
     session: str | None = typer.Option(None, "--session"),
     competition: str | None = typer.Option(None, "--competition", "-c"),
     max_steps: int = typer.Option(8, "--max-steps"),
+    branches: int = typer.Option(
+        1,
+        "--branches",
+        "-k",
+        min=1,
+        help="Test the top K untested hypotheses in parallel (1 = one at a time)",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y"),
     offline: bool = typer.Option(False, "--offline"),
     autonomy: int | None = typer.Option(None, "--autonomy", min=0, max=1),
@@ -435,6 +463,7 @@ def conduct_resume(
         session_id=session,
         competition=competition,
         max_steps=max_steps,
+        branches=branches,
         yes=yes,
         offline=offline,
         autonomy=autonomy,
