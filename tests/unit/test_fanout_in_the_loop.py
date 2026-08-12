@@ -187,6 +187,38 @@ def test_two_fan_outs_in_one_session_never_share_a_cohort(
     )
 
 
+def test_a_store_failure_while_naming_the_cohort_still_tears_down(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The branches exist by the time the cohort is named, so everything from
+    that point on has to be inside the teardown's `try`. Naming the cohort
+    writes to the store and can fail; above the `try` it would leave K claims
+    held and K worktrees checked out with nothing to release them.
+    """
+    ids = _propose(workspace, "a", "b")
+    monkeypatch.setattr(
+        "labpilot.research_engine.tools.handlers.plan.generate_plan",
+        lambda ws, **kw: type("R", (), {"data": {"plan_id": f"P-{kw['hypothesis_id']}"}})(),
+    )
+    with ConductorStore(workspace.knowledge_dir, workspace.competition) as store:
+        session = store.create_session("beat baseline")
+        monkeypatch.setattr(
+            type(store),
+            "append_new_decision",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db is gone")),
+        )
+
+        with pytest.raises(RuntimeError):
+            _fan_out(store, workspace, monkeypatch, session_id=session.id, agent=_Agent())
+
+    hypotheses = HypothesisStore(workspace.knowledge_dir, workspace.competition)
+    assert [hypotheses.get(i).status for i in ids] == [
+        HypothesisStatus.PROPOSED,
+        HypothesisStatus.PROPOSED,
+    ]
+    assert ".worktrees" not in _git(Path(workspace.root), "worktree", "list")
+
+
 def _real_run_parallel_sync() -> Any:
     from labpilot.research_engine.agents.parallel import run_parallel_sync
 

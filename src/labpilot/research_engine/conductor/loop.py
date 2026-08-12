@@ -195,19 +195,23 @@ def _fan_out_experiment(
     # Appending the record first allocates the id under the store's write lock
     # and gives the audit log the thing it was missing anyway — one entry
     # saying the campaign chose to fan out, above the per-branch entries.
-    cohort_record = store.append_new_decision(
-        session_id,
-        "fan_out",
-        rationale,
-        observe={
-            "step": step,
-            "branches": [b.hypothesis_id for b in prepared],
-        },
-    )
-    cohort_id = f"{session_id}-{cohort_record.id}"
-    progress(f"Fan-out {len(prepared)} branches (cohort {cohort_id})")
     outcomes = []
+    # Everything after the branches exist is inside the `try`, including
+    # naming the cohort: `append_new_decision` writes to the store and can
+    # fail, and a failure above the `try` would leave K claims held and K
+    # worktrees checked out with nothing to release them.
     try:
+        cohort_record = store.append_new_decision(
+            session_id,
+            "fan_out",
+            rationale,
+            observe={
+                "step": step,
+                "branches": [b.hypothesis_id for b in prepared],
+            },
+        )
+        cohort_id = f"{session_id}-{cohort_record.id}"
+        progress(f"Fan-out {len(prepared)} branches (cohort {cohort_id})")
         outcomes = run_branches(
             prepared,
             agent=agent,
@@ -219,9 +223,8 @@ def _fan_out_experiment(
             ),
         )
     finally:
-        # In a `finally` so a raising fan-out still returns its worktrees and
-        # claims; `outcomes` is empty then, which teardown reads as "nothing
-        # succeeded" and releases every claim.
+        # `outcomes` is empty when the block raised, which teardown reads as
+        # "nothing succeeded" and releases every claim.
         teardown_branches(workspace, prepared, outcomes)
 
     decisions: list[DecisionRecord] = [cohort_record]
