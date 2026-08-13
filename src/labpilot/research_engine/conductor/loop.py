@@ -753,11 +753,35 @@ def _objective_unmet(config: Any, state: Any) -> bool:
     last = getattr(state, "last_metric", None)
     if last is None:
         return True
+    # Same check `evaluate_stops` makes before firing on a target, and for the
+    # same reason: `last_metric` is a bare number. Without it a `cv_rmse` of
+    # 1789.7 reads as having met an `mse` target of 5 — 1789.7 > 5 is the
+    # *unmet* branch here, but an accuracy of 0.9 against that target is not,
+    # and this function's answer is what keeps a campaign going after an
+    # advisory stop. Measured on rogii 2026-08-12: the competition metric is
+    # mean_squared_error and the pipeline records cv_rmse.
+    if not _measures_the_target(config, state):
+        return True
     # `getattr(..., True)` matches `BudgetConfig.maximize`'s own default. This
     # read used `False`, so the two disagreed about the same field whenever the
     # attribute was missing — one more place where direction was assumed rather
     # than resolved.
     return last < target if getattr(config, "maximize", True) else last > target
+
+
+def _measures_the_target(config: Any, state: Any) -> bool:
+    """Whether `last_metric` is a reading of the metric the target names.
+
+    Duck-typed like its caller, which takes `Any` so tests can pass stand-ins.
+    An unknown metric name keeps the older, looser behaviour, exactly as
+    `budgets._last_metric_matches_target` does.
+    """
+    from labpilot.research_engine.conductor.budgets import metric_names_match
+
+    events = getattr(state, "score_events", None)
+    if not events:
+        return True
+    return metric_names_match(events[-1].metric_name, getattr(config, "target_metric", None))
 
 
 def _latest_plan_id(workspace: Workspace) -> str | None:
