@@ -164,6 +164,27 @@ def _validation_signals(root: Path) -> ValidationSignals:
         return ValidationSignals()
 
 
+def _treatment_is_its_own_parent(train_path: Path, prior_train: str) -> bool:
+    """Whether apply left `train.py` exactly as the parent execution left it.
+
+    Exact, not heuristic — which is why this one gates where `_observe_delta`
+    only observes. Its three checks compare a change against a claim and need a
+    false-positive rate before they can block; "the bytes are the same" needs
+    none.
+
+    A first write has no parent (`prior_train` empty) and is never a no-op.
+    """
+    if not prior_train.strip():
+        return False
+    try:
+        return train_path.read_text(encoding="utf-8", errors="replace") == prior_train
+    except OSError:
+        # Unreadable after a successful apply is its own problem, and not this
+        # gate's to report. Saying "changed" leaves the run to the gates that
+        # own reading it.
+        return False
+
+
 def _observe_delta(
     prior_train: str,
     proposal: CodeProposal,
@@ -650,6 +671,30 @@ class CodeEngineeringCapability(BaseCapability):
                 checks=["write_code", "apply"],
                 error=str(exc),
                 metadata={"origin": origin, "problem_type": problem_type},
+            )
+
+        unchanged = _treatment_is_its_own_parent(train_path, prior_train)
+        if unchanged and not is_dry_run(context):
+            return evidence(
+                context,
+                capability=self.name,
+                passed=False,
+                summary="the proposal left the pipeline unchanged",
+                checks=["write_code", "apply", "differs_from_parent"],
+                error=(
+                    "Applying this proposal left pipeline/train.py byte-identical to "
+                    "the parent's. An experiment compares a treatment against a "
+                    "control, so a treatment that *is* the control measures the "
+                    "control twice and attributes the result to a hypothesis it "
+                    "never tested. Measured on rogii 2026-08-12: E-244 and E-246 "
+                    "returned the same cv_rmse to sixteen digits for H-020 and "
+                    "H-021, and the second was recorded as a successful experiment."
+                ),
+                metadata={
+                    "origin": origin,
+                    "problem_type": problem_type,
+                    "digest": file_digest(train_path),
+                },
             )
 
         digests = {str(p): file_digest(p) for p in written}

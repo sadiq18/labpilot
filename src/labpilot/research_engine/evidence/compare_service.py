@@ -138,6 +138,35 @@ def _metrics_for_hypothesis(
     return None, {}
 
 
+def compared_against_itself(
+    treatment_execution_id: str,
+    control_execution_id: str | None,
+    treatment_metrics: dict[str, Any],
+    control_metrics: dict[str, Any],
+) -> str | None:
+    """Why this comparison measured one thing twice, or None when it is a real one.
+
+    A card moves a hypothesis to confirmed or rejected and shifts belief
+    confidence. Both readings have to come from different runs for that to mean
+    anything.
+
+    The second check is the one that fires in practice. `write_code` now refuses
+    a proposal that leaves `train.py` byte-identical, but a change can also be
+    *behaviourally* inert — measured on rogii 2026-08-12, E-244 and E-246
+    returned cv_rmse 1789.6796883967336 and the same 31-feature list for H-020
+    and H-021. That a treatment made no difference is a legitimate finding; it
+    is not evidence for the hypothesis that asked for it.
+    """
+    if control_execution_id and control_execution_id == treatment_execution_id:
+        return f"control and treatment are the same execution ({treatment_execution_id})"
+    if treatment_metrics and treatment_metrics == control_metrics:
+        return (
+            "treatment and control metrics are identical, so the change was "
+            "behaviourally inert"
+        )
+    return None
+
+
 def run_compare_and_build_card(context: TaskContext) -> EvidenceCard:
     """COMPARE vs parent control, write comparison.json, persist Evidence Card + graph."""
     root = context.workspace_root
@@ -174,6 +203,20 @@ def run_compare_and_build_card(context: TaskContext) -> EvidenceCard:
         )
     except Exception as exc:
         logger.warning("Research graph write failed: %s", exc)
+    # The card is still written and still persisted — "this change did nothing"
+    # is worth recording. What must not happen is that reading moving a
+    # hypothesis to confirmed/rejected, or shifting a belief's confidence, on
+    # the strength of a measurement that never varied.
+    self_comparison = compared_against_itself(
+        str(context.execution.id), control_exec, treatment_metrics, control_metrics
+    )
+    if self_comparison:
+        logger.warning(
+            "Not applying evidence for %s: %s",
+            context.plan.hypothesis_id or context.plan.id,
+            self_comparison,
+        )
+        return card
     try:
         from labpilot.research_engine.evidence.apply import (
             apply_card_to_beliefs,
