@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli import main as cli_main
 from labpilot.config import KaggleConfig
@@ -18,7 +18,7 @@ from labpilot.research_engine.intelligence.micro_agents.forum_analyzer import (
 )
 from labpilot.accessor.common.micro_agents import StructuredContext
 
-runner = CliRunner()
+runner = cli_runner()
 
 
 class FakeFetchApi:

@@ -5,13 +5,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.planner import compile_baseline_plan
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 
-runner = CliRunner()
+runner = cli_runner()
 
 _CLI_DIR = Path(__file__).resolve().parents[2] / "src" / "labpilot" / "cli"
 

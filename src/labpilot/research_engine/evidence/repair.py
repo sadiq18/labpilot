@@ -123,7 +123,10 @@ def repair_card_directions(
             lb_gain=card.observed.lb_gain,
             stability=card.observed.stability,
             maximize=maximize,
-            missing_control=card.control_experiment is None and card.observed.parent_cv is None,
+            missing_control=(
+                card.control_experiment is None and card.observed.parent_cv is None
+            )
+            or card.uncomparable_reason is not None,
         )
         updated = card.model_copy(
             update={

@@ -381,9 +381,32 @@ class WorkspaceCapability(BaseCapability):
             checks.append("profile_present")
             return True
 
+        # Whether there is something to lose. Before the staleness check every
+        # existing profile short-circuited above, so the rebuild paths below ran
+        # only when there was no profile at all. Now every pre-existing
+        # workspace reaches them — none carries a stamp — and both of them could
+        # replace a description carrying a target, columns and warnings, or
+        # disown it while leaving it on disk for `write_code` to read anyway.
+        stale = profile_path.is_file()
+
+        def keep_stale(reason: str) -> bool:
+            """Serve the old description, and say that is what happened.
+
+            `write_code` gates on `profile_path.is_file()` alone, so reporting
+            "no profile" while one sits on disk changed the bookkeeping and
+            nothing else. A profile we cannot refresh still beats none; what it
+            must not be is silent.
+            """
+            metadata["profile_stale"] = reason
+            metadata["profile"] = str(profile_path)
+            checks.append("profile_stale")
+            return True
+
         raw_dir = root / "data" / "raw"
         raw_files = [p for p in raw_dir.rglob("*") if p.is_file()] if raw_dir.is_dir() else []
         if not raw_files:
+            if stale:
+                return keep_stale("no_data")
             if context.constraints.get("dry_run"):
                 metadata["profile_skipped"] = "no_data_dry_run"
                 checks.append("profile_skipped")
@@ -430,6 +453,15 @@ class WorkspaceCapability(BaseCapability):
         except Exception as exc:
             logger.warning("Workspace tabular profile failed: %s", exc)
             metadata["profile_error"] = str(exc)
+            if stale:
+                # The inventory profile is for a workspace that has no
+                # description, not for one whose description we merely failed to
+                # refresh. `write_profile` overwrites in place, so letting this
+                # through replaced a profile naming a target, its columns and
+                # its warnings with a file listing — and returned True, so the
+                # step passed. Worse, the listing is stamped current, which made
+                # `_profile_is_current` accept it forever after.
+                return keep_stale("reprofile_failed")
             # Non-CSV / scientific layouts: still write an inventory profile so
             # baseline selection + codegen know what files exist.
             inventory_ok = self._write_inventory_profile(

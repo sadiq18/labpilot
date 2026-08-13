@@ -203,3 +203,212 @@ def test_a_real_comparison_still_applies(tmp_path: Path, monkeypatch) -> None:
     applied = _compare_with_parent(tmp_path, monkeypatch, {"cv_rmse": 194.3})
 
     assert applied == ["beliefs", "hypothesis"]
+
+
+# --- the gate must judge the proposal, not one file in it -------------------
+
+
+def _write_code_proposing(tmp_path: Path, files: dict[str, str], *, parent: dict[str, str]):
+    """Run WRITE_CODE with a proposal over `files`, atop an existing `parent` tree."""
+    import json as _json
+
+    from helpers.baseline_campaign import CodeFileSpec, CodeProposal
+    from test_engineer_capabilities import _ctx
+
+    from labpilot.research_engine.execution.capabilities.code_engineering import (
+        CodeEngineeringCapability,
+    )
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    context = _ctx(tmp_path / "knowledge", task_type=TaskType.WRITE_CODE, constraints={})
+    (context.workspace_root / "profile.json").write_text(
+        _json.dumps({"competition": "demo", "target_column": "target", "id_column": "id"}),
+        encoding="utf-8",
+    )
+    pipeline = context.workspace_root / "pipeline"
+    pipeline.mkdir(parents=True, exist_ok=True)
+    for name, body in parent.items():
+        (context.workspace_root / name).write_text(body, encoding="utf-8")
+
+    class _Agent:
+        last_used_llm = True
+
+        def run(self, ctx):
+            return CodeProposal(
+                summary="artifact under test",
+                files=[
+                    CodeFileSpec(path=p, content=c, action="write") for p, c in files.items()
+                ],
+            )
+
+    capability = CodeEngineeringCapability()
+    capability._agent = _Agent()  # noqa: SLF001 — the injection point
+    return capability.execute(context), context.workspace_root
+
+
+HELPER = "def clip(x):\n    return x\n"
+
+
+def test_a_delta_confined_to_another_pipeline_file_is_a_real_experiment(tmp_path: Path) -> None:
+    """The false reject. `pipeline/infer.py` is a first-class edit target.
+
+    `_copy_tree` offers aider every `*.py` under `pipeline/`, the platform
+    creates `infer.py` itself when it is absent, and the coding prompt names it
+    — so a hypothesis about post-processing produces a proposal with no
+    `train.py` in it at all. Judged by train.py alone that read as "the proposal
+    left the pipeline unchanged", with the edit already written to disk.
+    """
+    result, root = _write_code_proposing(
+        tmp_path,
+        {"pipeline/infer.py": HELPER.replace("return x", "return x.clip(0, 1)")},
+        parent={"pipeline/train.py": PARENT, "pipeline/infer.py": HELPER},
+    )
+
+    assert result.passed is True, result.error
+    assert (root / "pipeline" / "infer.py").read_text() != HELPER
+
+
+def test_a_proposal_that_rewrites_every_file_identically_is_still_refused(tmp_path: Path) -> None:
+    """The gate widened, not weakened: no file moved, so nothing was tested."""
+    result, _ = _write_code_proposing(
+        tmp_path,
+        {"pipeline/train.py": PARENT, "pipeline/infer.py": HELPER},
+        parent={"pipeline/train.py": PARENT, "pipeline/infer.py": HELPER},
+    )
+
+    assert result.passed is False
+    assert "differs_from_parent" in result.checks
+
+
+def test_one_moved_file_among_several_is_enough(tmp_path: Path) -> None:
+    """A treatment differs from its control if *anything* differs."""
+    result, _ = _write_code_proposing(
+        tmp_path,
+        {"pipeline/train.py": PARENT, "pipeline/infer.py": HELPER + "# tuned\n"},
+        parent={"pipeline/train.py": PARENT, "pipeline/infer.py": HELPER},
+    )
+
+    assert result.passed is True, result.error
+
+
+# --- the disqualification has to travel on the card -------------------------
+#
+# Skipping `apply_card_to_*` was never enough: the card is persisted and
+# `comparison.json` written *before* that point, so reflection read the refused
+# numbers straight back and confirmed the hypothesis, and `submit_learn`
+# re-derived a decision from the same card without consulting the check.
+
+
+def _card(tmp_path: Path, *, treatment: str, control: str | None, metrics, control_metrics):
+    from labpilot.research_engine.evidence.builder import build_evidence_card
+
+    (tmp_path / "competition.json").write_text(
+        json.dumps({"metric": {"key": "rmse", "direction": "minimize"}}), encoding="utf-8"
+    )
+    return build_evidence_card(
+        knowledge_dir=tmp_path / "knowledge",
+        competition="demo",
+        treatment_execution_id=treatment,
+        treatment_metrics=metrics,
+        hypothesis_id="H-021",
+        control_execution_id=control,
+        control_metrics=control_metrics,
+        workspace_root=tmp_path,
+        persist=False,
+    )
+
+
+def test_a_self_comparison_is_inconclusive_on_the_card_itself(tmp_path: Path) -> None:
+    """Not a log line in one caller — a field every reader sees."""
+    card = _card(
+        tmp_path,
+        treatment="E-244",
+        control="E-244",
+        metrics={"cv_rmse": 1.0},
+        control_metrics={"cv_rmse": 2.0},
+    )
+
+    assert card.decision.value == "inconclusive"
+    assert card.uncomparable_reason
+    assert "same execution" in card.uncomparable_reason
+
+
+def test_identical_metrics_are_inconclusive_on_the_card_itself(tmp_path: Path) -> None:
+    metrics = {"cv_rmse": 1789.6796883967336, "n_features": 31}
+    card = _card(
+        tmp_path,
+        treatment="E-246",
+        control="E-244",
+        metrics=metrics,
+        control_metrics=dict(metrics),
+    )
+
+    assert card.decision.value == "inconclusive"
+    assert "behaviourally inert" in (card.uncomparable_reason or "")
+
+
+def test_a_real_comparison_still_signs_a_verdict(tmp_path: Path) -> None:
+    """The guard must not cost the evidence loop its purpose."""
+    card = _card(
+        tmp_path,
+        treatment="E-246",
+        control="E-244",
+        metrics={"cv_rmse": 100.0},
+        control_metrics={"cv_rmse": 200.0},
+    )
+
+    assert card.uncomparable_reason is None
+    assert card.decision.value == "accepted"
+
+
+def test_a_leaderboard_gain_cannot_rescue_a_self_comparison(tmp_path: Path) -> None:
+    """`submit_learn`'s re-derivation, which is how the gate was bypassed.
+
+    A self-comparison has a control id and a `parent_cv`, so it cleared that
+    function's `missing_control` test; with `cv_gain` None and a non-negative
+    leaderboard delta, `_decide` returned `accepted` and the hypothesis was
+    confirmed on a measurement of the control.
+    """
+    from labpilot.research_engine.evidence.builder import decide_evidence
+
+    card = _card(
+        tmp_path,
+        treatment="E-244",
+        control="E-244",
+        metrics={"cv_rmse": 1.0},
+        control_metrics={"cv_rmse": 2.0},
+    )
+
+    decision, _ = decide_evidence(
+        cv_gain=card.observed.cv_gain,
+        lb_gain=0.5,
+        stability=card.observed.stability,
+        maximize=card.maximize,
+        missing_control=(card.control_experiment is None and card.observed.parent_cv is None)
+        or card.uncomparable_reason is not None,
+    )
+
+    assert decision.value == "inconclusive"
+
+
+def test_the_written_comparison_says_it_is_not_evidence(tmp_path: Path, monkeypatch) -> None:
+    """`comparison.json` is what reflection reads, so it has to carry the verdict."""
+    from test_engineer_capabilities import _ctx
+
+    from labpilot.research_engine.evidence import compare_service
+    from labpilot.research_engine.planner.schemas.task_types import TaskType
+
+    context = _ctx(tmp_path / "knowledge", task_type=TaskType.COMPARE)
+    context.plan.metadata["parent_execution_id"] = "E-244"
+    context.plan.metadata["parent_metrics"] = {"cv_rmse": 1789.6796883967336}
+    (context.workspace_root / "metrics.json").write_text(
+        json.dumps({"cv_rmse": 1789.6796883967336}), encoding="utf-8"
+    )
+    (context.workspace_root / "competition.json").write_text(
+        json.dumps({"metric": {"key": "rmse", "direction": "minimize"}}), encoding="utf-8"
+    )
+
+    compare_service.run_compare_and_build_card(context)
+
+    written = json.loads((context.workspace_root / "comparison.json").read_text())
+    assert written["decision"] == "inconclusive"

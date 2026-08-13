@@ -23,9 +23,17 @@ import json
 
 import pytest
 
-from labpilot.research_engine.conductor.policy import _REPEATABLE, llm_next_action
+from labpilot.research_engine.conductor.policy import _SPINS_ON_REPEAT, llm_next_action
 
-ALLOWLIST = {"query_memory", "generate_plan", "run_plan", "reflect", "analyze_competition"}
+ALLOWLIST = {
+    "query_memory",
+    "generate_plan",
+    "run_plan",
+    "reflect",
+    "analyze_competition",
+    "run_experiment",
+    "implement",
+}
 
 
 class _Records:
@@ -41,13 +49,30 @@ class _Records:
 
 
 def _offered(
-    completed: list[str], allowlist: set[str] | None = None, *, answers: str = "generate_plan"
+    dispatched: list[str] | list[tuple[str, str]],
+    allowlist: set[str] | None = None,
+    *,
+    answers: str = "generate_plan",
 ) -> list[str]:
-    """The allowlist the model is sent. `answers` must be a tool it may pick:
-    an unavailable one routes into the gated-retry loop and asks the operator.
+    """The allowlist the model is sent, given a dispatch history.
+
+    Entries are `tool` or `(tool, status)`; the default status is "completed".
+    Built as `task_summary`, the shape `build_observe_bundle` really produces —
+    asserting against a hand-made `completed_tools` was what let the
+    successes-only read go unnoticed. `answers` must be a tool the model may
+    pick: an unavailable one routes into the gated-retry loop and asks the
+    operator.
     """
+    steps = [(d, "completed") if isinstance(d, str) else d for d in dispatched]
+    observe = {
+        "task_summary": [
+            {"id": f"T-{i:03d}", "tool": tool, "status": status, "error": None}
+            for i, (tool, status) in enumerate(steps, start=1)
+        ],
+        "completed_tools": [tool for tool, status in steps if status == "completed"],
+    }
     client = _Records(answers)
-    llm_next_action({"completed_tools": completed}, set(allowlist or ALLOWLIST), client)
+    llm_next_action(observe, set(allowlist or ALLOWLIST), client)
     return client.seen[0]
 
 
@@ -56,10 +81,40 @@ def test_the_tool_that_just_ran_is_not_offered_again() -> None:
     assert "query_memory" not in _offered(["analyze_competition", "query_memory"])
 
 
-@pytest.mark.parametrize("tool", sorted(_REPEATABLE))
+@pytest.mark.parametrize("tool", sorted(ALLOWLIST - _SPINS_ON_REPEAT))
 def test_a_tool_that_pays_off_on_a_repeat_is_still_offered(tool: str) -> None:
-    """`run_plan` twice is a campaign working, not a campaign stuck."""
+    """`run_plan` twice is a campaign working, not a campaign stuck.
+
+    Over the catalog, not over `_REPEATABLE`: that tuple is the offline cycle's
+    order across seven tools, and adjudicating the full ten with it stripped
+    `run_experiment` and `implement` for a step after each one completed — the
+    two tools a campaign exists to repeat.
+    """
+    assert ALLOWLIST - _SPINS_ON_REPEAT, "the catalog and the spin set cannot be the same"
     assert tool in _offered(["analyze_competition", tool])
+
+
+def test_a_failed_step_does_not_suppress_the_last_success() -> None:
+    """The read that made the guarantee above false.
+
+    `completed_tools` holds successes only, so after `query_memory` completed
+    and `run_plan` failed its last entry was still `query_memory` — and it
+    stayed suppressed for every subsequent failing step, which is exactly when
+    retrieving prior experiments is the right move.
+    """
+    offered = _offered([("query_memory", "completed"), ("run_plan", "failed")])
+
+    assert "query_memory" in offered
+
+
+def test_a_still_pending_task_is_not_what_just_ran() -> None:
+    """Enqueued is not dispatched."""
+    offered = _offered(
+        [("analyze_competition", "completed"), ("query_memory", "pending")],
+        answers="query_memory",
+    )
+
+    assert "query_memory" in offered
 
 
 def test_only_the_immediately_preceding_tool_is_ruled_out() -> None:

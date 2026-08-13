@@ -164,25 +164,45 @@ def _validation_signals(root: Path) -> ValidationSignals:
         return ValidationSignals()
 
 
-def _treatment_is_its_own_parent(train_path: Path, prior_train: str) -> bool:
-    """Whether apply left `train.py` exactly as the parent execution left it.
+def _content_or_none(path: Path) -> str | None:
+    """The file's text, or None when it is absent or unreadable."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _treatment_is_its_own_parent(written: list[Path], prior: dict[Path, str | None]) -> bool:
+    """Whether apply left every file it touched exactly as the parent left it.
 
     Exact, not heuristic — which is why this one gates where `_observe_delta`
     only observes. Its three checks compare a change against a claim and need a
     false-positive rate before they can block; "the bytes are the same" needs
     none.
 
-    A first write has no parent (`prior_train` empty) and is never a no-op.
+    Asked of every applied file rather than of `pipeline/train.py` alone. A
+    delta may legitimately be confined to another file there: `_copy_tree`
+    offers aider every `*.py` under `pipeline/`, `_ensure_pipeline_modules`
+    creates `infer.py` when it is absent and the coding prompt tells codegen to
+    use it, and `changed` keeps only the files aider actually edited. Judging
+    the run by train.py alone failed every such proposal as a no-op — with its
+    edits already applied to disk, and its `record_execution_source` snapshot
+    skipped.
+
+    A file with no prior content is a first write, not a repeat, so it is never
+    a no-op. Unreadable after a successful apply is its own problem and not this
+    gate's to report: saying "changed" leaves the run to the gates that own
+    reading it.
     """
-    if not prior_train.strip():
+    if not written:
         return False
-    try:
-        return train_path.read_text(encoding="utf-8", errors="replace") == prior_train
-    except OSError:
-        # Unreadable after a successful apply is its own problem, and not this
-        # gate's to report. Saying "changed" leaves the run to the gates that
-        # own reading it.
-        return False
+    for path in written:
+        before = prior.get(path.resolve())
+        if before is None or not before.strip():
+            return False
+        if _content_or_none(path) != before:
+            return False
+    return True
 
 
 def _observe_delta(
@@ -659,6 +679,14 @@ class CodeEngineeringCapability(BaseCapability):
                 metadata={"origin": origin, "problem_type": problem_type},
             )
 
+        # Read before apply, for every path the proposal claims — the no-op
+        # check below asks whether *anything* landed, and after apply there is
+        # nothing left to compare against.
+        prior_by_path: dict[Path, str | None] = {
+            (root / spec.path).resolve(): _content_or_none((root / spec.path).resolve())
+            for spec in proposal.files
+        }
+
         try:
             written = apply_proposal(root, proposal)
         except ApplyError as exc:
@@ -673,8 +701,9 @@ class CodeEngineeringCapability(BaseCapability):
                 metadata={"origin": origin, "problem_type": problem_type},
             )
 
-        unchanged = _treatment_is_its_own_parent(train_path, prior_train)
-        if unchanged and not is_dry_run(context):
+        # A dry run writes the same file twice by design, and asks the plumbing
+        # rather than the science. Checked first so it does not pay the reads.
+        if not is_dry_run(context) and _treatment_is_its_own_parent(written, prior_by_path):
             return evidence(
                 context,
                 capability=self.name,
@@ -682,8 +711,9 @@ class CodeEngineeringCapability(BaseCapability):
                 summary="the proposal left the pipeline unchanged",
                 checks=["write_code", "apply", "differs_from_parent"],
                 error=(
-                    "Applying this proposal left pipeline/train.py byte-identical to "
-                    "the parent's. An experiment compares a treatment against a "
+                    "Applying this proposal left every file it touched "
+                    f"({', '.join(sorted(str(p.name) for p in written))}) byte-identical "
+                    "to the parent's. An experiment compares a treatment against a "
                     "control, so a treatment that *is* the control measures the "
                     "control twice and attributes the result to a hypothesis it "
                     "never tested. Measured on rogii 2026-08-12: E-244 and E-246 "
@@ -693,7 +723,7 @@ class CodeEngineeringCapability(BaseCapability):
                 metadata={
                     "origin": origin,
                     "problem_type": problem_type,
-                    "digest": file_digest(train_path),
+                    "digests": {str(p): file_digest(p) for p in written},
                 },
             )
 

@@ -68,7 +68,7 @@ class PaperAnalyzer(BaseAnalyzer):
         self._literature_explicit = literature is not None
 
     def analyze(self, context: AnalyzeContext) -> ResearchArtifacts:
-        self._maybe_attach_llm_client()
+        self._maybe_attach_llm_client(context)
         notes: list[str] = []
 
         literature = self._resolve_literature(context)
@@ -206,17 +206,6 @@ class PaperAnalyzer(BaseAnalyzer):
             competition=context.competition,
             download_pdfs=self.download_pdfs,
         )
-
-    def _maybe_attach_llm_client(self) -> None:
-        if self._llm_explicit or self.llm_client is not None:
-            return
-        try:
-            from labpilot.llm.client import resolve_llm_client
-            from labpilot.workspace import load_config_for_cwd
-
-            self.llm_client = resolve_llm_client(load_config_for_cwd()[0].llm)
-        except Exception:
-            self.llm_client = None
 
     def _persist(self, context: AnalyzeContext, items: list[ResearchArtifact]) -> list[str]:
         try:

@@ -93,6 +93,21 @@ class EvidenceCard(BaseModel):
         return [str(step) for step in recorded] if isinstance(recorded, list) else []
 
     @property
+    def uncomparable_reason(self) -> str | None:
+        """Why this card's two readings are not a comparison, if they are not.
+
+        Set when the control and the treatment are the same execution, or when
+        the two runs returned identical metrics. Every writer that re-derives
+        `decision` — `submit_learn` when leaderboard results land, `repair` when
+        a direction is corrected — must fold this into `missing_control`, or it
+        will sign a verdict on a measurement that never varied. Carried in
+        `metadata` rather than `decision_reason` because those writers overwrite
+        the reason and would drop it.
+        """
+        recorded = (self.metadata or {}).get("uncomparable_reason")
+        return str(recorded) if recorded else None
+
+    @property
     def decision_summary(self) -> str:
         """`decision_reason`, qualified by the flags that should temper it.
 

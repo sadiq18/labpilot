@@ -220,8 +220,15 @@ def _apply_submit_knowledge(
                 lb_gain=lb_delta,
                 stability=card.observed.stability,
                 maximize=card.maximize,
-                missing_control=card.control_experiment is None
-                and card.observed.parent_cv is None,
+                missing_control=(
+                    card.control_experiment is None and card.observed.parent_cv is None
+                )
+                # A self-comparison has a control id and a parent_cv, so it
+                # cleared the test above; with `cv_gain` None and a non-negative
+                # leaderboard delta `_decide` then returned `accepted`, and this
+                # function applied it to the belief and the hypothesis — the one
+                # re-derivation that never consulted the check at all.
+                or card.uncomparable_reason is not None,
                 overfitting=overfitting,
             )
             card = card.model_copy(

@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 #: information on a repeat. `analyze_competition` and `search_papers` do not.
 _REPEATABLE = ("generate_plan", "run_plan", "reflect")
 
+#: Tools whose repeat cannot move the observation: they read state rather than
+#: producing any. Stated positively, rather than derived as "not in
+#: `_REPEATABLE`", because that tuple is the offline cycle's *order* over seven
+#: tools and is not a claim about the ten in the catalog. Read as one, it
+#: stripped `run_experiment`, `implement` and `submit_learn` — the tools a
+#: campaign exists to repeat — for a step after each one completed.
+_SPINS_ON_REPEAT = frozenset({"query_memory", "analyze_competition", "search_papers"})
+
 _DEFAULT_ORDER = (
     "analyze_competition",
     "search_papers",
@@ -445,12 +453,38 @@ def _invoke_llm_next_action(
     return validated
 
 
+def _last_dispatched_tool(observe: dict[str, Any]) -> str | None:
+    """The tool the previous step actually ran, whatever became of it.
+
+    Not `completed_tools[-1]`, which is what this used to read: that list is
+    `[t.tool_name for t in tasks if t.status == "completed"]` over the whole
+    session, so a failed step does not appear in it at all. After one, its last
+    entry is some older tool that succeeded — and the gate then ruled *that*
+    out, on every subsequent step, while the tool actually spinning stayed on
+    offer. `query_memory` completing at step 3 and `run_plan` failing at 4-8
+    kept `query_memory` suppressed for all five, which is precisely when
+    retrieving prior experiments is the useful move.
+
+    `task_summary` carries every task in dispatch order with its status, which
+    is the question being asked. `pending` is skipped: enqueued is not run.
+    """
+    summary = observe.get("task_summary")
+    if isinstance(summary, list):
+        for entry in reversed(summary):
+            if isinstance(entry, dict) and entry.get("status") != "pending" and entry.get("tool"):
+                return str(entry["tool"])
+        return None
+    # Callers that assemble `observe` by hand and carry no task summary.
+    completed = list(observe.get("completed_tools") or [])
+    return str(completed[-1]) if completed else None
+
+
 def _without_a_spinning_repeat(observe: dict[str, Any], allowlist: set[str]) -> set[str]:
     """Drop the tool that just ran when running it again tells us nothing.
 
-    The offline policy has refused non-`_REPEATABLE` repeats since S-019; the
-    LLM path never did, and `rejected` only survives one step, so the model's
-    reasons are re-derived from an observation the repeat did not change.
+    The offline policy has refused pointless repeats since S-019; the LLM path
+    never did, and `rejected` only survives one step, so the model's reasons are
+    re-derived from an observation the repeat did not change.
 
     Measured on rogii 2026-08-12: `query_memory` chosen eight times running,
     every rationale a restatement of "MSE 194.8 is far above the target of 5,
@@ -460,12 +494,15 @@ def _without_a_spinning_repeat(observe: dict[str, Any], allowlist: set[str]) -> 
     Only the immediately preceding tool, so this cannot strand a tool for the
     rest of a campaign: once anything else runs, `query_memory` is offered again
     against evidence that has actually moved.
+
+    It is worth being plain about the limit: in that incident the allowlist had
+    already narrowed to `{query_memory}` alone, so `narrowed` is empty, the
+    guard below hands the original set straight back, and this rule changes
+    nothing. What fixed rogii is `has_unrun_plan` reading the store, in the same
+    change — this stops the *next* spin, one with somewhere else to go.
     """
-    completed = list(observe.get("completed_tools") or [])
-    if not completed:
-        return allowlist
-    last = completed[-1]
-    if last in _REPEATABLE or last not in allowlist:
+    last = _last_dispatched_tool(observe)
+    if last is None or last not in _SPINS_ON_REPEAT or last not in allowlist:
         return allowlist
     narrowed = allowlist - {last}
     # Never hand back an empty allowlist: with nothing on offer the model can

@@ -9,6 +9,11 @@ from typing import Any
 
 from labpilot.research_engine.evidence.builder import (
     build_evidence_card,
+    # Re-exported: this is where the check was defined and where its callers
+    # still import it from. It lives in `builder` now because that is where the
+    # card is made, and a disqualification the card does not carry is one only
+    # this function honours.
+    compared_against_itself,
     write_comparison_files,
 )
 from labpilot.research_engine.evidence.models import EvidenceCard
@@ -136,35 +141,6 @@ def _metrics_for_hypothesis(
     except Exception:
         pass
     return None, {}
-
-
-def compared_against_itself(
-    treatment_execution_id: str,
-    control_execution_id: str | None,
-    treatment_metrics: dict[str, Any],
-    control_metrics: dict[str, Any],
-) -> str | None:
-    """Why this comparison measured one thing twice, or None when it is a real one.
-
-    A card moves a hypothesis to confirmed or rejected and shifts belief
-    confidence. Both readings have to come from different runs for that to mean
-    anything.
-
-    The second check is the one that fires in practice. `write_code` now refuses
-    a proposal that leaves `train.py` byte-identical, but a change can also be
-    *behaviourally* inert — measured on rogii 2026-08-12, E-244 and E-246
-    returned cv_rmse 1789.6796883967336 and the same 31-feature list for H-020
-    and H-021. That a treatment made no difference is a legitimate finding; it
-    is not evidence for the hypothesis that asked for it.
-    """
-    if control_execution_id and control_execution_id == treatment_execution_id:
-        return f"control and treatment are the same execution ({treatment_execution_id})"
-    if treatment_metrics and treatment_metrics == control_metrics:
-        return (
-            "treatment and control metrics are identical, so the change was "
-            "behaviourally inert"
-        )
-    return None
 
 
 def run_compare_and_build_card(context: TaskContext) -> EvidenceCard:

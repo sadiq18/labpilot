@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli import main as cli_main
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
@@ -41,7 +41,7 @@ from labpilot.research_engine.intelligence.retrieval.models import (
     RetrievalIntent,
 )
 
-runner = CliRunner()
+runner = cli_runner()
 
 
 def _seed(store: KnowledgeStore) -> None:

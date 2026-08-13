@@ -63,9 +63,18 @@ def _offenders(tree: ast.AST) -> list[str]:
     return bad
 
 
-@pytest.mark.parametrize(
-    "source", sorted(SRC.rglob("*.py")), ids=lambda p: str(p.relative_to(SRC))
-)
+SOURCES = sorted(SRC.rglob("*.py"))
+
+
+def test_the_scan_actually_found_the_source_tree() -> None:
+    """AGENTS.md: "If a test could pass on an empty list, assert the list is
+    non-empty first." The rule below is parametrized over a filesystem glob, so
+    a moved `tests/` directory or an installed-wheel layout would collect one
+    skipped case and report the codebase clean over zero files."""
+    assert len(SOURCES) > 100, f"only {len(SOURCES)} sources under {SRC} — has the tree moved?"
+
+
+@pytest.mark.parametrize("source", SOURCES, ids=lambda p: str(p.relative_to(SRC)))
 def test_a_client_is_never_resolved_from_the_package_default(source: Path) -> None:
     offenders = _offenders(ast.parse(source.read_text(encoding="utf-8")))
 
@@ -94,3 +103,66 @@ def test_the_rule_catches_the_shape_it_was_written_for() -> None:
 
     assert _offenders(shipped), "the detector no longer sees the bug it was written for"
     assert not _offenders(fixed), "the detector flags the fix"
+
+
+def test_the_analyzers_read_the_workspace_the_context_names(tmp_path: Path) -> None:
+    """`load_config_for_cwd()` with no argument is not workspace-aware either.
+
+    It discovers by walking up from the *process* directory, and nothing under
+    `labpilot` ever chdirs — so `research conduct --workspace /data/rogii`
+    launched from a checkout finds no `labpilot.yaml`, falls back to the package
+    default where `routing` is empty, and reproduces the bug the switch to
+    `load_config_for_cwd` was made to end. `knowledge_dir` is inside the
+    workspace, so starting the walk there finds it wherever the process lives.
+    """
+    import os
+
+    from labpilot.workspace import load_config_for_cwd
+
+    workspace = tmp_path / "rogii"
+    (workspace / "configs").mkdir(parents=True)
+    (workspace / "knowledge").mkdir()
+    (workspace / "labpilot.yaml").write_text("competition: rogii\n", encoding="utf-8")
+    (workspace / "configs" / "default.yaml").write_text(
+        "llm:\n"
+        "  provider: ollama\n"
+        "  routing:\n"
+        "    providers:\n"
+        "      - name: local\n"
+        "        kind: ollama\n"
+        "        model: qwen2.5-coder:14b\n",
+        encoding="utf-8",
+    )
+
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    cwd = os.getcwd()
+    try:
+        os.chdir(outside)
+        bare, _ = load_config_for_cwd()
+        scoped, _ = load_config_for_cwd(start=workspace / "knowledge")
+    finally:
+        os.chdir(cwd)
+
+    assert not bare.llm.routing.providers, "the no-argument call cannot see the workspace"
+    assert [p.name for p in scoped.llm.routing.providers] == ["local"]
+
+
+def test_one_analyzer_base_owns_client_attachment() -> None:
+    """Three copies were fixed by hand once; the fourth is the one nobody adds here.
+
+    The AST rule below cannot prevent a fourth copy — it only checks how one is
+    spelled. A single definition can.
+    """
+    import ast
+
+    analyzers = SRC / "research_engine" / "intelligence" / "analyzers"
+    definitions = [
+        path.name
+        for path in sorted(analyzers.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.name == "_maybe_attach_llm_client"
+    ]
+
+    assert definitions == ["base.py"], f"client attachment is defined in {definitions}"

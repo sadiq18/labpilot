@@ -3,7 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
@@ -137,7 +137,7 @@ def test_rank_weights_change_order(tmp_path: Path):
 
 
 def test_rank_cli_empty_backlog(tmp_path: Path):
-    runner = CliRunner()
+    runner = cli_runner()
     result = runner.invoke(
         app,
         [

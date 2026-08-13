@@ -24,13 +24,21 @@ from __future__ import annotations
 
 import os
 
-#: Modules that read the CPU count. Patched together, because a test that
-#: resolves K through one and asserts through the other would otherwise see two
-#: different machines in the same run.
-_CPU_READERS = (
-    "labpilot.research_engine.execution.training.compute_budget",
-    "labpilot.research_engine.conductor.fanout",
-)
+#: The three sources `available_cpus()` consults, in its order. Patched here —
+#: at the machine — rather than by replacing `available_cpus` itself in each
+#: module that imports it.
+#:
+#: Replacing the function stubs out the code under test. `test_compute_budget`
+#: does `from ...compute_budget import available_cpus` and drives the real
+#: discovery by monkeypatching these same `os` calls; with the function itself
+#: swapped out, three of its assertions failed on an unmodified tree — and
+#: `scripts/hostile-test.sh` reported them as "the suite is asserting the
+#: machine, not the code". They were doing the opposite. Two of the four are
+#: even named in `_SUBJECT_IS_THE_MACHINE` in
+#: `tests/unit/test_tests_do_not_assert_the_machine.py`, which exempts them
+#: because the machine *is* their subject; patching one layer down means this
+#: plugin needs no exemption list of its own to agree with that one.
+_CPU_SOURCES = ("process_cpu_count", "cpu_count", "sched_getaffinity")
 
 
 def pytest_report_header(config) -> str | None:
@@ -44,7 +52,7 @@ def pytest_report_header(config) -> str | None:
 
 
 def pytest_configure(config) -> None:
-    """Install the fake CPU count before collection, so module-level reads see it."""
+    """Shrink the machine before collection, so module-level reads see it."""
     del config
     raw = os.environ.get("FAKE_CPUS")
     if not raw:
@@ -56,19 +64,23 @@ def pytest_configure(config) -> None:
     if count < 1:
         raise ValueError(f"FAKE_CPUS must be >= 1, got {count}")
 
-    import importlib
-
     patched = 0
-    for name in _CPU_READERS:
-        module = importlib.import_module(name)
-        if hasattr(module, "available_cpus"):
-            module.available_cpus = lambda _count=count: _count
-            patched += 1
+    for name in _CPU_SOURCES:
+        if not hasattr(os, name):
+            # `sched_getaffinity` is Linux-only, and `available_cpus` already
+            # skips it by the same `hasattr`. Not an error on macOS.
+            continue
+        if name == "sched_getaffinity":
+            os.sched_getaffinity = lambda _pid=0, _n=count: set(range(_n))
+        else:
+            setattr(os, name, lambda _n=count: _n)
+        patched += 1
     # Loudly, because a plugin that silently patches nothing reports a hostile
     # run that never happened — the same failure as a mutation sweep that runs
-    # no tests.
-    if patched != len(_CPU_READERS):
+    # no tests. `cpu_count` and `process_cpu_count` both exist on every
+    # supported interpreter, so fewer than two means the source list is stale.
+    if patched < 2:
         raise RuntimeError(
-            f"FAKE_CPUS patched {patched} of {len(_CPU_READERS)} readers; "
-            "the module list in hostile_env.py is stale"
+            f"FAKE_CPUS patched {patched} CPU sources; "
+            "the list in hostile_env.py no longer matches `available_cpus`"
         )

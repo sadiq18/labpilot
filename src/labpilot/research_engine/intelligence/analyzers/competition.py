@@ -90,7 +90,7 @@ class CompetitionAnalyzer(BaseAnalyzer):
 
     def analyze(self, context: AnalyzeContext) -> ResearchArtifacts:
         self._maybe_attach_kaggle_client()
-        self._maybe_attach_llm_client()
+        self._maybe_attach_llm_client(context)
         notes: list[str] = []
         if not self._fetcher_explicit and self.metadata_fetcher is None:
             notes.append(
@@ -168,23 +168,6 @@ class CompetitionAnalyzer(BaseAnalyzer):
                 self.related_provider = SeriesRelatedCompetitionProvider(
                     metadata_fetcher=client
                 )
-
-    def _maybe_attach_llm_client(self) -> None:
-        """Optional LLM for page enrichment — never required."""
-        if self._llm_explicit or self.llm_client is not None:
-            return
-        try:
-            from labpilot.llm.client import resolve_llm_client
-            from labpilot.workspace import load_config_for_cwd
-
-            # Workspace-aware, as `diagnostics.check_llm_routing` is: `load_config()`
-            # reads only the package default, where `routing` is empty, so this
-            # fell through to the legacy provider pin and ignored the workspace's
-            # router entirely.
-            config, _ = load_config_for_cwd()
-            self.llm_client = resolve_llm_client(config.llm)
-        except Exception:
-            self.llm_client = None
 
     def _resolve_spec(
         self, context: AnalyzeContext, notes: list[str]
