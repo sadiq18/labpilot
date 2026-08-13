@@ -11,6 +11,7 @@ artifacts or a local contract (``configs/competition.yaml`` in a workspace).
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,29 @@ def _cache_may_serve(kaggle: object, context: TaskContext) -> bool:
     if not cached.is_absolute():
         cached = Path(context.workspace_root) / cached
     return cached.is_dir() and any(cached.rglob("*"))
+
+
+def _profile_is_current(path: Path) -> bool:
+    """Whether an existing `profile.json` was written by today's profiler.
+
+    Reuse is right — profiling samples every partition and costs real time — but
+    reuse *forever* means a workspace keeps whatever description it was first
+    given. rogii's profile was written 2026-08-02 and served every campaign
+    since, so the partition warnings and the anchor column added later never
+    reached the codegen that needed them.
+
+    An unreadable or unstamped profile re-derives: the cost is one profiling
+    pass, and the alternative is running on a description nothing can vouch for.
+    """
+    from labpilot.accessor.profiler.tabular import PROFILE_SCHEMA_VERSION
+
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return bool(
+        isinstance(stored, dict) and stored.get("schema_version") == PROFILE_SCHEMA_VERSION
+    )
 
 
 def _has_credentials(kaggle: object) -> bool:
@@ -351,7 +375,7 @@ class WorkspaceCapability(BaseCapability):
         checks: list[str],
     ) -> bool | None:
         profile_path = root / "profile.json"
-        if profile_path.is_file():
+        if profile_path.is_file() and _profile_is_current(profile_path):
             metadata["profile_reused"] = True
             metadata["profile"] = str(profile_path)
             checks.append("profile_present")

@@ -730,3 +730,146 @@ def test_a_genuine_tie_does_not_let_column_order_decide(tmp_path):
 
     assert first.target_column == reversed_order.target_column
     assert any("ambiguous" in w for w in first.warnings)
+
+
+# --- the target's known prefix ----------------------------------------------
+#
+# Measured on rogii 2026-08-13. `TVT_input` is a contiguous, byte-exact prefix
+# of `TVT` in every well and NaN over exactly the scored rows. The profile
+# listed it as an ordinary numeric column with 164k nulls, so codegen built
+# KMeans clusters and a kriging feature from it and never anchored to it.
+# Carrying it forward scores RMSE 15.1; the pipeline built without knowing what
+# it was scored 1380 — worse than predicting a constant.
+
+
+def _anchor_dir(tmp_path, *, anchor_values=None, name="TVT_input", train_only=False):
+    """Partitioned dataset whose `name` column holds a prefix of the target."""
+    root = tmp_path / f"anchor-{name}-{train_only}"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    n, known = 10, 4
+
+    def frame(with_label):
+        target = [float(i) * 3 for i in range(n)]
+        col = anchor_values(target, known) if anchor_values else (
+            target[:known] + [None] * (n - known)
+        )
+        data = {"MD": list(range(n)), "Z": [t + 1000 for t in target], name: col}
+        if with_label:
+            data["TVT"] = target
+        return pd.DataFrame(data)
+
+    for i in range(4):
+        frame(True).to_csv(root / "train" / f"e{i}__main.csv", index=False)
+    for i in range(2):
+        test = frame(False)
+        if train_only:
+            test = test.drop(columns=[name])
+        test.to_csv(root / "test" / f"t{i}__main.csv", index=False)
+    pd.DataFrame({"id": [f"t{w}_{i}" for w in range(2) for i in range(known, n)],
+                  "tvt": [0.0] * (2 * (n - known))}).to_csv(
+        root / "sample_submission.csv", index=False)
+    return root
+
+
+def test_the_targets_known_prefix_is_named(tmp_path):
+    """The gap: without this the anchor is just a sparse numeric column."""
+    profile = _profiler().profile_directory(_anchor_dir(tmp_path), "anchor-comp")
+
+    assert profile.target_column == "TVT"
+    assert profile.anchor_column == "TVT_input"
+    assert any("known prefix" in w for w in profile.warnings)
+
+
+def test_the_warning_says_what_to_do_with_it(tmp_path):
+    """A name codegen cannot act on is the finding-that-gates-nothing failure."""
+    profile = _profiler().profile_directory(_anchor_dir(tmp_path), "anchor-comp")
+    note = next(w for w in profile.warnings if "known prefix" in w)
+
+    assert "residual" in note
+    assert "copy" in note, "the leak — identical to the target in training — must be stated"
+
+
+def test_a_complete_correlated_column_is_not_an_anchor(tmp_path):
+    """`Z` tracks the target closely and is never missing. Correlation is not a
+    prefix, and anchoring to it would predict the wrong series."""
+    profile = _profiler().profile_directory(
+        _anchor_dir(tmp_path, anchor_values=lambda t, k: [v + 1000 for v in t]),
+        "anchor-comp",
+    )
+
+    assert profile.anchor_column is None
+
+
+def test_scattered_nulls_are_missing_data_not_a_masked_future(tmp_path):
+    profile = _profiler().profile_directory(
+        _anchor_dir(
+            tmp_path,
+            anchor_values=lambda t, k: [v if i % 2 else None for i, v in enumerate(t)],
+        ),
+        "anchor-comp",
+    )
+
+    assert profile.anchor_column is None
+
+
+def test_a_prefix_that_disagrees_with_the_target_is_not_an_anchor(tmp_path):
+    """Equality is the whole test — a shifted or smoothed column is a feature."""
+    profile = _profiler().profile_directory(
+        _anchor_dir(
+            tmp_path,
+            anchor_values=lambda t, k: [v + 0.5 for v in t[:k]] + [None] * (len(t) - k),
+        ),
+        "anchor-comp",
+    )
+
+    assert profile.anchor_column is None
+
+
+def test_a_train_only_column_cannot_anchor_anything(tmp_path):
+    """It is absent exactly when a prediction needs it."""
+    profile = _profiler().profile_directory(
+        _anchor_dir(tmp_path, train_only=True), "anchor-comp"
+    )
+
+    assert profile.anchor_column is None
+
+
+def test_a_secondary_table_sharing_the_targets_name_does_not_hide_it(tmp_path):
+    """Per-kind column roles, both directions.
+
+    Measured on rogii 2026-08-13. `typewell.csv` carries its own `TVT` and ships
+    in test, so against the *union* of every kind's test columns the horizontal
+    well's `TVT` — the real label, absent from horizontal test files — stopped
+    looking withheld and target inference fell through to `EGFDU`, a horizon
+    depth. Against the primary kind alone, PR #117's `Geology` bug returns.
+    """
+    root = tmp_path / "shared-name"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in range(4):
+        pd.DataFrame({"MD": [0, 1], "GR": [1.0, 2.0], "TVT": [5.0, 6.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+        # The secondary table has a TVT of its own, and keeps it at test.
+        pd.DataFrame({"TVT": [1.0, 2.0], "GR": [3.0, 4.0], "Note": ["a", "b"]}).to_csv(
+            root / "train" / f"e{i}__ref.csv", index=False
+        )
+    for i in range(2):
+        pd.DataFrame({"MD": [0, 1], "GR": [1.0, 2.0]}).to_csv(
+            root / "test" / f"t{i}__main.csv", index=False
+        )
+        pd.DataFrame({"TVT": [1.0, 2.0], "GR": [3.0, 4.0]}).to_csv(
+            root / "test" / f"t{i}__ref.csv", index=False
+        )
+    pd.DataFrame({"id": ["t0_1"], "tvt": [0.0]}).to_csv(
+        root / "sample_submission.csv", index=False
+    )
+
+    profile = _profiler().profile_directory(root, "shared-comp")
+
+    assert profile.target_column == "TVT"
+    assert "TVT" in profile.train_only_columns
+    # `Note` is withheld by its own kind; `GR` reaches test in both kinds.
+    assert "Note" in profile.train_only_columns
+    assert "GR" not in profile.train_only_columns
