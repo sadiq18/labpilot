@@ -26,9 +26,6 @@ from labpilot.research_engine.intelligence.hypothesis.viability import (
     pool_counts,
     viable_hypothesis_count,
 )
-from labpilot.research_engine.planner.schemas.task_types import (
-    is_unrun_plan_status,
-)
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
 
@@ -448,6 +445,38 @@ def _invoke_llm_next_action(
     return validated
 
 
+def _without_a_spinning_repeat(observe: dict[str, Any], allowlist: set[str]) -> set[str]:
+    """Drop the tool that just ran when running it again tells us nothing.
+
+    The offline policy has refused non-`_REPEATABLE` repeats since S-019; the
+    LLM path never did, and `rejected` only survives one step, so the model's
+    reasons are re-derived from an observation the repeat did not change.
+
+    Measured on rogii 2026-08-12: `query_memory` chosen eight times running,
+    every rationale a restatement of "MSE 194.8 is far above the target of 5,
+    retrieve prior experiments". It reads as a model fault and is not one — the
+    campaign stopped on stagnation with zero experiments run.
+
+    Only the immediately preceding tool, so this cannot strand a tool for the
+    rest of a campaign: once anything else runs, `query_memory` is offered again
+    against evidence that has actually moved.
+    """
+    completed = list(observe.get("completed_tools") or [])
+    if not completed:
+        return allowlist
+    last = completed[-1]
+    if last in _REPEATABLE or last not in allowlist:
+        return allowlist
+    narrowed = allowlist - {last}
+    # Never hand back an empty allowlist: with nothing on offer the model can
+    # only stop, which turns a spin into a dead campaign — a worse failure than
+    # the one being fixed.
+    if not narrowed:
+        return allowlist
+    logger.info("Ruling out %r: it just ran and repeating it yields nothing new", last)
+    return narrowed
+
+
 def llm_next_action(
     observe: dict[str, Any],
     allowlist: set[str],
@@ -467,6 +496,8 @@ def llm_next_action(
     """
     if prefer_offline:
         return offline_next_action(observe, allowlist)
+
+    allowlist = _without_a_spinning_repeat(observe, allowlist)
 
     retries = 0
     # Tools this step already asked for that are currently gated. Fed back into
@@ -744,34 +775,36 @@ def should_gather_evidence(
     )
 
 
-def _plan_statuses(workspace: Workspace) -> list[str]:
-    from labpilot.research_engine.artifacts.plan import PlanArtifacts
+def has_unrun_plan(workspace: Workspace) -> bool:
+    """True when a plan still represents outstanding work (may not be runnable).
+
+    Reads the same store, and applies the same retirement filter, as
+    `has_runnable_plan`. It used to read the plan *files* and count any unrun
+    status, which counted plans whose hypothesis had since been rejected —
+    work nothing will ever pick up. `generate_plan` was then gated for having
+    outstanding work while `run_plan` was gated for having none, and the
+    allowlist emptied down to `query_memory`. See `PlanStore.unrun_plan_ids`.
+    """
     from labpilot.research_engine.intelligence.paths import store_is_absent
+    from labpilot.research_engine.planner.store import PlanStore
 
     if store_is_absent(workspace.knowledge_dir, workspace.competition):
-        return []
-    artifacts = None
+        return False
+    store = None
     try:
-        # Constructed inside the guard, and absence asked before it — the same
-        # treatment its neighbours got. This one kept the original handler,
-        # comment and all, one function away from where it was removed:
-        # `has_unrun_plan` feeds `decide_next`, so a fault here still read as
-        # "no plans" and still escaped on construction. Reported on PR #120.
-        artifacts = PlanArtifacts(workspace.knowledge_dir, workspace.competition)
-        return [str(p.status) for p in artifacts.list()]
+        store = PlanStore(workspace.knowledge_dir, workspace.competition)
+        return bool(store.unrun_plan_ids())
     except Exception:
+        # Fails *open*, as its neighbour does: reporting outstanding work that
+        # cannot be read would gate `generate_plan`, and a campaign that cannot
+        # plan cannot do anything else either.
         logger.exception(
-            "cannot read plan statuses for %s; treating as none", workspace.competition
+            "cannot read unrun plans for %s; treating as none", workspace.competition
         )
-        return []
+        return False
     finally:
-        if artifacts is not None:
-            artifacts.close()
-
-
-def has_unrun_plan(workspace: Workspace) -> bool:
-    """True when a plan still represents outstanding work (may not be runnable)."""
-    return any(is_unrun_plan_status(s) for s in _plan_statuses(workspace))
+        if store is not None:
+            store.close()
 
 
 def has_runnable_plan(workspace: Workspace) -> bool:

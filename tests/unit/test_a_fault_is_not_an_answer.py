@@ -448,16 +448,22 @@ def test_real_credentials_get_past_the_credential_gate(tmp_path):
 
 
 def test_the_neighbouring_plan_read_got_the_same_treatment(tmp_path, caplog):
-    """Reported on PR #120: `_plan_statuses` kept the exact
+    """Reported on PR #120 against `_plan_statuses`, which kept the exact
     `except Exception: # absent store means "no plans"` handler removed from its
-    neighbour, and still built `PlanArtifacts` outside the `try`. It feeds
-    `has_unrun_plan`, which feeds `decide_next`."""
+    neighbour and built its store outside the `try`.
+
+    That helper is gone — `has_unrun_plan` now asks `PlanStore` directly, so it
+    and `has_runnable_plan` apply the same retirement filter — and the handler
+    moved with the read. Asserted on the caller the Conductor actually uses:
+    this answer gates `generate_plan`, so a fault that escaped would end a
+    campaign rather than degrade it.
+    """
     from labpilot.research_engine.conductor import policy
 
     workspace = _Workspace(_with_a_store(tmp_path))
 
     with caplog.at_level(logging.ERROR):
-        assert policy._plan_statuses(workspace) == []
+        assert policy.has_unrun_plan(workspace) is False
 
     assert any(record.exc_info for record in caplog.records)
 
@@ -468,7 +474,7 @@ def test_an_empty_workspace_still_reports_no_plans_quietly(tmp_path, caplog):
     workspace = _Workspace(tmp_path / "never-written")
 
     with caplog.at_level(logging.ERROR):
-        assert policy._plan_statuses(workspace) == []
+        assert policy.has_unrun_plan(workspace) is False
 
     assert caplog.records == []
 
