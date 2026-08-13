@@ -98,7 +98,12 @@ CODEGEN_ROLE = "codegen"
 #: costs more — the failure mode is a bill, not an error.
 EDIT_FORMAT = "diff"
 
-_DEFAULT_TIMEOUT_S = 900
+#: A codegen attempt that has not landed in five minutes is stuck, not slow.
+#: At 900s a single hung run cost 15 minutes of a 3-hour campaign and returned
+#: nothing — measured on rogii 2026-08-13, step 1 of 30, where the fallback then
+#: produced a proposal in under two. The timeout is not a budget for hard edits;
+#: it is the point past which waiting has never paid.
+_DEFAULT_TIMEOUT_S = 300
 
 
 class AiderError(RuntimeError):
