@@ -209,10 +209,10 @@ class RepositoryAnalyzer(BaseAnalyzer):
         if self._llm_explicit or self.llm_client is not None:
             return
         try:
-            from labpilot.config import load_config
             from labpilot.llm.client import resolve_llm_client
+            from labpilot.workspace import load_config_for_cwd
 
-            self.llm_client = resolve_llm_client(load_config().llm)
+            self.llm_client = resolve_llm_client(load_config_for_cwd()[0].llm)
         except Exception:
             self.llm_client = None
 

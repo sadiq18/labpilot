@@ -174,12 +174,14 @@ class CompetitionAnalyzer(BaseAnalyzer):
         if self._llm_explicit or self.llm_client is not None:
             return
         try:
-            from labpilot.config import Settings, load_config
             from labpilot.llm.client import resolve_llm_client
+            from labpilot.workspace import load_config_for_cwd
 
-            config = load_config()
-            # Settings may override provider via env; resolve_llm_client handles that.
-            _ = Settings()
+            # Workspace-aware, as `diagnostics.check_llm_routing` is: `load_config()`
+            # reads only the package default, where `routing` is empty, so this
+            # fell through to the legacy provider pin and ignored the workspace's
+            # router entirely.
+            config, _ = load_config_for_cwd()
             self.llm_client = resolve_llm_client(config.llm)
         except Exception:
             self.llm_client = None
