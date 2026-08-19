@@ -1,6 +1,9 @@
 # M22 — An inference without evidence is a guess
 
-**Status:** not started · **Blocked by:** nothing · **Blocks:** [M23](18-baseline-correctness.md), [M25](20-eda-findings.md)
+**Status:** design · **Design:**
+[design/17-dataset-understanding.md](design/17-dataset-understanding.md) ·
+**Blocked by:** nothing · **Blocks:** [M23](18-baseline-correctness.md),
+[M25](20-eda-findings.md)
 
 ---
 
