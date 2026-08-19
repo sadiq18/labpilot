@@ -414,3 +414,121 @@ def test_a_control_result_supplies_the_blob_the_card_reads_around_it(tmp_path) -
     assert card.observed.parent_cv_std == 1.1, "the control blob never arrived"
     assert card.observed.stability.value == "similar"
     assert card.decision.value == "accepted"
+
+
+# --- phase 1: the production path goes through the seam ---------------------
+
+
+def test_the_validator_consults_every_direction_source_the_builder_does(tmp_path) -> None:
+    """The rogii case, and the one an earlier draft of this validator failed.
+
+    `_resolve_direction` asks `resolve_maximize` with `ResearchPaths.root` *and*
+    `ResearchPaths.extracted_dir`. The first version of `KaggleCvValidator`
+    passed `paths.base_dir` as the knowledge root and omitted the extracted
+    directory, so it consulted strictly fewer sources than the builder it stands
+    in for.
+
+    That gap is not small: the Analyze profile artifact under `extracted_dir` is
+    where rogii's `minimize` actually lived. Routing production through a
+    validator that answers `None` here would have made the campaign refuse to
+    build a card it builds today — a regression dressed as a refactor.
+    """
+    import json
+
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.validation.kaggle import direction_for
+
+    competition = "rogii-shaped"
+    knowledge = tmp_path / "knowledge"
+    paths = ResearchPaths(knowledge, competition)
+    misc = paths.extracted_dir / "misc"
+    misc.mkdir(parents=True, exist_ok=True)
+    # Direction lives *only* here — no competition.json anywhere.
+    (misc / f"competition_{competition}.json").write_text(
+        json.dumps({"metadata": {"profile": {"metric": {"name": "mse", "direction": "minimize"}}}}),
+        encoding="utf-8",
+    )
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    assert direction_for(competition, knowledge_dir=knowledge, workspace_root=workspace) is False
+
+
+def test_the_validator_matches_what_the_builder_would_have_resolved(tmp_path) -> None:
+    """The no-op, at the direction boundary specifically. Two implementations of
+    "which way is better" that disagree would move every baseline."""
+    import json
+
+    from labpilot.research_engine.evidence.builder import _resolve_direction
+    from labpilot.research_engine.validation.kaggle import direction_for
+
+    competition = "demo-agree"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "competition.json").write_text(
+        json.dumps(
+            {
+                "slug": competition,
+                "evaluation_metric": {"name": "rmse", "key": "rmse", "direction": "minimize"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert direction_for(
+        competition, knowledge_dir=tmp_path, workspace_root=workspace
+    ) == _resolve_direction(tmp_path, competition, workspace)
+
+
+def test_an_unresolvable_direction_is_carried_not_raised(tmp_path) -> None:
+    """The validator reports `None`; `build_evidence_card` is the layer that
+    decides refusing is the right response. Splitting it the other way would put
+    the refusal in a place with no idea what the caller can substitute."""
+    from labpilot.research_engine.validation.kaggle import direction_for
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    assert direction_for("nothing-stated", knowledge_dir=tmp_path, workspace_root=workspace) is None
+
+
+def test_the_production_comparison_runs_through_the_validator() -> None:
+    """Phase 1's whole content. Until this, `validate` was available and unused,
+    so the seam could rot without a single test noticing."""
+    import inspect
+
+    from labpilot.research_engine.evidence import compare_service
+
+    source = inspect.getsource(compare_service.run_compare_and_build_card)
+
+    assert "KaggleCvValidator().validate(" in source
+    assert "result=result" in source and "control_result=control_result" in source
+    assert "_load_metrics(root" not in source, "still loading metrics.json around the validator"
+
+
+def test_the_knowledge_root_is_the_research_dir_not_the_knowledge_dir(tmp_path) -> None:
+    """Mutation finding. `ResearchPaths.root` is `<base_dir>/<competition>/research`,
+    not `base_dir` — so passing `base_dir` straight through as `knowledge_root`
+    looks equivalent and searches a directory that holds no contract.
+
+    Every other test placed the contract where both spellings happen to find it
+    (or nowhere), so the two were indistinguishable. Here the knowledge copy of
+    `competition.json` sits only where `_resolve_direction` actually looks.
+    """
+    import json
+
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.validation.kaggle import direction_for
+
+    competition = "demo-knowledge-root"
+    paths = ResearchPaths(tmp_path, competition)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    (paths.root / "competition.json").write_text(
+        json.dumps({"metric": {"name": "rmse", "direction": "minimize"}}), encoding="utf-8"
+    )
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    assert direction_for(competition, knowledge_dir=tmp_path, workspace_root=workspace) is False

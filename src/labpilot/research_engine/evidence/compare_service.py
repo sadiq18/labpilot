@@ -23,6 +23,7 @@ from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
 from labpilot.research_engine.intelligence.models import ResearchArtifactType
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import HypothesisStatus
+from labpilot.research_engine.validation.kaggle import KaggleCvValidator, result_from_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -146,16 +147,29 @@ def _metrics_for_hypothesis(
 def run_compare_and_build_card(context: TaskContext) -> EvidenceCard:
     """COMPARE vs parent control, write comparison.json, persist Evidence Card + graph."""
     root = context.workspace_root
-    treatment_metrics = _load_metrics(root / "metrics.json")
     control_exec, control_metrics, control_hyp = resolve_control(context)
     plan_meta = dict(context.plan.metadata or {})
     knowledge_dir = context.paths.base_dir
+
+    # The production path goes through the validator, so the seam is *used*
+    # rather than merely available. Same sources in the same order — the
+    # validator loads the same `metrics.json` and resolves direction from the
+    # same four places `_resolve_direction` consults — so the card is unchanged.
+    #
+    # Both sides are described the same way. A comparison between a result and a
+    # loose blob is a comparison between two different kinds of thing, and the
+    # control is where that asymmetry hid a bug once already.
+    result = KaggleCvValidator().validate(context.plan.hypothesis_id, root, context)
+    treatment_metrics = result.raw
+    control_result = result_from_metrics(control_metrics, maximize=result.maximize)
 
     card = build_evidence_card(
         knowledge_dir=knowledge_dir,
         competition=context.competition,
         treatment_execution_id=context.execution.id,
         treatment_metrics=treatment_metrics,
+        result=result,
+        control_result=control_result,
         plan_id=context.plan.id,
         hypothesis_id=context.plan.hypothesis_id or None,
         control_execution_id=control_exec,
