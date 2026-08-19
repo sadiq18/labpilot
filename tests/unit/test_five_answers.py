@@ -68,7 +68,7 @@ def test_the_shapes_that_work_keep_their_answers(
     assert profile.id_columns == [key]
     assert profile.id_column == key, "the singular field is a view over the list"
     assert profile.confidence_in("target_column") >= 0.85
-    assert profile.confidence_in("id_column") >= 0.85
+    assert profile.confidence_in("id_columns") >= 0.85
 
 
 # --- features, and the exclusion that matters -------------------------------

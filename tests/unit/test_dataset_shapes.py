@@ -233,7 +233,7 @@ def test_a_dataset_without_kaggle_inputs_is_profiled(no_kaggle_inputs_data_dir: 
     ]
     # Uncertain on exactly the three answers that need something declared.
     uncertain = {f for f, i in profile.inferences.items() if i.band == "uncertain"}
-    assert uncertain == {"target_column", "id_column", "metric"}
+    assert uncertain == {"target_column", "id_columns", "metric"}
     assert any(note.code == "no_target_identified" for note in profile.notes)
 
 

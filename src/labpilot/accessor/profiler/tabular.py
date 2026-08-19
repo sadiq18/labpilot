@@ -14,6 +14,7 @@ from labpilot.accessor.profiler.evidence import (
     Signal,
     combine,
 )
+from labpilot.accessor.profiler.questions import answers_fingerprint
 from labpilot.accessor.profiler.schema import ExclusionReason, MetricRef, SplitRelationship
 from labpilot.accessor.profiler.source import (
     DatasetSource,
@@ -86,6 +87,10 @@ class DatasetProfile(BaseModel):
     submission_columns: list[str] = Field(default_factory=list)
     #: Structured reasons. `warnings` below is the prose view over these.
     notes: list[Note] = Field(default_factory=list)
+    #: Which answers this profile was built from (`questions.answers_fingerprint`).
+    #: Empty when there were none. A profile built before an answer was given
+    #: describes a different question, so this is part of what makes it stale.
+    answers_fingerprint: str = ""
     #: Why the value plane says what it says, keyed by field name. Absent for a
     #: field nothing has reasoned about yet, which `confidence_in` reports as
     #: 0.0 — "no evidence recorded", not "no evidence exists".
@@ -115,6 +120,17 @@ class DatasetProfile(BaseModel):
     # the series actually was, so a forecast should be a residual from its last
     # known value rather than a fit over the other columns.
     anchor_column: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def confidence(self) -> float:
+        """One number a gate can read: the **weakest** of the required answers.
+
+        Not an average. A schema certain about four things and guessing at the
+        target is a guessing schema, and a mean would let three confident
+        answers hide the one that matters.
+        """
+        return min((self.confidence_in(field) for field in REQUIRED_FIELDS), default=0.0)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -171,6 +187,33 @@ class DatasetProfile(BaseModel):
         """How sure the profiler is about one field, or 0.0 if it never reasoned about it."""
         inference = self.inferences.get(field)
         return inference.confidence if inference else 0.0
+
+
+#: What the schema-level `confidence` summarises. Broader than the fields whose
+#: uncertainty *stops* a campaign (`questions.BLOCKING_FIELDS`): a capped
+#: `disjoint_units` and a missing metric both drag the number down without being
+#: worth stopping for, which is the distinction between "how good is this
+#: description" and "may I proceed on it".
+REQUIRED_FIELDS = ("target_column", "id_columns", "train_test_relationship", "metric")
+
+
+def _answered(candidates: dict[str, list[Signal]], answer: str | None) -> dict[str, list[Signal]]:
+    """Fold an operator's answer into the candidate set.
+
+    The answer becomes a candidate carrying `operator_answer` (1.00), so it wins
+    by evidence rather than by bypassing the resolver — and its other signals
+    are kept, so the profile still shows what the data said about the column a
+    person chose. A named column the profiler never considered is added rather
+    than rejected: not being able to see something is why the question was asked.
+    """
+    if not answer:
+        return candidates
+    settled = dict(candidates)
+    settled[answer] = [
+        Signal(id="operator_answer", detail=f"answered: {answer!r}"),
+        *candidates.get(answer, []),
+    ]
+    return settled
 
 
 def _resolve(candidates: dict[str, list[Signal]]) -> tuple[str | None, Inference]:
@@ -712,7 +755,11 @@ class TabularProfiler:
                     )
                 ] + _column_signals(profile, overlap[1])
 
-        target_column, target_inference = _resolve(target_candidates)
+        answers = source.declared().answers
+        profile.answers_fingerprint = answers_fingerprint(answers)
+        target_column, target_inference = _resolve(
+            _answered(target_candidates, answers.get("target_column"))
+        )
         profile.target_column = target_column
         profile.inferences["target_column"] = target_inference
 
@@ -729,9 +776,9 @@ class TabularProfiler:
                 first_in_template=candidate == submission_columns[0],
                 on_both_sides=candidate in train_columns and candidate in test_columns,
             )
-        id_column, id_inference = _resolve(id_candidates)
+        id_column, id_inference = _resolve(_answered(id_candidates, answers.get("id_columns")))
         profile.id_columns = [id_column] if id_column else []
-        profile.inferences["id_column"] = id_inference
+        profile.inferences["id_columns"] = id_inference
 
         # A contract, not an inference: a template whose columns are not the id
         # and the target describes a submission this profile cannot produce, and
@@ -1121,9 +1168,22 @@ class TabularProfiler:
         # value — this step does not move answers the code already gets right —
         # and the resolver is asserted to agree with it, so the two cannot drift
         # while the old procedure is still in place.
+        answers = source.declared().answers
+        profile.answers_fingerprint = answers_fingerprint(answers)
         scored_target, target_inference = _resolve(
-            {str(c): target_signals_for(str(c)) for c in train_only}
+            _answered(
+                {str(c): target_signals_for(str(c)) for c in train_only},
+                answers.get("target_column"),
+            )
         )
+        if answers.get("target_column"):
+            # An answer is not a hint. Where a person has settled the question,
+            # the value follows the answer rather than the procedure that could
+            # not settle it — and `profile.target_column` is assigned above, so
+            # updating `target` alone would leave the answer in the evidence and
+            # the guess in the value.
+            target = scored_target
+            profile.target_column = scored_target
         if target is not None:
             profile.inferences["target_column"] = target_inference
             if scored_target != str(target):
@@ -1139,24 +1199,28 @@ class TabularProfiler:
                 )
 
         id_column, id_inference = _resolve(
-            {
-                candidate: _identity_signals(
-                    profile,
-                    candidate,
-                    unit_count=len(sample_df),
-                    # Named, but not *chosen* for being named: this path takes
-                    # the template's first column without checking anything
-                    # about it, so the evidence has to say position.
-                    in_template=False,
-                    first_in_template=candidate == submission_columns[0],
-                    on_both_sides=candidate in set(sample_df.columns) and candidate in test_columns,
-                )
-                for candidate in submission_columns[:1]
-            }
+            _answered(
+                {
+                    candidate: _identity_signals(
+                        profile,
+                        candidate,
+                        unit_count=len(sample_df),
+                        # Named, but not *chosen* for being named: this path
+                        # takes the template's first column without checking
+                        # anything about it, so the evidence has to say position.
+                        in_template=False,
+                        first_in_template=candidate == submission_columns[0],
+                        on_both_sides=candidate in set(sample_df.columns)
+                        and candidate in test_columns,
+                    )
+                    for candidate in submission_columns[:1]
+                },
+                answers.get("id_columns"),
+            )
         )
         profile.id_columns = [id_column] if id_column else []
         if id_column is not None:
-            profile.inferences["id_column"] = id_inference
+            profile.inferences["id_columns"] = id_inference
         self._detect_suffix_scoring(profile, source, sample_table, test_kind_tables)
         # Once, not twice: it reads every sampled partition to answer, and both
         # the exclusion below and `anchor_column` further down want the same

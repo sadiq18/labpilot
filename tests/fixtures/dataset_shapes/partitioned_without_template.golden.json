@@ -162,6 +162,7 @@
       "severity": "info"
     }
   ],
+  "answers_fingerprint": "",
   "inferences": {
     "target_column": {
       "signals": [
@@ -242,6 +243,7 @@
     "Zone_Depth"
   ],
   "anchor_column": null,
+  "confidence": 0.0,
   "id_column": null,
   "feature_columns": [
     "id",

@@ -252,17 +252,26 @@ def test_the_catalogue_carries_no_entry_nothing_can_fire(tmp_path: Path) -> None
         )
     ]
     frame = pd.DataFrame({"Id": [1, 2, 3], "x": [1.0, 2.0, 3.0], "y": [1.0, 2.0, 3.0]})
+    tables = {
+        "train.csv": frame,
+        "test.csv": frame[["Id", "x"]],
+        "sample_submission.csv": frame[["Id", "y"]],
+    }
     profiles.append(
         TabularProfiler(ProfilerConfig()).profile_dataset(
             DictSource(
-                {
-                    "train.csv": frame,
-                    "test.csv": frame[["Id", "x"]],
-                    "sample_submission.csv": frame[["Id", "y"]],
-                },
+                tables,
                 DeclaredFacts(metric=MetricRef(name="RMSE", key="rmse", direction="minimize")),
             ),
             "declared",
+        )
+    )
+    # And a dataset someone has answered, which is the only way `operator_answer`
+    # ever fires.
+    profiles.append(
+        TabularProfiler(ProfilerConfig()).profile_dataset(
+            DictSource(tables, DeclaredFacts(answers={"target_column": "y"})),
+            "answered",
         )
     )
 

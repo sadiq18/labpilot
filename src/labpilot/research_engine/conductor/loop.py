@@ -23,6 +23,11 @@ from types import MappingProxyType
 from typing import Any
 
 from labpilot.accessor.common.micro_agents import LLMDegradedError
+from labpilot.accessor.profiler.questions import (
+    SchemaQuestion,
+    open_questions,
+    record_answer,
+)
 from labpilot.research_engine.conductor.actions import (
     ResearchAction,
     map_research_action,
@@ -974,6 +979,40 @@ def _latest_execution_id(workspace: Workspace) -> str | None:
     return nodes[-1].id if nodes else None
 
 
+#: Ask an operator to settle one schema question. Returns the chosen value, or
+#: None to leave it open. Injected by the CLI exactly like `approval_prompt` —
+#: with one deliberate asymmetry: there is **no `auto_answer` counterpart to
+#: `auto_approve`**. Absent a prompt, an approval falls back to auto-approve; a
+#: schema question has nothing to fall back to, so it blocks. An option that
+#: could answer one unattended must not exist, because `--yes` would eventually
+#: be wired to it.
+SchemaPrompt = Callable[[SchemaQuestion], str | None]
+
+
+def _answer_schema_questions(
+    questions: list[SchemaQuestion],
+    root: Any,
+    prompt: SchemaPrompt | None,
+    progress: Callable[[str], None],
+) -> bool:
+    """Ask, record, and report whether every question is now settled.
+
+    Recording writes `schema_answers.json`, which changes the answers
+    fingerprint the profile was built with — so the next `prepare_workspace`
+    re-derives rather than serving the description that could not decide.
+    """
+    if prompt is None:
+        return False
+    for question in questions:
+        answer = prompt(question)
+        if not answer:
+            progress(f"{question.field} left unanswered")
+            return False
+        record_answer(root, question.field, answer)
+        progress(f"{question.field} answered: {answer}")
+    return True
+
+
 def run_until_stop(
     store: ConductorStore,
     workspace: Workspace,
@@ -989,6 +1028,7 @@ def run_until_stop(
     campaign_mode: bool = True,
     prefer_offline: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+    schema_prompt: SchemaPrompt | None = None,
     branches: int = 1,
 ) -> list[DecisionRecord]:
     """Run until stop, budget, operator pause, or ``max_steps`` if one is set.
@@ -1030,6 +1070,7 @@ def run_until_stop(
             campaign_mode=campaign_mode,
             prefer_offline=prefer_offline,
             offline_fallback_prompt=offline_fallback_prompt,
+            schema_prompt=schema_prompt,
             branches=branches,
         )
 
@@ -1049,6 +1090,7 @@ def _run_until_stop_inner(
     campaign_mode: bool = True,
     prefer_offline: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+    schema_prompt: SchemaPrompt | None = None,
     branches: int = 1,
 ) -> list[DecisionRecord]:
     scheduler = Scheduler(store, registry, workspace, llm_client=llm_client)
@@ -1193,6 +1235,41 @@ def _run_until_stop_inner(
         assert session is not None
         if session.status == "paused":
             _progress("Session paused by operator")
+            break
+
+        # A schema question is not a budget: it is the campaign discovering it
+        # does not know what it is optimising. Asked where there is someone to
+        # ask, and otherwise a stop — never a default, because a guess is frozen
+        # into `profile.json` for every later run of this workspace.
+        questions = open_questions(workspace.root)
+        if questions and not _answer_schema_questions(
+            questions, workspace.root, schema_prompt, _progress
+        ):
+            # `waiting`, not `failed`: the campaign is resumable the moment a
+            # person answers, and `checkpoint.py` already counts `waiting` among
+            # the active sessions. Nothing wrote it until now.
+            store.update_session_status(session_id, "waiting")
+            store.increment_metric(session_id, "unmet_goal")
+            rationale = (
+                f"stop:schema_question — {questions[0].field} is uncertain "
+                f"({questions[0].context}); answer with "
+                f"`research schema answer {questions[0].field} <value>`"
+            )
+            _progress(f"Stop condition: {rationale}")
+            decisions.append(
+                DecisionRecord(
+                    id=store.new_decision_id(),
+                    session_id=session_id,
+                    tool_name=None,
+                    rationale=rationale,
+                    stop=True,
+                    observe={
+                        "stop_reason": "schema_question",
+                        "questions": [{"id": q.id, "field": q.field} for q in questions],
+                    },
+                )
+            )
+            store.append_decision(decisions[-1])
             break
 
         budget_cfg, budget_state = load_budget_pair(session)

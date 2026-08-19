@@ -333,6 +333,18 @@ class CampaignHarness:
 
     # -- running ------------------------------------------------------------
 
+    def seed_profile(self, profile: Any) -> Path:
+        """Put a `profile.json` where the campaign will look for one.
+
+        Written through `write_profile` rather than by hand, so the stamp and
+        the derived markdown view are the ones production writes — a hand-rolled
+        profile is a different file that happens to have the same name.
+        """
+        from labpilot.accessor.profiler.report import write_profile
+
+        json_path, _md = write_profile(self.workspace.root, profile)
+        return json_path
+
     def run(
         self,
         *,
@@ -342,6 +354,7 @@ class CampaignHarness:
         goal: str = "harness goal",
         budgets: dict[str, Any] | None = None,
         session_metadata: dict[str, Any] | None = None,
+        schema_prompt: Any | None = None,
     ) -> Trace:
         if policy is not None and not isinstance(policy, ScriptedPolicy):
             policy = ScriptedPolicy(policy)
@@ -359,6 +372,9 @@ class CampaignHarness:
             auto_approve=True,
             prefer_offline=policy is None,
             autonomy=autonomy,
+            # None by default, which is what an unattended run has: no channel
+            # to ask on, so an open schema question stops the campaign.
+            schema_prompt=schema_prompt,
         )
         return Trace(
             decisions=decisions,

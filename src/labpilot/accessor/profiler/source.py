@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from labpilot.accessor.profiler.schema import MetricRef
 
@@ -66,14 +66,16 @@ class DeclaredFacts(BaseModel):
     is evidence that something is wrong, not an instruction — which is why this
     is returned by the source rather than written onto the schema.
 
-    Only what a consumer reads today lives here. A declared **target** and
-    **id** arrive in step 4 with `schema_answers.json`, which is where an
-    operator's answer belongs — not in a config file that Kaggle metadata
-    rebuilds.
+    Only what a consumer reads today lives here.
     """
 
     title: str = ""
     description: str = ""
+    #: Field name to value, from `schema_answers.json` — what a human has
+    #: already settled about this dataset. Carried by the source rather than
+    #: read by the profiler because the profiler has no workspace: a warehouse
+    #: adapter answers the same questions from wherever it keeps them.
+    answers: dict[str, str] = Field(default_factory=dict)
     #: What the environment says it scores by. Already canonical: the caller
     #: resolves the name through the metric registry, because `accessor` may not
     #: import `research_engine`.

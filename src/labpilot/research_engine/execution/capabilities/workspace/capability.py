@@ -40,7 +40,7 @@ def _cache_may_serve(kaggle: object, context: TaskContext) -> bool:
     return cached.is_dir() and any(cached.rglob("*"))
 
 
-def _profile_is_current(path: Path) -> bool:
+def _profile_is_current(path: Path, *, root: Path | None = None) -> bool:
     """Whether an existing `profile.json` was written by today's profiler.
 
     Reuse is right — profiling samples every partition and costs real time — but
@@ -52,10 +52,10 @@ def _profile_is_current(path: Path) -> bool:
     An unreadable or unstamped profile re-derives: the cost is one profiling
     pass, and the alternative is running on a description nothing can vouch for.
     """
-    return _profile_state(path) == "current"
+    return _profile_state(path, root=root) == "current"
 
 
-def _profile_state(path: Path) -> str:
+def _profile_state(path: Path, *, root: Path | None = None) -> str:
     """``current``, ``stale``, or ``unusable`` for an existing ``profile.json``.
 
     `_profile_is_current` only needs the first; the rebuild paths need the other
@@ -74,7 +74,18 @@ def _profile_state(path: Path) -> str:
         return "unusable"
     if not isinstance(stored, dict):
         return "unusable"
-    return "current" if stored.get("schema_version") == PROFILE_SCHEMA_VERSION else "stale"
+    if stored.get("schema_version") != PROFILE_SCHEMA_VERSION:
+        return "stale"
+    if root is not None:
+        # Answered since this was built? Then it describes a question that is no
+        # longer open, and reusing it would make `research schema answer` change
+        # nothing — the escape being fiction is the defect this milestone is
+        # named after.
+        from labpilot.accessor.profiler.questions import answers_fingerprint, load_answers
+
+        if stored.get("answers_fingerprint", "") != answers_fingerprint(load_answers(root)):
+            return "stale"
+    return "current"
 
 
 def _has_credentials(kaggle: object) -> bool:
@@ -401,7 +412,7 @@ class WorkspaceCapability(BaseCapability):
         # so asking both read and `json.loads` the same file twice — and for a
         # partitioned dataset that file carries every column profile and up to
         # 200 paths.
-        state = _profile_state(profile_path) if profile_path.is_file() else None
+        state = _profile_state(profile_path, root=root) if profile_path.is_file() else None
         if state == "current":
             metadata["profile_reused"] = True
             metadata["profile"] = str(profile_path)
@@ -443,6 +454,10 @@ class WorkspaceCapability(BaseCapability):
             return None
 
         try:
+            from labpilot.accessor.profiler.questions import (
+                load_answers,
+                pending_schema_questions,
+            )
             from labpilot.accessor.profiler.report import write_profile
             from labpilot.accessor.profiler.schema import MetricRef
             from labpilot.accessor.profiler.source import DeclaredFacts, LocalFileSource
@@ -486,6 +501,11 @@ class WorkspaceCapability(BaseCapability):
                     title=competition.title,
                     description=competition.description,
                     metric=declared_metric,
+                    # What a person has already settled about this dataset. Read
+                    # from `schema_answers.json`, which lives beside the profile
+                    # and outlives it: `profile.json` is rebuilt on every schema
+                    # bump, and an answer must survive a profiler upgrade.
+                    answers=load_answers(root),
                 ),
             )
             profile = TabularProfiler(config).profile_dataset(
@@ -499,6 +519,15 @@ class WorkspaceCapability(BaseCapability):
             metadata["profile"] = str(json_path)
             metadata["profile_md"] = str(md_path)
             checks.append("profile_written")
+            # A description with an open question is not a failure — it is a
+            # description that must not be acted on yet. Recorded here so the
+            # campaign can stop for a human instead of picking for one.
+            questions = pending_schema_questions(profile, load_answers(root))
+            if questions:
+                metadata["schema_questions"] = [
+                    {"id": q.id, "field": q.field, "context": q.context} for q in questions
+                ]
+                checks.append("schema_question_open")
             return True
         except Exception as exc:
             logger.warning("Workspace tabular profile failed: %s", exc)
