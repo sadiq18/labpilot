@@ -43,6 +43,7 @@ from labpilot.research_engine.intelligence.competition.metric_vocabulary import 
     direction_of,
     is_scorable,
     normalize_metric_key,
+    requires_probabilities,
 )
 
 #: Where a field's value came from, strongest first. Ordering is meaningful:
@@ -209,7 +210,7 @@ def resolve_direction(
     *,
     declared: Direction | None = None,
     declared_source: ObjectiveSource = "explicit",
-    task: Literal["regression", "classification"] = "regression",
+    num_classes: int | None = None,
     probe: bool = True,
 ) -> tuple[Direction | None, ObjectiveSource, list[str], str | None]:
     """Direction, its source, the evidence, and any contradiction.
@@ -223,7 +224,11 @@ def resolve_direction(
 
     measured: Direction | None = None
     if probe and metric_key and is_scorable(metric_key):
-        reading = probe_metric_direction(metric_key, task=task)
+        reading = probe_metric_direction(
+            metric_key,
+            needs_probabilities=requires_probabilities(metric_key),
+            num_classes=num_classes,
+        )
         if reading.direction is not None:
             measured = reading.direction
             evidence.append(
@@ -297,13 +302,13 @@ def resolve_objective(
         evidence.append(f"{metric_raw!r} is not catalogued; using {key!r} as its identity")
         source = "explicit" if declared_direction else "rules"
 
-    probe_task: Literal["regression", "classification"] = (
-        "classification" if (task or "").endswith("classification") else "regression"
-    )
+    # The resolver knows the task from the competition; the probe does not and
+    # must not. All it needs is the shape facts `compute_metric` asks for.
+    num_classes = 2 if (task or "").endswith("classification") else None
     direction, direction_source, direction_evidence, contradiction = resolve_direction(
         key,
         declared=declared_direction,
-        task=probe_task,
+        num_classes=num_classes,
         probe=probe,
     )
     evidence.extend(direction_evidence)

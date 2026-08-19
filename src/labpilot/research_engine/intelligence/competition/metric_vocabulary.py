@@ -78,6 +78,12 @@ class CanonicalMetric:
     problem_types: frozenset[ProblemType]
     cv_priority: int
     scorable: bool = True
+    #: The scorer needs probabilities, not hard predictions. Declared because
+    #: `compute_metric` *raises* without them for some metrics and silently
+    #: computes accuracy instead for others (AUC and log loss on multiclass) —
+    #: an undeclared input requirement that turns `cv_auc` into a number that is
+    #: not AUC, recorded in a log line and nowhere else.
+    requires_probabilities: bool = False
 
 
 #: Every entry is grounded in a metric this repository has actually seen — in a
@@ -117,6 +123,7 @@ _METRICS: tuple[CanonicalMetric, ...] = (
         ),
         problem_types=_CLASSIFICATION,
         cv_priority=30,
+        requires_probabilities=True,
     ),
     CanonicalMetric(
         key="rmse",
@@ -138,6 +145,7 @@ _METRICS: tuple[CanonicalMetric, ...] = (
         aliases=frozenset({"logloss", "log_loss", "logarithmic_loss"}),
         problem_types=_CLASSIFICATION,
         cv_priority=60,
+        requires_probabilities=True,
     ),
     CanonicalMetric(
         key="mse",
@@ -253,3 +261,9 @@ def known_keys() -> frozenset[str]:
 def scorable_keys() -> frozenset[str]:
     """Canonical keys `compute_metric` can produce."""
     return frozenset(m.key for m in _METRICS if m.scorable)
+
+
+def requires_probabilities(key: str | None) -> bool:
+    """Whether the scorer needs probabilities rather than hard predictions."""
+    normalized = normalize_metric_key(key)
+    return bool(normalized) and _BY_KEY[normalized].requires_probabilities
