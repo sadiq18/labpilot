@@ -24,6 +24,7 @@ from labpilot.research_engine.conductor.budgets import (
     ScoreEvent,
     evaluate_stops,
     goal_progress,
+    score_summary,
 )
 from labpilot.research_engine.conductor.checkpoint import latest_active_session, load_budget_pair
 from labpilot.research_engine.conductor.loop import _record_experiment_outcome, run_until_stop
@@ -110,9 +111,10 @@ def test_a_series_straddling_zero_uses_the_absolute_floor() -> None:
 
 
 def test_no_new_score_asks_for_guidance() -> None:
-    state = BudgetState(steps_since_new_score=6)
+    config = BudgetConfig()
+    state = BudgetState(steps_since_new_score=config.max_steps_without_score)
 
-    assert evaluate_stops(BudgetConfig(), state) == "needs_guidance"
+    assert evaluate_stops(config, state) == "needs_guidance"
 
 
 def test_nothing_eligible_to_run_asks_for_guidance() -> None:
@@ -124,22 +126,23 @@ def test_nothing_eligible_to_run_asks_for_guidance() -> None:
 def test_a_stalled_campaign_is_not_reported_as_a_plateau() -> None:
     """Both conditions hold; only one of them is a claim about results.
 
-    A campaign that has written no score for six steps has a flat window for
-    the trivial reason that nothing wrote to it. Calling that `plateau` is a
-    stop asserting something it never measured.
+    A campaign that has written no score for the whole window has a flat one
+    for the trivial reason that nothing wrote to it. Calling that `plateau` is
+    a stop asserting something it never measured.
     """
+    config = BudgetConfig()
     stalled_and_flat = BudgetState(
-        steps_since_new_score=6,
+        steps_since_new_score=config.max_steps_without_score,
         metric_history=[1380.0, 1380.0, 1380.0],
     )
 
-    assert evaluate_stops(BudgetConfig(), stalled_and_flat) == "needs_guidance"
+    assert evaluate_stops(config, stalled_and_flat) == "needs_guidance"
 
 
 def test_a_campaign_that_reached_its_goal_is_finished_not_stuck() -> None:
     reached_and_stalled = BudgetState(
         last_metric=0.91,
-        steps_since_new_score=6,
+        steps_since_new_score=BudgetConfig().max_steps_without_score,
         score_events=_events(0.91, metric="cv_auc", maximize=True),
     )
     config = BudgetConfig(target_metric="auc", target_value=0.9, maximize=True)
@@ -377,6 +380,29 @@ def test_a_guidance_pause_is_resumable_without_naming_the_session(tmp_path: Path
         # A guidance pause is not a missing capability, and must not be
         # counted as one.
         assert store.get_metrics(session.id).no_capability == 3
+
+        # …and resuming it must actually run. Asserting the session is merely
+        # *findable* passed while `conduct continue` was a no-op: the counters
+        # that tripped the stop are persisted, so the resumed run re-fired it
+        # before dispatching anything.
+        store.update_session_status(session.id, "running")
+        with patch(
+            "labpilot.research_engine.conductor.loop.decide_next",
+            _always_chooses("analyze_competition"),
+        ):
+            resumed = run_until_stop(
+                store,
+                ws,
+                session.id,
+                _registry(),
+                llm_client=object(),
+                max_steps=3,
+                auto_approve=True,
+                autonomy=1,
+            )
+
+        assert [d.tool_name for d in resumed if d.tool_name], "resumed run dispatched nothing"
+        assert not any(d.stop for d in resumed), "resumed run re-fired the stop it was resuming"
     finally:
         store.close()
 
@@ -410,6 +436,67 @@ def test_a_bounded_run_still_stops_on_max_steps(tmp_path: Path) -> None:
         store.close()
 
 
+def test_the_barren_breaker_still_fires_before_the_guidance_stop() -> None:
+    """A score append also resets `steps_since_success`, so the no-score
+    counter is never behind it. Set below `max_barren_steps` it therefore
+    fires first on every campaign and M20's `failing` becomes unreachable —
+    a broken campaign parked in `paused` reading like a normal end.
+    """
+    config = BudgetConfig()
+    assert config.max_steps_without_score > config.max_barren_steps
+
+    stops = [
+        evaluate_stops(config, BudgetState(steps_since_success=n, steps_since_new_score=n))
+        for n in range(1, config.max_steps_without_score + 1)
+    ]
+
+    assert "failing" in stops
+    assert stops.index("failing") < (
+        stops.index("needs_guidance") if "needs_guidance" in stops else len(stops)
+    )
+
+
+def test_the_no_score_counter_catches_what_the_barren_breaker_cannot() -> None:
+    """The case the margin is for: executions keep succeeding — so
+    `steps_since_success` keeps resetting and `failing` never fires — while
+    every one of them writes a placeholder metric the score writer skips."""
+    succeeding_but_scoring_nothing = BudgetState(steps_since_success=0, steps_since_new_score=10)
+
+    assert evaluate_stops(BudgetConfig(), succeeding_but_scoring_nothing) == "needs_guidance"
+
+
+# -- an improvement and a plateau are different questions ------------------
+
+
+def test_a_campaign_improving_every_run_is_not_stagnant() -> None:
+    """The plateau band is 0.1%; a real gain can be smaller than that.
+
+    Sharing one band made this series — four accuracy readings, each beating
+    the last — report three experiments with no improvement, which is what
+    `available_tools`' stagnant clause and the stagnation mint read. The
+    campaign was working and was told it was stuck.
+    """
+    improving = _state(0.9100, 0.9105, 0.9110, 0.9115, metric="cv_accuracy", maximize=True)
+
+    assert score_summary(improving, BudgetConfig()).steps_since_improvement == 0
+
+
+def test_a_genuinely_flat_series_is_still_stagnant() -> None:
+    flat = _state(0.91, 0.91, 0.91, 0.91, metric="cv_accuracy", maximize=True)
+
+    assert score_summary(flat, BudgetConfig()).steps_since_improvement == 3
+
+
+def test_the_two_bands_are_read_from_their_own_fields() -> None:
+    """Widening one must not move the other. A single shared field is how the
+    plateau fix reached the policy's view of progress in the first place."""
+    wide_plateau = BudgetConfig(plateau_rel_epsilon=0.5)
+    improving = _state(0.9100, 0.9105, metric="cv_accuracy", maximize=True)
+
+    assert score_summary(improving, wide_plateau).steps_since_improvement == 0
+    assert evaluate_stops(wide_plateau, BudgetState(metric_history=[0.91, 0.92, 0.93])) == "plateau"
+
+
 # -- the rule the thresholds follow ---------------------------------------
 
 
@@ -422,18 +509,24 @@ def test_no_threshold_this_milestone_adds_is_in_domain_units() -> None:
     and `max_cost_usd` are the contrast, and they are operator-supplied with
     no default for exactly this reason.
     """
-    added = {"max_steps_without_score", "max_consecutive_unmapped", "plateau_rel_epsilon"}
+    added = {
+        "max_steps_without_score",
+        "max_consecutive_unmapped",
+        "plateau_rel_epsilon",
+        "improvement_rel_epsilon",
+    }
     fields = BudgetConfig.model_fields
 
     for name in added:
         assert name in fields, f"{name} is no longer a field — update this guard"
         assert not name.endswith(("_s", "_usd", "_seconds", "_ms")), name
 
-    counts = added - {"plateau_rel_epsilon"}
+    counts = added - {"plateau_rel_epsilon", "improvement_rel_epsilon"}
     for name in counts:
         assert isinstance(getattr(BudgetConfig(), name), int)
 
     # A ratio is dimensionless by construction; the proof it carries no units
     # is the scale-invariance test at the top of this file.
     assert isinstance(BudgetConfig().plateau_rel_epsilon, float)
+    assert isinstance(BudgetConfig().improvement_rel_epsilon, float)
     assert BudgetConfig().max_wall_s is None and BudgetConfig().max_cost_usd is None

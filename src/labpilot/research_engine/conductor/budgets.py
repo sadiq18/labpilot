@@ -54,9 +54,21 @@ DEFAULT_MAX_BARREN_STEPS = 8
 #: The gap `steps_since_success` cannot see. That counter resets on any
 #: successful execution, and the score writer skips a placeholder run or a
 #: non-finite metric — so a campaign can succeed on every step while the series
-#: both objective stops read stays frozen. Six rather than one because
-#: analysis, planning and reflection legitimately produce no score.
-DEFAULT_MAX_STEPS_WITHOUT_SCORE = 6
+#: both objective stops read stays frozen.
+#:
+#: **Derived from the barren threshold, and strictly greater than it.** A score
+#: append always also resets `steps_since_success` (the writer records the
+#: execution before the score), so `steps_since_new_score >= steps_since_success`
+#: for every reachable state. Set below `DEFAULT_MAX_BARREN_STEPS` this counter
+#: therefore fires *first in time* on every campaign, and M20's `failing` — the
+#: stop that keeps a broken campaign from reading as a normal end — becomes
+#: unreachable. The plan asked for 6; 6 would have silently retired a stop that
+#: took nine campaign runs to earn.
+#:
+#: The margin only decides how long a campaign that *is* executing is allowed
+#: to keep producing nothing comparable, which is the case barren cannot see
+#: and this counter exists for.
+DEFAULT_MAX_STEPS_WITHOUT_SCORE = DEFAULT_MAX_BARREN_STEPS + 2
 
 #: Consecutive steps whose plan mapped to no tool before pausing.
 #:
@@ -83,6 +95,25 @@ DEFAULT_MAX_CONSECUTIVE_UNMAPPED = 3
 #: absolute comparison exactly, which is this change's rollback.
 DEFAULT_PLATEAU_REL_EPSILON = 1e-3
 
+#: The same idea for "this reading beat the ones before it", and deliberately
+#: two orders of magnitude tighter.
+#:
+#: These read as one question and are two. `plateau` asks whether a whole
+#: *window* failed to move; `_steps_since_improvement` asks whether a single
+#: *step* cleared measurement noise. A window of three readings 0.05% apart
+#: spans 0.1% — a plateau by the wide band while every step was an improvement
+#: by the tight one, and both statements are true.
+#:
+#: Sharing one band made that contradiction resolve the wrong way: an accuracy
+#: series gaining 0.05% a run reported three experiments with no improvement,
+#: which is what `available_tools`' stagnant clause and the stagnation mint
+#: read. A campaign improving on every run was told it was stuck.
+#:
+#: Erring permissive is the safe direction here — a floor set too low calls a
+#: little noise an improvement and resets a counter; set too high it invents
+#: stagnation and mints hypotheses against a campaign that is working.
+DEFAULT_IMPROVEMENT_REL_EPSILON = 1e-5
+
 
 class BudgetConfig(BaseModel):
     """Resource and objective limits for a campaign session."""
@@ -100,6 +131,7 @@ class BudgetConfig(BaseModel):
     #: whose values sit at or near zero, where a relative test degenerates.
     plateau_epsilon: float = 1e-6
     plateau_rel_epsilon: float = DEFAULT_PLATEAU_REL_EPSILON
+    improvement_rel_epsilon: float = DEFAULT_IMPROVEMENT_REL_EPSILON
     #: `None` disables the breaker. Opt-out exists because a campaign
     #: deliberately probing a broken workspace is a legitimate thing to run.
     max_consecutive_failures: int | None = DEFAULT_MAX_CONSECUTIVE_FAILURES
@@ -334,13 +366,15 @@ def score_summary(state: BudgetState, config: BudgetConfig) -> ScoreSummary:
         last_3_scores=values[-3:],
         delta_vs_best=delta,
         steps_since_improvement=_steps_since_improvement(
-            values, maximize, _noise_floor(values, config)
+            values,
+            maximize,
+            _noise_floor(values, config.plateau_epsilon, config.improvement_rel_epsilon),
         ),
         metric_name=events[-1].metric_name,
     )
 
 
-def _noise_floor(values: list[float], config: BudgetConfig) -> float:
+def _noise_floor(values: list[float], absolute: float, relative: float) -> float:
     """How large a change has to be before it counts as one.
 
     The absolute floor, or a fraction of the readings' own magnitude,
@@ -348,7 +382,7 @@ def _noise_floor(values: list[float], config: BudgetConfig) -> float:
     and an accuracy near 0.9: it is a quantity in the metric's units, and
     every metric has different ones. Scaling by the window's magnitude asks a
     question with the same answer in every domain — *did these readings move
-    by more than a tenth of a percent of what they measure?*
+    by more than some fraction of what they measure?*
 
     `max` of the two rather than either alone. The relative test degenerates
     as the readings approach zero, and the absolute floor is what catches
@@ -360,12 +394,14 @@ def _noise_floor(values: list[float], config: BudgetConfig) -> float:
     it is defined without reference to direction and stays stable for a series
     that straddles zero.
 
-    One definition, two readers: `plateau` and `_steps_since_improvement`.
-    They have to agree about what "no change" means, and the way to guarantee
-    that is for there to be one place that decides.
+    One definition of *how* to be scale-free, two bands. `relative` is the
+    caller's, because `plateau` and `_steps_since_improvement` are asking
+    different questions — see `DEFAULT_IMPROVEMENT_REL_EPSILON`. An earlier
+    version took one band from the config for both readers, and a campaign
+    gaining 0.05% a run read as stagnant.
     """
     scale = max((abs(v) for v in values), default=0.0)
-    return max(config.plateau_epsilon, config.plateau_rel_epsilon * scale)
+    return max(absolute, relative * scale)
 
 
 def _steps_since_improvement(values: list[float], maximize: bool, floor: float) -> int:
@@ -383,6 +419,11 @@ def _steps_since_improvement(values: list[float], maximize: bool, floor: float) 
     real gain and the campaign read as permanently stagnant while improving
     on every run. `_noise_floor` scales with the readings, which removes the
     dependence on what units the metric happens to use.
+
+    It is built from `improvement_rel_epsilon`, **not** the plateau band. A
+    single step clearing measurement noise and a whole window failing to move
+    are different questions, and answering both with the 0.1% plateau band
+    recreated the same hazard from the other side.
 
     One pass, carrying the best rather than re-scanning the prefix: this runs
     in the observe bundle and again in the gathering gate, so it is paid at
@@ -573,7 +614,7 @@ def evaluate_stops(
     if len(hist) >= n:
         window = hist[-n:]
         gain = max(window) - min(window)
-        if gain <= _noise_floor(window, config):
+        if gain <= _noise_floor(window, config.plateau_epsilon, config.plateau_rel_epsilon):
             return "plateau"
     return "none"
 

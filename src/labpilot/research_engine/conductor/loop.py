@@ -1062,6 +1062,23 @@ def _run_until_stop_inner(
     ensure_metrics(store, session_id)
     budget_cfg, budget_state = load_budget_pair(session)
     budget_state.ensure_wall_start()
+    # A new run of the loop clears the guidance counters, and that *is* the
+    # resume. Without it a `needs_guidance` pause could never be picked up:
+    # the counters that tripped it are persisted at their thresholds, so the
+    # first `evaluate_stops` of the resumed run re-fires the same stop before
+    # anything is dispatched — the campaign takes zero steps, every time,
+    # however thoroughly the operator fixed what it asked about.
+    #
+    # Cleared here rather than in `conduct continue` so any resumer gets it,
+    # and unconditionally rather than on a stored stop reason: invoking the
+    # loop again is the operator saying "try again", and a campaign still
+    # unable to progress simply spends the counters afresh and pauses again.
+    #
+    # The M20 breaker's counters are deliberately not cleared. `failing` parks
+    # a session in `failed`, which resuming needs `--session` to reach at all,
+    # and that friction is the point of the distinction.
+    budget_state.steps_since_new_score = 0
+    budget_state.consecutive_unmapped = 0
     persist_budgets(store, session_id, budget_cfg, budget_state)
 
     def _progress(msg: str) -> None:

@@ -91,9 +91,9 @@ new failure counting is needed.
 | # | Requirement |
 |---|---|
 | F1 | `conduct run` / `continue` / `resume` take no step bound by default; `--max-steps N` still bounds a debugging run |
-| F2 | A stalled campaign stops on `needs_guidance` after **6** conductor steps with no new comparable score, or **3** consecutive steps whose plan maps to no tool |
+| F2 | A stalled campaign stops on `needs_guidance` after **`max_barren_steps + 2`** conductor steps with no new comparable score, or **3** consecutive steps whose plan maps to no tool. The first threshold is derived, not chosen — see §8.2 |
 | F3 | `needs_guidance` sets session status `paused` and records a suggestion naming the condition |
-| F4 | A `needs_guidance` pause resumes under `conduct continue` with **no** `--session` argument |
+| F4 | A `needs_guidance` pause resumes under `conduct continue` with **no** `--session` argument, and the resumed run *dispatches* — being findable is not being resumable (§8.5) |
 | F5 | One goal-progress line per conductor step, and the identical string from `conduct status` |
 | F6 | `plateau` fires on a flat series regardless of the metric's magnitude — the same three readings must plateau whether they are ≈1380 or ≈0.91 |
 
@@ -195,7 +195,7 @@ evaluated every step), and the ordering should not depend on it being so.
 | `loop.py` — step loop | Unbounded iteration with an optional cap; increments both new counters | `run_until_stop(max_steps: int \| None = 8)` |
 | `loop.py` — `_record_experiment_outcome` | Resets `steps_since_new_score` **only** where `score_events` grows | unchanged signature |
 | `budgets.py` — `evaluate_stops` | Adds `needs_guidance`, ordered per §6; plateau compares against a scale-free floor | `(config, state) -> StopReason` |
-| `budgets.py` — `_noise_floor` | The one place "too small to be a change" is defined, shared with `_steps_since_improvement` | `(values, config) -> float` |
+| `budgets.py` — `_noise_floor` | The one place *how* to be scale-free is defined; the band is the caller's | `(values, absolute, relative) -> float` |
 | `budgets.py` — `goal_progress` | Renders one line from `score_summary`; derives no metric and no direction itself | `(config, state) -> str \| None` |
 | `cli/conduct.py` | Passes `max_steps=None`; exposes `--plateau-epsilon` / `--plateau-rel-epsilon`; prints the goal line in `status` | 3 option sites + status |
 | `metrics.py` — `record_suggestion` | Stops charging `no_capability` for non-capability kinds | adds `kind` guard |
@@ -229,7 +229,7 @@ report `max_steps` on a run that never had one.
 | `steps_since_new_score` | once per step, beside `steps_since_success` ([loop.py:1174](../../../../src/labpilot/research_engine/conductor/loop.py#L1174)) | in `_record_experiment_outcome`, only when a `ScoreEvent` is appended |
 | `consecutive_unmapped` | on the `plan.unmapped` branch | on any step whose plan maps ≥1 tool |
 
-`BudgetConfig` gains `max_steps_without_score: int | None = 6` and
+`BudgetConfig` gains `max_steps_without_score: int | None = DEFAULT_MAX_BARREN_STEPS + 2` and
 `max_consecutive_unmapped: int | None = 3`; `None` disables either, as
 `max_consecutive_failures` already allows.
 
@@ -240,22 +240,46 @@ the series rather than on a tool list also means it needs no maintenance when a
 new validator arrives: `_EXPERIMENT_TOOLS` is a hardcoded pair, and this counter
 never consults it.
 
+**The threshold is derived from `max_barren_steps`, not chosen.** A score append
+always also resets `steps_since_success` — the writer records the execution
+before the score — so `steps_since_new_score >= steps_since_success` in every
+reachable state. Set below M20's barren threshold this counter fires *first in
+time* on every campaign, and `failing` becomes unreachable: a campaign that
+executed nothing lands in `paused`, reading like a normal end, which is the one
+distinction M20's breaker exists to draw. The plan asked for 6, and 6 would have
+silently retired a stop that took nine campaign runs to earn. The margin above 8
+only decides how long a campaign that *is* executing may keep producing nothing
+comparable — the case barren cannot see, and the only one this counter is for.
+
 ### 8.3 A plateau that does not depend on the metric's units
 
 One helper defines "too small to be a change", and both readers use it:
 
 ```python
-def _noise_floor(values: list[float], config: BudgetConfig) -> float:
+def _noise_floor(values: list[float], absolute: float, relative: float) -> float:
     """Absolute floor, or a fraction of the readings' own magnitude."""
     scale = max((abs(v) for v in values), default=0.0)
-    return max(config.plateau_epsilon, config.plateau_rel_epsilon * scale)
+    return max(absolute, relative * scale)
 ```
 
 ```python
 window = hist[-n:]
-if max(window) - min(window) <= _noise_floor(window, config):
+if max(window) - min(window) <= _noise_floor(window, config.plateau_epsilon, config.plateau_rel_epsilon):
     return "plateau"
 ```
+
+**Two bands, not one.** `plateau` asks whether a whole *window* failed to move;
+`_steps_since_improvement` asks whether a single *step* cleared measurement
+noise. They read as one question and are two — a window of three readings 0.05%
+apart spans 0.1%, which is a plateau by the wide band while every step was an
+improvement by the tight one, and both statements are true. Answering both with
+`plateau_rel_epsilon` resolved that contradiction the wrong way: an accuracy
+series gaining 0.05% a run reported three experiments with no improvement, which
+is exactly what `available_tools`' stagnant clause and the stagnation mint read,
+so a campaign improving on every run was told it was stuck and had hypotheses
+minted at it. `improvement_rel_epsilon` defaults two orders of magnitude tighter
+at `1e-5`; erring permissive is the safe direction, since a floor set too low
+resets a counter and one set too high invents stagnation.
 
 `plateau_rel_epsilon: float = 1e-3` — a 0.1% spread. `plateau_epsilon` keeps its
 `1e-6` default and its meaning, and now acts as the floor for a series whose
@@ -320,8 +344,20 @@ save_checkpoint(store, session_id, extra={"stop_reason": "needs_guidance", ...})
 
 `paused` is what `conduct continue` resumes
 ([conduct.py:383](../../../../src/labpilot/cli/conduct.py#L383)) and what
-`latest_active_session` counts as live, satisfying F4. `failed` — where
-`failing` puts a session, deliberately — is neither.
+`latest_active_session` counts as live. `failed` — where `failing` puts a
+session, deliberately — is neither.
+
+**Parking the session is not enough, and this is where the first version was
+wrong.** The counters that tripped the stop are persisted at their thresholds,
+so the resumed run's first `evaluate_stops` re-fired it before dispatching
+anything: the campaign took zero steps, every time, however thoroughly the
+operator fixed what it asked about. `_run_until_stop_inner` therefore clears
+both guidance counters at start-up — invoking the loop again *is* the operator
+saying "try again", and a campaign still unable to progress simply spends them
+afresh and pauses again. Cleared in the loop rather than in `conduct continue`
+so every resumer gets it. The M20 breaker's counters are deliberately not
+cleared: `failing` parks a session in `failed`, which resuming must name with
+`--session` to reach at all, and that friction is the distinction.
 
 `record_suggestion` increments the `no_capability` metric unconditionally
 ([metrics.py:52](../../../../src/labpilot/research_engine/conductor/metrics.py#L52)),
@@ -374,7 +410,7 @@ who knows their domain; nothing defaults it. The same rule is why §8.3 exists �
 | Decision | Domain-neutral? | Note |
 |---|---|---|
 | Unbounded `max_steps` | Yes | Removes a bound; adds no assumption |
-| `max_steps_without_score = 6` | Yes | Counts decisions (N1) |
+| `max_steps_without_score` | Yes | Counts decisions (N1), and derived from `max_barren_steps` rather than chosen |
 | `max_consecutive_unmapped = 3` | Yes | Counts decisions |
 | `steps_since_new_score` reset site | Yes — **improves neutrality** | Keyed on `score_events` growing, not on `_EXPERIMENT_TOOLS`, so a validator that produces scores through a different tool is counted with no edit |
 | `needs_guidance` pause + suggestion | Yes | `record_suggestion` is the generic "say what was lacking" channel |
@@ -443,7 +479,10 @@ milestone adds is denominated in seconds, currency or metric magnitude — a
 guard against the next threshold being calibrated to whichever workspace is open.
 
 **Integration — resumability (F4).** A `needs_guidance` pause is picked up by
-`conduct continue` with no `--session`.
+`conduct continue` with no `--session` **and the resumed run dispatches a tool
+without re-firing the stop**. The second half is the assertion that matters: a
+test checking only that the session is findable passed for a resume that took
+zero steps.
 
 **Contract ([M15](../10-capability-audit.md)).** Two different score series must
 produce two different `goal_progress` lines. A renderer that ignores its input is
@@ -486,7 +525,8 @@ library default is untouched (N3), and every new threshold has a `None` opt-out.
 
 **Rollback** is `--max-steps 8` — the current behaviour, one flag away, with no
 migration to undo (N5). The noise-floor change is rolled back by setting
-`plateau_rel_epsilon: 0`, which restores the absolute comparison exactly.
+`plateau_rel_epsilon: 0` (and `improvement_rel_epsilon: 0`), which restores the
+absolute comparison exactly.
 
 **Roadmap note.** The README puts the ground-truth phase (M22→M26) ahead of this
 work, on the argument that optimising against an unverified target is "a more
