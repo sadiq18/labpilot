@@ -116,7 +116,7 @@ needs M7, and omitted M11/M12/M16/M17 entirely.
 | **M25** | [A finding is a statistic, not a plot](20-eda-findings.md) | Understanding the signal, once the problem is framed correctly | Not started. Both promotion triggers in [future-specialists.md](../backlog/future-specialists.md) are now met |
 | **M26** | [A feature is a claim its code must honour](21-feature-specs.md) | Creating signal, with attribution that survives | Not started. rogii produced 31 engineered features and nothing can say which of them helped |
 | **M15** | [Capability audit](10-capability-audit.md) | Stops the control plane outrunning the tools again | In progress — PR #129 open |
-| **M16** | [Evidence routine as background producer](11-background-routine.md) · [design](design/11-background-routine.md) | Gathering stops blocking testing | Gating shipped; routine designed, not started |
+| **M16** | [Evidence routine as background producer](11-background-routine.md) · [design](design/11-background-routine.md) | Gathering stops blocking testing | **Shipped behind `--gather-background`**: producer thread, allowlist handover, dedupe under two writers, and a producer-side budget reserve. Exit criterion 3 (a thin pool refilling without the consumer stalling) still needs a campaign log |
 | **M17** | [Run until plateau or goal](12-run-until-done.md) | Campaigns end on the objective, not a step counter | Not started |
 | — | [Interaction modes](07-interaction-modes.md) | Auto / accept-edits / plan UX | Not started |
 

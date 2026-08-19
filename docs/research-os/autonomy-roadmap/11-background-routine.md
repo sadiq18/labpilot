@@ -1,6 +1,7 @@
 # M16 — Evidence routine as a background producer
 
-**Status:** gating shipped, routine not started ·
+**Status:** routine shipped behind `--gather-background` (exit criterion 3
+still needs a campaign log) ·
 **Design:** [design/11-background-routine.md](design/11-background-routine.md) ·
 **Blockers cleared:** M11 (concurrency) shipped 2026-08-11/12 and M14 completed
 2026-08-07, so this is unblocked and waiting on a decision, not on other work
@@ -179,13 +180,13 @@ tool was skipped", which the shipped gate already achieves without a producer.
   (WAL + 5s `busy_timeout`), multi-statement writes take `write_lock_for`, and
   both are file locks that keep holding across processes. What M11 did *not*
   give is content-level dedupe — see Approach 3.
-- **The producer competes for the same LLM budget.** **Still unbuilt, and the
-  only unbuilt dependency.** `fitroute/budget.py`'s `BudgetLedger` tracks spend
-  per *provider*; `availability()` answers identically for every caller, so
-  there is no mechanism behind "producer work should be the lower priority
-  claim on the ledger from [M10](04-llm-tiering.md)". Hypothesis generation is a
-  `reasoning` role — a background producer running hot will exhaust the free
-  tier the consumer needs.
+- ~~**The producer competes for the same LLM budget.**~~ **Built.**
+  `availability(..., reserve=)` withholds a fraction of each window from the
+  caller that asks for it — a fraction, not a call count, so a token-metered
+  provider is covered too. It threads through `select_route` and
+  `LLMGateway.preview`, and the producer asks before a sweep rather than
+  per call inside one: a sweep abandoned halfway has already spent the quota it
+  was meant to protect. `LABPILOT_GATHER_RESERVE` defaults to `0.2`.
 - **A backlog is not a good backlog.** **Partly answered.** The count is now of
   *viable* hypotheses ([M21](16-hypothesis-selection.md)), so rows the selector
   has passed over twice stop voting, and the stagnant clause reopens gathering

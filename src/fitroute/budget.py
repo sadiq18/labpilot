@@ -119,9 +119,20 @@ class BudgetLedger:
         rpm: int | None = None,
         rpd: int | None = None,
         tpm: int | None = None,
+        reserve: float = 0.0,
         now: float | None = None,
     ) -> Availability:
         """Can ``provider`` be called right now, and if not, when?
+
+        ``reserve`` withholds that fraction of every configured window from
+        this caller, so a background worker runs out before the foreground one
+        does. The consumer asks with 0.0 and sees the real limit; a producer
+        asks with 0.2 and stops 20% early.
+
+        A fraction rather than a call count because `rpm`/`rpd` are free-tier
+        shapes: a paid, token-metered provider binds on `tpm`, where "hold back
+        five calls" means nothing. One knob, applied to whichever window binds
+        first.
 
         Locked like the writers. Reads were left unlocked when the writers were
         wrapped, which was safe only because `server._GATEWAY_LOCK` happened to
@@ -131,6 +142,19 @@ class BudgetLedger:
         from two different states.
         """
         now = now if now is not None else time.time()
+        keep = min(max(reserve, 0.0), 1.0)
+
+        def _effective(limit: int | None) -> int | None:
+            """The limit this caller may reach. Never below 1 while any is left:
+            a reserve is meant to make a background caller yield sooner, not to
+            take a provider away from it entirely."""
+            if limit is None or keep <= 0.0:
+                return limit
+            return max(1, int(limit * (1.0 - keep)))
+
+        rpm = _effective(rpm)
+        rpd = _effective(rpd)
+        tpm = _effective(tpm)
         with self._lock:
             row = self._conn.execute(
                 "SELECT until_ts, reason FROM llm_cooldowns WHERE provider = ?", (provider,)

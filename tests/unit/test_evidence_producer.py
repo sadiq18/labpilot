@@ -289,3 +289,82 @@ def test_the_observe_bundle_carries_producer_state_when_given_one(tmp_path: Path
 
     assert "evidence_producer" not in without
     assert with_status["evidence_producer"]["last_decision"] == "skipped"
+
+
+# --- the producer is the lower claim on the LLM budget ------------------------
+
+
+class _Router:
+    """Enough of the gateway to answer `preview(role, reserve=…)`."""
+
+    def __init__(self, *, available_at_reserve: float) -> None:
+        self.available_at_reserve = available_at_reserve
+        self.asked: list[tuple[str, float]] = []
+
+    def preview(self, role: str, *, reserve: float = 0.0):
+        self.asked.append((role, reserve))
+        provider = object() if reserve <= self.available_at_reserve else None
+        return type("Route", (), {"provider": provider, "reason": "daily limit reached"})()
+
+
+def test_the_producer_yields_when_the_reserve_leaves_it_no_room(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    calls: list[dict] = []
+    router = _Router(available_at_reserve=0.0)  # room at 0%, none at 20%
+
+    outcome = gather_once(
+        ws,
+        _registry(calls),
+        GatherPlan(tool="gather_stub"),
+        llm_client=router,
+        reserve=0.2,
+    )
+
+    assert outcome.gathered is False
+    assert "holding 20%" in outcome.reason
+    assert calls == []
+    assert router.asked == [("reasoning", 0.2)]
+
+
+def test_the_same_budget_still_lets_the_consumer_through() -> None:
+    """The point of a reserve: the producer runs out first, not both."""
+    router = _Router(available_at_reserve=0.0)
+
+    assert router.preview("reasoning", reserve=0.0).provider is not None
+    assert router.preview("reasoning", reserve=0.2).provider is None
+
+
+def test_no_reserve_means_no_pre_flight_question(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    calls: list[dict] = []
+    router = _Router(available_at_reserve=0.0)
+
+    outcome = gather_once(
+        ws, _registry(calls), GatherPlan(tool="gather_stub"), llm_client=router
+    )
+
+    assert outcome.gathered is True
+    assert router.asked == []
+
+
+def test_a_client_with_no_router_behind_it_does_not_block_gathering(tmp_path: Path) -> None:
+    """A legacy provider path has no ledger to ask; refusing on that basis
+    would be inventing a limit rather than respecting one.
+    """
+    ws = _ws(tmp_path)
+    calls: list[dict] = []
+
+    class _PlainClient:
+        def complete(self, system: str, user: str, **kw: object) -> str:
+            return ""
+
+    outcome = gather_once(
+        ws,
+        _registry(calls),
+        GatherPlan(tool="gather_stub"),
+        llm_client=_PlainClient(),
+        reserve=0.9,
+    )
+
+    assert outcome.gathered is True
+    assert len(calls) == 1
