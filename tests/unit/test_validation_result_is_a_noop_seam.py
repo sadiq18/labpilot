@@ -377,3 +377,40 @@ def test_a_workspace_with_no_metrics_reports_no_score(tmp_path) -> None:
     assert result.score is None
     assert result.direction == "minimize", "direction is independent of the score"
     assert not result.is_comparable
+
+
+def test_a_control_result_supplies_the_blob_the_card_reads_around_it(tmp_path) -> None:
+    """The score is not the only thing a card takes from the control side.
+
+    `cv_std`, `train_time_s` and `peak_memory_mb` are read straight off the
+    control blob, and stability is derived from the two spreads. So a
+    `control_result` must hand over its `raw`, not just its score — otherwise
+    stability silently reads `UNKNOWN` for every validator that supplies one.
+
+    Mutation finding: with an empty `raw` on both sides the assignment changes
+    nothing, so restoring the old `is None` test kept the suite green.
+    """
+    card = _card(
+        tmp_path,
+        "demo-control-blob",
+        treatment_metrics={},
+        result=ValidationResult(
+            score=190.97,
+            metric="cv_rmse",
+            direction="minimize",
+            source="harness",
+            raw={"cv_rmse": 190.97, "cv_std": 1.1, "train_time_s": 100.0},
+        ),
+        control_metrics={},
+        control_result=ValidationResult(
+            score=194.80,
+            metric="cv_rmse",
+            direction="minimize",
+            source="harness",
+            raw={"cv_rmse": 194.80, "cv_std": 1.1, "train_time_s": 80.0},
+        ),
+    )
+
+    assert card.observed.parent_cv_std == 1.1, "the control blob never arrived"
+    assert card.observed.stability.value == "similar"
+    assert card.decision.value == "accepted"

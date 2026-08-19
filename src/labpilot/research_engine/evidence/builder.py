@@ -494,18 +494,24 @@ def build_evidence_card(
     plan_meta = dict(plan_metadata or {})
     control_metrics = dict(control_metrics or {})
 
-    # A control_result that carries a score *is* a control, whether or not it
-    # brought a metrics blob with it. Both of the lines below used to ask only
-    # the blob, so a validator that scores without writing Kaggle-shaped
-    # `cv_`-keys — the whole point of the seam — had its control thrown away and
-    # every comparison came back `missing_control`. The treatment side never had
-    # this bug, which is why the suite stayed green: `_found(result, ...)` below
-    # is unguarded, and only the control was asked to prove itself twice.
-    control_scored = control_result is not None and control_result.score is not None
-    missing_control = not control_metrics and not control_execution_id and not control_scored
+    missing_control = not control_metrics and not control_execution_id
 
+    # A control_result *is* a control, whether or not it brought a metrics blob
+    # with it. This used to ask only the blob, so a validator that scores without
+    # writing Kaggle-shaped `cv_` keys — the whole point of the seam — had its
+    # control thrown away and every comparison came back `missing_control`. The
+    # treatment side never had the bug, which is why the suite stayed green:
+    # `_found(result, ...)` below is unguarded, and only the control was asked to
+    # prove itself twice.
+    #
+    # No `score is not None` refinement: `_found` already returns None for a
+    # scoreless result, and `missing_control` above is redundant with the
+    # `parent_cv is None` test at the `_decide` call — a second guard there was
+    # unreachable rather than defensive, and a mutation sweep said so.
     parent_found = (
-        _found(control_result, control_metrics) if (control_scored or control_metrics) else None
+        _found(control_result, control_metrics)
+        if (control_result is not None or control_metrics)
+        else None
     )
     treatment_found = _found(result, treatment_metrics)
     parent_cv = parent_found[0] if parent_found else None
