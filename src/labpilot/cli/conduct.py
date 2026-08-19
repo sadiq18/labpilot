@@ -219,7 +219,7 @@ def _stated_objective(ws: Any, competition: str) -> tuple[str | None, str | None
     )
 
 
-def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> None:
+def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict[str, Any]:
     """Refuse to start a campaign whose objective cannot be justified.
 
     Checked here rather than mid-run, and the placement is the point: refusing to
@@ -230,6 +230,10 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> None
     rogii ran campaigns for two weeks with `evaluation_metric: None`, and all
     fifteen of its evidence cards were built as though MSE were maximised. Both
     were free to catch at second zero.
+
+    Returns metadata to stamp on the session. An operator who overrides the gate
+    leaves a record there, because a campaign built on an unknown direction must
+    stay distinguishable from a resolved one long after the console line is gone.
     """
     from labpilot.research_engine.intelligence.competition.objective import resolve_objective
 
@@ -245,11 +249,20 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> None
             f"[dim]({objective.direction}, from {objective.direction_source}, "
             f"confidence {objective.confidence:.2f})[/dim]"
         )
-        return
+        return {
+            "objective_metric": objective.metric_name,
+            "objective_direction": objective.direction,
+            "objective_source": objective.source,
+            "objective_confidence": objective.confidence,
+        }
 
     console.print(f"[red]Objective not resolved[/red] - {objective.why_blocked()}")
     for line in objective.evidence:
         console.print(f"  [dim]-[/dim] {line}")
+    if objective.alternatives:
+        console.print(
+            f"  [dim]candidates:[/dim] {', '.join(objective.alternatives)}"
+        )
     console.print(
         "\n  Set it in the workspace contract and re-run, e.g. competition.json:\n"
         '    [cyan]"evaluation_metric": {"name": "rmse", "direction": "minimize"}[/cyan]'
@@ -266,7 +279,13 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> None
             default=False,
         ):
             console.print("[yellow]proceeding with an unresolved objective[/yellow]")
-            return
+            return {
+                "objective_override": True,
+                "objective_blocked_reason": objective.why_blocked(),
+                "objective_metric": objective.metric_name,
+                "objective_direction": objective.direction,
+                "objective_confidence": objective.confidence,
+            }
     raise typer.Exit(2)
 
 
@@ -372,7 +391,7 @@ def conduct_run(
         workspace_path=workspace_path,
         goal=goal,
     )
-    _preflight_objective(ws, competition, assume_yes=yes)
+    objective_meta = _preflight_objective(ws, competition, assume_yes=yes)
     store = ConductorStore(ws.knowledge_dir, competition)
     registry = default_tools()
     llm = None if offline else resolve_llm_client(config.llm)
@@ -392,6 +411,7 @@ def conduct_run(
                 "max_steps": max_steps,
                 "offline": offline,
                 "autonomy": autonomy,
+                **objective_meta,
             },
         )
         if target_metric:
@@ -449,6 +469,9 @@ def _continue_session(
         knowledge_dir=knowledge_dir,
         workspace_path=workspace_path,
     )
+    # Same gate as `run`: a contract edited between sessions can make an
+    # objective contradictory, and resuming would step against it unchecked.
+    _preflight_objective(ws, competition, assume_yes=True)
     store = ConductorStore(ws.knowledge_dir, competition)
     registry = default_tools()
     llm = None if offline else resolve_llm_client(config.llm)

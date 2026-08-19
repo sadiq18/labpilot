@@ -40,6 +40,7 @@ from labpilot.research_engine.intelligence.competition.direction_probe import (
     probe_metric_direction,
 )
 from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+    _slug,
     direction_of,
     is_scorable,
     normalize_metric_key,
@@ -122,10 +123,16 @@ class ObjectiveSpec(BaseModel):
     direction: Direction | None = None
     direction_source: ObjectiveSource = "unknown"
 
+    #: Where the metric's *identity* came from, separately from its direction.
+    identity_source: ObjectiveSource = "unknown"
+    #: The weaker of the two, so it always explains `confidence`. Reporting the
+    #: stronger one made `source='measured', confidence=0.90` unreadable — the
+    #: 0.90 came from the registry and nothing said so.
     source: ObjectiveSource = "unknown"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     evidence: list[str] = Field(default_factory=list)
-    #: Runners-up, so a question can offer real choices rather than a blank.
+    #: The answers a question could offer, when one can be asked. Empty means
+    #: there is nothing to choose between — not that the choice is unimportant.
     alternatives: list[str] = Field(default_factory=list)
     #: Field names that could not be resolved. Non-empty means "ask", and names
     #: *what* to ask about — an objective that says "uncertain" without saying
@@ -298,7 +305,7 @@ def resolve_objective(
     else:
         # Unknown metric: the slug is still a stable identity, which is enough to
         # compare two readings of it. Only aliasing needs a catalogue.
-        key = _slug_identity(metric_raw)
+        key = _slug(metric_raw)
         evidence.append(f"{metric_raw!r} is not catalogued; using {key!r} as its identity")
         source = "explicit" if declared_direction else "rules"
 
@@ -329,6 +336,13 @@ def resolve_objective(
         _CONFIDENCE[source], _CONFIDENCE[direction_source]
     )
 
+    # What an operator could actually be asked. A blocked objective whose only
+    # gap is orientation has exactly two answers, and offering them is the
+    # difference between a question and a wall.
+    alternatives: list[str] = []
+    if contradiction or "direction" in unresolved:
+        alternatives = ["maximize", "minimize"]
+
     return ObjectiveSpec(
         task=task,
         target=target,
@@ -337,16 +351,11 @@ def resolve_objective(
         scorable=is_scorable(key),
         direction=direction,
         direction_source=direction_source,
-        source=source if _rank(source) <= _rank(direction_source) else direction_source,
+        identity_source=source,
+        source=source if _rank(source) >= _rank(direction_source) else direction_source,
         confidence=confidence,
         evidence=evidence,
         unresolved=unresolved,
+        alternatives=alternatives,
         contradiction=contradiction,
     )
-
-
-def _slug_identity(raw: str) -> str:
-    """A stable key for a metric no catalogue knows."""
-    import re
-
-    return re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")

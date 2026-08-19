@@ -161,3 +161,58 @@ def test_the_legacy_metric_key_is_read_too(tmp_path: Path) -> None:
     raw, declared, _task = _stated_objective(_Workspace(tmp_path), "demo")
     assert raw == "rmse"
     assert declared == "minimize"
+
+
+# --- review findings --------------------------------------------------------
+
+
+def test_a_resolved_objective_is_recorded_on_the_session(tmp_path: Path) -> None:
+    """What the preflight returns is stamped into the session metadata, so a
+    campaign's objective is legible long after the console line is gone."""
+    meta = _preflight_objective(
+        _workspace(tmp_path, {"name": "rmse", "direction": "minimize"}),
+        "demo",
+        assume_yes=True,
+    )
+
+    assert meta["objective_metric"] == "rmse"
+    assert meta["objective_direction"] == "minimize"
+    assert meta["objective_confidence"] > 0
+
+
+def test_an_override_is_recorded_not_just_printed(tmp_path: Path, monkeypatch) -> None:
+    """Review finding. Confirming "run anyway" was announced on the console and
+    stored nowhere, so a campaign built on an unknown direction was afterwards
+    indistinguishable from a resolved one — the same class of failure as rogii's
+    fifteen cards, with a console line as its only trace."""
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr(typer, "confirm", lambda *a, **k: True)
+
+    meta = _preflight_objective(_workspace(tmp_path, None), "demo", assume_yes=False)
+
+    assert meta["objective_override"] is True
+    assert "no evaluation metric" in meta["objective_blocked_reason"]
+
+
+def test_the_candidates_reach_the_operator(tmp_path: Path, capsys) -> None:
+    """A question with no options is the wall the alternatives field exists to
+    prevent."""
+    ws = _workspace(tmp_path, {"name": "rmse", "direction": "maximize"})
+    with pytest.raises(typer.Exit):
+        _preflight_objective(ws, "demo", assume_yes=True)
+
+    assert "candidates:" in capsys.readouterr().out
+
+
+def test_resuming_a_session_is_gated_too(tmp_path: Path) -> None:
+    """Review finding. The gate covered `run` only, so a contract edited between
+    sessions let `continue` and `resume` step against an objective `run` would
+    refuse. Both route through `_continue_session`.
+    """
+    import inspect
+
+    from labpilot.cli import conduct
+
+    source = inspect.getsource(conduct._continue_session)
+    assert "_preflight_objective" in source

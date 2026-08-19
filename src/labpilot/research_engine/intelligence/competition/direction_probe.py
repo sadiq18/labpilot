@@ -161,48 +161,62 @@ def _as_array(y_true: Any) -> np.ndarray:
 def probe_direction(scorer: Scorer, pairs: Sequence[ProbePair]) -> DirectionProbe:
     """Measure whether higher or lower is better for `scorer`.
 
-    `scorer` takes ``(y_true, y_pred)`` and returns a float. Anything it raises on
-    is reported rather than swallowed — an evaluator that cannot score a trivial
-    input is a fact worth surfacing, not a reason to fall back to a default.
+    `scorer` takes ``(y_true, y_pred)`` and returns a float. A pair it cannot
+    answer — raising, or returning a non-finite value — is recorded as evidence
+    and skipped, not treated as a verdict about the scorer: a metric undefined
+    for a constant prediction still has a direction the other pairs can measure.
+    Only when *no* pair survives is that an error.
     """
     if not pairs:
         return DirectionProbe(direction=None, confidence=0.0, error="no probe pairs supplied")
 
     readings: list[ProbeReading] = []
+    refusals: list[str] = []
     for pair in pairs:
         try:
             perfect = float(scorer(pair.y_true, pair.perfect))
             degraded = float(scorer(pair.y_true, pair.degraded))
         except Exception as exc:  # noqa: BLE001 — the caller decides what a broken scorer means
-            return DirectionProbe(
-                direction=None,
-                confidence=0.0,
-                readings=tuple(readings),
-                error=f"scorer raised on the {pair.label!r} probe: {exc}",
-            )
+            # One degradation the scorer cannot handle is not a verdict about
+            # the scorer. A correlation metric is undefined for a constant
+            # prediction, and aborting here discarded the shuffle and roll
+            # readings that had already agreed — turning a measurable direction
+            # into `indeterminate`, which blocks the campaign.
+            refusals.append(f"{pair.label}: scorer raised — {exc}")
+            continue
         if not (np.isfinite(perfect) and np.isfinite(degraded)):
+            refusals.append(f"{pair.label}: scorer returned a non-finite value")
             continue
         readings.append(ProbeReading(label=pair.label, perfect=perfect, degraded=degraded))
 
-    return _verdict(tuple(readings))
+    return _verdict(tuple(readings), refusals=tuple(refusals))
 
 
-def _verdict(readings: tuple[ProbeReading, ...]) -> DirectionProbe:
-    """Unanimity or nothing. See the module docstring for why not a majority."""
+def _verdict(
+    readings: tuple[ProbeReading, ...], *, refusals: tuple[str, ...] = ()
+) -> DirectionProbe:
+    """Unanimity or nothing. See the module docstring for why not a majority.
+
+    `refusals` are pairs the scorer could not answer. They are evidence — a
+    metric undefined on a constant prediction says something real about it — but
+    they do not vote, and they only become an error when nothing else survived.
+    """
     informative = [r for r in readings if r.direction is not None]
     if not informative:
+        detail = f": {'; '.join(refusals)}" if refusals else ""
         return DirectionProbe(
             direction=None,
             confidence=0.0,
             readings=readings,
-            error="no probe separated a perfect prediction from a degraded one",
+            evidence=refusals,
+            error=f"no probe separated a perfect prediction from a degraded one{detail}",
         )
 
     directions = {r.direction for r in informative}
     evidence = tuple(
         f"{r.label}: perfect={r.perfect:.6g} degraded={r.degraded:.6g} → {r.direction}"
         for r in informative
-    )
+    ) + refusals
     if len(directions) > 1:
         return DirectionProbe(
             direction=None,

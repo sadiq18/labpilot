@@ -230,3 +230,71 @@ def test_degradations_are_defined_for_ragged_truth() -> None:
 
     assert {p.label for p in pairs} == {"shuffle", "roll", "constant"}
     assert all(len(p.degraded) == 3 for p in pairs)
+
+
+# --- a pair the scorer cannot answer is not a verdict about the scorer ------
+
+
+def test_a_pair_the_scorer_refuses_does_not_discard_the_others() -> None:
+    """Review finding. Aborting on the first raising pair threw away readings
+    that had already agreed, turning a measurable direction into
+    `indeterminate` — which blocks the campaign.
+
+    A correlation metric is undefined for a constant prediction, and `constant`
+    is the last of the three degradations, so shuffle and roll had both scored
+    and agreed before it raised.
+    """
+
+    def pearson(actual, predicted) -> float:
+        a, b = np.asarray(actual, float), np.asarray(predicted, float)
+        if b.std() == 0:
+            raise ValueError("correlation undefined for a constant prediction")
+        return float(np.corrcoef(a, b)[0, 1])
+
+    probe = probe_direction(pearson, degrade(np.arange(1.0, 65.0)))
+
+    assert probe.direction == "maximize"
+    assert probe.confidence >= 0.99
+    assert probe.error is None
+
+
+def test_a_refused_pair_is_still_recorded_as_evidence() -> None:
+    """That a metric is undefined for a constant prediction says something real
+    about it, so it is kept even though it does not vote."""
+
+    def refuses_constant(actual, predicted) -> float:
+        if np.asarray(predicted, float).std() == 0:
+            raise ValueError("nope")
+        return float(-np.mean(np.abs(np.asarray(actual) - np.asarray(predicted))))
+
+    probe = probe_direction(refuses_constant, degrade(np.arange(1.0, 65.0)))
+
+    assert probe.direction == "maximize"
+    assert any("constant" in line and "nope" in line for line in probe.evidence)
+
+
+def test_a_scorer_refusing_every_pair_is_still_an_error() -> None:
+    """Skipping a bad pair must not become swallowing them all."""
+
+    def broken(actual, predicted) -> float:
+        raise RuntimeError("no scorer here")
+
+    probe = probe_direction(broken, degrade(np.arange(1.0, 65.0)))
+
+    assert probe.indeterminate
+    assert "no scorer here" in (probe.error or "")
+
+
+def test_a_non_finite_reading_is_skipped_not_counted() -> None:
+    """NaN is not a direction. It is skipped and reported, like a refusal."""
+
+    def nan_on_constant(actual, predicted) -> float:
+        arr = np.asarray(predicted, float)
+        if arr.std() == 0:
+            return float("nan")
+        return float(-np.mean(np.abs(np.asarray(actual) - arr)))
+
+    probe = probe_direction(nan_on_constant, degrade(np.arange(1.0, 65.0)))
+
+    assert probe.direction == "maximize"
+    assert any("non-finite" in line for line in probe.evidence)

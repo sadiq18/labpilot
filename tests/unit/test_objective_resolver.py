@@ -201,3 +201,53 @@ def test_resolve_direction_returns_nothing_when_nothing_says_anything() -> None:
     assert direction is None
     assert source == "unknown"
     assert contradiction is None
+
+
+# --- review findings --------------------------------------------------------
+
+
+def test_source_always_explains_the_confidence() -> None:
+    """Review finding. `source` reported the *stronger* of the two inputs while
+    `confidence` was the `min`, so `source='measured', confidence=0.90` gave no
+    way to see that the registry had capped it."""
+    objective = _resolve("rmse")
+
+    assert objective.identity_source == "registry"
+    assert objective.direction_source == "measured"
+    assert objective.source == "registry", "source must name the input that capped confidence"
+    assert objective.confidence == pytest.approx(_confidence_of(objective.source))
+
+
+def _confidence_of(source: str) -> float:
+    from labpilot.research_engine.intelligence.competition.objective import _CONFIDENCE
+
+    return _CONFIDENCE[source]
+
+
+@pytest.mark.parametrize(
+    ("raw", "declared"),
+    [("WRMSSE", None), ("rmse", "maximize")],
+)
+def test_a_blocked_objective_offers_the_answers_it_could_take(raw, declared) -> None:
+    """Review finding. `alternatives` was documented as what lets a question
+    offer real choices and was never populated, so the interactive prompt was a
+    bare yes/no."""
+    objective = _resolve(raw, declared_direction=declared)
+
+    assert objective.blocks_launch
+    assert objective.alternatives == ["maximize", "minimize"]
+
+
+def test_a_resolved_objective_offers_nothing_to_choose() -> None:
+    """Empty means there is nothing to decide, not that it went unrecorded."""
+    assert _resolve("rmse").alternatives == []
+
+
+def test_there_is_one_slug_implementation() -> None:
+    """Review finding. `_slug_identity` restated `metric_vocabulary._slug`, and
+    the identity of every uncatalogued metric depended on the two regexes never
+    diverging."""
+    from labpilot.research_engine.intelligence.competition import objective as objective_module
+
+    assert not hasattr(objective_module, "_slug_identity")
+    assert _resolve("Weighted RMSSE").metric_name == "weighted_rmsse"
