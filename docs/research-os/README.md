@@ -3,16 +3,18 @@
 Back to [docs index](../README.md). V1 pipeline docs:
 [../research-pipeline/](../research-pipeline/).
 
-**Status:** M1 Platform Foundation implemented on `research-os-m1-foundation`
-(artifacts + workspace + tools + CLI strangler). Next: M2 Conductor.  
-**Branch (impl):** `research-os-m1-foundation` · **Design:** historically `research-os-design`  
-**Ops / parallel schedule:** [execution-plan.md](execution-plan.md)  
+**Document status:** Historical roadmap and architecture record. M1–M6
+infrastructure is implemented; M22–M24 are the active trust foundation. See the
+canonical [12-month Product and Startup Plan](PRODUCT-PLAN.md) for current
+sequencing.
+**Implementation history:** M1–M6 milestone records · **Design:** historical
+`research-os-design`
+**Historical ops schedule:** [execution-plan.md](execution-plan.md)
 **Principles:** [architecture.md](architecture.md)
 
-This is the **single product roadmap**. Architecture and technology **co-evolve per
-milestone**. We do **not** pick Neo4j / Qdrant / Temporal / Ray up front — each
-milestone ships a usable system and only the stack it needs, laying foundation for
-the next.
+Architecture and technology co-evolve per milestone. We do **not** pick Neo4j /
+Qdrant / Temporal / Ray up front; each capability must earn its introduction
+through a measured need.
 
 ---
 
@@ -47,13 +49,13 @@ Details: [architecture.md](architecture.md).
 | Stage | Product name | Usable outcome | Track | Branch |
 |-------|--------------|----------------|-------|--------|
 | **M0** | Research Pipeline | Analyze→Plan→Run→Reflect loop | [research-pipeline](../research-pipeline/) | — |
-| **M1** | Platform Foundation | Artifacts + Workspace + Tools (CLI unchanged) | [milestones/01-foundation/](milestones/01-foundation/) | `research-os-m1-foundation` |
-| **M2** | Research Conductor | Constrained LLM + task queue + `research conduct` | [milestones/02-conductor/](milestones/02-conductor/) | `research-os-m2-conductor` |
-| **M3** | Campaign Engine | Dynamic tasks, budgets, continue/pause/resume | [milestones/03-campaigns/](milestones/03-campaigns/) | `research-os-m3-campaigns` |
-| **M4** | Memory & context | Retrieve→rank→compress; hierarchy ports | [milestones/04-context/](milestones/04-context/) | `research-os-m4-context` |
-| **M5** | Agents, events, parallel | Specialists + bus + concurrent branches | [milestones/05-agents/](milestones/05-agents/) | `research-os-m5-agents` |
-| **M6** | Self-improving memory | Experience records + retrieve/seed CLI | [milestones/06-transfer-memory/](milestones/06-transfer-memory/) | `research-os-m6-transfer-memory` |
-| **M7+** | Autonomy hardening | A loop that can actually optimise | [autonomy-roadmap/](autonomy-roadmap/) | `research-os-m7-competition-hardening` |
+| **M1** | Platform Foundation | Artifacts + Workspace + Tools (CLI unchanged) | Implemented | `research-os-m1-foundation` |
+| **M2** | Research Conductor | Constrained LLM + task queue + `research conduct` | Implemented | `research-os-m2-conductor` |
+| **M3** | Campaign Engine | Dynamic tasks, budgets, continue/pause/resume | Implemented | `research-os-m3-campaigns` |
+| **M4** | Memory & context | Retrieve→rank→compress; hierarchy ports | Implemented | `research-os-m4-context` |
+| **M5** | Agents, events, parallel | Specialists + bus + concurrent branches | Implemented | `research-os-m5-agents` |
+| **M6** | Self-improving memory | Experience records + retrieve/seed CLI | Implemented | `research-os-m6-transfer-memory` |
+| **M7+** | Autonomy hardening | Trust foundation, then an optimising loop | Active roadmap | `research-os-m7-competition-hardening` |
 
 **Critical path:** M1 → M2 → M3 (Orchestrator). M4–M6 deepen the OS into a research
 **manager** (better decisions → delegate/parallel → learn across campaigns).  
@@ -62,7 +64,8 @@ regress quality. Full event bus ships with M5; M2 only needs an append-only deci
 log. Long-running **Campaign Engine** autonomy is **M3** (M2 ships the Conductor kernel
 + `research conduct`).
 
-Design satellites (`design/01`…`11`) hold depth; **this README is the roadmap**.
+Design satellites (`design/01`…`11`) and milestone files hold historical depth;
+the [Product and Startup Plan](PRODUCT-PLAN.md) is the current roadmap.
 
 ---
 

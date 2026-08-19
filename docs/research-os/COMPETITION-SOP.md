@@ -1,5 +1,9 @@
 # SOP — Winning a Competition with LabPilot
 
+**Document status:** Current operator guidance with manual trust checks. M22–M24
+are not implemented yet, so these checks are not automated gates; see the
+[Product and Startup Plan](PRODUCT-PLAN.md).
+
 Standard operating procedure for taking a Kaggle competition from zero to a
 trustworthy submission using the `research` CLI.
 
@@ -64,10 +68,10 @@ lessons transfer between competitions.
 uv run --project /path/to/labpilot research doctor
 ```
 
-All non-optional rows must be **OK**. In particular `LLM provider` must show
-the provider *and* the model — if it says `not pulled` or `unreachable`, every
-downstream intelligence step will silently degrade to template text instead of
-failing loudly.
+All non-optional rows must be **OK**. In particular, confirm that the configured
+LLM provider and model are available before relying on LLM-assisted intelligence.
+Treat a missing or unreachable provider as a stop for that path; do not infer
+that a generated report represents model reasoning.
 
 ---
 
@@ -85,7 +89,7 @@ Because this is a Kaggle context, prefer **kernels over papers**: public
 notebooks encode the tricks that actually score. Papers are worth pulling only
 when the competition is genuinely novel.
 
-### ✅ Gate 1 — did it understand the data?
+### ✅ Manual Gate 1 — did it understand the data?
 
 Read the `[dataset]` notes. This is the single highest-leverage check in the
 whole SOP. Confirm:
@@ -151,14 +155,14 @@ choice, model, hyperparameters — is then optimising noise.
 research run --plan P-001                 # add --dry-run for a smoke pass first
 ```
 
-### ✅ Gate 3 — is the score believable?
+### ✅ Manual Gate 3 — is the score believable?
 
 Check `metrics.json`:
 
-- **Compare against the naive baseline the template reports.** The partitioned
-  template emits `anchor_hold_mse` alongside the model's score. If the model
-  does not beat the naive anchor, the features are not earning their keep — do
-  not submit, and do not tune. Fix the representation.
+- **Compare against an independently checked naive baseline when one is
+  available.** Some templates may report an anchor metric, but LabPilot does not
+  yet enforce the M23 baseline floor or verdict. If the model does not beat a
+  valid naive reference, do not submit or tune; fix the representation.
 - **Sanity-check the magnitude** against the public leaderboard. A CV score
   hundreds of times better than the winning score means leakage, not genius.
 - **Confirm the validation scheme** recorded in `metrics.json` is the one you
@@ -206,7 +210,8 @@ until a budget or stop condition fires. Use the staged commands above when you
 want to debug *why* it chose something; use `conduct` when the loop is trusted.
 
 Approvals default to on before a new plan batch and before any leaderboard
-submit. Keep them on until you trust the campaign.
+submit. Keep them on. Until M22–M24 are implemented and benchmarked, do not use
+`conduct` unattended for expensive runs or submissions.
 
 ### How it decides — collect once, test many
 

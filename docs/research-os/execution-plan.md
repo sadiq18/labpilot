@@ -1,5 +1,9 @@
 # Research OS — Execution Plan
 
+**Document status:** Historical implementation sequencing for M1–M6. Those
+milestones are implemented. See [PRODUCT-PLAN.md](PRODUCT-PLAN.md) for the
+active roadmap.
+
 Back to [README.md](README.md) (roadmap) · [architecture.md](architecture.md).
 
 **Purpose:** Ops view of **sequence vs parallel** — not a second architecture doc.
@@ -7,14 +11,14 @@ Product intent and per-milestone tech live in the [roadmap README](README.md).
 
 ---
 
-## 1. Critical path (Orchestrator)
+## 1. Historical critical path (Orchestrator)
 
 ```text
 M1 Platform Foundation → M2 Conductor → M3 Campaigns
 ```
 
-Until M3 merges, there is no durable goal-driven autonomy. M4–M6 deepen the OS
-(context, agents/events/parallel, transfer).
+M1–M3 established durable goal-driven autonomy; M4–M6 added context,
+agents/events/parallelism, and transfer memory.
 
 ---
 

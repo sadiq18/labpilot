@@ -26,9 +26,10 @@ have:
 
 Operator guide: [SOP.md](SOP.md) · Full CLI: [CLI.md](CLI.md).
 
-**Next product arc (Research OS):** Single roadmap — architecture and tech co-evolve
-per milestone — [../research-os/README.md](../research-os/README.md). Design branch:
-`research-os-design`; implementation uses one branch per OS milestone.
+**Next product arc (Research OS):** The
+[12-month Product and Startup Plan](../research-os/PRODUCT-PLAN.md) is the
+canonical current direction. The Research OS README and milestone files are
+historical implementation/design records.
 
 ---
 
@@ -36,7 +37,7 @@ per milestone — [../research-os/README.md](../research-os/README.md). Design b
 
 | Track | Document | Summary |
 |-------|----------|---------|
-| **Research OS (design)** | [../research-os/](../research-os/) | M0–M6 roadmap; M1 Foundation next to implement |
+| **Research OS (implemented infrastructure)** | [../research-os/](../research-os/) | M1–M6 implemented; M22–M24 trust foundation is next |
 | **Completed** | [milestones/COMPLETED.md](milestones/COMPLETED.md) | P0 + P1 + P2 + P3 + P4 shipped |
 | **In progress** | [milestones/IN-PROGRESS.md](milestones/IN-PROGRESS.md) | Evidence Card/Graph; Engineer/Reflection/Planner shipped tracks |
 | **TODO** | [milestones/TODO.md](milestones/TODO.md) | post-1.0 items |
@@ -59,7 +60,7 @@ per milestone — [../research-os/README.md](../research-os/README.md). Design b
 | **Research Planner** | — | **MVP shipped** | Hypothesis → planning compiler → executable DAG (`research plan`); Plans 1–6 |
 | **Research Engineer** | — | **Phase B complete (dry-run SoR)** | Approved plan → implemented, verified experiment (`research run --plan`) |
 | **Research Reflection** | — | **Phase B complete** | Outcomes → durable knowledge (`research reflect` / `journal`) |
-| **Research OS** | — | **Design** | Conductor-led evolution — [../research-os/](../research-os/); M1 Foundation next |
+| **Research OS** | — | **M1–M6 implemented; trust foundation active** | Conductor-led evolution — [product plan](../research-os/PRODUCT-PLAN.md) · [autonomy roadmap](../research-os/autonomy-roadmap/) |
 
 Details for each track live in the linked documents above:
 

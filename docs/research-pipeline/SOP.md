@@ -1,5 +1,10 @@
 # LabPilot SOP — How to Use `research`
 
+**Document status:** Current operator guidance with manual trust checks. M22–M24
+are active prerequisite work, so LabPilot does not yet automate dataset/objective
+certainty or a baseline-correctness gate. See the
+[Product and Startup Plan](../research-os/PRODUCT-PLAN.md).
+
 Standard operating procedure for running LabPilot on a real Kaggle competition:
 setup once, then iterate like a research engineer via **Analyze → Plan → Run**.
 

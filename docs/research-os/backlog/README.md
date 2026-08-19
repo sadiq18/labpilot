@@ -1,5 +1,9 @@
 # Research OS — Backlog
 
+**Document status:** Backlog. Pull an item only after the evidence condition in
+the [Product and Startup Plan](../PRODUCT-PLAN.md#deferred-until-evidence-requires-it)
+is met; M22–M24 remain the active prerequisite work.
+
 Items deferred from the milestone critical path. Not scheduled until a later
 milestone or explicit pickup.
 

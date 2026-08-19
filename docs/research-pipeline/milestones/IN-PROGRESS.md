@@ -1,12 +1,16 @@
 # In Progress
 
+**Document status:** Historical milestone record. For active work, see the
+[12-month Product and Startup Plan](../../research-os/PRODUCT-PLAN.md) and its
+M22–M24 trust-foundation prerequisites.
+
 Back to [MILESTONES.md](../MILESTONES.md).
 
 ---
 
-## Research OS — M1 Foundation
+## Research OS — M1 Foundation *(historical)*
 
-**Status:** Implemented on `research-os-m1-foundation` (ready to merge).  
+**Status:** Implemented; M1–M6 are now complete.
 **Roadmap:** [../../research-os/README.md](../../research-os/README.md) ·
 [execution-plan](../../research-os/execution-plan.md) ·
 [M1 foundation](../../research-os/milestones/01-foundation/README.md) ·
@@ -14,7 +18,6 @@ Back to [MILESTONES.md](../MILESTONES.md).
 
 V1 pipeline remains the kernel. Stage CLIs (`analyze` / `plan` / `run` /
 `reflect` / `submit`) call Research OS tools over a Workspace facade.
-Next **implementation** branch: **M2 Conductor** (`research-os-m2-conductor`).
 
 ---
 
