@@ -134,8 +134,14 @@ default for this specific tool. Closing this — either making
 requested technique differs from what's on disk, or removing the
 `prefer_patch` shortcut for the `implement` capability specifically — is
 **out of scope for M15** per its own rule (§4 of the design: this milestone
-finds and labels gaps, [M7](01-technique-to-model.md) closes them). Flagging
-it here is what the audit is for.
+finds and labels gaps, it does not close them). Flagging it here is what the
+audit is for.
+
+**Ownership, corrected 2026-08-19.** This originally read "[M7](01-technique-to-model.md)
+closes them". M7 shipped 2026-08-07 scoped to the plan-execution path and
+never covered the standalone `implement` tool, so it closed without taking
+this on. Now tracked at
+[backlog/implement-tool-technique-path.md](../backlog/implement-tool-technique-path.md).
 
 ### `implement` does not vary by `technique` at all — it varies by `description`
 
