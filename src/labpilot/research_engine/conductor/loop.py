@@ -952,6 +952,7 @@ def run_until_stop(
     prefer_offline: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
     branches: int = 1,
+    gather_background: bool = False,
 ) -> list[DecisionRecord]:
     """Run until stop, budget, max_steps, or operator pause status.
 
@@ -963,30 +964,57 @@ def run_until_stop(
     When online policy fails, asks the operator (allow / deny / retry) before
     using the deterministic offline order — unless ``prefer_offline`` or
     ``auto_approve`` (``--yes``) is set.
+
+    ``gather_background`` (M16) hands evidence gathering to a producer thread
+    and takes `analyze_competition` off the consumer's allowlist for the whole
+    run. Default off: without it this is byte-for-byte the behaviour it has
+    always had, gate included.
     """
     # Every micro-agent invocation in this campaign is recorded: which agent,
     # whether the LLM or its rule engine produced the answer, and on failure
     # what kind. M14 2b and 3 are both blocked on having that as *data* rather
     # than log lines, and it can only be collected while the run happens.
+    producer = None
+    if gather_background:
+        from labpilot.research_engine.conductor.producer import EvidenceProducer
+
+        producer = EvidenceProducer(
+            workspace,
+            registry,
+            session_id=session_id,
+            llm_client=llm_client,
+        )
+
     with recording_provenance(
         workspace.knowledge_dir, workspace.competition, session_id=session_id
     ):
-        return _run_until_stop_inner(
-            store,
-            workspace,
-            session_id,
-            registry,
-            llm_client=llm_client,
-            max_steps=max_steps,
-            auto_approve=auto_approve,
-            approval_prompt=approval_prompt,
-            on_progress=on_progress,
-            autonomy=autonomy,
-            campaign_mode=campaign_mode,
-            prefer_offline=prefer_offline,
-            offline_fallback_prompt=offline_fallback_prompt,
-            branches=branches,
-        )
+        # Started and stopped out here rather than inside the loop body: the
+        # producer has to be shut down on *every* exit — stop condition,
+        # budget, exception, Ctrl-C — and one try/finally around the call is
+        # the version of that which cannot be forgotten in a new branch.
+        if producer is not None:
+            producer.start()
+        try:
+            return _run_until_stop_inner(
+                store,
+                workspace,
+                session_id,
+                registry,
+                llm_client=llm_client,
+                max_steps=max_steps,
+                auto_approve=auto_approve,
+                approval_prompt=approval_prompt,
+                on_progress=on_progress,
+                autonomy=autonomy,
+                campaign_mode=campaign_mode,
+                prefer_offline=prefer_offline,
+                offline_fallback_prompt=offline_fallback_prompt,
+                branches=branches,
+                producer=producer,
+            )
+        finally:
+            if producer is not None:
+                producer.stop()
 
 
 def _run_until_stop_inner(
@@ -1005,6 +1033,7 @@ def _run_until_stop_inner(
     prefer_offline: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
     branches: int = 1,
+    producer: Any | None = None,
 ) -> list[DecisionRecord]:
     scheduler = Scheduler(store, registry, workspace, llm_client=llm_client)
     decisions: list[DecisionRecord] = []
@@ -1034,7 +1063,13 @@ def _run_until_stop_inner(
         "prefer_offline": prefer_offline,
         "auto_offline_fallback": auto_approve,
         "offline_fallback_prompt": offline_fallback_prompt,
+        # M16: with a producer running, gathering is not the consumer's to do.
+        "external_gathering": producer is not None,
     }
+
+    def _producer_status() -> dict[str, Any] | None:
+        """Read per decision, not once: the point is that it changes mid-run."""
+        return None if producer is None else producer.status()
 
     # Repair research memory before acting on it. A claim no measurement
     # supports steers every decision this loop is about to make, and the repair
@@ -1196,6 +1231,7 @@ def _run_until_stop_inner(
                     # stagnant clause gates the allowlist before the prompt is
                     # built, so the series has to arrive with the decision.
                     budgets=(budget_cfg, budget_state),
+                    producer_status=_producer_status(),
                     **policy_kw,
                 )
                 _progress(
@@ -1458,6 +1494,7 @@ def _run_until_stop_inner(
             registry,
             llm_client=llm_client,
             budgets=(budget_cfg, budget_state),
+            producer_status=_producer_status(),
             **policy_kw,
         )
         decision_id = store.new_decision_id()

@@ -64,6 +64,7 @@ def build_observe_bundle(
     max_context_items: int = 16,
     max_context_chars: int = 4000,
     budgets: tuple[BudgetConfig, BudgetState] | None = None,
+    producer_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Gather durable state for policy input.
 
@@ -132,6 +133,13 @@ def build_observe_bundle(
     observe["viable_hypotheses"] = viable
     observe["untested_hypotheses"] = proposed_total
     observe["hours_since_last_artifact"] = hours_since_last_artifact(workspace)
+    # M16: what the background producer last did, when one is running. Purely
+    # descriptive — the gate is what decides, and a number the model merely
+    # reads has changed no decision in nine campaigns. It is here so the policy
+    # is not watching the hypothesis pool grow between steps with no account of
+    # why it is growing.
+    if producer_status is not None:
+        observe["evidence_producer"] = producer_status
     _attach_score_progress(observe, session, budgets)
     _attach_evidence_refresh(observe, workspace)
     if include_context:
@@ -621,6 +629,8 @@ def available_tools(
     workspace: Workspace,
     allowlist: set[str],
     budgets: tuple[BudgetConfig, BudgetState] | None = None,
+    *,
+    external_gathering: bool = False,
 ) -> set[str]:
     """Drop tools whose preconditions the workspace does not yet satisfy.
 
@@ -644,11 +654,22 @@ def available_tools(
     # minutes of network and LLM work). Once there is a backlog of untested
     # hypotheses, the useful move is to *test* one, not to re-derive the same
     # techniques and beliefs again. Gathering reopens when the backlog runs dry.
-    gather_ok, gather_reason = should_gather_evidence(workspace, budgets)
-    if not gather_ok:
-        logger.info("Skipping evidence gathering: %s", gather_reason)
+    #
+    # `external_gathering` (M16): a background producer owns the sweep, so the
+    # tool leaves the consumer's allowlist *unconditionally* — not gated on the
+    # same predicate. Leaving it gated would let both components pass the same
+    # gate in the same second and sweep twice. It also makes the exit criterion
+    # checkable: "a campaign step never blocks on gathering" becomes a property
+    # of the allowlist rather than a hope about scheduling.
+    if external_gathering:
+        gather_ok = False
+        logger.debug("Evidence gathering belongs to the background producer this run")
     else:
-        logger.info("Evidence gathering available: %s", gather_reason)
+        gather_ok, gather_reason = should_gather_evidence(workspace, budgets)
+        if not gather_ok:
+            logger.info("Skipping evidence gathering: %s", gather_reason)
+        else:
+            logger.info("Evidence gathering available: %s", gather_reason)
 
     requires: dict[str, bool] = {
         # Nothing to reflect on until an experiment has produced evidence.
@@ -913,6 +934,8 @@ def decide_next(
     auto_offline_fallback: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
     budgets: tuple[BudgetConfig, BudgetState] | None = None,
+    external_gathering: bool = False,
+    producer_status: dict[str, Any] | None = None,
 ) -> tuple[NextAction, dict[str, Any]]:
     """Observe + think; return validated NextAction and observe bundle.
 
@@ -926,13 +949,16 @@ def decide_next(
     caller with no campaign state behaves exactly as before.
     """
     all_tools = set(registry.names())
-    allowlist = available_tools(workspace, all_tools, budgets)
+    allowlist = available_tools(
+        workspace, all_tools, budgets, external_gathering=external_gathering
+    )
     observe = build_observe_bundle(
         store,
         workspace,
         session_id,
         include_context=not prefer_offline,
         budgets=budgets,
+        producer_status=producer_status,
     )
     action = llm_next_action(
         observe,

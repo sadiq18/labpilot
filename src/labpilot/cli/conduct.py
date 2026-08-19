@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,19 @@ conduct_app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+
+def _gather_background_enabled(flag: bool) -> bool:
+    """The flag, or `LABPILOT_GATHER_BACKGROUND` for callers that cannot pass one.
+
+    Read here rather than in `EvidenceProducer` so the environment reaches one
+    decision point: a producer that could switch itself on from a variable the
+    CLI never saw is a campaign whose behaviour is not in its own command line.
+    """
+    if flag:
+        return True
+    raw = os.environ.get("LABPILOT_GATHER_BACKGROUND", "").strip().lower()
+    return raw not in {"", "0", "false", "no", "off"}
 
 
 def _apply_deterministic_env(offline: bool) -> None:
@@ -276,6 +290,15 @@ def conduct_run(
         min=0,
         max=1,
     ),
+    gather_background: bool = typer.Option(
+        False,
+        "--gather-background",
+        help=(
+            "Run evidence gathering as a background producer instead of a campaign "
+            "step, so testing never waits on a kernel/paper sweep. Also settable "
+            "with LABPILOT_GATHER_BACKGROUND=1."
+        ),
+    ),
     max_submissions: int | None = typer.Option(None, "--max-submissions"),
     max_wall_s: float | None = typer.Option(None, "--max-wall-s"),
     max_cost_usd: float | None = typer.Option(None, "--max-cost-usd"),
@@ -340,6 +363,7 @@ def conduct_run(
             prefer_offline=offline,
             offline_fallback_prompt=None if yes else _offline_fallback_prompt(yes),
             branches=branches,
+            gather_background=_gather_background_enabled(gather_background),
         )
     finally:
         store.close()
@@ -357,6 +381,7 @@ def _continue_session(
     competition: str | None,
     max_steps: int,
     branches: int,
+    gather_background: bool = False,
     yes: bool,
     offline: bool,
     autonomy: int | None,
@@ -401,6 +426,7 @@ def _continue_session(
             prefer_offline=offline,
             offline_fallback_prompt=None if yes else _offline_fallback_prompt(yes),
             branches=branches,
+            gather_background=_gather_background_enabled(gather_background),
         )
     finally:
         store.close()
@@ -423,6 +449,15 @@ def conduct_continue(
             "Keep K within twice your provider's per-minute limit."
         ),
     ),
+    gather_background: bool = typer.Option(
+        False,
+        "--gather-background",
+        help=(
+            "Run evidence gathering as a background producer instead of a campaign "
+            "step, so testing never waits on a kernel/paper sweep. Also settable "
+            "with LABPILOT_GATHER_BACKGROUND=1."
+        ),
+    ),
     yes: bool = typer.Option(False, "--yes", "-y"),
     offline: bool = typer.Option(False, "--offline"),
     autonomy: int | None = typer.Option(None, "--autonomy", min=0, max=1),
@@ -436,6 +471,7 @@ def conduct_continue(
         competition=competition,
         max_steps=max_steps,
         branches=branches,
+        gather_background=gather_background,
         yes=yes,
         offline=offline,
         autonomy=autonomy,
@@ -460,6 +496,15 @@ def conduct_resume(
             "Keep K within twice your provider's per-minute limit."
         ),
     ),
+    gather_background: bool = typer.Option(
+        False,
+        "--gather-background",
+        help=(
+            "Run evidence gathering as a background producer instead of a campaign "
+            "step, so testing never waits on a kernel/paper sweep. Also settable "
+            "with LABPILOT_GATHER_BACKGROUND=1."
+        ),
+    ),
     yes: bool = typer.Option(False, "--yes", "-y"),
     offline: bool = typer.Option(False, "--offline"),
     autonomy: int | None = typer.Option(None, "--autonomy", min=0, max=1),
@@ -473,6 +518,7 @@ def conduct_resume(
         competition=competition,
         max_steps=max_steps,
         branches=branches,
+        gather_background=gather_background,
         yes=yes,
         offline=offline,
         autonomy=autonomy,
