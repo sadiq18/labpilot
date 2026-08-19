@@ -236,3 +236,144 @@ def test_the_card_reads_the_result_rather_than_re_deriving_it(tmp_path) -> None:
     assert card.observed.treatment_cv == 5.0, "re-derived cv_rmse instead of the stated score"
     assert card.observed.cv_gain == pytest.approx(1.0)
     assert card.decision.value == "accepted"
+
+
+# --- the control half of the seam -------------------------------------------
+
+
+@pytest.mark.parametrize("control_metrics", [None, {}])
+def test_a_control_that_scored_without_a_blob_is_still_a_control(
+    tmp_path, control_metrics
+) -> None:
+    """Review finding, and the one that blocked phase 2.
+
+    Both the assignment and the extraction asked the metrics *blob* rather than
+    the result, so a validator that scores without writing Kaggle-shaped `cv_`
+    keys had its control silently discarded and every comparison came back
+    `missing_control`. Parametrized over both empty forms because `is None` and
+    falsy are different tests and only one of them was wrong at each site —
+    `resolve_control` returns `{}`, which passed the `is None` check.
+
+    The treatment side never had the bug: `_found(result, ...)` is unguarded.
+    That asymmetry is why 3088 green tests said nothing.
+    """
+    kwargs = {} if control_metrics is None else {"control_metrics": control_metrics}
+    card = _card(
+        tmp_path,
+        "demo-blobless",
+        treatment_metrics={},
+        result=ValidationResult(
+            score=0.90, metric="pass_rate", direction="maximize", source="harness"
+        ),
+        control_result=ValidationResult(
+            score=0.70, metric="pass_rate", direction="maximize", source="harness"
+        ),
+        **kwargs,
+    )
+
+    assert card.observed.parent_cv == 0.70, "the control result was thrown away"
+    assert card.observed.cv_gain == pytest.approx(0.20)
+    assert card.decision.value == "accepted"
+
+
+def test_a_control_result_with_no_score_is_still_a_missing_control(tmp_path) -> None:
+    """The other side of it. Carrying a result is not the same as having scored,
+    and treating one as a control would compare against nothing."""
+    card = _card(
+        tmp_path,
+        "demo-scoreless-control",
+        treatment_metrics={},
+        result=ValidationResult(
+            score=0.90, metric="pass_rate", direction="maximize", source="harness"
+        ),
+        control_result=ValidationResult(
+            score=None, metric="", direction="maximize", source="harness"
+        ),
+    )
+
+    assert card.observed.parent_cv is None
+    assert card.decision_reason == "missing_control"
+
+
+# --- the validator actually runs --------------------------------------------
+
+
+def _workspace(tmp_path: Path, *, direction: str) -> Path:
+    import json
+
+    (tmp_path / "metrics.json").write_text(
+        json.dumps({"cv_rmse": 1.5, "cv_std": 0.1}), encoding="utf-8"
+    )
+    (tmp_path / "competition.json").write_text(
+        json.dumps(
+            {
+                "slug": "demo",
+                "evaluation_metric": {"name": "rmse", "key": "rmse", "direction": direction},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+class _Context:
+    def __init__(self, root: Path) -> None:
+        self.competition = "demo"
+        self.workspace_root = root
+        self.paths = None
+
+
+def test_the_kaggle_validator_reads_the_workspace_it_was_given(tmp_path) -> None:
+    """Review finding. `getattr(workspace, "root", workspace)` reads as "use
+    `.root` if this is a Workspace, else treat it as a path" and is not:
+    `pathlib.Path` *has* a `root` property returning "/". Passing the obvious
+    thing — a `Path`, which is what `TaskContext.workspace_root` holds — made the
+    validator read `/metrics.json` and return a scoreless result with no error.
+
+    Nothing caught it because the only test of this method asserted that it was
+    callable.
+    """
+    root = _workspace(tmp_path, direction="minimize")
+
+    result = KaggleCvValidator().validate(None, root, _Context(root))
+
+    assert result.score == 1.5
+    assert result.metric == "cv_rmse"
+    assert result.direction == "minimize"
+    assert result.artifacts["metrics"] == str(root / "metrics.json")
+
+
+def test_a_workspace_object_works_too(tmp_path) -> None:
+    """The shape the `getattr` was actually written for. Both must work, or
+    fixing one caller breaks the other."""
+    root = _workspace(tmp_path, direction="maximize")
+
+    class _Workspace:
+        def __init__(self, path: Path) -> None:
+            self.root = path
+
+    class _NoRootContext:
+        competition = "demo"
+        paths = None
+
+    result = KaggleCvValidator().validate(None, _Workspace(root), _NoRootContext())
+
+    assert result.score == 1.5
+    assert result.direction == "maximize"
+
+
+def test_a_workspace_with_no_metrics_reports_no_score(tmp_path) -> None:
+    """An absent metrics.json is "this run scored nothing", not a crash — and it
+    must be distinguishable from the `/metrics.json` misread it used to produce,
+    which looked exactly the same."""
+    (tmp_path / "competition.json").write_text(
+        '{"slug": "demo", "evaluation_metric": {"name": "rmse", "key": "rmse", '
+        '"direction": "minimize"}}',
+        encoding="utf-8",
+    )
+
+    result = KaggleCvValidator().validate(None, tmp_path, _Context(tmp_path))
+
+    assert result.score is None
+    assert result.direction == "minimize", "direction is independent of the score"
+    assert not result.is_comparable

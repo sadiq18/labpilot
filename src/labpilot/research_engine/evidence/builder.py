@@ -483,16 +483,30 @@ def build_evidence_card(
             maximize = result.maximize
         if lb_gain is None:
             lb_gain = result.secondary
-    if control_result is not None and control_metrics is None:
+    # `not control_metrics`, not `is None`: `resolve_control` returns `{}` when it
+    # finds nothing, so an `is None` test skipped the assignment for the most
+    # common empty case there is.
+    if control_result is not None and not control_metrics:
         control_metrics = control_result.raw
 
     if maximize is None:
         maximize = _resolve_direction(knowledge_dir, competition, workspace_root)
     plan_meta = dict(plan_metadata or {})
     control_metrics = dict(control_metrics or {})
-    missing_control = not control_metrics and not control_execution_id
 
-    parent_found = _found(control_result, control_metrics) if control_metrics else None
+    # A control_result that carries a score *is* a control, whether or not it
+    # brought a metrics blob with it. Both of the lines below used to ask only
+    # the blob, so a validator that scores without writing Kaggle-shaped
+    # `cv_`-keys — the whole point of the seam — had its control thrown away and
+    # every comparison came back `missing_control`. The treatment side never had
+    # this bug, which is why the suite stayed green: `_found(result, ...)` below
+    # is unguarded, and only the control was asked to prove itself twice.
+    control_scored = control_result is not None and control_result.score is not None
+    missing_control = not control_metrics and not control_execution_id and not control_scored
+
+    parent_found = (
+        _found(control_result, control_metrics) if (control_scored or control_metrics) else None
+    )
     treatment_found = _found(result, treatment_metrics)
     parent_cv = parent_found[0] if parent_found else None
     treatment_cv = treatment_found[0] if treatment_found else None

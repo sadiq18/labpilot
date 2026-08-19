@@ -61,6 +61,27 @@ def result_from_metrics(
     )
 
 
+def _workspace_root(workspace: Any, context: Any) -> Path:
+    """The directory a run wrote into, from either argument.
+
+    `getattr(workspace, "root", workspace)` looks like "use `.root` if this is a
+    Workspace, else treat it as a path" and is not: `pathlib.Path` *has* a `root`
+    property, and it returns ``"/"``. Passing the obvious thing — a `Path`, which
+    is what `TaskContext.workspace_root` holds — made the validator read
+    ``/metrics.json`` and return a scoreless result with no error.
+
+    `context.workspace_root` is preferred because the context already carries it,
+    which is also why `workspace` is a redundant parameter; it stays because the
+    protocol signature is fixed by the plan.
+    """
+    from_context = getattr(context, "workspace_root", None)
+    if from_context is not None:
+        return Path(from_context)
+    if isinstance(workspace, (str, Path)):
+        return Path(workspace)
+    return Path(workspace.root)
+
+
 class KaggleCvValidator:
     """Cross-validated training in a workspace, scored by the competition metric.
 
@@ -74,7 +95,7 @@ class KaggleCvValidator:
     source = SOURCE
 
     def validate(self, hypothesis: Any, workspace: Any, context: Any) -> ValidationResult:
-        root = Path(getattr(workspace, "root", workspace))
+        root = _workspace_root(workspace, context)
         competition = str(getattr(context, "competition", "") or "")
         knowledge_dir = getattr(getattr(context, "paths", None), "base_dir", None)
 
