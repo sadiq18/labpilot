@@ -45,14 +45,13 @@ MetricDirection = Literal["minimize", "maximize"]
 #: `conductor/budgets.py` so the vocabulary and the matcher cannot fork.
 MEASUREMENT_PREFIXES: tuple[str, ...] = ("cv_", "lb_", "val_", "test_", "train_")
 
-_CLASSIFICATION = frozenset(
-    {
-        ProblemType.TABULAR_CLASSIFICATION,
-        ProblemType.TEXT_CLASSIFICATION,
-        ProblemType.IMAGE_CLASSIFICATION,
-    }
-)
-_REGRESSION = frozenset({ProblemType.TABULAR_REGRESSION})
+#: What a metric needs of the *truth*, which is the question `problem_types`
+#: was really asking. Enumerating task types instead made adding one an
+#: O(metrics x tasks) edit, against a `ProblemType` closed at five values — no
+#: ranking, detection, segmentation, forecasting, audio or RL. Shape is the
+#: durable constraint: RMSE scores continuous values whether they came from a
+#: spreadsheet, a spectrogram or a wellbore.
+TargetKind = Literal["continuous", "discrete", "any"]
 
 
 @dataclass(frozen=True)
@@ -75,9 +74,14 @@ class CanonicalMetric:
     key: str
     direction: MetricDirection
     aliases: frozenset[str]
-    problem_types: frozenset[ProblemType]
+    #: What the truth must look like. Not which task it came from.
+    target_kind: TargetKind
     cv_priority: int
     scorable: bool = True
+    #: The scorer needs one score per group rather than per row — a ranking or
+    #: retrieval objective. Declared so applicability is derived from the data
+    #: rather than from a task label nobody can enumerate in advance.
+    requires_groups: bool = False
     #: The scorer needs probabilities, not hard predictions. Declared because
     #: `compute_metric` *raises* without them for some metrics and silently
     #: computes accuracy instead for others (AUC and log loss on multiclass) —
@@ -98,7 +102,7 @@ _METRICS: tuple[CanonicalMetric, ...] = (
         key="balanced_accuracy",
         direction="maximize",
         aliases=frozenset({"balanced_accuracy", "balanced_accuracy_score"}),
-        problem_types=_CLASSIFICATION,
+        target_kind="discrete",
         cv_priority=10,
         scorable=False,
     ),
@@ -106,7 +110,7 @@ _METRICS: tuple[CanonicalMetric, ...] = (
         key="accuracy",
         direction="maximize",
         aliases=frozenset({"accuracy", "acc", "categorization_accuracy"}),
-        problem_types=_CLASSIFICATION,
+        target_kind="discrete",
         cv_priority=20,
     ),
     CanonicalMetric(
@@ -121,7 +125,7 @@ _METRICS: tuple[CanonicalMetric, ...] = (
                 "area_under_the_receiver_operating_characteristic_curve",
             }
         ),
-        problem_types=_CLASSIFICATION,
+        target_kind="discrete",
         cv_priority=30,
         requires_probabilities=True,
     ),
@@ -129,21 +133,21 @@ _METRICS: tuple[CanonicalMetric, ...] = (
         key="rmse",
         direction="minimize",
         aliases=frozenset({"rmse", "root_mean_squared_error"}),
-        problem_types=_REGRESSION,
+        target_kind="continuous",
         cv_priority=40,
     ),
     CanonicalMetric(
         key="f1",
         direction="maximize",
         aliases=frozenset({"f1", "f1_score"}),
-        problem_types=_CLASSIFICATION,
+        target_kind="discrete",
         cv_priority=50,
     ),
     CanonicalMetric(
         key="logloss",
         direction="minimize",
         aliases=frozenset({"logloss", "log_loss", "logarithmic_loss"}),
-        problem_types=_CLASSIFICATION,
+        target_kind="discrete",
         cv_priority=60,
         requires_probabilities=True,
     ),
@@ -151,14 +155,14 @@ _METRICS: tuple[CanonicalMetric, ...] = (
         key="mse",
         direction="minimize",
         aliases=frozenset({"mse", "mean_squared_error"}),
-        problem_types=_REGRESSION,
+        target_kind="continuous",
         cv_priority=70,
     ),
     CanonicalMetric(
         key="mae",
         direction="minimize",
         aliases=frozenset({"mae", "mean_absolute_error"}),
-        problem_types=_REGRESSION,
+        target_kind="continuous",
         cv_priority=80,
     ),
     CanonicalMetric(
@@ -167,7 +171,7 @@ _METRICS: tuple[CanonicalMetric, ...] = (
         aliases=frozenset(
             {"rmsle", "root_mean_squared_logarithmic_error", "root_mean_squared_log_error"}
         ),
-        problem_types=_REGRESSION,
+        target_kind="continuous",
         cv_priority=90,
     ),
 )
@@ -237,15 +241,50 @@ def is_scorable(key: str | None) -> bool:
     return bool(normalized) and _BY_KEY[normalized].scorable
 
 
-def metrics_for_problem_type(problem_type: ProblemType | str) -> frozenset[str]:
-    """Scorable canonical keys for this problem type.
+def metrics_for(
+    *,
+    target_kind: TargetKind,
+    has_groups: bool = False,
+    scorable_only: bool = True,
+) -> frozenset[str]:
+    """Canonical keys whose requirements this data satisfies.
 
-    Scorable only: this feeds the baseline selector, which tells codegen which
-    ``cv_<key>`` to emit. Naming a metric the pipeline cannot compute would turn
-    an honest mapping into a runtime failure inside generated code.
+    The general entry point. Applicability is *derived* from the shape of the
+    truth rather than looked up against a task label, so a new kind of problem
+    needs no edit here — only data that does or does not meet a metric's stated
+    requirements.
     """
-    wanted = ProblemType(problem_type) if isinstance(problem_type, str) else problem_type
-    return frozenset(m.key for m in _METRICS if m.scorable and wanted in m.problem_types)
+    return frozenset(
+        m.key
+        for m in _METRICS
+        if (not scorable_only or m.scorable)
+        and m.target_kind in ("any", target_kind)
+        and (has_groups or not m.requires_groups)
+    )
+
+
+#: The one place a task label becomes a shape. Adding a `ProblemType` costs a
+#: line here, not an edit to every metric — which is why `problem_types` came
+#: off the entries.
+_TARGET_KIND_BY_PROBLEM_TYPE: dict[str, TargetKind] = {
+    ProblemType.TABULAR_REGRESSION.value: "continuous",
+    ProblemType.TABULAR_CLASSIFICATION.value: "discrete",
+    ProblemType.TEXT_CLASSIFICATION.value: "discrete",
+    ProblemType.IMAGE_CLASSIFICATION.value: "discrete",
+}
+
+
+def metrics_for_problem_type(problem_type: ProblemType | str) -> frozenset[str]:
+    """Scorable keys for a `ProblemType`, via its target shape.
+
+    A thin adapter kept for `SUPPORTED_METRICS_BY_PROBLEM_TYPE`'s consumers.
+    Prefer `metrics_for`, which needs no task label. An unrecognised problem type
+    yields nothing rather than guessing — the selector then falls back to its own
+    default and says so, instead of this pretending to know.
+    """
+    value = problem_type.value if isinstance(problem_type, ProblemType) else str(problem_type)
+    kind = _TARGET_KIND_BY_PROBLEM_TYPE.get(value)
+    return metrics_for(target_kind=kind) if kind else frozenset()
 
 
 def cv_search_order() -> tuple[str, ...]:

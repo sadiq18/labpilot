@@ -25,6 +25,7 @@ from labpilot.research_engine.intelligence.competition.metric_vocabulary import 
     direction_of,
     is_scorable,
     known_keys,
+    metrics_for,
     metrics_for_problem_type,
     normalize_metric_key,
     scorable_keys,
@@ -224,3 +225,56 @@ def test_cv_search_order_preserves_the_existing_priority() -> None:
     assert order.index("balanced_accuracy") < order.index("accuracy")
     assert order.index("accuracy") < order.index("auc")
     assert order.index("auc") < order.index("rmse")
+
+
+# --- applicability is derived from shape, not from a task label -------------
+
+
+def test_no_metric_entry_names_a_task() -> None:
+    """The scaling property, asserted structurally.
+
+    `problem_types` on every metric made adding a task type an O(metrics x tasks)
+    edit, against a `ProblemType` closed at five values — no ranking, detection,
+    segmentation, forecasting, audio or RL. A metric declares what it needs of
+    the data; nothing declares which task it belongs to.
+    """
+    for metric in _METRICS:
+        assert not hasattr(metric, "problem_types")
+        assert metric.target_kind in {"continuous", "discrete", "any"}
+
+
+def test_a_new_kind_of_problem_needs_no_registry_edit() -> None:
+    """A forecasting objective has no `ProblemType` member and never will need
+    one here: its truth is continuous, so the continuous metrics apply."""
+    assert metrics_for(target_kind="continuous") == {"rmse", "mse", "mae", "rmsle"}
+    assert metrics_for(target_kind="discrete") == {"accuracy", "auc", "logloss", "f1"}
+
+
+def test_a_group_metric_is_offered_only_when_there_are_groups(monkeypatch) -> None:
+    """Ranking and retrieval score per query, not per row, so such a metric must
+    not be offered for a dataset with no groups to score over.
+
+    Injected into the real registry and read back through `metrics_for`, because
+    asserting the predicate by hand would test my arithmetic rather than the
+    filter.
+    """
+    from dataclasses import replace
+
+    from labpilot.research_engine.intelligence.competition import metric_vocabulary as mv
+
+    ndcg = replace(
+        mv._METRICS[1], key="ndcg", target_kind="discrete", requires_groups=True
+    )
+    monkeypatch.setattr(mv, "_METRICS", (*mv._METRICS, ndcg))
+
+    assert "ndcg" not in mv.metrics_for(target_kind="discrete")
+    assert "ndcg" in mv.metrics_for(target_kind="discrete", has_groups=True)
+    # a per-row metric stays available either way
+    assert "accuracy" in mv.metrics_for(target_kind="discrete", has_groups=True)
+
+
+def test_an_unrecognised_problem_type_yields_nothing_rather_than_guessing() -> None:
+    """The selector then falls back to its own default and says so, instead of
+    this pretending to know what an unmapped task needs."""
+    assert metrics_for_problem_type("audio_classification") == frozenset()
+    assert metrics_for_problem_type("unknown") == frozenset()
