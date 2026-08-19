@@ -217,3 +217,69 @@ def test_missing_primary_metric_is_inconclusive():
     result = compare(base, child, primary_metric_key="cv_accuracy")
     assert result.verdict == Verdict.INCONCLUSIVE
     assert result.primary_metric_key is None
+
+
+# --- direction comes from the metric, not from the contract -----------------
+
+
+def _competition_dir(tmp_path: Path, metric: dict) -> tuple[Path, ...]:
+    import json
+
+    (tmp_path / "competition.json").write_text(
+        json.dumps({"slug": "demo", "evaluation_metric": metric}), encoding="utf-8"
+    )
+    return (tmp_path,)
+
+
+def test_a_contract_that_states_the_wrong_direction_does_not_invert_the_verdict(
+    tmp_path: Path,
+) -> None:
+    """The rogii failure, at the comparator. A contract claiming RMSE is
+    maximised made a *worse* score read as an improvement, and fifteen evidence
+    cards were built that way. The registry knows RMSE from its key, and the key
+    is what the run was actually scored on.
+    """
+    dirs = _competition_dir(tmp_path, {"name": "rmse", "key": "rmse", "direction": "maximize"})
+
+    comparison = compare(
+        _exp("base", metrics={"cv_rmse": 10.0}, problem_type="tabular_regression"),
+        _exp("child", metrics={"cv_rmse": 20.0}, problem_type="tabular_regression"),
+        competition_dirs=dirs,
+    )
+
+    assert comparison.primary_metric_key == "cv_rmse"
+    assert comparison.verdict is Verdict.REGRESSION, "a doubled RMSE read as an improvement"
+
+
+def test_a_contract_that_states_no_direction_is_not_read_as_maximize(
+    tmp_path: Path,
+) -> None:
+    """`direction != "minimize"` read *everything* that was not that literal
+    string as maximize — including a contract that never said."""
+    dirs = _competition_dir(tmp_path, {"name": "rmse", "key": "rmse"})
+
+    comparison = compare(
+        _exp("base", metrics={"cv_rmse": 10.0}, problem_type="tabular_regression"),
+        _exp("child", metrics={"cv_rmse": 5.0}, problem_type="tabular_regression"),
+        competition_dirs=dirs,
+    )
+
+    assert comparison.verdict is Verdict.WORTH_KEEPING, "halving RMSE is an improvement"
+
+
+def test_a_stated_direction_still_decides_a_metric_the_registry_cannot_know(
+    tmp_path: Path,
+) -> None:
+    """The registry answers for catalogued keys only. For anything else the
+    contract is the best evidence available, and must still be used."""
+    dirs = _competition_dir(
+        tmp_path, {"name": "wellbore misfit", "key": "wellbore_misfit", "direction": "minimize"}
+    )
+
+    comparison = compare(
+        _exp("base", metrics={"cv_wellbore_misfit": 10.0}, problem_type="tabular_regression"),
+        _exp("child", metrics={"cv_wellbore_misfit": 5.0}, problem_type="tabular_regression"),
+        competition_dirs=dirs,
+    )
+
+    assert comparison.verdict is Verdict.WORTH_KEEPING

@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
 
+from labpilot.research_engine.execution.metrics import compute_metric
 from labpilot.research_engine.intelligence.competition.metrics import (
     enrich_metric_spec,
     normalize_metric,
     resolve_metric_key_with_llm,
 )
 from labpilot.research_engine.intelligence.competition.models import MetricSpec
-from labpilot.research_engine.execution.metrics import compute_metric
 
 
 def test_normalize_metric_sets_canonical_key():
@@ -97,3 +97,48 @@ def test_compute_metric_auc_multiclass_falls_back_to_accuracy():
     y_pred = np.array([0, 1, 2])
     score = compute_metric(y_true, y_pred, "auc", y_proba=None, num_classes=3)
     assert score == pytest.approx(1.0)
+
+
+# --- an unrecognised metric has no direction --------------------------------
+
+
+def test_an_unrecognised_metric_is_not_read_as_maximizing() -> None:
+    """`normalize_metric` opened with `direction = "maximize"` and only moved off
+    it on a substring hit, so a metric matching *nothing* came back confidently
+    maximizing. An unrecognised name is precisely the case with no evidence for
+    either direction, and maximize is the answer that inverts every verdict for a
+    loss — which is what rogii's fifteen evidence cards were built on.
+    """
+    spec = normalize_metric("Wellbore Misfit Score")
+
+    assert spec is not None
+    assert spec.key is None
+    assert spec.direction == "unknown"
+
+
+def test_a_recognised_metric_takes_the_registry_direction() -> None:
+    assert normalize_metric("Root Mean Squared Error").direction == "minimize"
+    assert normalize_metric("Area Under the ROC Curve").direction == "maximize"
+
+
+def test_the_metric_spec_direction_comes_from_its_key() -> None:
+    """Filled by the model itself, so a spec built anywhere — including one
+    deserialized from a `competition.json` that omits the field — is oriented."""
+    assert MetricSpec(name="rmse", key="rmse").direction == "minimize"
+    assert MetricSpec(name="auc", key="auc").direction == "maximize"
+    assert MetricSpec(name="mystery").direction == "unknown", "guessed with no key at all"
+
+
+def test_a_direction_contradicting_the_registry_is_left_standing() -> None:
+    """Deliberately *not* corrected here. It is the contradiction
+    `resolve_objective` blocks the campaign on, and silently rewriting it would
+    delete the detection while leaving the wrong contract on disk."""
+    assert MetricSpec(name="rmse", key="rmse", direction="maximize").direction == "maximize"
+
+
+def test_a_direction_that_is_not_one_of_the_three_is_rejected() -> None:
+    """`direction: str` accepted "sideways", "min", "Minimize" and "" alike."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        MetricSpec(name="x", direction="sideways")
