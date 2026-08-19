@@ -7,6 +7,12 @@ from typing import Any
 import pandas as pd
 from pydantic import BaseModel, Field
 
+from labpilot.accessor.profiler.source import (
+    DatasetSource,
+    DeclaredFacts,
+    LocalFileSource,
+    TableRef,
+)
 from labpilot.config import ProfilerConfig
 
 logger = logging.getLogger(__name__)
@@ -91,6 +97,32 @@ class DatasetProfile(BaseModel):
 # multi-file rather than partitioned. Group-aware splits and the partitioned
 # template are expensive to get wrong on a normal competition.
 _MIN_PARTITIONS = 3
+
+
+def _local_root(source: DatasetSource) -> Path | None:
+    """The directory behind a source, when it has one.
+
+    Modality detection walks a tree and suffix-scoring counts lines; neither is
+    expressible through the protocol yet, and both move behind it in step 5.
+    Asking one question here — rather than `isinstance` at each call site —
+    keeps the list of filesystem-only capabilities to one place, and countable.
+    """
+    return source.root if isinstance(source, LocalFileSource) else None
+
+
+def _where(source: DatasetSource) -> str:
+    """Something an operator can act on when a source turns up empty."""
+    root = _local_root(source)
+    return str(root) if root is not None else type(source).__name__
+
+
+def _name_of(table: TableRef) -> str:
+    """The table's file name, lower-cased — the form every pattern test uses.
+
+    Messages print `Path(table.uri).name` instead: an operator looking for
+    `Train.csv` should not be shown `train.csv` because a matcher folded case.
+    """
+    return Path(table.uri).name.lower()
 
 
 def _detect_anchor_column(
@@ -223,7 +255,14 @@ class TabularProfiler:
         self.config = config
 
     def profile_file(self, path: Path) -> DatasetProfile:
-        df = pd.read_csv(path, nrows=self.config.max_rows_sample)
+        """Describe one file that is not part of a dataset layout.
+
+        Reads through a source over the file's own directory, so this module
+        holds no direct `read_csv` of its own: one owner for every read is what
+        makes the seam real rather than decorative.
+        """
+        source = LocalFileSource(path.parent)
+        df = source.sample(TableRef(uri=path.name), self.config.max_rows_sample)
         return DatasetProfile(
             competition="",
             files=[str(path)],
@@ -276,24 +315,66 @@ class TabularProfiler:
         competition_title: str = "",
         competition_description: str = "",
     ) -> DatasetProfile:
-        # File-role detection is a naming-convention heuristic. `train_pattern`,
-        # `test_pattern`, and `submission_pattern` let a competition's local
-        # config (`configs/competitions/<slug>.yaml`) override the defaults
-        # when a dataset doesn't follow the "train*/test*/*submission*"
-        # convention.
+        """Profile a directory of CSVs. A thin wrapper over :meth:`profile_dataset`.
+
+        Kept as the entry point every existing caller uses, and reduced to the
+        one thing it knows that the general path does not: how to build a source
+        over a directory.
+        """
+        logger.info("Profiling dataset directory %s for '%s'", data_dir, competition)
+        source = LocalFileSource(
+            data_dir,
+            DeclaredFacts(title=competition_title, description=competition_description),
+        )
+        return self.profile_dataset(
+            source,
+            competition,
+            train_pattern=train_pattern,
+            test_pattern=test_pattern,
+            submission_pattern=submission_pattern,
+            llm_client=llm_client,
+        )
+
+    def profile_dataset(
+        self,
+        source: DatasetSource,
+        competition: str,
+        *,
+        train_pattern: str = "train",
+        test_pattern: str = "test",
+        submission_pattern: str = "submission",
+        llm_client: Any | None = None,
+    ) -> DatasetProfile:
+        """Profile whatever a source exposes.
+
+        The seam M12 needs: an adapter over a warehouse, an object store or an
+        environment is profiled by passing it here, with no edit to this module.
+        Title and description come from `source.declared()` rather than from
+        parameters, because a source is what knows them.
+
+        Two capabilities remain filesystem-only and are skipped, visibly, for a
+        source that has no root: modality detection (which walks a directory for
+        images) and suffix-scoring detection (which counts lines). Both move
+        behind the protocol in step 5; until then a skipped one says so in
+        `warnings` rather than leaving a default that reads as a finding.
+
+        File-role detection is a naming-convention heuristic. `train_pattern`,
+        `test_pattern`, and `submission_pattern` let a competition's local
+        config (`configs/competitions/<slug>.yaml`) override the defaults when a
+        dataset doesn't follow the "train*/test*/*submission*" convention.
+        """
         # TODO: fetch the real file roles from the Kaggle competition
         # portal/API automatically instead of relying on name matching.
-        logger.info("Profiling dataset directory %s for '%s'", data_dir, competition)
-        csv_files = sorted(data_dir.rglob("*.csv"))
-        if not csv_files:
-            raise FileNotFoundError(f"No CSV files found in {data_dir}.")
+        tables = source.tables()
+        if not tables:
+            raise FileNotFoundError(f"No CSV files found in {_where(source)}.")
 
         # Partitioned layouts (train/<entity>.csv) match no filename prefix, so
         # try them before the single-file heuristic reports "found 0".
         partitioned = self._try_profile_partitioned(
-            data_dir,
+            source,
             competition,
-            csv_files,
+            tables,
             train_pattern=train_pattern,
             test_pattern=test_pattern,
             submission_pattern=submission_pattern,
@@ -301,38 +382,37 @@ class TabularProfiler:
         if partitioned is not None:
             return partitioned
 
-        train_path = self._single_file(
-            [path for path in csv_files if path.name.lower().startswith(train_pattern.lower())],
+        train_table = self._single_table(
+            [table for table in tables if _name_of(table).startswith(train_pattern.lower())],
             "training",
         )
-        sample_path = self._single_file(
-            [path for path in csv_files if submission_pattern.lower() in path.name.lower()],
+        sample_table = self._single_table(
+            [table for table in tables if submission_pattern.lower() in _name_of(table)],
             "sample submission",
         )
         test_matches = [
-            path for path in csv_files if path.name.lower().startswith(test_pattern.lower())
+            table for table in tables if _name_of(table).startswith(test_pattern.lower())
         ]
         test_warnings: list[str] = []
         if len(test_matches) == 1:
-            test_path = test_matches[0]
+            test_table = test_matches[0]
         elif len(test_matches) == 0:
-            test_path = sample_path
+            test_table = sample_table
             test_warnings.append(
                 "No test CSV found; using sample submission as the test reference file."
             )
         else:
-            names = [path.name for path in test_matches]
+            names = [Path(table.uri).name for table in test_matches]
             raise ValueError(f"Expected one test CSV, found {len(test_matches)}: {names}")
 
-        train_columns = list(pd.read_csv(train_path, nrows=0).columns)
-        test_columns = list(pd.read_csv(test_path, nrows=0).columns)
-        submission = pd.read_csv(sample_path, nrows=self.config.max_rows_sample)
-        submission_columns = list(submission.columns)
+        train_columns = source.columns(train_table)
+        test_columns = source.columns(test_table)
+        submission_columns = source.columns(sample_table)
 
         target_candidates = [column for column in train_columns if column not in test_columns]
         if len(target_candidates) == 1:
             target_column = target_candidates[0]
-        elif test_path == sample_path:
+        elif test_table == sample_table:
             overlap = [column for column in submission_columns if column in train_columns]
             if len(overlap) >= 2:
                 target_column = overlap[1]
@@ -363,40 +443,54 @@ class TabularProfiler:
                 f"expected {expected_submission_columns}, got {submission_columns}."
             )
 
-        profile = self.profile_file(train_path)
+        # One read of the training table, where there were two: `profile_file`
+        # sampled it and then `enrich_column_stats` sampled it again with the
+        # same cap. Same bytes, same frame — the second read only cost time.
+        train_sample = source.sample(train_table, self.config.max_rows_sample)
+        profile = DatasetProfile(
+            competition=competition,
+            row_count=len(train_sample),
+            column_count=len(train_sample.columns),
+            columns=self.profile_columns(train_sample),
+        )
         profile.warnings.extend(test_warnings)
-        train_sample = pd.read_csv(train_path, nrows=self.config.max_rows_sample)
         from labpilot.accessor.profiler.modality import ModalityDetector
 
         detector = ModalityDetector()
         detector.enrich_column_stats(train_sample, profile.columns)
-        profile.competition = competition
-        profile.files = [str(p.relative_to(data_dir)) for p in csv_files]
-        profile.train_file = str(train_path.relative_to(data_dir))
-        profile.test_file = str(test_path.relative_to(data_dir))
-        profile.sample_submission_file = str(sample_path.relative_to(data_dir))
-        profile.test_row_count = sum(
-            len(chunk) for chunk in pd.read_csv(test_path, usecols=[id_column], chunksize=10_000)
-        )
+        profile.files = [table.uri for table in tables]
+        profile.train_file = train_table.uri
+        profile.test_file = test_table.uri
+        profile.sample_submission_file = sample_table.uri
+        profile.test_row_count = source.exact_unit_count(test_table, id_column)
         profile.target_column = target_column
         profile.id_column = id_column
         profile.submission_columns = submission_columns
         for column in profile.columns:
             column.is_target_candidate = column.name == target_column
 
-        modality = detector.detect(
-            data_dir,
-            profile,
-            llm_client=llm_client,
-            competition_title=competition_title,
-            competition_description=competition_description,
-        )
-        profile.modality = modality.modality
-        profile.image_dir = modality.image_dir
-        profile.image_column = modality.image_column
-        profile.text_column = modality.text_column
-        if modality.signals:
-            profile.warnings.extend(modality.signals)
+        declared = source.declared()
+        root = _local_root(source)
+        if root is None:
+            # Not a default that reads as a finding: `modality` stays "tabular"
+            # either way, and the difference between "detected tabular" and
+            # "never looked" has to be visible or it is the silent degrade M14
+            # exists to remove.
+            profile.warnings.append("modality not detected: source exposes no directory")
+        else:
+            modality = detector.detect(
+                root,
+                profile,
+                llm_client=llm_client,
+                competition_title=declared.title,
+                competition_description=declared.description,
+            )
+            profile.modality = modality.modality
+            profile.image_dir = modality.image_dir
+            profile.image_column = modality.image_column
+            profile.text_column = modality.text_column
+            if modality.signals:
+                profile.warnings.extend(modality.signals)
 
         logger.info(
             "Profiled '%s': target=%s, id=%s, train_rows=%d, test_rows=%d",
@@ -410,21 +504,24 @@ class TabularProfiler:
 
     def _role_of(
         self,
-        path: Path,
-        data_dir: Path,
+        table: TableRef,
         train_pattern: str,
         test_pattern: str,
         *,
         by_directory_only: bool = False,
     ) -> str:
-        """Classify a CSV as train/test by directory, falling back to filename.
+        """Classify a table as train/test by directory, falling back to filename.
 
         ``by_directory_only`` skips the filename fallback. Partitioned-layout
         detection uses it because a filename prefix is far too weak a signal
         there: ``train.csv`` + ``train_extra.csv`` both match "train" and would
         otherwise be read as two partitions of a partitioned dataset.
+
+        This is *layout* inference, not a fact the source states — which is why
+        it lives here and why `TableRef` carries no role until step 3 gives that
+        answer its evidence.
         """
-        parts = [p.lower() for p in path.relative_to(data_dir).parts[:-1]]
+        parts = [part.lower() for part in Path(table.uri).parts[:-1]]
         for part in parts:
             if part.startswith(train_pattern.lower()):
                 return "train"
@@ -432,7 +529,7 @@ class TabularProfiler:
                 return "test"
         if by_directory_only:
             return "other"
-        name = path.name.lower()
+        name = _name_of(table)
         if name.startswith(train_pattern.lower()):
             return "train"
         if name.startswith(test_pattern.lower()):
@@ -450,21 +547,19 @@ class TabularProfiler:
 
     def _try_profile_partitioned(
         self,
-        data_dir: Path,
+        source: DatasetSource,
         competition: str,
-        csv_files: list[Path],
+        tables: list[TableRef],
         *,
         train_pattern: str,
         test_pattern: str,
         submission_pattern: str,
     ) -> DatasetProfile | None:
         """Profile one-file-per-entity datasets, or return None if not that shape."""
-        by_role: dict[str, list[Path]] = {"train": [], "test": [], "other": []}
-        for path in csv_files:
-            role = self._role_of(
-                path, data_dir, train_pattern, test_pattern, by_directory_only=True
-            )
-            by_role[role].append(path)
+        by_role: dict[str, list[TableRef]] = {"train": [], "test": [], "other": []}
+        for table in tables:
+            role = self._role_of(table, train_pattern, test_pattern, by_directory_only=True)
+            by_role[role].append(table)
         train_files, test_files = by_role["train"], by_role["test"]
         # Require a real per-entity layout: files grouped under a train/
         # directory, and enough of them that "one table per entity" is the only
@@ -474,20 +569,20 @@ class TabularProfiler:
         if len(train_files) < _MIN_PARTITIONS:
             return None
 
-        sample_paths = [p for p in by_role["other"] if submission_pattern.lower() in p.name.lower()]
-        sample_path = sample_paths[0] if sample_paths else None
+        sample_tables = [t for t in by_role["other"] if submission_pattern.lower() in _name_of(t)]
+        sample_table = sample_tables[0] if sample_tables else None
 
         # Group files by "kind" suffix (horizontal_well / typewell / …). A kind
         # shared by many entities is a real per-entity table, not a one-off.
-        kinds: dict[str, list[Path]] = {}
-        for path in train_files:
-            _, kind = self._split_entity_kind(path.stem)
-            kinds.setdefault(kind, []).append(path)
+        kinds: dict[str, list[TableRef]] = {}
+        for table in train_files:
+            _, kind = self._split_entity_kind(Path(table.uri).stem)
+            kinds.setdefault(kind, []).append(table)
         primary_kind = max(kinds, key=lambda k: len(kinds[k]))
 
         limit = max(1, min(self.config.max_files_sample, len(kinds[primary_kind])))
         sampled = kinds[primary_kind][:limit]
-        frames = [pd.read_csv(p, nrows=self.config.max_rows_sample) for p in sampled]
+        frames = [source.sample(table, self.config.max_rows_sample) for table in sampled]
 
         # Every kind, not only the most common one. The generated `load_data`
         # concatenates *all* the CSVs under `train/`, so the frame it trains on
@@ -525,16 +620,17 @@ class TabularProfiler:
         train_cols_by_kind: dict[str, set[str]] = {
             primary_kind: {str(c) for f in frames for c in f.columns}
         }
-        for kind, paths in kinds.items():
+        for kind, kind_tables in kinds.items():
             if kind == primary_kind:
                 continue
-            kind_limit = max(1, min(self.config.max_files_sample, len(paths)))
+            kind_limit = max(1, min(self.config.max_files_sample, len(kind_tables)))
             kind_frames = [
-                pd.read_csv(p, nrows=self.config.max_rows_sample) for p in paths[:kind_limit]
+                source.sample(table, self.config.max_rows_sample)
+                for table in kind_tables[:kind_limit]
             ]
             train_cols_by_kind[kind] = {str(c) for f in kind_frames for c in f.columns}
             union_frames.extend(kind_frames)
-            row_count += int(sum(len(f) for f in kind_frames) / len(kind_frames) * len(paths))
+            row_count += int(sum(len(f) for f in kind_frames) / len(kind_frames) * len(kind_tables))
         sample_df = pd.concat(union_frames, ignore_index=True)
 
         # Test columns from **every** kind, for the same reason the sample frame
@@ -546,16 +642,17 @@ class TabularProfiler:
         # against the wrong column entirely.
         test_columns: set[str] = set()
         test_cols_by_kind: dict[str, set[str]] = {}
-        test_by_kind: dict[str, list[Path]] = {}
-        for path in test_files:
-            test_by_kind.setdefault(self._split_entity_kind(path.stem)[1], []).append(path)
-        for kind, paths in test_by_kind.items():
-            kind_limit = max(1, min(self.config.max_files_sample, len(paths)))
-            for path in paths[:kind_limit]:
-                found = {str(c) for c in pd.read_csv(path, nrows=0).columns}
+        test_by_kind: dict[str, list[TableRef]] = {}
+        for table in test_files:
+            kind = self._split_entity_kind(Path(table.uri).stem)[1]
+            test_by_kind.setdefault(kind, []).append(table)
+        for kind, kind_tables in test_by_kind.items():
+            kind_limit = max(1, min(self.config.max_files_sample, len(kind_tables)))
+            for table in kind_tables[:kind_limit]:
+                found = set(source.columns(table))
                 test_columns.update(found)
                 test_cols_by_kind.setdefault(kind, set()).update(found)
-        test_kind_files = test_by_kind.get(primary_kind, [])
+        test_kind_tables = test_by_kind.get(primary_kind, [])
 
         # One predicate, asked the same way everywhere a column's availability
         # at test matters: `train_only`, the target fallback, and the anchor.
@@ -569,8 +666,8 @@ class TabularProfiler:
             )
 
         submission_columns: list[str] = []
-        if sample_path is not None:
-            submission_columns = list(pd.read_csv(sample_path, nrows=0).columns)
+        if sample_table is not None:
+            submission_columns = source.columns(sample_table)
 
         # Target inference: a column present in train but absent from test is a
         # label candidate; the one also named in the submission header wins.
@@ -641,20 +738,20 @@ class TabularProfiler:
             primary_only = candidates
             target = (primary_only or train_only)[-1]
 
-        profile = self.profile_file(sampled[0])
-        profile.competition = competition
         # From the union frame, not from one file filtered down to it. The
         # filter could only ever remove columns, so a column that exists in
         # another kind had no way to appear.
-        profile.columns = self.profile_columns(sample_df)
-        profile.files = [str(p.relative_to(data_dir)) for p in csv_files[:200]]
-        profile.train_file = str(sampled[0].relative_to(data_dir))
-        profile.test_file = (
-            str(test_kind_files[0].relative_to(data_dir)) if test_kind_files else None
+        #
+        # Built directly rather than from `profile_file(sampled[0])`, which read
+        # one partition to fill three fields that every line below overwrites.
+        profile = DatasetProfile(
+            competition=competition,
+            columns=self.profile_columns(sample_df),
         )
-        profile.sample_submission_file = (
-            str(sample_path.relative_to(data_dir)) if sample_path else None
-        )
+        profile.files = [table.uri for table in tables[:200]]
+        profile.train_file = sampled[0].uri
+        profile.test_file = test_kind_tables[0].uri if test_kind_tables else None
+        profile.sample_submission_file = sample_table.uri if sample_table else None
         profile.submission_columns = submission_columns
         profile.target_column = target
         profile.id_column = submission_columns[0] if submission_columns else None
@@ -665,9 +762,9 @@ class TabularProfiler:
         profile.partition_key = "file_stem_entity"
         profile.partition_kinds = {k: len(v) for k, v in sorted(kinds.items())}
         profile.train_partition_count = len(kinds[primary_kind])
-        profile.test_partition_count = len(test_kind_files)
+        profile.test_partition_count = len(test_kind_tables)
         profile.train_only_columns = train_only
-        self._detect_suffix_scoring(profile, sample_path, test_kind_files, data_dir)
+        self._detect_suffix_scoring(profile, source, sample_table, test_kind_tables)
         profile.warnings = [
             f"partitioned dataset: {len(train_files)} train / {len(test_files)} test CSVs",
             f"primary kind={primary_kind!r}; kinds={profile.partition_kinds}",
@@ -700,20 +797,34 @@ class TabularProfiler:
     def _detect_suffix_scoring(
         self,
         profile: DatasetProfile,
-        sample_path: Path | None,
-        test_kind_files: list[Path],
-        data_dir: Path,
+        source: DatasetSource,
+        sample_table: TableRef | None,
+        test_kind_tables: list[TableRef],
     ) -> None:
         """Detect ``<entity>_<row_index>`` submission ids covering only a tail.
 
         A random split is meaningless for these: at inference the model has the
         head of the partition and must predict forward, so validation has to
         reproduce that gap rather than sampling rows uniformly.
+
+        The row count below is a *line* count, not `exact_unit_count`: it counts
+        physical lines, which is what makes it cheap and what makes it wrong on
+        a quoted newline. Left as it is here — changing how rows are counted is
+        step 5's job, and doing it inside a refactor that promises no behaviour
+        change is how a "value-neutral" step stops being one. It is also why
+        this needs a filesystem: a source without one skips detection and says
+        so, rather than reporting `scored_is_partition_suffix=False`, which a
+        reader cannot tell from "looked, and it is not a forecast".
         """
-        if sample_path is None or not test_kind_files:
+        if sample_table is None or not test_kind_tables:
+            return
+        if not isinstance(source, LocalFileSource):
+            profile.warnings.append(
+                "suffix scoring not detected: source exposes no directory to count lines in"
+            )
             return
         try:
-            submission = pd.read_csv(sample_path)
+            submission = source.sample(sample_table, None)
         except Exception:  # noqa: BLE001 — detection is best-effort
             return
         if submission.empty:
@@ -730,14 +841,18 @@ class TabularProfiler:
             return
 
         fractions: list[float] = []
-        for path in test_kind_files:
-            entity, _ = self._split_entity_kind(path.stem)
+        for table in test_kind_tables:
+            entity, _ = self._split_entity_kind(Path(table.uri).stem)
             scored = indices[entities == entity]
             if scored.empty:
                 continue
             try:
-                n_rows = sum(1 for _ in path.open("r", encoding="utf-8")) - 1
-            except OSError:
+                n_rows = source.physical_line_count(table) - 1
+            except (OSError, UnicodeDecodeError):
+                # `UnicodeDecodeError` is a `ValueError`, so the original catch
+                # let a latin-1 partition escape a best-effort detector and take
+                # the whole profile down with it — the workspace then falls back
+                # to a filesystem inventory because one file had an accent in it.
                 continue
             if n_rows <= 0:
                 continue
@@ -751,9 +866,9 @@ class TabularProfiler:
             profile.scored_is_partition_suffix = True
             profile.scored_fraction = sum(fractions) / len(fractions)
 
-    def _single_file(self, matches: list[Path], role: str) -> Path:
+    def _single_table(self, matches: list[TableRef], role: str) -> TableRef:
         if len(matches) != 1:
-            names = [path.name for path in matches]
+            names = [Path(table.uri).name for table in matches]
             raise ValueError(f"Expected one {role} CSV, found {len(matches)}: {names}")
         return matches[0]
 

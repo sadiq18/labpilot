@@ -1,0 +1,107 @@
+{
+  "schema_version": 0,
+  "competition": "strong-signals",
+  "files": [
+    "sample_submission.csv",
+    "test.csv",
+    "train.csv"
+  ],
+  "train_file": "train.csv",
+  "test_file": "test.csv",
+  "sample_submission_file": "sample_submission.csv",
+  "row_count": 12,
+  "test_row_count": 4,
+  "column_count": 5,
+  "columns": [
+    {
+      "name": "Id",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 12,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 1.0,
+        "max": 12.0,
+        "mean": 6.5,
+        "std": 3.605551
+      }
+    },
+    {
+      "name": "LotArea",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 12,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 6120.0,
+        "max": 14260.0,
+        "mean": 10119.25,
+        "std": 2403.434252
+      }
+    },
+    {
+      "name": "Neighborhood",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 3,
+      "is_target_candidate": false,
+      "is_numeric": false,
+      "stats": {
+        "avg_length": 7.0
+      }
+    },
+    {
+      "name": "YearBuilt",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 12,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 1915.0,
+        "max": 2005.0,
+        "mean": 1975.416667,
+        "std": 31.744601
+      }
+    },
+    {
+      "name": "SalePrice",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 12,
+      "is_target_candidate": true,
+      "is_numeric": true,
+      "stats": {
+        "min": 118000.0,
+        "max": 307000.0,
+        "mean": 190866.666667,
+        "std": 56628.571865
+      }
+    }
+  ],
+  "target_column": "SalePrice",
+  "id_column": "Id",
+  "submission_columns": [
+    "Id",
+    "SalePrice"
+  ],
+  "warnings": [
+    "default_tabular"
+  ],
+  "modality": "tabular",
+  "image_dir": null,
+  "image_column": null,
+  "text_column": null,
+  "partitioned": false,
+  "partition_key": null,
+  "partition_kinds": {},
+  "train_partition_count": 0,
+  "test_partition_count": 0,
+  "row_count_estimated": false,
+  "scored_is_partition_suffix": false,
+  "scored_fraction": 0.0,
+  "train_only_columns": [],
+  "anchor_column": null
+}

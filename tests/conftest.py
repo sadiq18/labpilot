@@ -376,3 +376,59 @@ def image_data_dir(tmp_path: Path) -> Path:
         data_dir / "sample_submission.csv", index=False
     )
     return data_dir
+
+
+# --- M22 dataset shapes -----------------------------------------------------
+# Built by `helpers/dataset_shapes.py`, which explains what each shape is for.
+# They are fixtures rather than inline builders because the same shapes are read
+# by the profiler tests, the golden snapshots, and (from step 3) the evidence
+# tests — and a shape that differs between those is not one shape.
+
+
+@pytest.fixture
+def strong_signals_data_dir(tmp_path: Path) -> Path:
+    from helpers.dataset_shapes import build_strong_signals
+
+    return build_strong_signals(tmp_path)
+
+
+@pytest.fixture
+def partitioned_with_template_data_dir(tmp_path: Path) -> Path:
+    from helpers.dataset_shapes import build_partitioned_with_template
+
+    return build_partitioned_with_template(tmp_path)
+
+
+@pytest.fixture
+def partitioned_without_template_data_dir(tmp_path: Path) -> Path:
+    from helpers.dataset_shapes import build_partitioned_without_template
+
+    return build_partitioned_without_template(tmp_path)
+
+
+@pytest.fixture
+def no_kaggle_inputs_data_dir(tmp_path: Path) -> Path:
+    from helpers.dataset_shapes import build_no_kaggle_inputs
+
+    return build_no_kaggle_inputs(tmp_path)
+
+
+@pytest.fixture
+def bool_target_data_dir(tmp_path: Path) -> Path:
+    from helpers.dataset_shapes import build_bool_target
+
+    return build_bool_target(tmp_path)
+
+
+@pytest.fixture
+def sampled_beyond_cap_data_dir(tmp_path: Path) -> Path:
+    from helpers.dataset_shapes import build_sampled_beyond_cap
+
+    return build_sampled_beyond_cap(tmp_path)
+
+
+@pytest.fixture
+def environment_data_dir(tmp_path: Path) -> Path:
+    from helpers.dataset_shapes import build_environment
+
+    return build_environment(tmp_path)

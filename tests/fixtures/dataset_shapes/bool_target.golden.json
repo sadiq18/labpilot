@@ -1,0 +1,101 @@
+{
+  "schema_version": 0,
+  "competition": "bool-target",
+  "files": [
+    "sample_submission.csv",
+    "test.csv",
+    "train.csv"
+  ],
+  "train_file": "train.csv",
+  "test_file": "test.csv",
+  "sample_submission_file": "sample_submission.csv",
+  "row_count": 12,
+  "test_row_count": 4,
+  "column_count": 5,
+  "columns": [
+    {
+      "name": "PassengerId",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 12,
+      "is_target_candidate": false,
+      "is_numeric": false,
+      "stats": {
+        "avg_length": 7.0
+      }
+    },
+    {
+      "name": "HomePlanet",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 3,
+      "is_target_candidate": false,
+      "is_numeric": false,
+      "stats": {
+        "avg_length": 5.0
+      }
+    },
+    {
+      "name": "Age",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 12,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 14.0,
+        "max": 58.0,
+        "mean": 33.0,
+        "std": 12.562571
+      }
+    },
+    {
+      "name": "RoomService",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 6,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 0.0,
+        "max": 303.0,
+        "mean": 44.666667,
+        "std": 87.844215
+      }
+    },
+    {
+      "name": "Transported",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 2,
+      "is_target_candidate": true,
+      "is_numeric": false,
+      "stats": {
+        "avg_length": 4.416667
+      }
+    }
+  ],
+  "target_column": "Transported",
+  "id_column": "PassengerId",
+  "submission_columns": [
+    "PassengerId",
+    "Transported"
+  ],
+  "warnings": [
+    "default_tabular"
+  ],
+  "modality": "tabular",
+  "image_dir": null,
+  "image_column": null,
+  "text_column": null,
+  "partitioned": false,
+  "partition_key": null,
+  "partition_kinds": {},
+  "train_partition_count": 0,
+  "test_partition_count": 0,
+  "row_count_estimated": false,
+  "scored_is_partition_suffix": false,
+  "scored_fraction": 0.0,
+  "train_only_columns": [],
+  "anchor_column": null
+}
