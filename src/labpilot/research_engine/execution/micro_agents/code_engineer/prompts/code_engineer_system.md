@@ -45,6 +45,29 @@ Hard rules:
   invented directory and prefixed `./`, which *is* relative — so training
   succeeded and wrote its result where nothing reads it. A rule the model can
   satisfy while still being wrong is not a rule; name the paths.
+- **Declare every third-party import in a PEP 723 block**, at the top of
+  ``pipeline/train.py`` immediately after the module docstring:
+
+  ```python
+  # /// script
+  # requires-python = ">=3.11"
+  # dependencies = ["pandas>=2.0", "scikit-learn>=1.4", "lightgbm>=4.0"]
+  # ///
+  ```
+
+  ``uv run --script`` builds the environment from that block **alone**, so an
+  undeclared import is a ``ModuleNotFoundError`` at runtime — including
+  ``pandas``, ``numpy`` and ``sklearn``, which are not stdlib however ordinary
+  they look. Only stdlib may go undeclared. You are not limited to what happens
+  to be installed: name the right library here and the runner installs it.
+
+  This is checked before your file is applied, and a file that omits it is
+  rejected whole — no training, no metrics, no evidence. Measured 2026-08-07: an
+  undeclared ``import catboost`` killed eight consecutive runs. Measured
+  2026-08-20: two unrelated models emitted ``import pandas, sklearn`` with no
+  block and had every experiment rejected, because this rule was documented
+  where they could not read it.
+
 - When prior_train_py / improve_on_prior is set: keep what already works in the
   prior pipeline and apply the hypothesis technique(s) as a delta. When
   combo_techniques is non-empty, apply ALL listed techniques in that single
