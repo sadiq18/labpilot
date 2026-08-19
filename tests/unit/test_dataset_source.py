@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from labpilot.accessor.profiler import tabular as tabular_module
 from labpilot.accessor.profiler.source import (
@@ -25,6 +26,10 @@ from labpilot.accessor.profiler.source import (
 )
 from labpilot.accessor.profiler.tabular import TabularProfiler
 from labpilot.config import ProfilerConfig
+
+#: Names that read data. `open` is in here because it is the one a hurried edit
+#: reaches for, and it parses as a bare name rather than an attribute.
+_READERS = frozenset({"read_csv", "read_parquet", "read_json", "open"})
 
 
 def test_local_file_source_satisfies_the_protocol(tmp_path: Path) -> None:
@@ -57,7 +62,7 @@ def test_columns_reads_the_header_without_the_rows(
     sampled_beyond_cap_data_dir: Path,
 ) -> None:
     source = LocalFileSource(sampled_beyond_cap_data_dir)
-    train = TableRef(id="train.csv", uri="train.csv")
+    train = TableRef(uri="train.csv")
 
     assert source.columns(train) == ["id", "feature", "label"]
 
@@ -70,12 +75,12 @@ def test_sample_caps_and_exact_count_does_not(sampled_beyond_cap_data_dir: Path)
     `playground-series-s6e7/profile.json` (100,000 rows recorded for 690,088).
     """
     source = LocalFileSource(sampled_beyond_cap_data_dir)
-    train = TableRef(id="train.csv", uri="train.csv")
+    train = TableRef(uri="train.csv")
     real_rows = len(pd.read_csv(sampled_beyond_cap_data_dir / "train.csv"))
 
     assert real_rows > 10, "the fixture must exceed the cap or this proves nothing"
     assert len(source.sample(train, 10)) == 10
-    assert len(source.sample(train)) == real_rows
+    assert len(source.sample(train, None)) == real_rows
     assert source.exact_unit_count(train, "id") == real_rows
 
 
@@ -105,7 +110,7 @@ def test_the_profiler_reads_only_through_the_source(
             calls.append(("columns", table.uri))
             return super().columns(table)
 
-        def sample(self, table: TableRef, limit: int | None = None) -> pd.DataFrame:
+        def sample(self, table: TableRef, limit: int | None) -> pd.DataFrame:
             calls.append(("sample", table.uri))
             return super().sample(table, limit)
 
@@ -143,15 +148,97 @@ def test_the_profiler_holds_no_read_of_its_own() -> None:
     failure, and a call spelled `pandas.read_csv` should not be a pass.
     """
     tree = ast.parse(Path(tabular_module.__file__).read_text(encoding="utf-8"))
+    # Both call shapes. Matching only `ast.Attribute` missed the likeliest
+    # violation there is — a bare `open(path)`, which parses as `ast.Name` — so
+    # the guard against direct reads could not see the most direct read.
     reads = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in {"read_csv", "read_parquet", "read_json", "open"}
+        and (
+            (isinstance(node.func, ast.Attribute) and node.func.attr in _READERS)
+            or (isinstance(node.func, ast.Name) and node.func.id in _READERS)
+        )
     ]
 
     assert not reads, (
         "tabular.py must read through a DatasetSource; add the read to "
         f"accessor/profiler/source.py instead (line {reads[0].lineno if reads else 0})"
     )
+
+
+def test_a_uri_cannot_leave_the_dataset_root(strong_signals_data_dir: Path) -> None:
+    """`root / uri` silently discards the root when the uri is absolute.
+
+    No uri from `tables()` can do this today. The check exists because step 3
+    starts building tables from operator answers and model proposals, and a
+    boundary that only holds while every caller is trusted is not one.
+    """
+    source = LocalFileSource(strong_signals_data_dir)
+
+    assert source.path(TableRef(uri="train.csv")).name == "train.csv"
+    for escape in ("/etc/passwd", "../../../etc/passwd"):
+        with pytest.raises(ValueError, match="outside the dataset root"):
+            source.path(TableRef(uri=escape))
+
+
+class DictSource:
+    """A dataset that is not a directory. Implements `DatasetSource`, nothing more.
+
+    Deliberately holds no path, so any filesystem read the profiler attempts
+    fails loudly rather than silently working because the test happened to run
+    beside real files.
+    """
+
+    def __init__(self, frames: dict[str, pd.DataFrame], declared: DeclaredFacts | None = None):
+        self._frames = frames
+        self._declared = declared or DeclaredFacts()
+
+    def tables(self) -> list[TableRef]:
+        return [TableRef(uri=name) for name in self._frames]
+
+    def columns(self, table: TableRef) -> list[str]:
+        return [str(column) for column in self._frames[table.uri].columns]
+
+    def sample(self, table: TableRef, limit: int | None) -> pd.DataFrame:
+        frame = self._frames[table.uri]
+        return frame if limit is None else frame.head(limit)
+
+    def exact_unit_count(self, table: TableRef, column: str) -> int:
+        return len(self._frames[table.uri])
+
+    def declared(self) -> DeclaredFacts:
+        return self._declared
+
+
+def test_a_dataset_that_is_not_a_directory_can_be_profiled() -> None:
+    """The seam, exercised end to end by something that owns no files.
+
+    This is what `profile_dataset` is for: M12's warehouse, object store or
+    environment adapter is profiled by passing it here, with no edit to the
+    profiler. Before it existed, `profile_directory` built its own
+    `LocalFileSource` and there was no way in.
+    """
+    train = pd.DataFrame(
+        {"Id": [1, 2, 3], "LotArea": [8450.0, 9600.0, 11250.0], "SalePrice": [1.0, 2.0, 3.0]}
+    )
+    source = DictSource(
+        {
+            "train.csv": train,
+            "test.csv": train[["Id", "LotArea"]],
+            "sample_submission.csv": train[["Id", "SalePrice"]],
+        },
+        DeclaredFacts(title="In memory", description="no files anywhere"),
+    )
+
+    profile = TabularProfiler(ProfilerConfig()).profile_dataset(source, "in-memory")
+
+    assert profile.target_column == "SalePrice"
+    assert profile.id_column == "Id"
+    assert profile.train_file == "train.csv"
+    assert profile.row_count == 3
+    assert profile.test_row_count == 3
+    assert [column.name for column in profile.columns] == ["Id", "LotArea", "SalePrice"]
+    # Skipped, and said so. A silent `modality="tabular"` would read as a
+    # finding rather than as "never looked" (M14).
+    assert any("modality not detected" in warning for warning in profile.warnings)

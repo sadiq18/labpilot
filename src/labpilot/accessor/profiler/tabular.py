@@ -7,7 +7,12 @@ from typing import Any
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from labpilot.accessor.profiler.source import DeclaredFacts, LocalFileSource, TableRef
+from labpilot.accessor.profiler.source import (
+    DatasetSource,
+    DeclaredFacts,
+    LocalFileSource,
+    TableRef,
+)
 from labpilot.config import ProfilerConfig
 
 logger = logging.getLogger(__name__)
@@ -92,6 +97,23 @@ class DatasetProfile(BaseModel):
 # multi-file rather than partitioned. Group-aware splits and the partitioned
 # template are expensive to get wrong on a normal competition.
 _MIN_PARTITIONS = 3
+
+
+def _local_root(source: DatasetSource) -> Path | None:
+    """The directory behind a source, when it has one.
+
+    Modality detection walks a tree and suffix-scoring counts lines; neither is
+    expressible through the protocol yet, and both move behind it in step 5.
+    Asking one question here — rather than `isinstance` at each call site —
+    keeps the list of filesystem-only capabilities to one place, and countable.
+    """
+    return source.root if isinstance(source, LocalFileSource) else None
+
+
+def _where(source: DatasetSource) -> str:
+    """Something an operator can act on when a source turns up empty."""
+    root = _local_root(source)
+    return str(root) if root is not None else type(source).__name__
 
 
 def _name_of(table: TableRef) -> str:
@@ -240,7 +262,7 @@ class TabularProfiler:
         makes the seam real rather than decorative.
         """
         source = LocalFileSource(path.parent)
-        df = source.sample(TableRef(id=path.name, uri=path.name), self.config.max_rows_sample)
+        df = source.sample(TableRef(uri=path.name), self.config.max_rows_sample)
         return DatasetProfile(
             competition="",
             files=[str(path)],
@@ -293,21 +315,59 @@ class TabularProfiler:
         competition_title: str = "",
         competition_description: str = "",
     ) -> DatasetProfile:
-        # File-role detection is a naming-convention heuristic. `train_pattern`,
-        # `test_pattern`, and `submission_pattern` let a competition's local
-        # config (`configs/competitions/<slug>.yaml`) override the defaults
-        # when a dataset doesn't follow the "train*/test*/*submission*"
-        # convention.
-        # TODO: fetch the real file roles from the Kaggle competition
-        # portal/API automatically instead of relying on name matching.
+        """Profile a directory of CSVs. A thin wrapper over :meth:`profile_dataset`.
+
+        Kept as the entry point every existing caller uses, and reduced to the
+        one thing it knows that the general path does not: how to build a source
+        over a directory.
+        """
         logger.info("Profiling dataset directory %s for '%s'", data_dir, competition)
         source = LocalFileSource(
             data_dir,
             DeclaredFacts(title=competition_title, description=competition_description),
         )
+        return self.profile_dataset(
+            source,
+            competition,
+            train_pattern=train_pattern,
+            test_pattern=test_pattern,
+            submission_pattern=submission_pattern,
+            llm_client=llm_client,
+        )
+
+    def profile_dataset(
+        self,
+        source: DatasetSource,
+        competition: str,
+        *,
+        train_pattern: str = "train",
+        test_pattern: str = "test",
+        submission_pattern: str = "submission",
+        llm_client: Any | None = None,
+    ) -> DatasetProfile:
+        """Profile whatever a source exposes.
+
+        The seam M12 needs: an adapter over a warehouse, an object store or an
+        environment is profiled by passing it here, with no edit to this module.
+        Title and description come from `source.declared()` rather than from
+        parameters, because a source is what knows them.
+
+        Two capabilities remain filesystem-only and are skipped, visibly, for a
+        source that has no root: modality detection (which walks a directory for
+        images) and suffix-scoring detection (which counts lines). Both move
+        behind the protocol in step 5; until then a skipped one says so in
+        `warnings` rather than leaving a default that reads as a finding.
+
+        File-role detection is a naming-convention heuristic. `train_pattern`,
+        `test_pattern`, and `submission_pattern` let a competition's local
+        config (`configs/competitions/<slug>.yaml`) override the defaults when a
+        dataset doesn't follow the "train*/test*/*submission*" convention.
+        """
+        # TODO: fetch the real file roles from the Kaggle competition
+        # portal/API automatically instead of relying on name matching.
         tables = source.tables()
         if not tables:
-            raise FileNotFoundError(f"No CSV files found in {data_dir}.")
+            raise FileNotFoundError(f"No CSV files found in {_where(source)}.")
 
         # Partitioned layouts (train/<entity>.csv) match no filename prefix, so
         # try them before the single-file heuristic reports "found 0".
@@ -410,19 +470,27 @@ class TabularProfiler:
             column.is_target_candidate = column.name == target_column
 
         declared = source.declared()
-        modality = detector.detect(
-            source.root,
-            profile,
-            llm_client=llm_client,
-            competition_title=declared.title,
-            competition_description=declared.description,
-        )
-        profile.modality = modality.modality
-        profile.image_dir = modality.image_dir
-        profile.image_column = modality.image_column
-        profile.text_column = modality.text_column
-        if modality.signals:
-            profile.warnings.extend(modality.signals)
+        root = _local_root(source)
+        if root is None:
+            # Not a default that reads as a finding: `modality` stays "tabular"
+            # either way, and the difference between "detected tabular" and
+            # "never looked" has to be visible or it is the silent degrade M14
+            # exists to remove.
+            profile.warnings.append("modality not detected: source exposes no directory")
+        else:
+            modality = detector.detect(
+                root,
+                profile,
+                llm_client=llm_client,
+                competition_title=declared.title,
+                competition_description=declared.description,
+            )
+            profile.modality = modality.modality
+            profile.image_dir = modality.image_dir
+            profile.image_column = modality.image_column
+            profile.text_column = modality.text_column
+            if modality.signals:
+                profile.warnings.extend(modality.signals)
 
         logger.info(
             "Profiled '%s': target=%s, id=%s, train_rows=%d, test_rows=%d",
@@ -479,7 +547,7 @@ class TabularProfiler:
 
     def _try_profile_partitioned(
         self,
-        source: LocalFileSource,
+        source: DatasetSource,
         competition: str,
         tables: list[TableRef],
         *,
@@ -487,12 +555,7 @@ class TabularProfiler:
         test_pattern: str,
         submission_pattern: str,
     ) -> DatasetProfile | None:
-        """Profile one-file-per-entity datasets, or return None if not that shape.
-
-        Typed to `LocalFileSource` rather than the protocol because
-        `_detect_suffix_scoring` still counts lines on disk. That routine moves
-        behind the protocol in step 5; every *read* here already goes through it.
-        """
+        """Profile one-file-per-entity datasets, or return None if not that shape."""
         by_role: dict[str, list[TableRef]] = {"train": [], "test": [], "other": []}
         for table in tables:
             role = self._role_of(table, train_pattern, test_pattern, by_directory_only=True)
@@ -734,7 +797,7 @@ class TabularProfiler:
     def _detect_suffix_scoring(
         self,
         profile: DatasetProfile,
-        source: LocalFileSource,
+        source: DatasetSource,
         sample_table: TableRef | None,
         test_kind_tables: list[TableRef],
     ) -> None:
@@ -748,12 +811,20 @@ class TabularProfiler:
         physical lines, which is what makes it cheap and what makes it wrong on
         a quoted newline. Left as it is here — changing how rows are counted is
         step 5's job, and doing it inside a refactor that promises no behaviour
-        change is how a "value-neutral" step stops being one.
+        change is how a "value-neutral" step stops being one. It is also why
+        this needs a filesystem: a source without one skips detection and says
+        so, rather than reporting `scored_is_partition_suffix=False`, which a
+        reader cannot tell from "looked, and it is not a forecast".
         """
         if sample_table is None or not test_kind_tables:
             return
+        if not isinstance(source, LocalFileSource):
+            profile.warnings.append(
+                "suffix scoring not detected: source exposes no directory to count lines in"
+            )
+            return
         try:
-            submission = source.sample(sample_table)
+            submission = source.sample(sample_table, None)
         except Exception:  # noqa: BLE001 — detection is best-effort
             return
         if submission.empty:
@@ -777,7 +848,11 @@ class TabularProfiler:
                 continue
             try:
                 n_rows = source.physical_line_count(table) - 1
-            except OSError:
+            except (OSError, UnicodeDecodeError):
+                # `UnicodeDecodeError` is a `ValueError`, so the original catch
+                # let a latin-1 partition escape a best-effort detector and take
+                # the whole profile down with it — the workspace then falls back
+                # to a filesystem inventory because one file had an accent in it.
                 continue
             if n_rows <= 0:
                 continue

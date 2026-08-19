@@ -21,16 +21,17 @@ current evidence disappears.
 ## 2. Problem
 
 The profiler states answers it has no way to justify, and there is no mechanism
-by which a weak answer can look weak. Read on `main` at `cd35485`:
+by which a weak answer can look weak. Read on `main` at `cd35485`, and cited by
+symbol wherever this milestone's own step 1 moves the lines:
 
 | Site | Defect |
 |---|---|
-| `tabular.py:332-345`, `578-645` | Two target-inference paths. Both end in position deciding: `overlap[1]`, or `sorted(candidates)[-1]` after a tie |
-| `tabular.py:635-639` | The tie warning says *"set `target_column` in the competition config"*. `CompetitionSpec` has no such field — the only advertised escape is fiction |
+| `tabular.py` — the single-table branch of `profile_dataset`, and `_try_profile_partitioned` | Two target-inference paths. Both end in position deciding: `overlap[1]`, or `sorted(candidates)[-1]` after a tie |
+| `tabular.py` — the `ambiguous_target` warning in `_try_profile_partitioned` | It says *"set `target_column` in the competition config"*. `CompetitionSpec` has no such field — the only advertised escape is fiction |
 | `modality.py:34`, `_llm_tiebreak` | `confidence` is `"high"` on every path, including the no-LLM path |
 | `workspace/capability.py:458-466` | The profiler is called **without** an LLM client, so that no-LLM path is the one production always takes |
 | `modality.py:104-117` | The zarr branch is unreachable: the CSV-preference return fires first, and every zarr competition ships a `sample_submission.csv` |
-| `tabular.py:226-233` | `row_count = len(df)` under `nrows=max_rows_sample`, with `row_count_estimated` left `False`. On disk: `playground-series-s6e7/profile.json` says 100,000 rows, unstamped; the file has 690,088 |
+| `tabular.py` — `profile_file`, and the profile built in `profile_dataset` | `row_count` is the length of a sample capped at `max_rows_sample`, and `row_count_estimated` stays `False`. On disk: `playground-series-s6e7/profile.json` says 100,000 rows, unstamped; the file has 690,088 |
 | `competition/metrics.py:38-49` | Substring mapping: `balanced_accuracy_score` → `accuracy`. On disk in that competition's `competition.json` |
 | `workspace/capability.py:503-580` | A second modality decision. When the profiler raises, this writes a valid-looking profile with `target_column: null` and prose in `warnings` |
 | whole module | The profiler `rglob`s CSVs directly. No seam between *where data lives* and *what is inferred from it* |

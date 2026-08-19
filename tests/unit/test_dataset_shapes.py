@@ -23,6 +23,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from helpers.dataset_shapes import (
+    SAMPLED_BEYOND_CAP_ROWS,
+    build_bool_target,
+    build_partitioned_with_template,
+    build_partitioned_without_template,
+    build_sampled_beyond_cap,
+    build_strong_signals,
+)
 from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
 from labpilot.config import ProfilerConfig
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
@@ -34,13 +42,15 @@ GOLDEN_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "dataset_shapes"
 #: 690,088 rows to show it would cost seconds per run.
 SAMPLE_CAP = 10
 
-#: fixture name -> profiler config. Shapes that raise are exercised separately.
+#: shape -> (builder, config). Keyed by builder rather than by fixture so both
+#: checks below can build the *same* shape twice in different directories, which
+#: a `tmp_path` fixture cannot do. Shapes that raise are exercised separately.
 PROFILEABLE = {
-    "strong_signals_data_dir": ProfilerConfig(),
-    "partitioned_with_template_data_dir": ProfilerConfig(),
-    "partitioned_without_template_data_dir": ProfilerConfig(),
-    "bool_target_data_dir": ProfilerConfig(),
-    "sampled_beyond_cap_data_dir": ProfilerConfig(max_rows_sample=SAMPLE_CAP),
+    "strong_signals": (build_strong_signals, ProfilerConfig()),
+    "partitioned_with_template": (build_partitioned_with_template, ProfilerConfig()),
+    "partitioned_without_template": (build_partitioned_without_template, ProfilerConfig()),
+    "bool_target": (build_bool_target, ProfilerConfig()),
+    "sampled_beyond_cap": (build_sampled_beyond_cap, ProfilerConfig(max_rows_sample=SAMPLE_CAP)),
 }
 
 
@@ -71,42 +81,46 @@ def _normalized(profile: DatasetProfile) -> dict:
 # --- golden snapshots -------------------------------------------------------
 
 
-@pytest.mark.parametrize("fixture_name", sorted(PROFILEABLE))
-def test_profile_matches_its_golden_snapshot(request, fixture_name: str) -> None:
+@pytest.mark.parametrize("shape", sorted(PROFILEABLE))
+def test_profile_matches_its_golden_snapshot(tmp_path: Path, shape: str) -> None:
     """Pin every profileable shape, so step 1 must change nothing.
 
     Delete a golden file to regenerate it; the diff is then the review.
     """
-    data_dir = request.getfixturevalue(fixture_name)
-    actual = _normalized(_profile(data_dir, PROFILEABLE[fixture_name]))
+    builder, config = PROFILEABLE[shape]
+    actual = _normalized(_profile(builder(tmp_path), config))
 
     # A golden comparison passes trivially against an empty description, which
     # is exactly what a broken profiler produces.
     assert actual["columns"], "profile has no columns; the snapshot would be vacuous"
 
     GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
-    golden = GOLDEN_DIR / f"{fixture_name.removesuffix('_data_dir')}.golden.json"
+    golden = GOLDEN_DIR / f"{shape}.golden.json"
     if not golden.is_file():
         golden.write_text(json.dumps(actual, indent=2) + "\n", encoding="utf-8")
     assert actual == json.loads(golden.read_text(encoding="utf-8"))
 
 
-def test_profiling_does_not_depend_on_where_it_ran(tmp_path: Path) -> None:
+@pytest.mark.parametrize("shape", sorted(PROFILEABLE))
+def test_profiling_does_not_depend_on_where_it_ran(tmp_path: Path, shape: str) -> None:
     """Requirement 4 (determinism), and the half a golden cannot see.
 
     A snapshot compares one run against a file; this compares two runs against
     each other from different directories. `test_capstone`'s renderer bug was
     invisible to a comparison that shared a directory.
-    """
-    from helpers.dataset_shapes import build_strong_signals
 
-    first = _normalized(_profile(build_strong_signals(tmp_path / "one")))
-    second = _normalized(_profile(build_strong_signals(tmp_path / "two")))
+    Over every shape, not just the flat one: the partitioned path is where the
+    path-derived values live — `files[:200]` ordering, `sampled[:limit]`, and a
+    `primary_kind` picked by `max()` over a dict whose insertion order comes
+    from `rglob`.
+    """
+    builder, config = PROFILEABLE[shape]
+    first = _normalized(_profile(builder(tmp_path / "one"), config))
+    second = _normalized(_profile(builder(tmp_path / "two"), config))
 
     assert first["columns"], "an empty profile would make this comparison vacuous"
-    # `competition` is the directory name, which is the one field that is
-    # *supposed* to differ; everything else describes the bytes.
-    assert first["competition"] == second["competition"] == "strong-signals"
+    # `competition` is the directory name, and both runs build the same shape,
+    # so it is the same string; everything else describes the bytes.
     assert first == second
 
 
@@ -220,7 +234,13 @@ def test_the_sample_cap_is_reported_as_an_exact_row_count(
     real_rows = len(pd.read_csv(sampled_beyond_cap_data_dir / "train.csv"))
     profile = _profile(sampled_beyond_cap_data_dir, ProfilerConfig(max_rows_sample=SAMPLE_CAP))
 
-    assert real_rows > SAMPLE_CAP, "the fixture must exceed the cap or it proves nothing"
+    # Both halves: what the builder says it wrote, and what is on disk. The
+    # constant exists to express this relationship, so it has to be read here or
+    # it is a declaration nothing reaches.
+    assert SAMPLED_BEYOND_CAP_ROWS > SAMPLE_CAP
+    assert real_rows == SAMPLED_BEYOND_CAP_ROWS > SAMPLE_CAP, (
+        "the fixture must exceed the cap or it proves nothing"
+    )
     assert profile.row_count == SAMPLE_CAP
     assert profile.row_count_estimated is False
 
