@@ -1,7 +1,7 @@
 # M16 — Evidence routine as a background producer
 
-**Status:** routine shipped behind `--gather-background` (exit criterion 3
-still needs a campaign log) ·
+**Status:** routine shipped behind `--gather-background`; paired campaign run
+2026-08-20 — criterion 3 half met ·
 **Design:** [design/11-background-routine.md](design/11-background-routine.md) ·
 **Blockers cleared:** M11 (concurrency) shipped 2026-08-11/12 and M14 completed
 2026-08-07, so this is unblocked and waiting on a decision, not on other work
@@ -164,9 +164,22 @@ Full mechanism in [design/11-background-routine.md](design/11-background-routine
    concurrently produce **one** row. Claiming was the only race this plan
    named; creating is the other one.
 
-Criterion 1 needs a campaign log with the producer on and one without, on the
-same workspace, and the number that settles it is **steps per hour** — not "the
-tool was skipped", which the shipped gate already achieves without a producer.
+**Measured 2026-08-20** on a sandbox clone of rogii, producer off then on
+(design §3). The consumer never stalled — four steps dispatched, zero
+`analyze_competition` — and evidence went from **158h stale to 0.02h** with
++18 artifacts, against **+0 and 158h** on the baseline. Criterion 3 is **half
+met**: the evidence store refilled, the hypothesis pool did not, because the
+sweep outlived an eight-step campaign.
+
+**Criterion 1's premise did not reproduce, and that matters more than the
+result.** The baseline never blocked on gathering. The gate reported
+*"Evidence gathering available: only 10 viable hypotheses queued"* at all five
+steps and the LLM policy chose testing every single time. So **steps per hour
+does not discriminate here** — the failure this milestone actually removes is
+not a campaign stalled behind a sweep, it is a campaign testing hard against
+five-day-old evidence while the gate says "go and look" and the policy
+correctly refuses because it has work to do. Nothing else in the system
+resolves that standoff.
 
 ## Traps
 

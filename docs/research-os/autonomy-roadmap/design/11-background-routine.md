@@ -1,7 +1,7 @@
 # Design — M16: the evidence routine as a background producer
 
 **Plan:** [../11-background-routine.md](../11-background-routine.md) ·
-**Status:** built behind `--gather-background`; exit criterion 3 undemonstrated ·
+**Status:** built behind `--gather-background`; measured 2026-08-20 (§3), criterion 3 half met ·
 **Depends on:** M7, M11, M14 (all shipped) ·
 **Ledger priority (§8):** built — `availability(..., reserve=)`
 
@@ -62,20 +62,79 @@ the reason the stagnant clause must stay independent of the count.
 | Producer crash impact on campaign | **zero** — every tick exception-isolated, same shape as `_maybe_mint_on_stagnation` |
 | Behaviour change when off | **zero** — off is the default (§11) |
 
-## 3. Success metrics
+## 3. Success metrics — measured 2026-08-20
 
-Measured on one workspace, two campaign runs, producer off then on:
+A paired run on one workspace, producer off then on. Sandbox clones of
+`rogii-wellbore-geology-prediction` (never the operator's copy), identical
+environment on both sides, `--max-steps 8 --yes --max-submissions 0`.
 
-| Metric | Now | Target |
+| | Producer **off** | Producer **on** |
 |---|---|---|
-| Campaign steps per hour | baseline TBD from the paired run | **higher** — the whole point |
-| Wall-clock a step spends inside the gathering tool | up to ~15 min | **0** |
-| Untested hypotheses idle during a sweep | 10 observed | not applicable — nothing idles |
-| Duplicate hypothesis rows after a concurrent run | n/a (one writer) | **0** |
+| Wall clock | 847s | 1047s |
+| Steps dispatched | 5 | 4 |
+| Tools chosen | implement, run_experiment ×2, generate_plan, run_experiment | run_experiment ×2, generate_plan, run_plan |
+| `analyze_competition` dispatched **by the campaign** | **0** | **0** |
+| Research artifacts | 239 → **239** (+0) | 239 → **257** (+18) |
+| Evidence age at end | **158.1h** | **0.02h** |
+| Hypothesis pool (viable/proposed) | 10/136 → 10/136 | 10/136 → 10/136 |
+| Producer ticks | — | 1 (gathering; still sweeping at shutdown) |
 
-"The tool was skipped" is **not** a success metric — the shipped gate already
-achieves that without a producer. Steps per hour is the number that settles
-criterion 1.
+### What this shows, and what it does not
+
+**The consumer never waited.** With the producer running, the campaign
+dispatched four steps and `analyze_competition` zero times, while the sweep ran
+beside it. Requirement 6 and exit criterion 1 hold as *observed* behaviour, not
+just as a property of the allowlist.
+
+**Evidence refilled; the hypothesis queue did not.** +18 artifacts and staleness
+collapsing from 158 hours to one minute is the producer doing its job. The pool
+stayed at 10 viable because the sweep was still running when the campaign
+stopped — `apply_side_effects` reached fetch and ingest but not `hypothesize`.
+The stages are individually durable (§7.4), so the work is banked rather than
+lost: the *next* campaign starts from fresh evidence. But **exit criterion 3 is
+only half met**, and the half that is missing is the half named in it.
+
+**The premise of criterion 1 did not reproduce.** The baseline never blocked on
+gathering — not because it was prevented, but because it *declined*: the gate
+reported "Evidence gathering available: only 10 viable hypotheses queued" at all
+five steps and the LLM policy chose testing every time. The ~15-minute blocking
+sweep in the plan's opening observation came from an earlier policy regime. So
+**steps per hour is not the discriminating measure on this workspace** — the
+two runs chose different tools and ran different experiments, and the 847s/1047s
+difference measures that, not the producer. The measure that discriminates is
+evidence freshness: 158h versus 0.02h, for the same campaign work.
+
+That is a correction to §3 as originally written, and it moves what this
+milestone is *for*. The failure it removes here is not a campaign stalled behind
+a sweep; it is a campaign testing hard for fourteen minutes against evidence
+five days stale, with a gate that says "go and look" every single step and a
+policy that correctly refuses because it has work to do. Nothing else in the
+system resolves that standoff.
+
+**The provenance fix is confirmed in the field.** 29 invocations recorded from
+the producer thread during the run — `RepositoryAnalyzerAgent` ×22,
+`ConceptNormalizerAgent` ×5, `CompetitionPageAnalyzerAgent`,
+`RepoQueryPlannerAgent` — none of which the campaign could have produced, since
+it dispatched no `analyze_competition`. Before `contextvars.copy_context()` in
+`start()` every one of those rows was dropped.
+
+**Shutdown behaved as designed.** "Evidence producer still sweeping at shutdown;
+leaving it to the process exit" — the bounded join (§7.4), taken rather than
+made the operator wait out a multi-minute sweep.
+
+### Conditions, so the numbers are readable
+
+* `evaluation_metric` was `null` in the workspace contract and the campaign
+  refuses to run without one. Set in the sandbox to `rmse`/minimize — what this
+  workspace's own `metrics.json` already records every prior run against, not a
+  metric chosen for this exercise. **The research these runs produced is not
+  meaningful; only the loop's mechanics and timings are.**
+* `LABPILOT_VIABLE_HYPOTHESIS_TARGET=25` on both sides, so the 10-viable pool
+  reads as thin — criterion 3's condition. `LABPILOT_MIN_RESWEEP_HOURS=0.02` so
+  a producer could sweep more than once inside a bounded run; it did not get
+  the chance to.
+* One pair, one workspace, free-tier providers with one observed failover. This
+  is an existence proof about mechanism, not a performance measurement.
 
 ## 4. Scope
 
@@ -367,15 +426,25 @@ What the tests cover, and what they do not:
 |---|---|
 | 1 — a step never blocks on gathering | **Unit-proven at the allowlist**: with a producer running, `analyze_competition` leaves the consumer's allowlist even when the gate says *gather*. Not yet shown on a campaign log |
 | 2 — full backlog ticks and no-ops with a reason | **Covered** |
-| 3 — a thin backlog refills without the consumer stalling | **Not demonstrated.** Needs the paired campaign run below |
+| 3 — a thin backlog refills without the consumer stalling | **Half met, measured 2026-08-20** (§3). The consumer did not stall; the *evidence* store refilled (+18 artifacts, 158h → 0.02h stale); the *hypothesis* pool did not, because the sweep outlived the campaign |
 | 4 — producer and consumer never claim the same hypothesis | **Covered**, and structurally: the producer proposes and never claims (§7.3) |
 | 5 — one idea, one row, under two writers | **Covered and mutation-checked** — moving the predicate outside `.alloc.lock` makes eight racing writers produce eight rows, and the test catches it |
 | 6 — a tick that raises does not take the campaign with it | **Covered** |
 | 7 — the plan decides what is gathered, not the producer | **Covered** — driven with a stub tool and non-Kaggle args |
 
-Then the paired campaign run in §3. Until it exists, this milestone sits exactly
-where M8 and M11 do: implementation complete, the criterion that needs a running
-campaign undemonstrated.
+The paired campaign run in §3 has now happened. What it leaves open is narrow
+and specific: a rogii sweep outlives an eight-step campaign, so the hypothesis
+pool refills on the *next* run rather than this one. Two ways to close it, and
+they are not equivalent —
+
+1. **Let the producer finish.** Longer campaigns, or a shutdown that waits for
+   `hypothesize` specifically (the one stage whose output the consumer needs)
+   rather than joining on a fixed grace.
+2. **Make the sweep cheaper.** The 22 `RepositoryAnalyzerAgent` calls in one
+   tick are most of its cost, and `ANALYZE_ARGS` already excludes papers for the
+   same reason.
+
+(1) is the smaller change and the one that matches the criterion's wording.
 
 **It does not fix what a campaign is short of.** The plan's first trap stands,
 now aimed at M22–M26: a faster supply of hypotheses tested against a target
