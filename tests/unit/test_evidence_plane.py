@@ -18,9 +18,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from helpers.dataset_shapes import (
+    build_no_kaggle_inputs,
+    build_partition_suffix,
     build_partitioned_with_template,
     build_partitioned_without_template,
     build_strong_signals,
+    build_template_only,
 )
 from helpers.dataset_sources import DictSource
 from pydantic import ValidationError
@@ -33,6 +36,8 @@ from labpilot.accessor.profiler.evidence import (
     band_of,
     combine,
 )
+from labpilot.accessor.profiler.schema import MetricRef
+from labpilot.accessor.profiler.source import DeclaredFacts
 from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
 from labpilot.config import ProfilerConfig
 
@@ -235,19 +240,38 @@ def test_the_catalogue_carries_no_entry_nothing_can_fire(tmp_path: Path) -> None
     milestone exists to remove — and it is easiest to add one by writing the
     catalogue ahead of the code.
     """
+    profiles = [
+        _profile(build(tmp_path))
+        for build in (
+            build_strong_signals,
+            build_partitioned_with_template,
+            build_partitioned_without_template,
+            build_no_kaggle_inputs,
+            build_partition_suffix,
+            build_template_only,
+        )
+    ]
+    frame = pd.DataFrame({"Id": [1, 2, 3], "x": [1.0, 2.0, 3.0], "y": [1.0, 2.0, 3.0]})
+    profiles.append(
+        TabularProfiler(ProfilerConfig()).profile_dataset(
+            DictSource(
+                {
+                    "train.csv": frame,
+                    "test.csv": frame[["Id", "x"]],
+                    "sample_submission.csv": frame[["Id", "y"]],
+                },
+                DeclaredFacts(metric=MetricRef(name="RMSE", key="rmse", direction="minimize")),
+            ),
+            "declared",
+        )
+    )
+
     fired: set[str] = set()
-    for build in (
-        build_strong_signals,
-        build_partitioned_with_template,
-        build_partitioned_without_template,
-    ):
-        profile = _profile(build(tmp_path))
+    for profile in profiles:
         for inference in profile.inferences.values():
             fired |= {signal.id for signal in inference.signals}
             for alternative in inference.alternatives:
                 fired |= {signal.id for signal in alternative.signals}
 
-    # `positional_template_overlap` needs a dataset with no test file at all,
-    # which the fixtures above do not have; it is exercised by the cap test.
-    unreachable = set(CATALOGUE) - fired - {"positional_template_overlap"}
+    unreachable = set(CATALOGUE) - fired
     assert not unreachable, f"catalogue entries nothing fires: {sorted(unreachable)}"

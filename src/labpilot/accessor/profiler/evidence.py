@@ -144,6 +144,39 @@ CATALOGUE: dict[str, SignalSpec] = {
             cap=0.50,
             means="second column of the template's overlap with train — position, not evidence",
         ),
+        _spec(
+            "declared_by_source",
+            0.90,
+            "stated",
+            means="the environment states it — a competition's metric, a config, a goal",
+        ),
+        # --- objective ------------------------------------------------------
+        _spec(
+            "direction_declared",
+            0.30,
+            "distributional",
+            means="the declaration says which way is better, so it is not half a metric",
+        ),
+        # --- split ----------------------------------------------------------
+        _spec(
+            "no_scoring_input",
+            0.90,
+            "structural",
+            means="there is no scoring input at all — a fact about the dataset, not a guess",
+        ),
+        _spec(
+            "scored_rows_are_partition_tail",
+            0.80,
+            "structural",
+            means="the scored rows are a contiguous tail of each partition",
+        ),
+        _spec(
+            "scoring_input_present",
+            0.50,
+            "structural",
+            cap=0.75,
+            means="a scoring input exists and nothing contradicts disjoint units — the residual",
+        ),
         # --- identity -------------------------------------------------------
         _spec(
             "present_in_train_and_scoring",

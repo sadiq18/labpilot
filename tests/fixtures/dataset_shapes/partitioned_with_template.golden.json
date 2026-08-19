@@ -117,7 +117,17 @@
     }
   ],
   "target_column": "Depth",
-  "id_column": "id",
+  "id_columns": [
+    "id"
+  ],
+  "excluded_columns": {
+    "id": "is_id",
+    "Depth_input": "equals_target",
+    "Depth": "is_target",
+    "Zone_Depth": "unavailable_at_scoring"
+  },
+  "train_test_relationship": "disjoint_units",
+  "metric": null,
   "submission_columns": [
     "id",
     "depth"
@@ -223,6 +233,25 @@
       "band": "probable",
       "alternatives": [],
       "rejected": []
+    },
+    "train_test_relationship": {
+      "signals": [
+        {
+          "id": "scoring_input_present",
+          "detail": "a scoring input exists; no split signal"
+        }
+      ],
+      "confidence": 0.5,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
+    },
+    "metric": {
+      "signals": [],
+      "confidence": 0.0,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
     }
   },
   "modality": "tabular",
@@ -245,6 +274,12 @@
     "Zone_Depth"
   ],
   "anchor_column": "Depth_input",
+  "id_column": "id",
+  "feature_columns": [
+    "md",
+    "azimuth",
+    "formation"
+  ],
   "warnings": [
     "partitioned dataset: 8 train / 8 test CSVs",
     "primary kind='horizontal_well'; kinds={'horizontal_well': 5, 'typewell': 3}",

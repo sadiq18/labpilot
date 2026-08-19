@@ -276,6 +276,16 @@ SplitRelationship = Literal["disjoint_units", "temporal_split", "partition_suffi
 absence of one. That is what makes a warehouse table and an RL environment
 describable by the same schema.
 
+**What step 3 shipped, and what waits.** `SplitRelationship` ships
+`partition_suffix`, `disjoint_units`, `no_test_provided` and `unknown`;
+`temporal_split`, `same_entities_new_period` and `environment` arrive with the
+detectors that can conclude them. `ExclusionReason` ships everything but
+`post_outcome` and `operator_excluded`, which need a timestamp comparison and an
+answer file. `target_type`, `target_distribution`, `datetime_columns` and
+`text_columns` are not in step 3 at all — they are measurements over a resolved
+target, and M23 is their first consumer. An enum member with no detector would
+be a declaration nothing reaches, which is what this milestone removes.
+
 ### 7.3 Evidence and `combine`
 
 ```python
@@ -374,6 +384,12 @@ are gone, so a metric that reaches a workspace has an exact alias behind it.
 `substring_match` is kept in the catalogue's design for the case that remains —
 a source supplying a name the registry cannot match — and ships only when
 something can produce it.
+
+**The resolution stays outside `accessor`**, which may not import
+`research_engine` where the registry lives. A source states an already-canonical
+`MetricRef`; `_ensure_profile` is what maps `CompetitionSpec.evaluation_metric`
+onto one, and the profiler records that the answer was *declared* rather than
+derived.
 
 ### 7.5 Features — the safety-critical answer
 
@@ -545,7 +561,7 @@ show` is Rich output, truncated at 40 columns.
 | 0 ✅ | Fixtures for cases A, B, B′, C, a >`max_rows_sample` table, a CSV-less environment layout | They reproduce the defects |
 | 1 ✅ | `source.py` + `LocalFileSource`; `profile_dataset` takes a source | Schemas byte-identical, on fixtures and on rogii's 1,546 tables |
 | 2 ✅ | `evidence.py`, catalogue, `combine`; `inferences` populated from today's decisions; `notes`/`warnings` view | Check 1 passes; **no values change** — the golden diff is two added keys, nothing removed and nothing altered |
-| 3 | The five answers rewritten as scoring; `id_columns`, `excluded_columns`, `train_test_relationship`, `metric` | Checks 4, 5, 6 |
+| 3 ✅ | The five answers rewritten as scoring; `id_columns`, `excluded_columns`, `train_test_relationship`, `metric` | Checks 4, 5, 6 |
 | 4 | Questions, `schema_answers.json`, `schema_prompt`, block path, `research schema` | Check 7 |
 | 5 | Modality list, `prediction_unit`, zarr, tie-break confidence, `row_count`, metric recording; the fiction deleted | Check 8 |
 | 6 | Proposer + verifiers, off by default | Check 3 |

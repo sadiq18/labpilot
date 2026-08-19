@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-
 from helpers.dataset_shapes import (
     SAMPLED_BEYOND_CAP_ROWS,
     build_bool_target,
@@ -31,6 +30,7 @@ from helpers.dataset_shapes import (
     build_sampled_beyond_cap,
     build_strong_signals,
 )
+
 from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
 from labpilot.config import ProfilerConfig
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
@@ -209,16 +209,32 @@ def test_one_file_decides_the_label(
     assert _profile(partitioned_without_template_data_dir).target_column == "Zone_Depth"
 
 
-def test_a_dataset_without_kaggle_inputs_cannot_be_profiled(
-    no_kaggle_inputs_data_dir: Path,
-) -> None:
-    """Case C: one table, no split, no template. Flips at step 3.
+def test_a_dataset_without_kaggle_inputs_is_profiled(no_kaggle_inputs_data_dir: Path) -> None:
+    """Case C, flipped at step 3: the M12 shape produces a schema.
 
-    This is the M12 shape, and today it does not produce a weak description —
-    it produces none at all.
+    One table, no split, no template, no declared metric. Every structural
+    signal is unavailable by construction, so the answers that depend on them
+    are `uncertain` — and the description a model needs to do anything at all,
+    the columns and their statistics, is there regardless.
+
+    It used to raise `ValueError: Expected one training CSV, found 0`, which is
+    the profiler's answer to the entire world outside Kaggle.
     """
-    with pytest.raises(ValueError, match="Expected one training CSV"):
-        _profile(no_kaggle_inputs_data_dir)
+    profile = _profile(no_kaggle_inputs_data_dir)
+
+    assert profile.train_test_relationship == "no_test_provided"
+    assert profile.confidence_in("train_test_relationship") >= 0.85
+    assert profile.feature_columns == [
+        "event_id",
+        "account",
+        "amount",
+        "occurred_at",
+        "churned",
+    ]
+    # Uncertain on exactly the three answers that need something declared.
+    uncertain = {f for f, i in profile.inferences.items() if i.band == "uncertain"}
+    assert uncertain == {"target_column", "id_column", "metric"}
+    assert any(note.code == "no_target_identified" for note in profile.notes)
 
 
 def test_an_environment_has_no_description_at_all(environment_data_dir: Path) -> None:

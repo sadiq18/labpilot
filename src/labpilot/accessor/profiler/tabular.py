@@ -7,7 +7,14 @@ from typing import Any
 import pandas as pd
 from pydantic import BaseModel, Field, computed_field, model_validator
 
-from labpilot.accessor.profiler.evidence import Alternative, Inference, Note, Signal
+from labpilot.accessor.profiler.evidence import (
+    Alternative,
+    Inference,
+    Note,
+    Signal,
+    combine,
+)
+from labpilot.accessor.profiler.schema import ExclusionReason, MetricRef, SplitRelationship
 from labpilot.accessor.profiler.source import (
     DatasetSource,
     DeclaredFacts,
@@ -64,7 +71,18 @@ class DatasetProfile(BaseModel):
     column_count: int = 0
     columns: list[ColumnProfile] = Field(default_factory=list)
     target_column: str | None = None
-    id_column: str | None = None
+    #: A list, because a composite key is ordinary outside Kaggle —
+    #: `(store, date)`, `(patient, visit)`. `id_column` below is the first of
+    #: them, kept for every existing reader.
+    id_columns: list[str] = Field(default_factory=list)
+    #: Why each non-feature column is not one, by reason code. A measurement:
+    #: two people with the same bytes would agree, so no confidence attaches.
+    excluded_columns: dict[str, ExclusionReason] = Field(default_factory=dict)
+    #: How the scored units relate to the training units. What validation has to
+    #: reproduce, and the first thing M23's floor needs to be computed on.
+    train_test_relationship: SplitRelationship = "unknown"
+    #: What the dataset is scored by, and how that was reached.
+    metric: MetricRef | None = None
     submission_columns: list[str] = Field(default_factory=list)
     #: Structured reasons. `warnings` below is the prose view over these.
     notes: list[Note] = Field(default_factory=list)
@@ -97,6 +115,24 @@ class DatasetProfile(BaseModel):
     # the series actually was, so a forecast should be a residual from its last
     # known value rather than a fit over the other columns.
     anchor_column: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def id_column(self) -> str | None:
+        """The first key column. A view over `id_columns`, so the two cannot drift."""
+        return self.id_columns[0] if self.id_columns else None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def feature_columns(self) -> list[str]:
+        """Everything a model may use: the columns, minus the exclusions.
+
+        Derived rather than stored because this is the one answer where a wrong
+        value is worse than no value — a leak makes a score look *better*, so
+        nothing downstream detects it — and a stored copy that drifts from
+        `excluded_columns` would be exactly that failure with no symptom.
+        """
+        return [c.name for c in self.columns if c.name not in self.excluded_columns]
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -135,6 +171,93 @@ class DatasetProfile(BaseModel):
         """How sure the profiler is about one field, or 0.0 if it never reasoned about it."""
         inference = self.inferences.get(field)
         return inference.confidence if inference else 0.0
+
+
+def _resolve(candidates: dict[str, list[Signal]]) -> tuple[str | None, Inference]:
+    """Pick the best-evidenced candidate, and record what every candidate had.
+
+    One decision procedure for every question, replacing a chain of `if`s per
+    path: score each candidate against the catalogue, take the highest, keep the
+    rest as alternatives with their own evidence.
+
+    A tie keeps today's answer — the last of the tied candidates in sort order —
+    so this step changes no value that today's code gets right. That is not a
+    defence of the rule: it is position deciding, the caller records a note
+    saying so, and step 4 replaces it with a question. What has changed already
+    is that the tie is *visible*, because the runners-up carry the same
+    confidence in the profile.
+    """
+    if not candidates:
+        return None, Inference.of([])
+    scored = sorted(
+        ((name, combine(signals), signals) for name, signals in candidates.items()),
+        key=lambda row: (-row[1], row[0]),
+    )
+    tied = [row for row in scored if row[1] == scored[0][1]]
+    winner, _, winning_signals = tied[-1] if len(tied) > 1 else scored[0]
+    return winner, Inference.of(
+        winning_signals,
+        alternatives=[
+            Alternative.of(name, signals) for name, _, signals in scored if name != winner
+        ],
+    )
+
+
+def _exclusions(
+    profile: DatasetProfile,
+    *,
+    target: str | None,
+    ids: list[str],
+    unavailable: set[str],
+    equals_target: str | None = None,
+) -> dict[str, ExclusionReason]:
+    """Why each column is not a feature.
+
+    Order matters only in that a column gets one reason; the first that applies
+    is the one a reader most needs. `equals_target` is last because it is the
+    subtlest and the most expensive to get wrong: rogii's `TVT_input` is the
+    strongest predictor in the dataset *and* unusable as a plain feature, and a
+    profile that lists it among the features is how a model learns to copy a
+    column that is NaN on every scored row.
+    """
+    reasons: dict[str, ExclusionReason] = {}
+    for column in profile.columns:
+        name = column.name
+        if target is not None and name == target:
+            reasons[name] = "is_target"
+        elif name in ids:
+            reasons[name] = "is_id"
+        elif name in unavailable:
+            reasons[name] = "unavailable_at_scoring"
+        elif equals_target is not None and name == equals_target:
+            reasons[name] = "equals_target"
+        elif column.unique_count <= 1:
+            reasons[name] = "constant"
+    return reasons
+
+
+def _split_signals(*, has_scoring_input: bool, scored_is_partition_suffix: bool) -> list[Signal]:
+    """What is known about how the scored units relate to the training ones."""
+    if not has_scoring_input:
+        return [Signal(id="no_scoring_input", detail="no scoring input in this dataset")]
+    if scored_is_partition_suffix:
+        return [
+            Signal(
+                id="scored_rows_are_partition_tail",
+                detail="scored rows are a contiguous tail of each test partition",
+            )
+        ]
+    return [Signal(id="scoring_input_present", detail="a scoring input exists; no split signal")]
+
+
+def _metric_signals(metric: MetricRef | None) -> list[Signal]:
+    signals: list[Signal] = []
+    if metric is None:
+        return signals
+    signals.append(Signal(id="declared_by_source", detail=f"declared metric {metric.name!r}"))
+    if metric.direction is not None:
+        signals.append(Signal(id="direction_declared", detail=f"direction={metric.direction}"))
+    return signals
 
 
 def _column_signals(profile: DatasetProfile, name: str | None) -> list[Signal]:
@@ -491,14 +614,27 @@ class TabularProfiler:
         if partitioned is not None:
             return partitioned
 
-        train_table = self._single_table(
-            [table for table in tables if _name_of(table).startswith(train_pattern.lower())],
-            "training",
+        train_matches = [
+            table for table in tables if _name_of(table).startswith(train_pattern.lower())
+        ]
+        if not train_matches and len(tables) == 1:
+            # One table is the training table. A dataset that is not a
+            # competition has no `train` prefix to match — a warehouse extract,
+            # a study export, a log dump — and refusing to describe it at all
+            # was the profiler's answer to the entire world outside Kaggle.
+            train_table = tables[0]
+        else:
+            train_table = self._single_table(train_matches, "training")
+
+        sample_matches = [
+            table for table in tables if submission_pattern.lower() in _name_of(table)
+        ]
+        # Absent is a fact about the dataset; two is an ambiguity nobody can
+        # resolve from here, so only the second still refuses.
+        sample_table = (
+            self._single_table(sample_matches, "sample submission") if sample_matches else None
         )
-        sample_table = self._single_table(
-            [table for table in tables if submission_pattern.lower() in _name_of(table)],
-            "sample submission",
-        )
+
         test_matches = [
             table for table in tables if _name_of(table).startswith(test_pattern.lower())
         ]
@@ -507,56 +643,22 @@ class TabularProfiler:
             test_table = test_matches[0]
         elif len(test_matches) == 0:
             test_table = sample_table
-            test_warnings.append(
-                "No test CSV found; using sample submission as the test reference file."
-            )
+            if sample_table is not None:
+                test_warnings.append(
+                    "No test CSV found; using sample submission as the test reference file."
+                )
         else:
             names = [Path(table.uri).name for table in test_matches]
             raise ValueError(f"Expected one test CSV, found {len(test_matches)}: {names}")
 
         train_columns = source.columns(train_table)
-        test_columns = source.columns(test_table)
-        submission_columns = source.columns(sample_table)
+        test_columns = source.columns(test_table) if test_table is not None else []
+        submission_columns = source.columns(sample_table) if sample_table is not None else []
 
-        target_candidates = [column for column in train_columns if column not in test_columns]
-        target_by_position = False
-        if len(target_candidates) == 1:
-            target_column = target_candidates[0]
-        elif test_table == sample_table:
-            overlap = [column for column in submission_columns if column in train_columns]
-            if len(overlap) >= 2:
-                target_column = overlap[1]
-                target_by_position = True
-            else:
-                raise ValueError(
-                    "Unable to infer one target column from train/sample submission schemas; "
-                    f"found {target_candidates or 'none'}."
-                )
-        else:
-            raise ValueError(
-                "Unable to infer one target column from train/test schemas; "
-                f"found {target_candidates or 'none'}."
-            )
-
-        id_candidates = [
-            column
-            for column in submission_columns
-            if column in train_columns and column in test_columns and column != target_column
-        ]
-        if not id_candidates:
-            raise ValueError("Unable to infer an ID column from the sample submission.")
-        id_column = id_candidates[0]
-
-        expected_submission_columns = [id_column, target_column]
-        if submission_columns != expected_submission_columns:
-            raise ValueError(
-                "Sample submission schema does not match the inferred ID and target columns: "
-                f"expected {expected_submission_columns}, got {submission_columns}."
-            )
-
-        # One read of the training table, where there were two: `profile_file`
-        # sampled it and then `enrich_column_stats` sampled it again with the
-        # same cap. Same bytes, same frame — the second read only cost time.
+        # The profile is built before the answers are resolved, because the
+        # evidence for an answer includes what the columns look like — whether
+        # the candidate is complete, whether it is numeric — and those are facts
+        # about the frame rather than about the header.
         train_sample = source.sample(train_table, self.config.max_rows_sample)
         profile = DatasetProfile(
             competition=competition,
@@ -572,71 +674,113 @@ class TabularProfiler:
         detector.enrich_column_stats(train_sample, profile.columns)
         profile.files = [table.uri for table in tables]
         profile.train_file = train_table.uri
-        profile.test_file = test_table.uri
-        profile.sample_submission_file = sample_table.uri
-        profile.test_row_count = source.exact_unit_count(test_table, id_column)
-        profile.target_column = target_column
-        profile.id_column = id_column
+        profile.test_file = test_table.uri if test_table is not None else None
+        profile.sample_submission_file = sample_table.uri if sample_table is not None else None
         profile.submission_columns = submission_columns
+
+        # --- which columns could be the label ------------------------------
+        withheld = [column for column in train_columns if column not in test_columns]
+        target_candidates: dict[str, list[Signal]] = {}
+        if test_table is not None:
+            for candidate in withheld:
+                signals: list[Signal] = []
+                if candidate in submission_columns:
+                    signals.append(
+                        Signal(
+                            id="named_in_prediction_template",
+                            detail=f"submission header names {candidate!r}",
+                        )
+                    )
+                if withheld == [candidate]:
+                    signals.append(
+                        Signal(
+                            id="sole_withheld_column",
+                            detail=f"{candidate!r} is the only column train has and test does not",
+                        )
+                    )
+                target_candidates[candidate] = signals + _column_signals(profile, candidate)
+        if not target_candidates and test_table is not None and test_table == sample_table:
+            # The positional branch: no column is withheld, so the template's
+            # own overlap with train is all there is. Capped at 0.50 by the
+            # catalogue, which is what makes it ask rather than answer.
+            overlap = [column for column in submission_columns if column in train_columns]
+            if len(overlap) >= 2:
+                target_candidates[overlap[1]] = [
+                    Signal(
+                        id="positional_template_overlap",
+                        detail=f"second of {len(overlap)} columns the template shares with train",
+                    )
+                ] + _column_signals(profile, overlap[1])
+
+        target_column, target_inference = _resolve(target_candidates)
+        profile.target_column = target_column
+        profile.inferences["target_column"] = target_inference
+
+        # --- which columns could be the key --------------------------------
+        id_candidates: dict[str, list[Signal]] = {}
+        for candidate in submission_columns:
+            if candidate == target_column:
+                continue
+            id_candidates[candidate] = _identity_signals(
+                profile,
+                candidate,
+                unit_count=len(train_sample),
+                in_template=True,
+                first_in_template=candidate == submission_columns[0],
+                on_both_sides=candidate in train_columns and candidate in test_columns,
+            )
+        id_column, id_inference = _resolve(id_candidates)
+        profile.id_columns = [id_column] if id_column else []
+        profile.inferences["id_column"] = id_inference
+
+        # A contract, not an inference: a template whose columns are not the id
+        # and the target describes a submission this profile cannot produce, and
+        # failing here is closer to the cause than failing at submission time.
+        if sample_table is not None:
+            expected_submission_columns = [id_column, target_column]
+            if submission_columns != expected_submission_columns:
+                raise ValueError(
+                    "Sample submission schema does not match the inferred ID and target columns: "
+                    f"expected {expected_submission_columns}, got {submission_columns}."
+                )
+
         for column in profile.columns:
             column.is_target_candidate = column.name == target_column
 
-        target_signals: list[Signal] = []
-        if target_column in submission_columns:
-            target_signals.append(
-                Signal(
-                    id="named_in_prediction_template",
-                    detail=f"submission header names {target_column!r}",
-                )
-            )
-        if target_candidates == [target_column]:
-            target_signals.append(
-                Signal(
-                    id="sole_withheld_column",
-                    detail=f"{target_column!r} is the only column train has and test does not",
-                )
-            )
-        if target_by_position:
-            target_signals.append(
-                Signal(
-                    id="positional_template_overlap",
-                    detail=f"second of {len(overlap)} columns the template shares with train",
-                )
-            )
-        target_signals += _column_signals(profile, target_column)
-        profile.inferences["target_column"] = Inference.of(
-            target_signals,
-            alternatives=[
-                Alternative.of(candidate, _column_signals(profile, candidate))
-                for candidate in target_candidates
-                if candidate != target_column
-            ],
+        if test_table is not None and id_column is not None:
+            profile.test_row_count = source.exact_unit_count(test_table, id_column)
+
+        # --- the remaining answers -----------------------------------------
+        profile.train_only_columns = withheld if test_table is not None else []
+        profile.excluded_columns = _exclusions(
+            profile,
+            target=target_column,
+            ids=profile.id_columns,
+            unavailable=set(profile.train_only_columns),
         )
-        profile.inferences["id_column"] = Inference.of(
-            _identity_signals(
+        split_signals = _split_signals(
+            has_scoring_input=test_table is not None,
+            scored_is_partition_suffix=False,
+        )
+        profile.train_test_relationship = (
+            "disjoint_units" if test_table is not None else "no_test_provided"
+        )
+        profile.inferences["train_test_relationship"] = Inference.of(split_signals)
+        profile.metric = source.declared().metric
+        profile.inferences["metric"] = Inference.of(_metric_signals(profile.metric))
+        if profile.target_column is None:
+            why = (
+                "no scoring input to compare train against"
+                if test_table is None
+                else "no candidate column"
+            )
+            _note(
                 profile,
-                id_column,
-                unit_count=len(train_sample),
-                in_template=id_column in submission_columns,
-                first_in_template=bool(submission_columns) and id_column == submission_columns[0],
-                on_both_sides=id_column in train_columns and id_column in test_columns,
-            ),
-            alternatives=[
-                Alternative.of(
-                    candidate,
-                    _identity_signals(
-                        profile,
-                        candidate,
-                        unit_count=len(train_sample),
-                        in_template=candidate in submission_columns,
-                        first_in_template=candidate == submission_columns[0],
-                        on_both_sides=True,
-                    ),
-                )
-                for candidate in id_candidates
-                if candidate != id_column
-            ],
-        )
+                "no_target_identified",
+                f"no column could be identified as the label: {why}",
+                field="target_column",
+                severity="blocking",
+            )
 
         declared = source.declared()
         root = _local_root(source)
@@ -666,7 +810,6 @@ class TabularProfiler:
             profile.text_column = modality.text_column
             for text in modality.signals:
                 _note(profile, "modality_signal", text, field="modality")
-
         logger.info(
             "Profiled '%s': target=%s, id=%s, train_rows=%d, test_rows=%d",
             competition,
@@ -934,7 +1077,6 @@ class TabularProfiler:
         profile.sample_submission_file = sample_table.uri if sample_table else None
         profile.submission_columns = submission_columns
         profile.target_column = target
-        profile.id_column = submission_columns[0] if submission_columns else None
         profile.row_count = row_count
         profile.row_count_estimated = True
         profile.column_count = len(sample_df.columns)
@@ -975,31 +1117,73 @@ class TabularProfiler:
                 )
             return signals + _column_signals(profile, candidate)
 
+        # The same resolver the flat path uses. `target` above is still the
+        # value — this step does not move answers the code already gets right —
+        # and the resolver is asserted to agree with it, so the two cannot drift
+        # while the old procedure is still in place.
+        scored_target, target_inference = _resolve(
+            {str(c): target_signals_for(str(c)) for c in train_only}
+        )
         if target is not None:
-            profile.inferences["target_column"] = Inference.of(
-                target_signals_for(str(target)),
-                alternatives=[
-                    Alternative.of(str(c), target_signals_for(str(c)))
-                    for c in train_only
-                    if str(c) != str(target)
-                ],
-            )
-        if profile.id_column is not None:
-            profile.inferences["id_column"] = Inference.of(
-                _identity_signals(
+            profile.inferences["target_column"] = target_inference
+            if scored_target != str(target):
+                # Evidence and procedure disagreeing is a finding, not something
+                # to resolve silently in favour of either.
+                _note(
                     profile,
-                    profile.id_column,
+                    "target_disagrees_with_evidence",
+                    f"the inferred target is {target!r}; the best-evidenced candidate is "
+                    f"{scored_target!r}",
+                    field="target_column",
+                    severity="blocking",
+                )
+
+        id_column, id_inference = _resolve(
+            {
+                candidate: _identity_signals(
+                    profile,
+                    candidate,
                     unit_count=len(sample_df),
                     # Named, but not *chosen* for being named: this path takes
                     # the template's first column without checking anything
                     # about it, so the evidence has to say position.
                     in_template=False,
-                    first_in_template=True,
-                    on_both_sides=profile.id_column in set(sample_df.columns)
-                    and profile.id_column in test_columns,
+                    first_in_template=candidate == submission_columns[0],
+                    on_both_sides=candidate in set(sample_df.columns) and candidate in test_columns,
                 )
-            )
+                for candidate in submission_columns[:1]
+            }
+        )
+        profile.id_columns = [id_column] if id_column else []
+        if id_column is not None:
+            profile.inferences["id_column"] = id_inference
         self._detect_suffix_scoring(profile, source, sample_table, test_kind_tables)
+        # Once, not twice: it reads every sampled partition to answer, and both
+        # the exclusion below and `anchor_column` further down want the same
+        # column for the same reason.
+        profile.anchor_column = _detect_anchor_column(
+            frames, profile.target_column, lambda name: not withheld_at_test(name)
+        )
+        profile.excluded_columns = _exclusions(
+            profile,
+            target=profile.target_column,
+            ids=profile.id_columns,
+            unavailable=set(train_only),
+            equals_target=profile.anchor_column,
+        )
+        profile.train_test_relationship = (
+            "partition_suffix"
+            if profile.scored_is_partition_suffix
+            else ("disjoint_units" if test_kind_tables else "no_test_provided")
+        )
+        profile.inferences["train_test_relationship"] = Inference.of(
+            _split_signals(
+                has_scoring_input=bool(test_kind_tables),
+                scored_is_partition_suffix=profile.scored_is_partition_suffix,
+            )
+        )
+        profile.metric = source.declared().metric
+        profile.inferences["metric"] = Inference.of(_metric_signals(profile.metric))
         # Appended, not assigned. `profile.warnings = [...]` here discarded
         # everything recorded earlier in this method — including the note
         # `_detect_suffix_scoring` writes one line above when a source has no
@@ -1044,9 +1228,6 @@ class TabularProfiler:
                 "validate by holding out each partition's tail",
                 severity="caution",
             )
-        profile.anchor_column = _detect_anchor_column(
-            frames, profile.target_column, lambda name: not withheld_at_test(name)
-        )
         if profile.anchor_column:
             _note(
                 profile,
