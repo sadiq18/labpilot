@@ -127,20 +127,29 @@ def test_profiling_does_not_depend_on_where_it_ran(tmp_path: Path, shape: str) -
 # --- what the profile cannot say --------------------------------------------
 
 
-def test_a_correct_answer_carries_no_evidence(strong_signals_data_dir: Path) -> None:
-    """Case A: right, and unable to say why. Flips at step 2.
+def test_a_correct_answer_now_says_why(strong_signals_data_dir: Path) -> None:
+    """Case A, flipped at step 2: right, and able to say why.
 
-    Every strong signal fires here — the template names the label, the label is
-    absent from the scoring input, it is numeric and complete — and the profile
-    records none of that. Its only prose is a modality signal nothing parses.
+    Every strong signal fires here — the template names the label, it is the
+    only column withheld from the scoring input, it is complete and numeric —
+    and each one is now named in the profile rather than implied by a value
+    appearing out of nowhere.
     """
     profile = _profile(strong_signals_data_dir)
+    target = profile.inferences["target_column"]
 
     assert profile.target_column == "SalePrice"
     assert profile.id_column == "Id"
-    dumped = profile.model_dump()
-    assert "confidence" not in dumped
-    assert "inferences" not in dumped
+    assert [signal.id for signal in target.signals] == [
+        "named_in_prediction_template",
+        "sole_withheld_column",
+        "non_null_in_train",
+        "is_numeric",
+    ]
+    assert target.band == "asserted"
+    assert profile.confidence_in("target_column") >= 0.85
+    # One candidate, so nothing to be an alternative to.
+    assert target.alternatives == []
     assert profile.warnings == ["default_tabular"]
 
 

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from helpers.dataset_sources import DictSource
 
 from labpilot.accessor.profiler import tabular as tabular_module
 from labpilot.accessor.profiler.source import (
@@ -180,35 +181,6 @@ def test_a_uri_cannot_leave_the_dataset_root(strong_signals_data_dir: Path) -> N
     for escape in ("/etc/passwd", "../../../etc/passwd"):
         with pytest.raises(ValueError, match="outside the dataset root"):
             source.path(TableRef(uri=escape))
-
-
-class DictSource:
-    """A dataset that is not a directory. Implements `DatasetSource`, nothing more.
-
-    Deliberately holds no path, so any filesystem read the profiler attempts
-    fails loudly rather than silently working because the test happened to run
-    beside real files.
-    """
-
-    def __init__(self, frames: dict[str, pd.DataFrame], declared: DeclaredFacts | None = None):
-        self._frames = frames
-        self._declared = declared or DeclaredFacts()
-
-    def tables(self) -> list[TableRef]:
-        return [TableRef(uri=name) for name in self._frames]
-
-    def columns(self, table: TableRef) -> list[str]:
-        return [str(column) for column in self._frames[table.uri].columns]
-
-    def sample(self, table: TableRef, limit: int | None) -> pd.DataFrame:
-        frame = self._frames[table.uri]
-        return frame if limit is None else frame.head(limit)
-
-    def exact_unit_count(self, table: TableRef, column: str) -> int:
-        return len(self._frames[table.uri])
-
-    def declared(self) -> DeclaredFacts:
-        return self._declared
 
 
 def test_a_dataset_that_is_not_a_directory_can_be_profiled() -> None:

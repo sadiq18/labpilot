@@ -62,9 +62,64 @@
     "id",
     "label"
   ],
-  "warnings": [
-    "default_tabular"
+  "notes": [
+    {
+      "code": "modality_signal",
+      "text": "default_tabular",
+      "field": "modality",
+      "severity": "info"
+    }
   ],
+  "inferences": {
+    "target_column": {
+      "signals": [
+        {
+          "id": "named_in_prediction_template",
+          "detail": "submission header names 'label'"
+        },
+        {
+          "id": "sole_withheld_column",
+          "detail": "'label' is the only column train has and test does not"
+        },
+        {
+          "id": "non_null_in_train",
+          "detail": "label: no nulls in train"
+        },
+        {
+          "id": "is_numeric",
+          "detail": "label: float64"
+        }
+      ],
+      "confidence": 0.9592,
+      "band": "asserted",
+      "alternatives": [],
+      "rejected": []
+    },
+    "id_column": {
+      "signals": [
+        {
+          "id": "named_in_prediction_template",
+          "detail": "template names 'id'"
+        },
+        {
+          "id": "first_template_column",
+          "detail": "'id' is the template's first column"
+        },
+        {
+          "id": "present_in_train_and_scoring",
+          "detail": "'id' is on both sides"
+        },
+        {
+          "id": "unique_per_unit",
+          "detail": "10 distinct in 10"
+        }
+      ],
+      "confidence": 0.946,
+      "band": "asserted",
+      "alternatives": [],
+      "rejected": []
+    }
+  },
   "modality": "tabular",
   "image_dir": null,
   "image_column": null,
@@ -78,5 +133,8 @@
   "scored_is_partition_suffix": false,
   "scored_fraction": 0.0,
   "train_only_columns": [],
-  "anchor_column": null
+  "anchor_column": null,
+  "warnings": [
+    "default_tabular"
+  ]
 }
