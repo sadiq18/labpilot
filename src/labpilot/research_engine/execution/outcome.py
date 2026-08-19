@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -529,25 +530,40 @@ def _is_generic_recommendation(text: str) -> bool:
     return False
 
 
-def _already_covered_by_proposed(
-    store: HypothesisStore,
+def _covered_by_proposed(
     *,
     prediction: str,
     tags: list[str],
-) -> bool:
-    """Skip mint when an open proposed hyp already covers the same idea."""
+) -> Callable[[list[Any]], bool]:
+    """Predicate for `create_unless_covered`: is this idea already proposed?
+
+    Returned as a closure rather than run against the store here (M16). The
+    check and the write that depends on it have to happen under one lock —
+    `HypothesisStore.create_unless_covered` holds `.alloc.lock` across both —
+    or a second writer slips a near-duplicate into the gap. Which is exactly
+    what M16's background producer is.
+
+    The overlap rule is unchanged: a shared meaningful tag, or half the
+    prediction's long tokens (min 3) appearing in an existing proposal.
+    """
     pred_tokens = {t for t in re.findall(r"[a-z0-9]+", prediction.lower()) if len(t) > 3}
     tag_set = {t.lower() for t in tags if t.lower() not in {"improvement", "follow-up", "execution", "submit"}}
-    for hyp in store.list(status=HypothesisStatus.PROPOSED):
-        existing_tags = {t.lower() for t in hyp.tags}
-        if tag_set and tag_set & existing_tags:
-            return True
-        existing_tokens = {
-            t for t in re.findall(r"[a-z0-9]+", (hyp.prediction + " " + hyp.observation).lower()) if len(t) > 3
-        }
-        if pred_tokens and len(pred_tokens & existing_tokens) >= max(3, len(pred_tokens) // 2):
-            return True
-    return False
+
+    def covered(proposed: list[Any]) -> bool:
+        for hyp in proposed:
+            existing_tags = {t.lower() for t in hyp.tags}
+            if tag_set and tag_set & existing_tags:
+                return True
+            existing_tokens = {
+                t
+                for t in re.findall(r"[a-z0-9]+", (hyp.prediction + " " + hyp.observation).lower())
+                if len(t) > 3
+            }
+            if pred_tokens and len(pred_tokens & existing_tokens) >= max(3, len(pred_tokens) // 2):
+                return True
+        return False
+
+    return covered
 
 
 def notify_proposed_hypotheses(
@@ -626,16 +642,9 @@ def maybe_mint_improvement_hypothesis(
         confidence = min(0.9, parent_conf + 0.1)
         tags.extend(["overfitting", "generalization", summary.execution_id])
         # Only skip if backlog already has an overfit/generalization proposal.
-        if _already_covered_by_proposed(
-            store,
-            prediction=prediction,
-            tags=["overfitting", "generalization"],
-        ):
-            logger.info(
-                "Skipping overfit mint for %s — generalization hyp already proposed",
-                summary.execution_id,
-            )
-            return None
+        # Evaluated inside the create below, under the allocation lock (M16).
+        check_tags = ["overfitting", "generalization"]
+        skip_note = "Skipping overfit mint for %s — generalization hyp already proposed"
     else:
         loss = summary.learning_loss
         recommendation = str(
@@ -664,12 +673,9 @@ def maybe_mint_improvement_hypothesis(
         observation = str(assessment.get("summary") or recommendation)[:500]
         prediction = recommendation[:500]
         tags.extend([summary.execution_id, "recover_loss"])
-        if _already_covered_by_proposed(store, prediction=prediction, tags=tags):
-            logger.info(
-                "Skipping recovery mint for %s — already covered by proposed backlog",
-                summary.execution_id,
-            )
-            return None
+        # Snapshot: `tags` gains a `fork:` entry below, after the check point.
+        check_tags = list(tags)
+        skip_note = "Skipping recovery mint for %s — already covered by proposed backlog"
 
     if _is_generic_recommendation(prediction):
         return None
@@ -683,7 +689,8 @@ def maybe_mint_improvement_hypothesis(
     if parent and parent.technique and parent.technique not in stack:
         stack.append(parent.technique)
 
-    follow = store.create(
+    follow = store.create_unless_covered(
+        covered_by=_covered_by_proposed(prediction=prediction, tags=check_tags),
         observation=observation[:500] or prediction[:500],
         reason=reason[:1000],
         prediction=prediction[:500],
@@ -705,6 +712,9 @@ def maybe_mint_improvement_hypothesis(
         parent_hypothesis_id=parent_id,
         technique_stack=stack,
     )
+    if follow is None:
+        logger.info(skip_note, summary.execution_id)
+        return None
     return follow.id
 
 
@@ -762,12 +772,14 @@ def maybe_mint_stacked_from_success(
             continue
         if ledger.is_failed(name):
             continue
-        if any(
-            h.technique == name and h.parent_hypothesis_id == parent_id
-            for h in store.list()
-            if h.status == HypothesisStatus.PROPOSED
-        ):
-            continue
+        # Checked under the allocation lock by the create below (M16), so a
+        # second writer cannot propose the same stack in the gap.
+        def _covered(proposed: list[Any], *, _technique: str = name) -> bool:
+            return any(
+                h.technique == _technique and h.parent_hypothesis_id == parent_id
+                for h in proposed
+            )
+
         conf = min(
             0.95,
             float(parent.confidence if parent else 0.5)
@@ -776,7 +788,8 @@ def maybe_mint_stacked_from_success(
         )
         impact = max(0.005, float(summary.learning_gain) * 0.4)
         new_stack = [*stack, name] if name not in stack else list(stack)
-        hyp = store.create(
+        hyp = store.create_unless_covered(
+            covered_by=_covered,
             observation=(
                 f"Parent {parent_id} gained {summary.learning_gain:.4g} on "
                 f"{summary.execution_id}; unused technique {name} remains. "
@@ -807,6 +820,8 @@ def maybe_mint_stacked_from_success(
             parent_hypothesis_id=parent_id,
             technique_stack=new_stack,
         )
+        if hyp is None:
+            continue
         minted.append(hyp.id)
         if len(minted) >= limit:
             break
@@ -855,15 +870,16 @@ def maybe_mint_ablation_from_combo_win(
         if not kept:
             continue
         label = "+".join(kept)
-        if any(
-            h.parent_hypothesis_id == parent.id
-            and "ablation" in {t.lower() for t in h.tags}
-            and set(h.combo_techniques or []) == set(kept)
-            for h in store.list()
-            if h.status == HypothesisStatus.PROPOSED
-        ):
-            continue
-        hyp = store.create(
+        def _covered(proposed: list[Any], *, _kept: set[str] = set(kept)) -> bool:
+            return any(
+                h.parent_hypothesis_id == parent.id
+                and "ablation" in {t.lower() for t in h.tags}
+                and set(h.combo_techniques or []) == _kept
+                for h in proposed
+            )
+
+        hyp = store.create_unless_covered(
+            covered_by=_covered,
             observation=(
                 f"Combination {parent.id} gained {summary.learning_gain:.4g}; "
                 f"ablate by dropping `{drop}` to test if `{label}` alone suffices."
@@ -895,6 +911,8 @@ def maybe_mint_ablation_from_combo_win(
             technique_stack=stack,
             combo_techniques=kept,
         )
+        if hyp is None:
+            continue
         minted.append(hyp.id)
     return minted
 
@@ -970,13 +988,11 @@ def maybe_mint_combo_from_success(
         techs = list(cand.metadata.get("combo_techniques") or [])
         if len(techs) < 2:
             continue
-        if any(
-            set(h.combo_techniques or []) == set(techs)
-            and h.status == HypothesisStatus.PROPOSED
-            for h in store.list()
-        ):
-            continue
-        hyp = store.create(
+        def _covered(proposed: list[Any], *, _techs: set[str] = set(techs)) -> bool:
+            return any(set(h.combo_techniques or []) == _techs for h in proposed)
+
+        hyp = store.create_unless_covered(
+            covered_by=_covered,
             observation=cand.observation,
             reason=cand.reason,
             prediction=cand.prediction,
@@ -1006,6 +1022,8 @@ def maybe_mint_combo_from_success(
             technique_stack=list(cand.technique_stack),
             combo_techniques=techs,
         )
+        if hyp is None:
+            continue
         minted.append(hyp.id)
     return minted
 

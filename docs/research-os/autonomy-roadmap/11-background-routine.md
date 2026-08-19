@@ -130,12 +130,14 @@ Full mechanism in [design/11-background-routine.md](design/11-background-routine
    option: `EventBus.publish` is a synchronous `signal.send`, so the handler
    runs on the publisher's thread and would block the consumer at exactly the
    moment this milestone exists to unblock it.
-3. **Claim hypotheses atomically.** M11 shipped this: `claim_if_proposed`
-   returns `None` to the loser, backed by a cross-process `fcntl.flock` per
-   hypothesis id. `mark_testing_if_proposed` cannot express a race — every
-   caller is handed `status=testing` and concludes it won — and one caller is
-   still on it, `reflection/hypotheses/evaluator.py`.
-   **Claiming is not the only race.** Neither minting path dedupes safely under
+3. **Claim hypotheses atomically.** Already shipped with M11:
+   `claim_if_proposed` returns `None` to the loser, backed by a cross-process
+   `fcntl.flock` per hypothesis id, and `fanout.py` uses it. The remaining
+   caller of `mark_testing_if_proposed` — `reflection/hypotheses/evaluator.py`
+   — is correct as it stands: the producer proposes and never claims, and that
+   caller usually runs inside a claim fan-out already made, where an exclusive
+   claim would report "lost" on every healthy branch. It now says so.
+   **Claiming is not the only race, and the other one is open.** Neither minting path dedupes safely under
    two writers: `persist_recommendations` (the producer's own output) does not
    dedupe at all, and `_already_covered_by_proposed` lists the proposed pool
    *outside* the lock `create()` takes. Two writers produce two rows for one
