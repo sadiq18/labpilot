@@ -1,8 +1,9 @@
 # Design — M16: the evidence routine as a background producer
 
-**Plan:** [../11-background-routine.md](../11-background-routine.md) · **Status:** design ·
-**Owner:** unassigned · **Depends on:** M7, M11, M14 (all shipped) ·
-**Unbuilt dependency it carries:** producer priority on the LLM ledger (§8)
+**Plan:** [../11-background-routine.md](../11-background-routine.md) ·
+**Status:** built behind `--gather-background`; exit criterion 3 undemonstrated ·
+**Depends on:** M7, M11, M14 (all shipped) ·
+**Ledger priority (§8):** built — `availability(..., reserve=)`
 
 ---
 
@@ -351,16 +352,30 @@ Off by default. `research conduct run --gather-background` (or
 byte-for-byte today's behaviour, including `analyze_competition` staying gated on
 the predicate in the consumer's allowlist. **Rollback is dropping the flag.**
 
-Ship order, each step independently useful:
+Ship order, each step independently useful — **all four landed**:
 
-1. §7.2 dedupe — correctness under two writers, no producer yet (§7.3 turned
+1. ~~§7.2 dedupe~~ — correctness under two writers, no producer yet (§7.3 turned
    out to be documentation, not a change).
-2. §5.1 `gather_once` — callable, invoked from nowhere.
-3. §5.2 runner + §5.3 allowlist + §9 observability, behind the flag.
-4. §8 reserve.
+2. ~~§5.1 `gather_once`~~ — callable, invoked from nowhere.
+3. ~~§5.2 runner + §5.3 allowlist + §9 observability~~, behind the flag.
+4. ~~§8 reserve~~ — `availability(..., reserve=)`, `select_route(..., reserve=)`,
+   `LLMGateway.preview(role, reserve=)`, and a pre-flight check in the producer.
+
+What the tests cover, and what they do not:
+
+| Criterion | State |
+|---|---|
+| 1 — a step never blocks on gathering | **Unit-proven at the allowlist**: with a producer running, `analyze_competition` leaves the consumer's allowlist even when the gate says *gather*. Not yet shown on a campaign log |
+| 2 — full backlog ticks and no-ops with a reason | **Covered** |
+| 3 — a thin backlog refills without the consumer stalling | **Not demonstrated.** Needs the paired campaign run below |
+| 4 — producer and consumer never claim the same hypothesis | **Covered**, and structurally: the producer proposes and never claims (§7.3) |
+| 5 — one idea, one row, under two writers | **Covered and mutation-checked** — moving the predicate outside `.alloc.lock` makes eight racing writers produce eight rows, and the test catches it |
+| 6 — a tick that raises does not take the campaign with it | **Covered** |
+| 7 — the plan decides what is gathered, not the producer | **Covered** — driven with a stub tool and non-Kaggle args |
 
 Then the paired campaign run in §3. Until it exists, this milestone sits exactly
-where M8 and M11 do: implementation complete, exit criteria undemonstrated.
+where M8 and M11 do: implementation complete, the criterion that needs a running
+campaign undemonstrated.
 
 **It does not fix what a campaign is short of.** The plan's first trap stands,
 now aimed at M22–M26: a faster supply of hypotheses tested against a target

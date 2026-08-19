@@ -104,6 +104,44 @@ def _created_count(result: Any) -> int:
         return 0
 
 
+#: Role the sweep's expensive work runs under — hypothesis generation and
+#: extraction are both `reasoning` calls.
+_PRODUCER_ROLE = "reasoning"
+
+
+def _budget_headroom(llm_client: Any | None, reserve: float) -> str | None:
+    """Reason to skip when the producer would be spending the consumer's quota.
+
+    The producer is the *lower* claim on the LLM budget: a sweep is minutes of
+    reasoning calls, and finishing one at the cost of the campaign's next plan
+    is a bad trade in both directions — the campaign stalls and the evidence
+    lands with nothing to test it.
+
+    Asked once, before the sweep, rather than enforced per call inside it. The
+    decision that matters is whether to *start*: a sweep abandoned halfway has
+    already spent the quota it was meant to protect.
+
+    Returns None (go ahead) when there is no reserve, no client, or no router
+    behind the client — a legacy provider path has no ledger to ask, and
+    refusing to gather on that basis would be inventing a limit rather than
+    respecting one.
+    """
+    if reserve <= 0.0 or llm_client is None:
+        return None
+    preview = getattr(llm_client, "preview", None)
+    if not callable(preview):
+        return None
+    try:
+        route = preview(_PRODUCER_ROLE, reserve=reserve)
+    except Exception:
+        logger.exception("Evidence producer could not preview its route; gathering anyway")
+        return None
+    if getattr(route, "provider", None) is not None:
+        return None
+    detail = str(getattr(route, "reason", "") or "no provider available")
+    return f"holding {reserve:.0%} of the LLM budget for the campaign ({detail})"
+
+
 def gather_once(
     workspace: Workspace,
     registry: ToolRegistry,
@@ -111,6 +149,7 @@ def gather_once(
     *,
     llm_client: Any | None = None,
     budgets: tuple[BudgetConfig, BudgetState] | None = None,
+    reserve: float = 0.0,
 ) -> GatherOutcome:
     """Gather evidence if the gate allows, and report what happened either way.
 
@@ -125,6 +164,10 @@ def gather_once(
     one degrades silently, which is a failure this repository has already paid
     for once.
 
+    ``reserve`` is the fraction of the LLM budget this call refuses to touch,
+    so the producer runs out before the campaign does. Default 0.0 keeps a
+    direct caller (and every test) on the real limits.
+
     Raises whatever the tool raises. Isolating a bad tick is the runner's job,
     and a unit that swallows its own failures cannot be tested for them.
     """
@@ -132,6 +175,11 @@ def gather_once(
     if not ok:
         logger.info("Evidence producer: skipping — %s", reason)
         return GatherOutcome(gathered=False, reason=reason)
+
+    yielded = _budget_headroom(llm_client, reserve)
+    if yielded is not None:
+        logger.info("Evidence producer: skipping — %s", yielded)
+        return GatherOutcome(gathered=False, reason=yielded)
 
     logger.info("Evidence producer: gathering — %s", reason)
     started = time.monotonic()
@@ -157,6 +205,11 @@ def gather_once(
 #: whose evidence moves weekly rather than hourly needs no different runner, it
 #: just gets more no-ops, and a no-op is one freshness read plus one pool scan.
 _TICK_SECONDS = float(os.environ.get("LABPILOT_GATHER_TICK_S", "300"))
+
+#: Fraction of the LLM budget the producer leaves alone. Hypothesis generation
+#: is a `reasoning` call and a sweep makes many of them; a background worker
+#: running hot exhausts the free tier the campaign needs to plan.
+_RESERVE = float(os.environ.get("LABPILOT_GATHER_RESERVE", "0.2"))
 
 #: How long campaign shutdown waits for a tick already in flight. A sweep runs
 #: for minutes and an operator must not wait it out; past this the thread is
@@ -195,6 +248,7 @@ class EvidenceProducer:
         llm_client: Any | None = None,
         plan: GatherPlan | None = None,
         tick_seconds: float | None = None,
+        reserve: float | None = None,
     ) -> None:
         self.workspace = workspace
         self.registry = registry
@@ -202,6 +256,7 @@ class EvidenceProducer:
         self.llm_client = llm_client
         self.plan = plan or default_gather_plan(workspace)
         self.tick_seconds = _TICK_SECONDS if tick_seconds is None else tick_seconds
+        self.reserve = _RESERVE if reserve is None else reserve
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -247,6 +302,7 @@ class EvidenceProducer:
                 self.plan,
                 llm_client=self.llm_client,
                 budgets=self._budgets(),
+                reserve=self.reserve,
             )
         except Exception as exc:  # noqa: BLE001 — see docstring
             logger.exception("Evidence producer tick failed")

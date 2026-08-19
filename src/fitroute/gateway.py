@@ -97,12 +97,19 @@ class LLMGateway:
         """
         return self.for_role("default").complete(system, user, json_mode=json_mode)
 
-    def preview(self, role: str):
-        """Resolve without calling — for `doctor` and dry runs."""
+    def preview(self, role: str, *, reserve: float = 0.0):
+        """Resolve without calling — for `doctor`, dry runs, and pre-flight checks.
+
+        ``reserve`` asks the question a background caller needs: *is there room
+        for me, leaving this much for everyone else?* M16's evidence producer
+        uses it to skip a tick rather than start a multi-minute sweep that
+        would spend the quota the campaign needs to plan.
+        """
         return select_route(
             self.routing,
             role,
             self.ledger,
+            reserve=reserve,
             credential_resolver=self.credential_resolver,
         )
 
