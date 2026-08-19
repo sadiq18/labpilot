@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from labpilot.accessor.kaggle.models import CompetitionMetadata
 
@@ -22,13 +22,43 @@ class ProblemType(StrEnum):
 
 
 class MetricSpec(BaseModel):
+    """A competition's evaluation metric: what it is, and which way is better.
+
+    `direction` defaulted to `"maximize"`, so every unstated direction claimed
+    the one that inverts every verdict for a loss. rogii's fifteen evidence
+    cards were built that way — the single genuine improvement recorded as
+    `rejected`. The default is now `"unknown"`, which is what a contract that
+    never said actually means, and which callers can see.
+    """
+
     name: str
-    direction: str = "maximize"  # maximize | minimize
+    direction: Literal["maximize", "minimize", "unknown"] = "unknown"
     description: str = ""
     # Canonical key used by BaselineSelector and training templates (e.g.
-    # "accuracy", "auc", "rmse"). None when the raw Kaggle metric string
-    # could not be mapped to a supported evaluator key.
+    # "accuracy", "auc", "rmse"). None when the raw metric string could not be
+    # mapped to a catalogued evaluator key.
     key: str | None = None
+
+    @model_validator(mode="after")
+    def _fill_direction_from_key(self) -> "MetricSpec":
+        """A catalogued key already knows which way is better.
+
+        Fills only an *unknown* direction. A stated direction that contradicts
+        the registry is deliberately left standing rather than corrected: it is
+        the contradiction `resolve_objective` blocks the campaign on, and
+        silently rewriting it here would delete the detection while leaving the
+        wrong contract on disk.
+        """
+        if self.direction != "unknown" or self.key is None:
+            return self
+        from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+            direction_of,
+        )
+
+        measured = direction_of(self.key)
+        if measured is not None:
+            object.__setattr__(self, "direction", measured)
+        return self
 
 
 class CompetitionSpec(BaseModel):

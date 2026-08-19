@@ -22,6 +22,9 @@ from labpilot.research_engine.evidence.models import (
 from labpilot.research_engine.evidence.store import EvidenceCardStore
 from labpilot.research_engine.execution.evidence import evidence_dir
 from labpilot.research_engine.intelligence.competition.direction import resolve_maximize
+from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+    cv_probe_keys,
+)
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import Experiment, Hypothesis
@@ -61,17 +64,12 @@ def _primary_cv_keyed(metrics: dict[str, Any]) -> tuple[float, str] | None:
     -194.30 by comparing a stub's `cv_accuracy` of 0.5 against a real run's
     `cv_rmse` of 194.80. The caller uses the key to refuse that comparison.
     """
-    for key in (
-        "cv_score",
-        "cv_balanced_accuracy",
-        "cv_accuracy",
-        "cv_roc_auc",
-        "cv_rmse",
-        "balanced_accuracy",
-        "accuracy",
-        "rmse",
-        "score",
-    ):
+    # Order comes from the registry, alias-expanded: a run writes `cv_roc_auc`
+    # or `cv_auc` depending on its template, and both are the same measurement.
+    # `cv_score`/`score` bracket it because they are generic sentinels rather
+    # than metrics — a blob naming neither a metric nor a direction, which is
+    # why they cannot live in a metric registry.
+    for key in ("cv_score", *cv_probe_keys(), "score"):
         if isinstance(metrics.get(key), (int, float)):
             return float(metrics[key]), key
     for key, val in metrics.items():

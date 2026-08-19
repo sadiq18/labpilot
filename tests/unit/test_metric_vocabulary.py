@@ -21,6 +21,7 @@ import pytest
 from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
     _METRICS,
     MEASUREMENT_PREFIXES,
+    cv_probe_keys,
     cv_search_order,
     direction_of,
     is_scorable,
@@ -278,3 +279,75 @@ def test_an_unrecognised_problem_type_yields_nothing_rather_than_guessing() -> N
     this pretending to know what an unmapped task needs."""
     assert metrics_for_problem_type("audio_classification") == frozenset()
     assert metrics_for_problem_type("unknown") == frozenset()
+
+
+# --- A3: the registry is the only metric list -------------------------------
+
+
+def test_no_literal_metric_list_survives_outside_this_module() -> None:
+    """The A3 exit criterion, asserted structurally rather than by memory.
+
+    Five modules each kept their own spelling of "the metrics we know", and they
+    disagreed: the parser's substring hints mapped `mean_squared_error` to
+    nothing the selector would accept, and `budgets` carried a second copy of the
+    measurement prefixes. A sixth copy is one edit away at any time, so the
+    check has to be automatic.
+    """
+    import pathlib
+    import re
+
+    known = {"accuracy", "auc", "logloss", "f1", "rmse", "mse", "mae", "rmsle"}
+    root = pathlib.Path(__file__).resolve().parents[2] / "src" / "labpilot"
+    this_module = "metric_vocabulary.py"
+    literal = re.compile(r"[{(\[]\s*((?:\"[a-z0-9_]+\"\s*,\s*){2,}\"[a-z0-9_]+\")\s*,?\s*[})\]]")
+
+    offenders: list[str] = []
+    for path in root.rglob("*.py"):
+        if path.name == this_module:
+            continue
+        for match in literal.finditer(path.read_text(encoding="utf-8")):
+            names = set(re.findall(r'"([a-z0-9_]+)"', match.group(1)))
+            # Every member a canonical key. `objective.py`'s morphological hints
+            # ("error", "loss", "gain", "precision") overlap this vocabulary
+            # without being a metric list — they orient a metric *no* catalogue
+            # knows, which is the case the registry cannot serve.
+            if len(names & known) >= 3 and names <= known:
+                offenders.append(f"{path.relative_to(root)}: {sorted(names)}")
+
+    assert not offenders, "metric list outside the registry:\n" + "\n".join(offenders)
+
+
+def test_a_name_and_its_own_abbreviation_resolve_to_one_metric() -> None:
+    """`Root Mean Squared Error (RMSE)` is how Kaggle actually spells it — and
+    exact alias matching alone could not read it, which broke house-prices."""
+    assert normalize_metric_key("Root Mean Squared Error (RMSE)") == "rmse"
+    assert normalize_metric_key("Area Under the ROC Curve (AUC)") == "auc"
+
+
+def test_a_gloss_that_contradicts_its_name_resolves_to_nothing() -> None:
+    """Preferring the left half because it is written first is the positional
+    tie-break this module exists to remove."""
+    assert normalize_metric_key("Accuracy (RMSE)") is None
+
+
+def test_a_composite_metric_is_not_read_as_the_one_it_contains() -> None:
+    """MCRMSE is column-wise RMSE and is a *different* number. The substring
+    matcher this replaced answered `rmse` here, which is the whole bug class:
+    `"mse" in "rmse"` is also True, and the old table survived only by listing
+    `rmse` first."""
+    assert normalize_metric_key("Mean Columnwise RMSE (MCRMSE)") is None
+    assert normalize_metric_key("mean_columnwise_rmse") is None
+
+
+def test_the_probe_order_covers_the_spellings_runs_actually_write() -> None:
+    """`cv_roc_auc` is what the classification template writes; `cv_auc` is what
+    the canonical key would suggest. Both must be found, and every cross-validated
+    spelling must outrank every bare one — a CV reading and a single-split one
+    are different measurements."""
+    keys = cv_probe_keys()
+
+    assert "cv_roc_auc" in keys and "cv_auc" in keys
+    assert max(i for i, k in enumerate(keys) if k.startswith("cv_")) < min(
+        i for i, k in enumerate(keys) if not k.startswith("cv_")
+    )
+    assert keys.index("cv_balanced_accuracy") < keys.index("cv_accuracy") < keys.index("cv_rmse")

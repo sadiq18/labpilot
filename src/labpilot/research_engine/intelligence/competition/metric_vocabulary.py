@@ -220,7 +220,39 @@ def normalize_metric_key(raw: str | None) -> str | None:
     if not slug:
         return None
     metric = _BY_ALIAS.get(slug) or _BY_ALIAS.get(strip_measurement_prefix(slug))
-    return metric.key if metric else None
+    if metric:
+        return metric.key
+    return _resolve_glossed(raw)
+
+
+#: ``Root Mean Squared Error (RMSE)`` — a name and its own abbreviation. Kaggle
+#: writes metrics this way constantly, and it is the one composite form worth
+#: reading, because both halves are supposed to name the same metric.
+_GLOSS = re.compile(r"^(?P<name>[^(]+)\((?P<gloss>[^)]+)\)\s*$")
+
+
+def _resolve_glossed(raw: str) -> str | None:
+    """Resolve ``"Full Name (ABBR)"`` when both halves agree, else None.
+
+    Each half is matched *exactly*, against the same alias table — this is not
+    substring matching returning under a new name. The old parser scanned
+    ``("mean squared error", "mse")`` pairs for containment, which made
+    ``"mse" in "rmse"`` true and left the whole table depending on `rmse` being
+    listed first.
+
+    Disagreement returns None rather than preferring a half. ``"Accuracy (RMSE)"``
+    is a contract that contradicts itself, and picking the left one because it is
+    written first is position standing in for evidence.
+    """
+    match = _GLOSS.match(raw.strip())
+    if not match:
+        return None
+    halves = {
+        _BY_ALIAS[slug].key
+        for slug in (_slug(match["name"]), _slug(match["gloss"]))
+        if slug in _BY_ALIAS
+    }
+    return halves.pop() if len(halves) == 1 else None
 
 
 def direction_of(key: str | None) -> MetricDirection | None:
@@ -290,6 +322,33 @@ def metrics_for_problem_type(problem_type: ProblemType | str) -> frozenset[str]:
 def cv_search_order() -> tuple[str, ...]:
     """Canonical keys by ``cv_priority``, for picking a primary metric from a blob."""
     return tuple(m.key for m in sorted(_METRICS, key=lambda m: m.cv_priority))
+
+
+def _spellings(metric: CanonicalMetric) -> list[str]:
+    """Every way this metric can appear in a recorded key, canonical first.
+
+    A run writes whatever spelling its template chose: `cv_roc_auc` and `cv_auc`
+    are the same measurement. Ordering is fixed so two reads of one blob pick the
+    same key — a primary metric that moves between runs is not comparable.
+    """
+    return [metric.key, *sorted(metric.aliases - {metric.key})]
+
+
+def cv_probe_keys() -> tuple[str, ...]:
+    """Concrete keys to look for in a metrics blob, best first.
+
+    Cross-validated spellings come before bare ones, so a `cv_rmse` outranks a
+    bare `accuracy` sitting in the same blob — a CV reading and a single-split
+    one are different measurements, and the qualified key says which it is.
+
+    Alias-expanded because the blob holds the *recorded* spelling, not the
+    canonical key. Callers return the key they matched rather than the canonical
+    one: it is what the run actually wrote, and rewriting it would make an
+    evidence card cite a key no metrics.json contains.
+    """
+    ordered = sorted(_METRICS, key=lambda m: m.cv_priority)
+    spellings = [name for metric in ordered for name in _spellings(metric)]
+    return tuple([f"cv_{name}" for name in spellings] + spellings)
 
 
 def known_keys() -> frozenset[str]:

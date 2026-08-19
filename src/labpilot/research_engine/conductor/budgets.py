@@ -8,6 +8,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from labpilot.research_engine.conductor.models import _now
+from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+    MEASUREMENT_PREFIXES,
+)
 
 StopReason = Literal[
     "none",
@@ -152,10 +155,9 @@ class BudgetState(BaseModel):
         return max(0.0, (current - start).total_seconds())
 
 
-#: How a metric was measured, as spelled in a recorded key: `cv_rmse` is
-#: cross-validated, `lb_auc` is the leaderboard. These qualify the metric; they
-#: are not part of its name.
-_MEASUREMENT_PREFIXES = ("cv_", "lb_", "val_", "test_", "train_")
+#: Imported rather than restated. Two copies of "how a metric was measured"
+#: drift, and a prefix present in one and missing from the other means
+#: `--target-metric rmse` silently stops matching a recorded `val_rmse`.
 
 
 def metric_names_match(recorded: str | None, requested: str | None) -> bool:
@@ -185,7 +187,7 @@ def metric_names_match(recorded: str | None, requested: str | None) -> bool:
     # Only an unqualified request can widen: a request that already names a
     # measurement can never equal `prefix + itself` unless the recorded key is
     # doubly prefixed, so no separate guard for it is reachable.
-    return any(left == f"{prefix}{right}" for prefix in _MEASUREMENT_PREFIXES)
+    return any(left == f"{prefix}{right}" for prefix in MEASUREMENT_PREFIXES)
 
 
 def comparable_tail(events: list[ScoreEvent]) -> list[ScoreEvent]:

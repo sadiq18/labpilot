@@ -1,15 +1,35 @@
-"""Best-effort mapping from Kaggle's free-text evaluation metric to a `MetricSpec`.
+"""Map a competition's free-text evaluation metric onto a `MetricSpec`.
 
 Kaggle's API returns the evaluation metric as a human-readable string (e.g.
-"Root Mean Squared Error", "Categorization Accuracy", "AUC"), not a
-structured enum. P1 maps these to canonical `key` values used by the
-baseline selector and training templates for `cv_<key>` in metrics.json.
+"Root Mean Squared Error", "Categorization Accuracy", "AUC"), not a structured
+enum. The canonical `key` is what the baseline selector and training templates
+use for `cv_<key>` in metrics.json.
+
+Identity and direction both come from `metric_vocabulary`. What this module used
+to do instead is worth recording, because it is the bug class the registry
+exists to close:
+
+* Two ordered tuples of `(substring, key)` pairs, scanned in order. Substring
+  matching made `"mse" in "rmse"` true, so the list survived only by spelling
+  `rmse` before `mse` — position standing in for evidence, and one reordering
+  away from mapping every RMSE competition to MSE.
+* Direction was read off *which tuple matched*, so it was a property of where a
+  name was written down rather than of the metric.
+* The initial value was `direction = "maximize"`, so a metric matching **nothing**
+  came back confidently maximizing. An unrecognised name is exactly the case with
+  no evidence for either direction, and it got the answer that silently inverts
+  every verdict for a loss.
 """
 
 import logging
 import re
 from typing import TYPE_CHECKING
 
+from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+    direction_of,
+    normalize_metric_key,
+    scorable_keys,
+)
 from labpilot.research_engine.intelligence.competition.models import MetricSpec
 
 if TYPE_CHECKING:
@@ -17,68 +37,25 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CANONICAL_METRIC_KEYS = frozenset(
-    {"accuracy", "auc", "logloss", "f1", "rmse", "mse", "mae", "rmsle"}
-)
-
-# Longer/more specific phrases first so substring matching doesn't get
-# short-circuited by a more generic hint (e.g. "log loss" before "loss").
-_MINIMIZE_HINTS: tuple[tuple[str, str], ...] = (
-    ("root mean squared logarithmic error", "rmsle"),
-    ("root mean squared error", "rmse"),
-    ("mean squared error", "mse"),
-    ("mean absolute error", "mae"),
-    ("log loss", "logloss"),
-    ("logloss", "logloss"),
-    ("rmsle", "rmsle"),
-    ("rmse", "rmse"),
-    ("mae", "mae"),
-    ("mse", "mse"),
-)
-_MAXIMIZE_HINTS: tuple[tuple[str, str], ...] = (
-    ("area under the roc curve", "auc"),
-    ("categorization accuracy", "accuracy"),
-    ("accuracy", "accuracy"),
-    ("auc", "auc"),
-    ("f1", "f1"),
-    ("f1 score", "f1"),
-    ("f1-score", "f1"),
-)
-
-
-def _derive_key(lowered: str) -> str | None:
-    for hint, key in _MINIMIZE_HINTS:
-        if hint in lowered:
-            return key
-    for hint, key in _MAXIMIZE_HINTS:
-        if hint in lowered:
-            return key
-    return None
+#: Kept as a name because callers import it; the set itself is the registry's.
+CANONICAL_METRIC_KEYS: frozenset[str] = scorable_keys()
 
 
 def normalize_metric(raw: str) -> MetricSpec | None:
-    """Turn a Kaggle evaluation-metric string into a `MetricSpec`, or None."""
+    """Turn a competition's evaluation-metric string into a `MetricSpec`, or None.
+
+    `key` is None when no catalogued metric matches, and `direction` is
+    `"unknown"` rather than a guess. Both are honest answers a caller can act on:
+    the objective resolver probes an evaluator to settle direction, and the
+    baseline selector falls back to its own default and logs that it did.
+    """
     cleaned = raw.strip()
     if not cleaned:
         return None
 
-    lowered = cleaned.lower()
-    direction = "maximize"
-    key: str | None = None
-
-    for hint, hint_key in _MINIMIZE_HINTS:
-        if hint in lowered:
-            direction = "minimize"
-            key = hint_key
-            break
-    else:
-        for hint, hint_key in _MAXIMIZE_HINTS:
-            if hint in lowered:
-                direction = "maximize"
-                key = hint_key
-                break
-
-    name = lowered.replace(" ", "_").replace("-", "_")
+    key = normalize_metric_key(cleaned)
+    direction = direction_of(key) or "unknown"
+    name = cleaned.lower().replace(" ", "_").replace("-", "_")
     return MetricSpec(name=name, direction=direction, description=cleaned, key=key)
 
 
