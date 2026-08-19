@@ -1081,6 +1081,24 @@ def _run_until_stop_inner(
         """
         return producer is not None and producer.is_running()
 
+    def _gathering_owned() -> set[str]:
+        """Tools the background producer owns right now, to subtract (M16).
+
+        `available_tools` gates the *policy prompt*. Campaign mode builds its
+        own allowlist — `set(registry.names())` minus the submit carve-out —
+        and hands that to `offline_next_research_action` and
+        `map_research_action`, so gating only inside `decide_next` left the
+        offline path dispatching the very sweep the producer was already
+        running. Two sweeps of the same competition at once, which is the exact
+        thing the handover exists to prevent.
+
+        Named from the producer's own plan rather than hardcoded, so the one
+        domain-coupled site stays `default_gather_plan`.
+        """
+        if producer is None or not producer.is_running():
+            return set()
+        return {producer.plan.tool}
+
     # Repair research memory before acting on it. A claim no measurement
     # supports steers every decision this loop is about to make, and the repair
     # must not wait for a *successful experiment* — a campaign that completes
@@ -1184,6 +1202,7 @@ def _run_until_stop_inner(
             # gated tool to `auto_approve`, so a non-interactive run has no
             # brake between "selected submit_learn" and "uploaded to Kaggle".
             allowlist -= SUBMIT_TOOLS
+        allowlist -= _gathering_owned()
         stop = evaluate_stops(budget_cfg, budget_state)
         if stop != "none":
             # `failing` is not a completion. Recording it as one would put the
@@ -1278,6 +1297,10 @@ def _run_until_stop_inner(
             allowlist = set(registry.names())
             if not submit_tools_allowed(budget_cfg):
                 allowlist -= SUBMIT_TOOLS
+            # Re-applied for the same reason the submit carve-out is: this is
+            # the allowlist that reaches `map_research_action`, so a plain
+            # re-read hands the tool back at the point it gets selected.
+            allowlist -= _gathering_owned()
             plan = map_research_action(research, allowlist)
             if research.stop and _objective_unmet(budget_cfg, budget_state):
                 # Goal persistence. The policy tends to call it done once it has

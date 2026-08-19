@@ -359,14 +359,23 @@ class EvidenceProducer:
         Without it the gate simply loses its stagnant clause — the pool and
         freshness clauses still decide — so a failure here degrades the
         producer's judgement rather than stopping it.
+
+        The imports are *inside* the guard. Left outside, an ImportError went
+        straight past this handler to `tick_once`, which counted the whole tick
+        as failed — so the producer swept nothing at all for the life of the
+        campaign, quietly, while `last_error` said why to a field nobody reads.
+        That is precisely what happened: `load_budget_pair` lives in
+        `checkpoint`, not `budgets`, and every unit test built a producer with
+        no `session_id` and never reached this line.
         """
         if not self.session_id:
             return None
-        from labpilot.research_engine.conductor.budgets import load_budget_pair
-        from labpilot.research_engine.conductor.store import ConductorStore
 
         store = None
         try:
+            from labpilot.research_engine.conductor.checkpoint import load_budget_pair
+            from labpilot.research_engine.conductor.store import ConductorStore
+
             store = ConductorStore(self.workspace.knowledge_dir, self.workspace.competition)
             session = store.get_session(self.session_id)
             if session is None:

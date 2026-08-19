@@ -9,6 +9,7 @@ outside Kaggle.
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -601,34 +602,173 @@ def test_the_env_switch_only_accepts_boolean_words(monkeypatch) -> None:
     assert _gather_background_enabled(True) is True  # the flag still wins
 
 
-def test_the_campaign_starts_the_producer_only_after_repairing_memory() -> None:
+def _campaign_registry(order: list[str], gathered: threading.Event) -> ToolRegistry:
+    """Two handlers: the producer's sweep, and everything the campaign can call.
+
+    The campaign's tools block until the producer has swept, so the ordering
+    assertions below do not depend on how the scheduler happens to interleave
+    two threads. `analyze_competition` is only ever reached by the producer —
+    while one is running it is off the consumer's allowlist by design.
+    """
+
+    def sweep(workspace: Workspace, **kwargs: object) -> ToolResult:
+        order.append("gather")
+        gathered.set()
+        return ToolResult(refs=[], data={})
+
+    def campaign_step(workspace: Workspace, **kwargs: object) -> ToolResult:
+        gathered.wait(10.0)
+        return ToolResult(refs=[], data={})
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDescriptor(name="analyze_competition", handler=sweep, capability_status="fixed")
+    )
+    for name in ("query_memory", "generate_plan", "search_papers"):
+        registry.register(
+            ToolDescriptor(name=name, handler=campaign_step, capability_status="fixed")
+        )
+    return registry
+
+
+def test_the_campaign_starts_the_producer_only_after_repairing_memory(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Its first tick fires immediately and mints from beliefs and overlays —
     the things the repair chain at the top of the loop has just corrected.
-    Started before it, the first sweep reads the pre-repair compass.
+    Started before it, the first sweep reads the pre-repair compass: a campaign
+    once ran with 45 false `vit` claims intact, and every rogii overlay said
+    `Avoid: SWA` about the only technique that had ever improved the metric.
+
+    Driven through the real loop rather than by reading its source, so a
+    refactor that keeps the call and moves it cannot pass.
     """
-    import inspect
+    import time as _time
 
-    from labpilot.research_engine.conductor import loop as loop_mod
+    from labpilot.research_engine.conductor.loop import run_until_stop
+    from labpilot.research_engine.conductor.store import ConductorStore
+    from labpilot.research_engine.execution import outcome as outcome_mod
 
-    source = inspect.getsource(loop_mod._run_until_stop_inner)
-    repair = source.index("revalidate_outcome_claims(")
-    start = source.index("producer.start()")
+    order: list[str] = []
+    gathered = threading.Event()
 
-    assert start > repair, "producer starts before the belief/overlay repair chain"
+    def slow_repair(**kwargs: object) -> list[str]:
+        order.append("repair")
+        # Long enough that a producer started ahead of the chain would have
+        # swept before this returns.
+        _time.sleep(0.5)
+        return []
+
+    monkeypatch.setattr(outcome_mod, "revalidate_outcome_claims", slow_repair)
+
+    ws = _ws(tmp_path, slug="ordering")
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        session = store.create_session("improve score", metadata={"max_steps": 2})
+        run_until_stop(
+            store,
+            ws,
+            session.id,
+            _campaign_registry(order, gathered),
+            llm_client=None,
+            max_steps=2,
+            auto_approve=True,
+            prefer_offline=True,
+            gather_background=True,
+        )
+    finally:
+        store.close()
+
+    assert "repair" in order, "the repair chain did not run"
+    assert "gather" in order, "the producer never swept"
+    assert order.index("repair") < order.index("gather")
 
 
-def test_gathering_returns_to_the_campaign_if_the_producer_is_not_running() -> None:
-    """The allowlist handover has to follow the thread, not the object: keyed
-    on existence, a producer that never started would take the tool away for
-    the whole run with nothing gathering in its place.
+def test_gathering_returns_to_the_campaign_if_the_producer_is_not_running(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The allowlist handover has to follow the thread, not the object.
+
+    Keyed on existence, a producer whose thread never started would take
+    `analyze_competition` off the consumer's allowlist for the whole run and
+    leave nothing gathering in its place. Both directions are driven here: a
+    live producer owns the sweep, a dead one hands it back.
     """
-    import inspect
+    from labpilot.research_engine.conductor import producer as producer_mod
+    from labpilot.research_engine.conductor.loop import run_until_stop
+    from labpilot.research_engine.conductor.store import ConductorStore
 
-    from labpilot.research_engine.conductor import loop as loop_mod
+    def _run(slug: str, *, start_the_thread: bool) -> list[str]:
+        order: list[str] = []
+        gathered = threading.Event()
+        if not start_the_thread:
+            # Nothing sweeps, so the campaign's tools must not wait for one.
+            gathered.set()
+            monkeypatch.setattr(
+                producer_mod.EvidenceProducer, "start", lambda self: None, raising=True
+            )
+        ws = _ws(tmp_path, slug=slug)
+        store = ConductorStore(ws.knowledge_dir, ws.competition)
+        try:
+            session = store.create_session("improve score", metadata={"max_steps": 3})
+            decisions = run_until_stop(
+                store,
+                ws,
+                session.id,
+                _campaign_registry(order, gathered),
+                llm_client=None,
+                max_steps=3,
+                auto_approve=True,
+                prefer_offline=True,
+                gather_background=True,
+            )
+        finally:
+            store.close()
+        return [d.tool_name for d in decisions if d.tool_name and not d.stop]
 
-    source = inspect.getsource(loop_mod._run_until_stop_inner)
-    owns = source.index("def _producer_owns_gathering()")
-    body = source[owns : owns + 900]
+    with monkeypatch.context():
+        live = _run("live-producer", start_the_thread=True)
+    dead = _run("dead-producer", start_the_thread=False)
 
-    assert "producer.is_running()" in body
-    assert "external_gathering=_producer_owns_gathering()" in source
+    assert "analyze_competition" not in live, "a running producer must own the sweep"
+    assert "analyze_competition" in dead, "a dead producer must hand gathering back"
+
+
+def test_a_producer_with_a_session_can_actually_read_its_budgets(tmp_path: Path) -> None:
+    """Every tick failed, silently, whenever a session id was set.
+
+    `_budgets` imported `load_budget_pair` from `budgets` — it lives in
+    `checkpoint` — and the imports sat outside the guard, so the ImportError
+    went past `_budgets`' own handler to `tick_once`, which counted the whole
+    tick as failed. The producer swept nothing for the life of the campaign
+    while `last_error` explained why to a field nobody reads. Every unit test
+    built a producer without a session id and never reached the line.
+    """
+    from labpilot.research_engine.conductor.budgets import BudgetConfig, BudgetState
+    from labpilot.research_engine.conductor.producer import EvidenceProducer
+    from labpilot.research_engine.conductor.store import ConductorStore
+
+    ws = _ws(tmp_path)
+    calls: list[dict] = []
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        session = store.create_session("improve score")
+    finally:
+        store.close()
+
+    producer = EvidenceProducer(
+        ws,
+        _registry(calls),
+        session_id=session.id,
+        plan=GatherPlan(tool="gather_stub"),
+    )
+
+    pair = producer._budgets()  # noqa: SLF001 — the line that was unreachable
+    assert pair is not None
+    assert isinstance(pair[0], BudgetConfig)
+    assert isinstance(pair[1], BudgetState)
+
+    outcome = producer.tick_once()
+    assert outcome is not None, producer.status()["last_error"]
+    assert producer.status()["last_error"] is None
+    assert len(calls) == 1
