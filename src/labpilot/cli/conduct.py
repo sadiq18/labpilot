@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -192,6 +193,83 @@ def _resolve_campaign_direction(ws: Any, competition: str) -> bool | None:
         return None
 
 
+def _stated_objective(ws: Any, competition: str) -> tuple[str | None, str | None, str | None]:
+    """(metric_raw, declared_direction, problem_type) from the workspace contract."""
+    import json
+
+    root = getattr(ws, "root", None)
+    if root is None:
+        return None, None, None
+    path = Path(root) / "competition.json"
+    if not path.is_file():
+        return None, None, None
+    try:
+        spec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None, None
+    metric = spec.get("evaluation_metric") or spec.get("metric") or {}
+    if not isinstance(metric, dict):
+        metric = {}
+    raw = metric.get("name") or metric.get("key")
+    declared = metric.get("direction")
+    return (
+        str(raw) if raw else None,
+        str(declared) if declared in ("maximize", "minimize") else None,
+        str(spec.get("problem_type") or "") or None,
+    )
+
+
+def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> None:
+    """Refuse to start a campaign whose objective cannot be justified.
+
+    Checked here rather than mid-run, and the placement is the point: refusing to
+    *start* an unattended job costs nothing and reaches the operator while they
+    are still at the keyboard. Halting at 2am reaches nobody until morning and
+    throws away the night.
+
+    rogii ran campaigns for two weeks with `evaluation_metric: None`, and all
+    fifteen of its evidence cards were built as though MSE were maximised. Both
+    were free to catch at second zero.
+    """
+    from labpilot.research_engine.intelligence.competition.objective import resolve_objective
+
+    metric_raw, declared, problem_type = _stated_objective(ws, competition)
+    objective = resolve_objective(
+        metric_raw=metric_raw,
+        declared_direction=declared,  # type: ignore[arg-type]
+        task=problem_type,
+    )
+    if not objective.blocks_launch:
+        console.print(
+            f"[dim]objective:[/dim] {objective.metric_name} "
+            f"[dim]({objective.direction}, from {objective.direction_source}, "
+            f"confidence {objective.confidence:.2f})[/dim]"
+        )
+        return
+
+    console.print(f"[red]Objective not resolved[/red] - {objective.why_blocked()}")
+    for line in objective.evidence:
+        console.print(f"  [dim]-[/dim] {line}")
+    console.print(
+        "\n  Set it in the workspace contract and re-run, e.g. competition.json:\n"
+        '    [cyan]"evaluation_metric": {"name": "rmse", "direction": "minimize"}[/cyan]'
+    )
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if not assume_yes and interactive:
+        # The operator is here, so offer the choice rather than only refusing. A
+        # `--yes` run must never reach this branch: auto-answering "which fact is
+        # true?" is how a wrong objective gets frozen into a workspace, and the
+        # reuse discipline everywhere else means it would stay wrong.
+        if typer.confirm(
+            "\nRun anyway, accepting that every conclusion may carry the wrong sign?",
+            default=False,
+        ):
+            console.print("[yellow]proceeding with an unresolved objective[/yellow]")
+            return
+    raise typer.Exit(2)
+
+
 def _budget_metadata(
     *,
     max_submissions: int | None,
@@ -294,6 +372,7 @@ def conduct_run(
         workspace_path=workspace_path,
         goal=goal,
     )
+    _preflight_objective(ws, competition, assume_yes=yes)
     store = ConductorStore(ws.knowledge_dir, competition)
     registry = default_tools()
     llm = None if offline else resolve_llm_client(config.llm)
