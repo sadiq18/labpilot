@@ -348,6 +348,11 @@ def test_decide_next_feeds_one_source_to_the_prompt_and_the_gate(tmp_path: Path)
         ToolDescriptor(
             name="analyze_competition",
             handler=lambda workspace, **_: ToolResult(refs=[], data={}),
+            # Returns an empty result whatever it is passed, so `fixed` is the
+            # honest label for the double — it stands in for the tool, and is
+            # not a claim about the real `analyze_competition` (which the
+            # catalog declares `real`). M15 made this field required.
+            capability_status="fixed",
         )
     )
 

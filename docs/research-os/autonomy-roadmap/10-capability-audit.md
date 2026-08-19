@@ -1,7 +1,7 @@
 # M15 — The capability layer audit
 
-**Status:** all three exit criteria met 2026-08-11 · **Purpose:** stop the
-control plane outrunning the tools again  
+**Status:** all three exit criteria met 2026-08-11 (PR #129) · **Purpose:**
+stop the control plane outrunning the tools again  
 **Design:** [../design/12-capability-audit.md](../design/12-capability-audit.md)
 
 > **Three defects found, none by reading code — all three by building the
