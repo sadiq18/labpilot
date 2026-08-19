@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -192,6 +193,129 @@ def _resolve_campaign_direction(ws: Any, competition: str) -> bool | None:
         return None
 
 
+def _stated_target(root: Path) -> str | None:
+    """The target column, from the profile that already inferred it.
+
+    `competition.json` does not carry one; `profile.json` does. Without this the
+    `target` field on every ObjectiveSpec was None in the shipped path while
+    reading as though it were populated.
+    """
+    import json
+
+    path = root / "profile.json"
+    if not path.is_file():
+        return None
+    try:
+        profile = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    target = profile.get("target_column") if isinstance(profile, dict) else None
+    return str(target) if target else None
+
+
+def _stated_objective(
+    ws: Any, competition: str
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """(metric_raw, declared_direction, problem_type, target) from the workspace."""
+    import json
+
+    root = getattr(ws, "root", None)
+    if root is None:
+        return None, None, None, None
+    target = _stated_target(Path(root))
+    path = Path(root) / "competition.json"
+    if not path.is_file():
+        return None, None, None, target
+    try:
+        spec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None, None, target
+    metric = spec.get("evaluation_metric") or spec.get("metric") or {}
+    if not isinstance(metric, dict):
+        metric = {}
+    raw = metric.get("name") or metric.get("key")
+    declared = metric.get("direction")
+    return (
+        str(raw) if raw else None,
+        str(declared) if declared in ("maximize", "minimize") else None,
+        str(spec.get("problem_type") or "") or None,
+        target,
+    )
+
+
+def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict[str, Any]:
+    """Refuse to start a campaign whose objective cannot be justified.
+
+    Checked here rather than mid-run, and the placement is the point: refusing to
+    *start* an unattended job costs nothing and reaches the operator while they
+    are still at the keyboard. Halting at 2am reaches nobody until morning and
+    throws away the night.
+
+    rogii ran campaigns for two weeks with `evaluation_metric: None`, and all
+    fifteen of its evidence cards were built as though MSE were maximised. Both
+    were free to catch at second zero.
+
+    Returns metadata to stamp on the session. An operator who overrides the gate
+    leaves a record there, because a campaign built on an unknown direction must
+    stay distinguishable from a resolved one long after the console line is gone.
+    """
+    from labpilot.research_engine.intelligence.competition.objective import resolve_objective
+
+    metric_raw, declared, problem_type, target = _stated_objective(ws, competition)
+    objective = resolve_objective(
+        metric_raw=metric_raw,
+        declared_direction=declared,  # type: ignore[arg-type]
+        task=problem_type,
+        target=target,
+    )
+    if not objective.blocks_launch:
+        console.print(
+            f"[dim]objective:[/dim] {objective.metric_name} "
+            f"[dim]({objective.direction} from {objective.direction_source}; "
+            f"confidence {objective.confidence:.2f}, capped by "
+            f"{objective.source})[/dim]"
+        )
+        return {
+            "objective_metric": objective.metric_name,
+            "objective_target": objective.target,
+            "objective_direction": objective.direction,
+            "objective_source": objective.source,
+            "objective_confidence": objective.confidence,
+        }
+
+    console.print(f"[red]Objective not resolved[/red] - {objective.why_blocked()}")
+    for line in objective.evidence:
+        console.print(f"  [dim]-[/dim] {line}")
+    if objective.alternatives:
+        console.print(
+            f"  [dim]candidates:[/dim] {', '.join(objective.alternatives)}"
+        )
+    console.print(
+        "\n  Set it in the workspace contract and re-run, e.g. competition.json:\n"
+        '    [cyan]"evaluation_metric": {"name": "rmse", "direction": "minimize"}[/cyan]'
+    )
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if not assume_yes and interactive:
+        # The operator is here, so offer the choice rather than only refusing. A
+        # `--yes` run must never reach this branch: auto-answering "which fact is
+        # true?" is how a wrong objective gets frozen into a workspace, and the
+        # reuse discipline everywhere else means it would stay wrong.
+        if typer.confirm(
+            "\nRun anyway, accepting that every conclusion may carry the wrong sign?",
+            default=False,
+        ):
+            console.print("[yellow]proceeding with an unresolved objective[/yellow]")
+            return {
+                "objective_override": True,
+                "objective_blocked_reason": objective.why_blocked(),
+                "objective_metric": objective.metric_name,
+                "objective_direction": objective.direction,
+                "objective_confidence": objective.confidence,
+            }
+    raise typer.Exit(2)
+
+
 def _budget_metadata(
     *,
     max_submissions: int | None,
@@ -294,6 +418,7 @@ def conduct_run(
         workspace_path=workspace_path,
         goal=goal,
     )
+    objective_meta = _preflight_objective(ws, competition, assume_yes=yes)
     store = ConductorStore(ws.knowledge_dir, competition)
     registry = default_tools()
     llm = None if offline else resolve_llm_client(config.llm)
@@ -313,6 +438,7 @@ def conduct_run(
                 "max_steps": max_steps,
                 "offline": offline,
                 "autonomy": autonomy,
+                **objective_meta,
             },
         )
         if target_metric:
@@ -379,6 +505,22 @@ def _continue_session(
     try:
         session = _resolve_session(store, session_id)
         meta = dict(session.metadata)
+        # Same gate as `run`: a contract edited between sessions can make an
+        # objective contradictory, and resuming would step against it unchecked.
+        #
+        # Ordered after the session is loaded so a recorded override can be
+        # honoured. Gating unconditionally with `assume_yes=True` made a campaign
+        # the operator had deliberately started under an unresolved objective
+        # impossible to resume at all — the launch accepted the answer and every
+        # `continue` afterwards refused it, which is the gate contradicting a
+        # decision it had already taken.
+        if meta.get("objective_override"):
+            console.print(
+                "[yellow]objective:[/yellow] resuming under the override recorded at launch — "
+                f"{meta.get('objective_blocked_reason') or 'reason not recorded'}"
+            )
+        else:
+            _preflight_objective(ws, competition, assume_yes=True)
         level = autonomy if autonomy is not None else int(meta.get("autonomy", 0))
         if session.status == "paused":
             store.update_session_status(session.id, "running")

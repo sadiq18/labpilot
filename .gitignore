@@ -66,3 +66,7 @@ htmlcov/
 
 # Local env backups
 .env.bak*
+
+# Shared experience store — a local SQLite DB, never committed
+experiences.db
+experiences.db.writelock
