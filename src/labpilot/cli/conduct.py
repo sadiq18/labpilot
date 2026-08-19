@@ -193,20 +193,43 @@ def _resolve_campaign_direction(ws: Any, competition: str) -> bool | None:
         return None
 
 
-def _stated_objective(ws: Any, competition: str) -> tuple[str | None, str | None, str | None]:
-    """(metric_raw, declared_direction, problem_type) from the workspace contract."""
+def _stated_target(root: Path) -> str | None:
+    """The target column, from the profile that already inferred it.
+
+    `competition.json` does not carry one; `profile.json` does. Without this the
+    `target` field on every ObjectiveSpec was None in the shipped path while
+    reading as though it were populated.
+    """
+    import json
+
+    path = root / "profile.json"
+    if not path.is_file():
+        return None
+    try:
+        profile = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    target = profile.get("target_column") if isinstance(profile, dict) else None
+    return str(target) if target else None
+
+
+def _stated_objective(
+    ws: Any, competition: str
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """(metric_raw, declared_direction, problem_type, target) from the workspace."""
     import json
 
     root = getattr(ws, "root", None)
     if root is None:
-        return None, None, None
+        return None, None, None, None
+    target = _stated_target(Path(root))
     path = Path(root) / "competition.json"
     if not path.is_file():
-        return None, None, None
+        return None, None, None, target
     try:
         spec = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None, None, None
+        return None, None, None, target
     metric = spec.get("evaluation_metric") or spec.get("metric") or {}
     if not isinstance(metric, dict):
         metric = {}
@@ -216,6 +239,7 @@ def _stated_objective(ws: Any, competition: str) -> tuple[str | None, str | None
         str(raw) if raw else None,
         str(declared) if declared in ("maximize", "minimize") else None,
         str(spec.get("problem_type") or "") or None,
+        target,
     )
 
 
@@ -237,20 +261,23 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
     """
     from labpilot.research_engine.intelligence.competition.objective import resolve_objective
 
-    metric_raw, declared, problem_type = _stated_objective(ws, competition)
+    metric_raw, declared, problem_type, target = _stated_objective(ws, competition)
     objective = resolve_objective(
         metric_raw=metric_raw,
         declared_direction=declared,  # type: ignore[arg-type]
         task=problem_type,
+        target=target,
     )
     if not objective.blocks_launch:
         console.print(
             f"[dim]objective:[/dim] {objective.metric_name} "
-            f"[dim]({objective.direction}, from {objective.direction_source}, "
-            f"confidence {objective.confidence:.2f})[/dim]"
+            f"[dim]({objective.direction} from {objective.direction_source}; "
+            f"confidence {objective.confidence:.2f}, capped by "
+            f"{objective.source})[/dim]"
         )
         return {
             "objective_metric": objective.metric_name,
+            "objective_target": objective.target,
             "objective_direction": objective.direction,
             "objective_source": objective.source,
             "objective_confidence": objective.confidence,
@@ -469,9 +496,6 @@ def _continue_session(
         knowledge_dir=knowledge_dir,
         workspace_path=workspace_path,
     )
-    # Same gate as `run`: a contract edited between sessions can make an
-    # objective contradictory, and resuming would step against it unchecked.
-    _preflight_objective(ws, competition, assume_yes=True)
     store = ConductorStore(ws.knowledge_dir, competition)
     registry = default_tools()
     llm = None if offline else resolve_llm_client(config.llm)
@@ -481,6 +505,22 @@ def _continue_session(
     try:
         session = _resolve_session(store, session_id)
         meta = dict(session.metadata)
+        # Same gate as `run`: a contract edited between sessions can make an
+        # objective contradictory, and resuming would step against it unchecked.
+        #
+        # Ordered after the session is loaded so a recorded override can be
+        # honoured. Gating unconditionally with `assume_yes=True` made a campaign
+        # the operator had deliberately started under an unresolved objective
+        # impossible to resume at all — the launch accepted the answer and every
+        # `continue` afterwards refused it, which is the gate contradicting a
+        # decision it had already taken.
+        if meta.get("objective_override"):
+            console.print(
+                "[yellow]objective:[/yellow] resuming under the override recorded at launch — "
+                f"{meta.get('objective_blocked_reason') or 'reason not recorded'}"
+            )
+        else:
+            _preflight_objective(ws, competition, assume_yes=True)
         level = autonomy if autonomy is not None else int(meta.get("autonomy", 0))
         if session.status == "paused":
             store.update_session_status(session.id, "running")

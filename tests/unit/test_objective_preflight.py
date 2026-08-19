@@ -136,7 +136,7 @@ def test_a_malformed_contract_is_not_read_as_an_objective(tmp_path: Path) -> Non
     constraint stated'."""
     (tmp_path / "competition.json").write_text("{ not json", encoding="utf-8")
 
-    assert _stated_objective(_Workspace(tmp_path), "demo") == (None, None, None)
+    assert _stated_objective(_Workspace(tmp_path), "demo") == (None, None, None, None)
     assert _blocks(_Workspace(tmp_path))
 
 
@@ -145,7 +145,7 @@ def test_a_bogus_direction_is_discarded_rather_than_trusted(tmp_path: Path) -> N
     probe rather than being carried as a declaration."""
     ws = _workspace(tmp_path, {"name": "rmse", "direction": "sideways"})
 
-    _raw, declared, _task = _stated_objective(ws, "demo")
+    _raw, declared, _task, _target = _stated_objective(ws, "demo")
     assert declared is None
     assert not _blocks(ws), "the probe should still resolve rmse on its own"
 
@@ -158,7 +158,7 @@ def test_the_legacy_metric_key_is_read_too(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    raw, declared, _task = _stated_objective(_Workspace(tmp_path), "demo")
+    raw, declared, _task, _target = _stated_objective(_Workspace(tmp_path), "demo")
     assert raw == "rmse"
     assert declared == "minimize"
 
@@ -205,6 +205,45 @@ def test_the_candidates_reach_the_operator(tmp_path: Path, capsys) -> None:
     assert "candidates:" in capsys.readouterr().out
 
 
+def test_the_target_column_reaches_the_objective(tmp_path: Path) -> None:
+    """Review finding. `ObjectiveSpec.target` was declared, documented and never
+    populated — every shipped spec carried None while reading as though the
+    field were live. `competition.json` has no target; `profile.json` does."""
+    ws = _workspace(tmp_path, {"name": "rmse", "direction": "minimize"})
+    (tmp_path / "profile.json").write_text(json.dumps({"target_column": "TVT"}), encoding="utf-8")
+
+    assert _stated_objective(ws, "demo")[3] == "TVT"
+    assert _preflight_objective(ws, "demo", assume_yes=True)["objective_target"] == "TVT"
+
+
+def test_a_missing_or_broken_profile_is_not_a_target(tmp_path: Path) -> None:
+    """Absent, unparseable and target-less must all read as 'not stated', and
+    none of them may stop a resolvable objective from launching."""
+    ws = _workspace(tmp_path, {"name": "rmse", "direction": "minimize"})
+    assert _stated_objective(ws, "demo")[3] is None
+
+    (tmp_path / "profile.json").write_text("{ not json", encoding="utf-8")
+    assert _stated_objective(ws, "demo")[3] is None
+
+    (tmp_path / "profile.json").write_text(json.dumps({"target_column": None}), encoding="utf-8")
+    assert _stated_objective(ws, "demo")[3] is None
+    assert not _blocks(ws)
+
+
+def test_the_printed_confidence_names_the_source_that_capped_it(tmp_path: Path, capsys) -> None:
+    """Review finding. The line read `(minimize, from measured, confidence 0.90)`
+    — pairing the direction's source with a confidence the *registry* set. The
+    model was fixed to report the capping source and the console line was not,
+    so the one an operator actually reads still mismatched."""
+    _preflight_objective(
+        _workspace(tmp_path, {"name": "rmse", "direction": "minimize"}), "demo", assume_yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert "minimize from measured" in out
+    assert "capped by registry" in out
+
+
 def test_resuming_a_session_is_gated_too(tmp_path: Path) -> None:
     """Review finding. The gate covered `run` only, so a contract edited between
     sessions let `continue` and `resume` step against an objective `run` would
@@ -216,3 +255,26 @@ def test_resuming_a_session_is_gated_too(tmp_path: Path) -> None:
 
     source = inspect.getsource(conduct._continue_session)
     assert "_preflight_objective" in source
+
+
+def test_a_campaign_started_under_an_override_can_still_be_resumed() -> None:
+    """Review finding. `_continue_session` gated with `assume_yes=True`, which
+    never prompts and always exits — so a campaign the operator had deliberately
+    launched under an unresolved objective could never be continued. The launch
+    accepted the answer; every resume afterwards refused it.
+
+    Asserted on the source because the alternative is standing up a store, a
+    workspace and a registry to observe one branch.
+    """
+    import inspect
+
+    from labpilot.cli import conduct
+
+    source = inspect.getsource(conduct._continue_session)
+    gate = source.index("_preflight_objective")
+    guard = source.index('meta.get("objective_override")')
+
+    assert guard < gate, "the gate runs before the override is read"
+    assert source.index("meta = dict(session.metadata)") < guard, (
+        "the override is read before the session is loaded"
+    )

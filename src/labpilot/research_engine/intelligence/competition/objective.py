@@ -37,6 +37,9 @@ from pydantic import BaseModel, Field
 
 from labpilot.research_engine.intelligence.competition.direction_probe import (
     Direction,
+    Scorer,
+    degrade,
+    probe_direction,
     probe_metric_direction,
 )
 from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
@@ -219,23 +222,46 @@ def resolve_direction(
     declared_source: ObjectiveSource = "explicit",
     num_classes: int | None = None,
     probe: bool = True,
+    scorer: Scorer | None = None,
+    y_true: object | None = None,
 ) -> tuple[Direction | None, ObjectiveSource, list[str], str | None]:
     """Direction, its source, the evidence, and any contradiction.
 
-    Probe first when the metric is executable: a measurement of the scorer that
-    will be used outranks anything anyone declared about its name. When the probe
-    and a declaration disagree, neither wins — the objective is contradictory and
-    the caller must stop.
+    Probe first when there is something executable to probe: a measurement of the
+    scorer that will be used outranks anything anyone declared about its name.
+    When the probe and a declaration disagree, neither wins — the objective is
+    contradictory and the caller must stop.
+
+    `scorer` is the hook that makes measurement reachable for a metric no
+    catalogue knows. Without it the probe could only run on registry entries —
+    gating the measurement behind the table it exists to bypass, so an
+    uncatalogued metric fell through to name morphology and the probe only ever
+    re-confirmed directions the registry already stated.
+
+    Pass `y_true` alongside a scorer whenever the workspace has real truth: it
+    exercises the scorer on the data it will actually see, and a ranking or
+    mask-shaped objective cannot be probed from a synthetic vector at all.
     """
     evidence: list[str] = []
 
     measured: Direction | None = None
-    if probe and metric_key and is_scorable(metric_key):
+    reading = None
+    if probe and scorer is not None:
+        from labpilot.research_engine.intelligence.competition.direction_probe import (
+            _synthetic_truth,
+        )
+
+        truth = _synthetic_truth(num_classes) if y_true is None else y_true
+        if y_true is None:
+            evidence.append("probed a supplied scorer against a synthetic truth vector")
+        reading = probe_direction(scorer, degrade(truth))
+    elif probe and metric_key and is_scorable(metric_key):
         reading = probe_metric_direction(
             metric_key,
             needs_probabilities=requires_probabilities(metric_key),
             num_classes=num_classes,
         )
+    if reading is not None:
         if reading.direction is not None:
             measured = reading.direction
             evidence.append(
@@ -280,6 +306,8 @@ def resolve_objective(
     task: str | None = None,
     target: str | None = None,
     probe: bool = True,
+    scorer: Scorer | None = None,
+    y_true: object | None = None,
 ) -> ObjectiveSpec:
     """Resolve an objective from what the competition stated.
 
@@ -301,13 +329,20 @@ def resolve_objective(
     key = normalize_metric_key(metric_raw)
     if key:
         evidence.append(f"{metric_raw!r} resolves to {key!r}")
-        source: ObjectiveSource = "explicit" if declared_direction else "registry"
+        source: ObjectiveSource = "registry"
     else:
         # Unknown metric: the slug is still a stable identity, which is enough to
         # compare two readings of it. Only aliasing needs a catalogue.
         key = _slug(metric_raw)
         evidence.append(f"{metric_raw!r} is not catalogued; using {key!r} as its identity")
-        source = "explicit" if declared_direction else "rules"
+        source = "rules"
+
+    # `source` is how the *identity* was resolved, and a declared direction is no
+    # evidence about identity. Promoting it to "explicit" whenever a direction
+    # was stated read an uncatalogued name as 0.95 confident because the contract
+    # happened to also say "minimize" — the weakest identity in the system
+    # reporting the second-strongest number. Declarations belong to
+    # `direction_source`, which is where `resolve_direction` already puts them.
 
     # The resolver knows the task from the competition; the probe does not and
     # must not. All it needs is the shape facts `compute_metric` asks for.
@@ -317,6 +352,8 @@ def resolve_objective(
         declared=declared_direction,
         num_classes=num_classes,
         probe=probe,
+        scorer=scorer,
+        y_true=y_true,
     )
     evidence.extend(direction_evidence)
 
@@ -329,12 +366,19 @@ def resolve_objective(
     # metric-mismatch class this whole layer exists to remove, arriving one
     # level up. Measured on disk: playground-series-s6e7 states
     # `balanced_accuracy_score` and every campaign scored plain accuracy.
-    if not is_scorable(key):
+    # A supplied scorer *is* an implementation, so the proxy problem below does
+    # not arise for it. Asking `is_scorable` alone would block a caller who had
+    # just handed us the very thing it says is missing.
+    scorable = is_scorable(key) or scorer is not None
+    if not scorable:
         unresolved.append("local_scoring")
 
-    confidence = 0.0 if contradiction else min(
-        _CONFIDENCE[source], _CONFIDENCE[direction_source]
-    )
+    # Derived from the confidence values themselves rather than from `_RANK`, so
+    # `confidence == _CONFIDENCE[source]` holds by construction. Selecting by
+    # rank while taking the min of the values agreed only while the two tables
+    # stayed monotonic with each other, and nothing enforced that.
+    weakest = min((source, direction_source), key=lambda s: _CONFIDENCE[s])
+    confidence = 0.0 if contradiction else _CONFIDENCE[weakest]
 
     # What an operator could actually be asked. A blocked objective whose only
     # gap is orientation has exactly two answers, and offering them is the
@@ -348,11 +392,11 @@ def resolve_objective(
         target=target,
         metric_name=key,
         metric_raw=metric_raw,
-        scorable=is_scorable(key),
+        scorable=scorable,
         direction=direction,
         direction_source=direction_source,
         identity_source=source,
-        source=source if _rank(source) >= _rank(direction_source) else direction_source,
+        source=weakest,
         confidence=confidence,
         evidence=evidence,
         unresolved=unresolved,

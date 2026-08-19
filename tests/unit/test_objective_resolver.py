@@ -251,3 +251,116 @@ def test_there_is_one_slug_implementation() -> None:
 
     assert not hasattr(objective_module, "_slug_identity")
     assert _resolve("Weighted RMSSE").metric_name == "weighted_rmsse"
+
+
+def test_a_scorer_the_registry_never_heard_of_is_still_measured() -> None:
+    """Review finding, and the headline claim of this whole layer.
+
+    The probe was gated behind `is_scorable(metric_key)` — a registry lookup —
+    so it could only ever run on metrics the table already had a direction for.
+    Measurement was reachable exactly where it was redundant and unreachable
+    exactly where it was needed: an uncatalogued metric fell through to name
+    morphology, which is the lookup table with worse evidence.
+
+    `scorer` is the hook that closes it. A workspace with its own evaluator now
+    gets a *measured* direction.
+    """
+    import numpy as np
+
+    def wellbore_misfit(y_true, y_pred) -> float:
+        a, b = np.asarray(y_true, float), np.asarray(y_pred, float)
+        return float(np.mean(np.abs(np.log1p(a) - np.log1p(b))))
+
+    objective = _resolve("wellbore misfit", scorer=wellbore_misfit)
+
+    assert objective.direction == "minimize"
+    assert objective.direction_source == "measured", "fell back to the name again"
+    assert any("probed the evaluator" in e for e in objective.evidence)
+
+
+def test_without_the_hook_the_same_metric_only_gets_a_guess() -> None:
+    """The other half: this is what the gate used to produce for *every*
+    uncatalogued metric, and it must remain visibly weaker."""
+    objective = _resolve("wellbore misfit")
+
+    assert objective.direction_source == "rules"
+    assert not any("probed the evaluator" in e for e in objective.evidence)
+
+
+def test_a_supplied_scorer_is_an_implementation() -> None:
+    """`is_scorable` asks whether *this repo* implements the metric. A caller
+    who hands us a scorer has answered that question by handing it over, and
+    blocking on `local_scoring` anyway refuses the thing just supplied."""
+    import numpy as np
+
+    objective = _resolve(
+        "wellbore misfit",
+        scorer=lambda a, b: float(np.mean(np.abs(np.asarray(a, float) - np.asarray(b, float)))),
+    )
+
+    assert objective.scorable
+    assert objective.is_actionable and not objective.blocks_launch
+
+
+def test_real_truth_is_used_over_the_synthetic_stand_in() -> None:
+    """Truth from the workspace exercises the scorer on the data it will see;
+    a ranking- or mask-shaped objective cannot be probed from a float vector."""
+    seen: list[object] = []
+
+    def scorer(actual, predicted) -> float:
+        seen.append(actual)
+        return -float(sum(a != b for a, b in zip(actual, predicted, strict=False)))
+
+    truth = [[3, 1, 2], [5, 4], [7, 8, 9, 6], [2, 1], [4, 5, 6]]
+    objective = _resolve("ranked overlap", scorer=scorer, y_true=truth)
+
+    assert objective.direction == "maximize"
+    assert seen and all(s is truth for s in seen), "probed something other than the truth given"
+    assert not any("synthetic" in e for e in objective.evidence)
+
+
+def test_a_scorer_that_says_nothing_does_not_become_a_guess() -> None:
+    """The hook must not turn an indeterminate measurement into a name-based
+    answer that reads as though it had been measured."""
+    objective = _resolve("wellbore misfit", scorer=lambda a, b: 1.0)
+
+    assert objective.direction_source != "measured"
+    assert any("probe inconclusive" in e for e in objective.evidence)
+
+
+def test_confidence_does_not_depend_on_two_tables_agreeing() -> None:
+    """Review finding. `source` was chosen by comparing `_RANK` while
+    `confidence` was the `min` of `_CONFIDENCE`. They agreed only while the two
+    tables stayed monotonic with each other, and nothing checked that — reorder
+    one entry and a spec would report a source whose confidence was not the one
+    printed beside it.
+    """
+    from labpilot.research_engine.intelligence.competition.objective import (
+        _CONFIDENCE,
+        _RANK,
+    )
+
+    for raw, declared in [("rmse", None), ("mean_squared_error", "minimize"), ("WRMSSE", None)]:
+        objective = _resolve(raw, declared_direction=declared)
+        if objective.contradiction:
+            continue
+        assert objective.confidence == pytest.approx(_CONFIDENCE[objective.source]), raw
+
+    assert set(_RANK) == set(_CONFIDENCE), "a source with no confidence would KeyError"
+
+
+def test_a_declared_direction_is_not_evidence_about_the_metrics_identity() -> None:
+    """Found while fixing the finding above. `source` — the *identity* provenance
+    — was set to "explicit" whenever a direction was declared, so an uncatalogued
+    metric name reported 0.95 confidence because the contract also happened to
+    state "minimize". Stating which way is better says nothing about whether the
+    name was correctly identified, and that is the weakest link this field exists
+    to expose.
+    """
+    catalogued = _resolve("rmse", declared_direction="minimize")
+    assert catalogued.identity_source == "registry"
+    assert catalogued.confidence == pytest.approx(0.90)
+
+    unknown = _resolve("wellbore misfit", declared_direction="minimize")
+    assert unknown.identity_source == "rules"
+    assert unknown.confidence == pytest.approx(0.60), "a slug read as an explicit identity"
