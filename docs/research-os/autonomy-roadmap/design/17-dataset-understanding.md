@@ -32,9 +32,10 @@ symbol wherever this milestone's own step 1 moves the lines:
 | `workspace/capability.py:458-466` | The profiler is called **without** an LLM client, so that no-LLM path is the one production always takes |
 | `modality.py:104-117` | The zarr branch is unreachable: the CSV-preference return fires first, and every zarr competition ships a `sample_submission.csv` |
 | `tabular.py` — `profile_file`, and the profile built in `profile_dataset` | `row_count` is the length of a sample capped at `max_rows_sample`, and `row_count_estimated` stays `False`. On disk: `playground-series-s6e7/profile.json` says 100,000 rows, unstamped; the file has 690,088 |
-| `competition/metrics.py:38-49` | Substring mapping: `balanced_accuracy_score` → `accuracy`. On disk in that competition's `competition.json` |
+| `competition/metrics.py:38-49` | Substring mapping: `balanced_accuracy_score` → `accuracy`. On disk in that competition's `competition.json`. **Closed by #145**, which rewired identity and direction onto `metric_vocabulary` and deleted both hint tuples |
 | `workspace/capability.py:503-580` | A second modality decision. When the profiler raises, this writes a valid-looking profile with `target_column: null` and prose in `warnings` |
 | whole module | The profiler `rglob`s CSVs directly. No seam between *where data lives* and *what is inferred from it* |
+| `tabular.py` — `id_column` on the partitioned path | Set to the prediction template's first column, unverified. **Found by step 2's evidence plane on its first real run, 2026-08-20:** rogii's profile records `id_column: "id"` and no column of that name exists in any table — the template's `id` is a synthesised `<entity>_<row>` key. It scores 0.10, `uncertain`, on one positional signal |
 
 **Measured cost.** rogii trained against a horizon depth for eleven days because
 `profile.json` was written 2026-08-02 and never re-derived; a six-experiment
@@ -322,11 +323,20 @@ reachable on structure alone. The positional cap is the plan's third trap made
 structural: `overlap[1]` is not improved, it is capped, so a rule that would
 pick `id` from a reversed header can never decide alone.
 
-**Uniqueness is not a signal.** "Only one column is withheld" adds no weight —
-being the sole candidate is already expressed by an empty `alternatives` list.
-Paying for it twice would make a one-candidate dataset look better-evidenced
-than a two-candidate one firing identical evidence, and the two-candidate case
-is exactly the one that must ask.
+**Being a candidate is the entry condition, not evidence.** Corrected in step 2,
+where the first draft's rule did not survive contact with rogii. There is no
+"withheld at scoring" signal: when eight columns are withheld, knowing that this
+one is says nothing about *which* is the label, and paying every candidate the
+same points lifts them over the ask threshold together — 0.694 each, `probable`,
+no question asked, which is the failure this milestone exists to remove.
+`sole_withheld_column` (0.70) fires only where withholding **identifies** the
+column, and identification is the whole of its value.
+
+**A tie broken by sorting is not a signal either.** Where the code takes
+`sorted(candidates)[-1]`, every candidate keeps the confidence its own evidence
+earns and a note records that position chose between them. Paying the winner
+0.10 for being alphabetically last put it at 0.6328 against its twin's 0.592 —
+one band apart, on identical evidence — until the signal was removed.
 
 Residual conclusions cap at **0.75**: `disjoint_units` ("IID") is what is
 concluded when nothing else fired, and an independence assumption that is wrong
@@ -357,12 +367,13 @@ The other four questions follow the same families: `id_columns` from
 and the capped residual above; `metric` from `exact_alias_match` (.90),
 `direction_declared` (.30) and `substring_match` (.15, **capped 0.55**).
 
-`exact_alias_match` reads `competition/metric_vocabulary.py`, now on `main` with
-one consumer. The substring map it replaces is **still live** in
-`competition/metrics.py:38-49` — the path that writes `competition.json` — so a
-metric can still reach a workspace by substring, land at 0.55, and ask. That is
-the honest reading of `{"name": "balanced_accuracy_score", "key": "accuracy"}`
-until the parser path is rewired too.
+`exact_alias_match` reads `competition/metric_vocabulary.py`. **#145 finished
+the rewire** while this milestone was in flight: `competition/metrics.py` now
+resolves identity and direction through the registry and both substring tuples
+are gone, so a metric that reaches a workspace has an exact alias behind it.
+`substring_match` is kept in the catalogue's design for the case that remains —
+a source supplying a name the registry cannot match — and ships only when
+something can produce it.
 
 ### 7.5 Features — the safety-critical answer
 
@@ -387,10 +398,19 @@ answer.
 
 | Case | Signals | Confidence |
 |---|---|---|
-| **A. house-prices** (all strong signals present) | template .80 + absent-from-scoring .70 + dtype↔RMSE .30 + non-null .20 + numeric .15 | **0.9714** `asserted` |
+| **A. house-prices** (all strong signals present) | template .80 + sole-withheld .70 + non-null .20 + numeric .15 | **0.9592** `asserted` |
 | **B. 1,546-table partitioned set**, template present | template .80 + across-units .40 + non-null .20 + numeric .15 | **0.9184** `asserted` |
 | **B′. same set, no template** | across-units .40 + non-null .20 + numeric .15 | **0.592** `uncertain` |
 | **C. warehouse table**: no test set, no template, no declared metric | declared .90 + non-null .20 + numeric .15 | **0.932** `asserted` |
+
+A is 0.9592 rather than the 0.9714 an earlier draft gave, because
+`dtype_matches_metric` (.30) needs a metric and the profile carries none — that
+signal arrives with the field. B, B′ and their tie are exact and are asserted as
+literals in `test_evidence_plane.py`, so a changed weight moves them: the worked
+examples are the catalogue's output, not a target it was tuned to hit. **B is
+measured on the real rogii dataset**, where `TVT` scores 0.9184 `asserted` and
+`EGFDU` — the horizon depth this workspace trained against for eleven days — is
+recorded as a 0.49 alternative with its evidence.
 
 A is the number in the milestone brief, derived from the catalogue rather than
 chosen. B is today's behaviour, which is *correct* — and nothing in today's
@@ -471,7 +491,7 @@ Off by default (`profiler.llm_proposals: false`).
 | Unattended ambiguity | Auto-answer with the best guess | Block, no `auto_answer` option | A campaign can stop for a human; the alternative freezes a coin flip into every later run |
 | Confidence scalar | Mean over fields | Weakest link | One number that cannot hide a guessed target; a single weak field drags the schema score down |
 | Source access | Base class with file assumptions | `Protocol`, one adapter | M12 becomes an adapter; one indirection today with no second implementation to validate it |
-| Metric mapping | Fix the substring map here | Record *how* it was matched; consume `metric_vocabulary.py` | Keeps this milestone's surface honest; a substring match caps at 0.55 and asks until the parser path is rewired to the vocabulary |
+| Metric mapping | Fix the substring map here | Record *how* it was matched; consume `metric_vocabulary.py` | Keeps this milestone's surface honest. #145 has since rewired the parser onto the registry, so the weak path this hedged against no longer exists |
 | Modality | Keep the scalar winner | List + computed mirror | Auxiliary modalities stop being discarded; two spellings of one fact, prevented by making one computed |
 
 ---
@@ -522,9 +542,9 @@ show` is Rich output, truncated at 40 columns.
 
 | Step | Content | Ships when |
 |---|---|---|
-| 0 | Fixtures for cases A, B, B′, C, a >`max_rows_sample` table, a CSV-less environment layout | They reproduce the defects |
-| 1 | `source.py` + `LocalFileSource`; the profiler reads through it | Schemas byte-identical |
-| 2 | `evidence.py`, catalogue, `combine`; `inferences` populated from today's decisions; `notes`/`warnings` view | Check 1 passes; **no values change** |
+| 0 ✅ | Fixtures for cases A, B, B′, C, a >`max_rows_sample` table, a CSV-less environment layout | They reproduce the defects |
+| 1 ✅ | `source.py` + `LocalFileSource`; `profile_dataset` takes a source | Schemas byte-identical, on fixtures and on rogii's 1,546 tables |
+| 2 ✅ | `evidence.py`, catalogue, `combine`; `inferences` populated from today's decisions; `notes`/`warnings` view | Check 1 passes; **no values change** — the golden diff is two added keys, nothing removed and nothing altered |
 | 3 | The five answers rewritten as scoring; `id_columns`, `excluded_columns`, `train_test_relationship`, `metric` | Checks 4, 5, 6 |
 | 4 | Questions, `schema_answers.json`, `schema_prompt`, block path, `research schema` | Check 7 |
 | 5 | Modality list, `prediction_unit`, zarr, tie-break confidence, `row_count`, metric recording; the fiction deleted | Check 8 |

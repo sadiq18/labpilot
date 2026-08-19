@@ -87,9 +87,64 @@
     "Id",
     "SalePrice"
   ],
-  "warnings": [
-    "default_tabular"
+  "notes": [
+    {
+      "code": "modality_signal",
+      "text": "default_tabular",
+      "field": "modality",
+      "severity": "info"
+    }
   ],
+  "inferences": {
+    "target_column": {
+      "signals": [
+        {
+          "id": "named_in_prediction_template",
+          "detail": "submission header names 'SalePrice'"
+        },
+        {
+          "id": "sole_withheld_column",
+          "detail": "'SalePrice' is the only column train has and test does not"
+        },
+        {
+          "id": "non_null_in_train",
+          "detail": "SalePrice: no nulls in train"
+        },
+        {
+          "id": "is_numeric",
+          "detail": "SalePrice: float64"
+        }
+      ],
+      "confidence": 0.9592,
+      "band": "asserted",
+      "alternatives": [],
+      "rejected": []
+    },
+    "id_column": {
+      "signals": [
+        {
+          "id": "named_in_prediction_template",
+          "detail": "template names 'Id'"
+        },
+        {
+          "id": "first_template_column",
+          "detail": "'Id' is the template's first column"
+        },
+        {
+          "id": "present_in_train_and_scoring",
+          "detail": "'Id' is on both sides"
+        },
+        {
+          "id": "unique_per_unit",
+          "detail": "12 distinct in 12"
+        }
+      ],
+      "confidence": 0.946,
+      "band": "asserted",
+      "alternatives": [],
+      "rejected": []
+    }
+  },
   "modality": "tabular",
   "image_dir": null,
   "image_column": null,
@@ -103,5 +158,8 @@
   "scored_is_partition_suffix": false,
   "scored_fraction": 0.0,
   "train_only_columns": [],
-  "anchor_column": null
+  "anchor_column": null,
+  "warnings": [
+    "default_tabular"
+  ]
 }

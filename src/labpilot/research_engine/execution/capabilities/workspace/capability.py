@@ -508,6 +508,7 @@ class WorkspaceCapability(BaseCapability):
         tabular_error: str,
     ) -> bool:
         try:
+            from labpilot.accessor.profiler.evidence import Note
             from labpilot.accessor.profiler.modality import IMAGE_EXTENSIONS, ModalityDetector
             from labpilot.accessor.profiler.report import write_profile
             from labpilot.accessor.profiler.tabular import DatasetProfile
@@ -536,9 +537,17 @@ class WorkspaceCapability(BaseCapability):
             profile = DatasetProfile(
                 competition=context.competition,
                 files=files,
-                warnings=[
-                    f"tabular profiler unavailable: {tabular_error}",
-                    "using filesystem inventory profile",
+                notes=[
+                    Note(
+                        code="profiler_failed",
+                        text=f"tabular profiler unavailable: {tabular_error}",
+                        severity="caution",
+                    ),
+                    Note(
+                        code="inventory_profile",
+                        text="using filesystem inventory profile",
+                        severity="caution",
+                    ),
                 ],
             )
             modality = ModalityDetector().detect(
@@ -556,10 +565,22 @@ class WorkspaceCapability(BaseCapability):
                 )
                 if inferred is ProblemType.IMAGE_CLASSIFICATION:
                     profile.modality = "image"
-                    profile.warnings.append("modality=image from competition metadata")
+                    profile.notes.append(
+                        Note(
+                            code="modality_from_metadata",
+                            text="modality=image from competition metadata",
+                            field="modality",
+                        )
+                    )
                 elif inferred is ProblemType.TEXT_CLASSIFICATION:
                     profile.modality = "text"
-                    profile.warnings.append("modality=text from competition metadata")
+                    profile.notes.append(
+                        Note(
+                            code="modality_from_metadata",
+                            text="modality=text from competition metadata",
+                            field="modality",
+                        )
+                    )
                 else:
                     # Presence of image-like files without CSV roles.
                     has_images = any(
@@ -570,7 +591,13 @@ class WorkspaceCapability(BaseCapability):
                     )
                     if has_images or has_zarr:
                         profile.modality = "image"
-                        profile.warnings.append("modality=image from file extensions")
+                        profile.notes.append(
+                            Note(
+                                code="modality_from_extensions",
+                                text="modality=image from file extensions",
+                                field="modality",
+                            )
+                        )
                     else:
                         profile.modality = modality.modality
             else:
@@ -578,8 +605,10 @@ class WorkspaceCapability(BaseCapability):
             profile.image_dir = modality.image_dir
             profile.image_column = modality.image_column
             profile.text_column = modality.text_column
-            if modality.signals:
-                profile.warnings.extend(modality.signals)
+            for signal_text in modality.signals:
+                profile.notes.append(
+                    Note(code="modality_signal", text=signal_text, field="modality")
+                )
 
             json_path, md_path = write_profile(root, profile)
             metadata["profile"] = str(json_path)

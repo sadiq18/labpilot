@@ -118,14 +118,85 @@
   "target_column": "Zone_Depth",
   "id_column": null,
   "submission_columns": [],
-  "warnings": [
-    "partitioned dataset: 8 train / 8 test CSVs",
-    "primary kind='horizontal_well'; kinds={'horizontal_well': 5, 'typewell': 3}",
-    "row_count estimated from 5 sampled files",
-    "rows are NOT iid across partitions \u2014 validation must group by partition",
-    "Target inference is ambiguous: ['Depth', 'Zone_Depth'] are equally supported by the training partitions and none is named in a sample submission. Set `target_column` in the competition config to decide it.",
-    "train-only columns (unavailable at test): ['Depth', 'Zone_Depth']"
+  "notes": [
+    {
+      "code": "partitioned_layout",
+      "text": "partitioned dataset: 8 train / 8 test CSVs",
+      "field": null,
+      "severity": "info"
+    },
+    {
+      "code": "primary_kind",
+      "text": "primary kind='horizontal_well'; kinds={'horizontal_well': 5, 'typewell': 3}",
+      "field": null,
+      "severity": "info"
+    },
+    {
+      "code": "row_count_estimated",
+      "text": "row_count estimated from 5 sampled files",
+      "field": "row_count",
+      "severity": "info"
+    },
+    {
+      "code": "rows_not_iid",
+      "text": "rows are NOT iid across partitions \u2014 validation must group by partition",
+      "field": null,
+      "severity": "caution"
+    },
+    {
+      "code": "ambiguous_target",
+      "text": "Target inference is ambiguous: ['Depth', 'Zone_Depth'] are equally supported by the training partitions and none is named in a sample submission. Set `target_column` in the competition config to decide it.",
+      "field": "target_column",
+      "severity": "caution"
+    },
+    {
+      "code": "train_only_columns",
+      "text": "train-only columns (unavailable at test): ['Depth', 'Zone_Depth']",
+      "field": null,
+      "severity": "info"
+    }
   ],
+  "inferences": {
+    "target_column": {
+      "signals": [
+        {
+          "id": "present_across_train_units",
+          "detail": "in 5/5 horizontal_well tables"
+        },
+        {
+          "id": "non_null_in_train",
+          "detail": "Zone_Depth: no nulls in train"
+        },
+        {
+          "id": "is_numeric",
+          "detail": "Zone_Depth: float64"
+        }
+      ],
+      "confidence": 0.592,
+      "band": "uncertain",
+      "alternatives": [
+        {
+          "candidate": "Depth",
+          "confidence": 0.592,
+          "signals": [
+            {
+              "id": "present_across_train_units",
+              "detail": "in 5/5 horizontal_well tables"
+            },
+            {
+              "id": "non_null_in_train",
+              "detail": "Depth: no nulls in train"
+            },
+            {
+              "id": "is_numeric",
+              "detail": "Depth: float64"
+            }
+          ]
+        }
+      ],
+      "rejected": []
+    }
+  },
   "modality": "tabular",
   "image_dir": null,
   "image_column": null,
@@ -145,5 +216,13 @@
     "Depth",
     "Zone_Depth"
   ],
-  "anchor_column": null
+  "anchor_column": null,
+  "warnings": [
+    "partitioned dataset: 8 train / 8 test CSVs",
+    "primary kind='horizontal_well'; kinds={'horizontal_well': 5, 'typewell': 3}",
+    "row_count estimated from 5 sampled files",
+    "rows are NOT iid across partitions \u2014 validation must group by partition",
+    "Target inference is ambiguous: ['Depth', 'Zone_Depth'] are equally supported by the training partitions and none is named in a sample submission. Set `target_column` in the competition config to decide it.",
+    "train-only columns (unavailable at test): ['Depth', 'Zone_Depth']"
+  ]
 }
