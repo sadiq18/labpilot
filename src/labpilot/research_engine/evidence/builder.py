@@ -30,6 +30,7 @@ from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import Experiment, Hypothesis
 from labpilot.research_engine.shared.labels import is_record_reference
+from labpilot.research_engine.validation.models import ValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,21 @@ def _primary_cv_keyed(metrics: dict[str, Any]) -> tuple[float, str] | None:
         if isinstance(metrics.get(key), (int, float)):
             return float(metrics[key]), key
     return None
+
+
+def _found(
+    result: ValidationResult | None, metrics: dict[str, Any]
+) -> tuple[float, str] | None:
+    """The (score, key) pair, preferring one a validator already extracted.
+
+    Identical output either way — the Kaggle validator calls `_primary_cv_keyed`
+    on the same blob — so this is the no-op seam, not a second extraction path.
+    A result whose score is None means the validator found no primary metric,
+    which is what `_primary_cv_keyed` returning None already means.
+    """
+    if result is not None:
+        return None if result.score is None else (result.score, result.metric)
+    return _primary_cv_keyed(metrics)
 
 
 def _primary_cv(metrics: dict[str, Any]) -> float | None:
@@ -440,6 +456,8 @@ def build_evidence_card(
     overfitting: bool = False,
     belief_priors: dict[str, float] | None = None,
     persist: bool = True,
+    result: ValidationResult | None = None,
+    control_result: ValidationResult | None = None,
 ) -> EvidenceCard:
     """Build (and optionally persist) an Evidence Card for one treatment run.
 
@@ -450,14 +468,32 @@ def build_evidence_card(
     ``rejected`` and a regression as ``accepted``. A card is a signed, durable
     conclusion; writing one whose sign is a guess is worse than writing none.
     """
+    # A `ValidationResult` supplies the same three facts the loose arguments do —
+    # score, control, direction — but as one object that states its own
+    # direction. Accepted beside them rather than instead of them so this phase
+    # changes no behaviour: the wrapper reads the same sources in the same order,
+    # and a card built either way is identical field for field.
+    #
+    # The result wins where it speaks. A validator that measured its own
+    # direction outranks a competition file that never saw the number, which is
+    # the inversion M12 exists to make possible.
+    if result is not None:
+        treatment_metrics = result.raw
+        if maximize is None:
+            maximize = result.maximize
+        if lb_gain is None:
+            lb_gain = result.secondary
+    if control_result is not None and control_metrics is None:
+        control_metrics = control_result.raw
+
     if maximize is None:
         maximize = _resolve_direction(knowledge_dir, competition, workspace_root)
     plan_meta = dict(plan_metadata or {})
     control_metrics = dict(control_metrics or {})
     missing_control = not control_metrics and not control_execution_id
 
-    parent_found = _primary_cv_keyed(control_metrics) if control_metrics else None
-    treatment_found = _primary_cv_keyed(treatment_metrics)
+    parent_found = _found(control_result, control_metrics) if control_metrics else None
+    treatment_found = _found(result, treatment_metrics)
     parent_cv = parent_found[0] if parent_found else None
     treatment_cv = treatment_found[0] if treatment_found else None
 
