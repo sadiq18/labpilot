@@ -5,14 +5,21 @@ from pathlib import Path
 from typing import Any
 
 from labpilot.research_engine.execution.baseline.selector import BaselineChoice
+from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+    maximize_from_spec,
+)
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
-from labpilot.research_engine.shared.experiments.models import Experiment, StructuredReflection
 from labpilot.research_engine.shared.experiments.legacy_run_overrides import (
     ImprovementPlan,
     load_improvement_plan,
     load_training_overrides,
 )
-from labpilot.research_engine.shared.experiments.manifest import RunManifest, StageStatus, load_manifest
+from labpilot.research_engine.shared.experiments.manifest import (
+    RunManifest,
+    StageStatus,
+    load_manifest,
+)
+from labpilot.research_engine.shared.experiments.models import Experiment, StructuredReflection
 from labpilot.research_engine.shared.experiments.store import ExperimentStore
 
 logger = logging.getLogger(__name__)
@@ -369,7 +376,14 @@ class ExperimentGraph:
 
 def _resolve_metric_direction(runs_dir: Path, run_ids: list[str]) -> bool:
     """`True` = maximize. Reads the first available `competition.json`;
-    defaults to maximize when none is found or the spec has no metric."""
+    defaults to maximize when none is found or direction is unknowable.
+
+    Shares `maximize_from_spec` with the comparator. This used to be its own
+    `direction != "minimize"`, so a contract claiming RMSE is maximised had
+    `compare()` reporting a doubled RMSE as a regression while `_pick_best`
+    selected that same run as best on the path — two subsystems contradicting
+    each other about one competition.
+    """
     for run_id in run_ids:
         path = runs_dir / run_id / "competition.json"
         if not path.is_file():
@@ -378,8 +392,9 @@ def _resolve_metric_direction(runs_dir: Path, run_ids: list[str]) -> bool:
             spec = CompetitionSpec.model_validate_json(path.read_text())
         except (OSError, ValueError):
             continue
-        if spec.evaluation_metric is not None:
-            return spec.evaluation_metric.direction != "minimize"
+        resolved = maximize_from_spec(spec.evaluation_metric)
+        if resolved is not None:
+            return resolved
     return True
 
 

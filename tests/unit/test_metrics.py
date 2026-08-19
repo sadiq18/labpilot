@@ -136,9 +136,35 @@ def test_a_direction_contradicting_the_registry_is_left_standing() -> None:
     assert MetricSpec(name="rmse", key="rmse", direction="maximize").direction == "maximize"
 
 
-def test_a_direction_that_is_not_one_of_the_three_is_rejected() -> None:
-    """`direction: str` accepted "sideways", "min", "Minimize" and "" alike."""
-    import pydantic
+def test_a_legacy_direction_spelling_is_read_rather_than_rejected() -> None:
+    """Review finding. Narrowing the field to a `Literal` made the model
+    stricter than `direction.py`, which has always read any `min*`/`max*`
+    prefix. A hand-written `configs/competitions/<slug>.yaml` saying
+    `direction: min` then raised out of `CompetitionParser` — and inside
+    `capability.py`'s broad `except Exception` it silently discarded the whole
+    analyze-derived contract with an INFO log.
+    """
+    assert MetricSpec(name="x", direction="min").direction == "minimize"
+    assert MetricSpec(name="x", direction="Maximize").direction == "maximize"
 
-    with pytest.raises(pydantic.ValidationError):
-        MetricSpec(name="x", direction="sideways")
+
+def test_an_unreadable_direction_becomes_unknown_not_an_error() -> None:
+    """Unknown is a value the rest of the system can act on; a crash here loses
+    the entire competition contract."""
+    assert MetricSpec(name="x", direction="sideways").direction == "unknown"
+    assert MetricSpec(name="x", key="rmse", direction="sideways").direction == "minimize"
+
+
+def test_a_hand_written_config_with_a_legacy_direction_still_parses() -> None:
+    """The end-to-end shape of the finding: this is the file CLAUDE.md tells
+    people to write by hand."""
+    import yaml
+
+    from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
+
+    raw = yaml.safe_load(
+        "slug: demo\nevaluation_metric:\n  name: rmse\n  key: rmse\n  direction: min\n"
+    )
+    spec = CompetitionSpec.model_validate(raw)
+
+    assert spec.evaluation_metric.direction == "minimize"

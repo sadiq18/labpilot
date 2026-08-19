@@ -51,10 +51,14 @@ def _from_competition_json(path: Path) -> bool | None:
     profile artifact, so a competition with a perfectly explicit direction on
     disk could still be unresolvable.
 
-    Read as a dict rather than through `CompetitionSpec`: the model defaults
-    `direction` to ``"maximize"``, which would turn an absent field into a
-    confident wrong answer instead of the ``None`` that lets the caller keep
-    looking.
+    Read as a dict rather than through `CompetitionSpec`, for two reasons that
+    outlived the original one. `MetricSpec.direction` no longer defaults to
+    ``"maximize"`` — it defaults to ``"unknown"`` and derives from the key — so
+    the "confident wrong answer" this note used to cite is gone. What remains:
+    the model *fills* a direction from its key, which would mask a contract that
+    genuinely states none, and a malformed spec raises rather than yielding the
+    ``None`` that lets the caller keep looking. Both would cost the fallback to
+    the profile artifact, which is where rogii's real ``minimize`` lived.
     """
     if not path.is_file():
         return None

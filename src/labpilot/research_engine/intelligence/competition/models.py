@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from labpilot.accessor.kaggle.models import CompetitionMetadata
 
@@ -38,6 +38,27 @@ class MetricSpec(BaseModel):
     # "accuracy", "auc", "rmse"). None when the raw metric string could not be
     # mapped to a catalogued evaluator key.
     key: str | None = None
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def _accept_any_spelling(cls, raw: object) -> object:
+        """`min`, `Minimize`, `maximise` — every form `direction.py` reads.
+
+        Narrowing this field to a `Literal` without normalising first made the
+        model stricter than the reader that has always accepted those spellings,
+        so a hand-written competition config raised `ValidationError` out of
+        `CompetitionParser` — and inside `capability.py`'s broad `except
+        Exception`, silently discarded the entire analyze-derived contract.
+
+        `None` and missing stay untouched so the field default applies.
+        """
+        if raw is None:
+            return raw
+        from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+            normalize_direction,
+        )
+
+        return normalize_direction(raw)
 
     @model_validator(mode="after")
     def _fill_direction_from_key(self) -> "MetricSpec":

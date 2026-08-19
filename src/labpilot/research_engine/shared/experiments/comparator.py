@@ -12,7 +12,7 @@ from typing import Any
 
 from labpilot.accessor.common.derived import derived_note
 from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
-    direction_of,
+    maximize_from_spec,
 )
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.research_engine.shared.experiments.models import (
@@ -132,6 +132,10 @@ def resolve_primary_metric_key_and_direction(
     maximize remains the last resort — it is what an uncatalogued metric with no
     stated direction has always meant here, and changing that is a separate
     decision from removing the silent override.
+
+    `maximize_from_spec` is shared with `graph._resolve_metric_direction`, which
+    carried the same expression. Two copies meant fixing one made the pair
+    *disagree* about a competition rather than merely both be wrong.
     """
     maximize = True
     spec_key: str | None = None
@@ -145,12 +149,9 @@ def resolve_primary_metric_key_and_direction(
             continue
         if spec.evaluation_metric is not None:
             spec_key = spec.evaluation_metric.key
-            measured = direction_of(spec_key)
-            stated = spec.evaluation_metric.direction
-            if measured is not None:
-                maximize = measured == "maximize"
-            elif stated in ("maximize", "minimize"):
-                maximize = stated == "maximize"
+            resolved = maximize_from_spec(spec.evaluation_metric)
+            if resolved is not None:
+                maximize = resolved
             break
 
     shared = sorted(set(base.metrics) & set(compare_exp.metrics))

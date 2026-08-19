@@ -21,13 +21,16 @@ import pytest
 from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
     _METRICS,
     MEASUREMENT_PREFIXES,
+    bare_probe_keys,
     cv_probe_keys,
     cv_search_order,
     direction_of,
     is_scorable,
     known_keys,
+    maximize_from_spec,
     metrics_for,
     metrics_for_problem_type,
+    normalize_direction,
     normalize_metric_key,
     scorable_keys,
 )
@@ -341,13 +344,74 @@ def test_a_composite_metric_is_not_read_as_the_one_it_contains() -> None:
 
 def test_the_probe_order_covers_the_spellings_runs_actually_write() -> None:
     """`cv_roc_auc` is what the classification template writes; `cv_auc` is what
-    the canonical key would suggest. Both must be found, and every cross-validated
-    spelling must outrank every bare one — a CV reading and a single-split one
-    are different measurements."""
+    the canonical key would suggest. Both must be found."""
     keys = cv_probe_keys()
 
     assert "cv_roc_auc" in keys and "cv_auc" in keys
-    assert max(i for i, k in enumerate(keys) if k.startswith("cv_")) < min(
-        i for i, k in enumerate(keys) if not k.startswith("cv_")
-    )
     assert keys.index("cv_balanced_accuracy") < keys.index("cv_accuracy") < keys.index("cv_rmse")
+
+
+def test_cross_validated_and_bare_spellings_are_offered_separately() -> None:
+    """Review finding. Returning both from one function put every bare
+    catalogued key ahead of the caller's generic `cv_*` sweep, so a single-split
+    `mae` displaced the `cv_wrmsse` a campaign was actually judged on. The split
+    is what lets the caller sequence them around that sweep.
+    """
+    assert all(k.startswith("cv_") for k in cv_probe_keys())
+    assert not any(k.startswith("cv_") for k in bare_probe_keys())
+    assert len(cv_probe_keys()) == len(bare_probe_keys())
+    assert bare_probe_keys().index("accuracy") < bare_probe_keys().index("rmse")
+
+
+# --- one spelling of "which way is better" ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("min", "minimize"),
+        ("Minimize", "minimize"),
+        ("MIN", "minimize"),
+        ("minimise", "minimize"),
+        ("max", "maximize"),
+        ("Maximize", "maximize"),
+        ("sideways", "unknown"),
+        ("", "unknown"),
+        (None, "unknown"),
+    ],
+)
+def test_every_spelling_direction_py_reads_is_accepted(raw, expected) -> None:
+    """Review finding. `direction.py` has always read any `min*`/`max*` prefix,
+    so a `Literal` that rejected them made the model stricter than the reader —
+    and a hand-written `configs/competitions/<slug>.yaml` saying `direction: min`
+    raised out of `CompetitionParser`."""
+    assert normalize_direction(raw) == expected
+
+
+def test_an_unreadable_direction_becomes_unknown_rather_than_an_error() -> None:
+    """Never a guess, never a crash: a misspelled direction is exactly the case
+    where the registry and the probe should get to answer instead."""
+    assert normalize_direction("lower_is_better") == "unknown"
+
+
+def test_the_registry_outranks_a_contract_that_contradicts_it() -> None:
+    from labpilot.research_engine.intelligence.competition.models import MetricSpec
+
+    assert maximize_from_spec(MetricSpec(name="rmse", key="rmse", direction="maximize")) is False
+    assert maximize_from_spec(MetricSpec(name="auc", key="auc", direction="minimize")) is True
+
+
+def test_a_stated_direction_decides_a_key_the_registry_cannot_know() -> None:
+    from labpilot.research_engine.intelligence.competition.models import MetricSpec
+
+    unknown_key = MetricSpec(name="wellbore misfit", key="wellbore_misfit", direction="minimize")
+    assert maximize_from_spec(unknown_key) is False
+
+
+def test_nothing_knowable_is_none_rather_than_maximize() -> None:
+    """`None` is what lets the caller keep its own default and say so. Answering
+    `True` here is the silent-maximize this whole layer exists to remove."""
+    from labpilot.research_engine.intelligence.competition.models import MetricSpec
+
+    assert maximize_from_spec(None) is None
+    assert maximize_from_spec(MetricSpec(name="wellbore misfit", key="wellbore_misfit")) is None

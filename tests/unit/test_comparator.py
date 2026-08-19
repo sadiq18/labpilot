@@ -1,5 +1,6 @@
 """Unit tests for Milestone 2 Plan 3 — Automatic Comparator."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from labpilot.research_engine.shared.experiments.comparator import (
     compare,
     load_comparison,
     render_markdown,
+    resolve_primary_metric_key_and_direction,
     write_comparison,
 )
 from labpilot.research_engine.shared.experiments.models import (
@@ -223,8 +225,6 @@ def test_missing_primary_metric_is_inconclusive():
 
 
 def _competition_dir(tmp_path: Path, metric: dict) -> tuple[Path, ...]:
-    import json
-
     (tmp_path / "competition.json").write_text(
         json.dumps({"slug": "demo", "evaluation_metric": metric}), encoding="utf-8"
     )
@@ -283,3 +283,34 @@ def test_a_stated_direction_still_decides_a_metric_the_registry_cannot_know(
     )
 
     assert comparison.verdict is Verdict.WORTH_KEEPING
+
+
+def test_the_graph_and_the_comparator_never_disagree(tmp_path: Path) -> None:
+    """Review finding. Both carried their own `direction != "minimize"`, and
+    rewiring only the comparator was worse than rewiring neither: for a contract
+    claiming RMSE is maximised, `compare()` reported a regression while
+    `build_graph`'s flag fed `_pick_best`, which selected that same worse run as
+    the best node on the path. One resolver, so a third caller cannot diverge.
+    """
+    from labpilot.research_engine.shared.experiments.graph import _resolve_metric_direction
+
+    contracts = [
+        {"name": "rmse", "key": "rmse", "direction": "maximize"},
+        {"name": "rmse", "key": "rmse"},
+        {"name": "auc", "key": "auc", "direction": "minimize"},
+        {"name": "misfit", "key": "wellbore_misfit", "direction": "minimize"},
+        {"name": "misfit", "key": "wellbore_misfit"},
+    ]
+    for index, metric in enumerate(contracts):
+        run = tmp_path / f"r{index}"
+        run.mkdir()
+        (run / "competition.json").write_text(
+            json.dumps({"slug": "demo", "evaluation_metric": metric}), encoding="utf-8"
+        )
+        _key, comparator_maximize = resolve_primary_metric_key_and_direction(
+            _exp("a", metrics={"cv_rmse": 10.0}),
+            _exp("b", metrics={"cv_rmse": 5.0}),
+            competition_dirs=(run,),
+        )
+
+        assert _resolve_metric_direction(tmp_path, [f"r{index}"]) is comparator_maximize, metric
