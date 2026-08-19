@@ -39,6 +39,7 @@ from labpilot.research_engine.conductor.budgets import (
     BudgetState,
     comparable_tail,
     evaluate_stops,
+    goal_progress,
     metric_names_match,
     score_summary,
     submit_tools_allowed,
@@ -76,6 +77,13 @@ _MAX_STOP_OVERRIDES = 2
 #: to produce) an experiment; a failed `analyze_competition` is a bad step, not
 #: evidence that the campaign cannot work.
 _EXPERIMENT_TOOLS = frozenset({"run_experiment", "run_plan"})
+
+#: What a stop reason means for the session's status. Anything absent is a
+#: completion. `failing` is not one — a campaign whose every execution broke
+#: must not land where one that met its target does — and `needs_guidance` is
+#: not one either: nothing is broken and nothing is finished, so it pauses,
+#: which is the status a `conduct continue` picks back up.
+_STOP_SESSION_STATUS = {"failing": "failed", "needs_guidance": "paused"}
 
 
 #: Each experiment tool's own `dry_run` default, so a fan-out of a step that
@@ -722,11 +730,36 @@ def _record_experiment_outcome(
                 )
             budget_state.metric_history = [e.value for e in comparable]
             budget_state.last_metric = event.value
+            # Reset here, at the append, and nowhere else. `steps_since_success`
+            # resets on any successful execution, which is why it cannot see a
+            # run that succeeds and writes a placeholder metric; this counter is
+            # keyed on the series it guards.
+            budget_state.steps_since_new_score = 0
             logger.info(
                 "recorded %s=%s for %s", event.metric_name, event.value, event.experiment_id
             )
             _maybe_mint_on_stagnation(workspace, budget_state, budget_cfg)
     persist_budgets(store, session_id, budget_cfg, budget_state)
+
+
+def _needs_guidance_reason(config: Any, state: Any) -> str:
+    """Which condition asked for a person, in the terms they can act on.
+
+    A bare `stop:needs_guidance` reproduces the complaint this milestone
+    exists to answer — a campaign that ended without saying why.
+    """
+    limit = getattr(config, "max_steps_without_score", None)
+    if limit is not None and getattr(state, "steps_since_new_score", 0) >= limit:
+        return (
+            f"{state.steps_since_new_score} step(s) produced no new comparable "
+            "score. The campaign is running and measuring nothing — check that "
+            "experiments are writing metrics."
+        )
+    return (
+        f"{getattr(state, 'consecutive_unmapped', 0)} consecutive step(s) chose "
+        "an action no registered tool can perform. The campaign has nothing "
+        "eligible to run; see the recorded suggestions for what was missing."
+    )
 
 
 def _fail_session_on_degraded_llm(store, session_id, record, decisions, exc) -> None:
@@ -943,7 +976,7 @@ def run_until_stop(
     registry: ToolRegistry,
     *,
     llm_client: Any | None = None,
-    max_steps: int = 8,
+    max_steps: int | None = 8,
     auto_approve: bool = False,
     approval_prompt: ApprovalPrompt | None = None,
     on_progress: ProgressCallback | None = None,
@@ -953,7 +986,14 @@ def run_until_stop(
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
     branches: int = 1,
 ) -> list[DecisionRecord]:
-    """Run until stop, budget, max_steps, or operator pause status.
+    """Run until stop, budget, operator pause, or ``max_steps`` if one is set.
+
+    ``max_steps=None`` runs unbounded, which is what the CLI asks for: a
+    campaign should end on its objective, not on a counter. The default stays
+    ``8`` here rather than ``None`` so no in-process caller changes behaviour
+    by upgrading — a bounded run is what a library caller asking for "some
+    steps" means, and an unbounded one is a hang in a test suite with no
+    per-test timeout.
 
     ``branches`` is the fan-out width (M11). The default of 1 is the
     sequential path this loop has always run, unchanged: every fan-out
@@ -996,7 +1036,7 @@ def _run_until_stop_inner(
     registry: ToolRegistry,
     *,
     llm_client: Any | None = None,
-    max_steps: int = 8,
+    max_steps: int | None = 8,
     auto_approve: bool = False,
     approval_prompt: ApprovalPrompt | None = None,
     on_progress: ProgressCallback | None = None,
@@ -1113,7 +1153,18 @@ def _run_until_stop_inner(
     except Exception as exc:  # noqa: BLE001 — never block a campaign on repair
         logger.warning("Claim revalidation at session start failed: %s", exc)
 
-    for step in range(max_steps):
+    step = -1
+    while True:
+        step += 1
+        # A `for/else` cannot say "bound only when asked" — it would have to
+        # iterate `range(max_steps or sys.maxsize)` and then report `max_steps`
+        # on a run that never had one.
+        if max_steps is not None and step >= max_steps:
+            store.update_session_status(session_id, "paused")
+            _progress(f"Reached max_steps={max_steps}")
+            save_checkpoint(store, session_id, extra={"stop_reason": "max_steps"})
+            break
+        step_label = f"{step + 1}/{max_steps}" if max_steps is not None else f"{step + 1}"
         # Refresh each iteration so mid-session registration is visible.
         allowlist = set(registry.names())
         session = store.get_session(session_id)
@@ -1129,16 +1180,44 @@ def _run_until_stop_inner(
             # gated tool to `auto_approve`, so a non-interactive run has no
             # brake between "selected submit_learn" and "uploaded to Kaggle".
             allowlist -= SUBMIT_TOOLS
+        # Before the stop evaluation, not after: the step that ends the
+        # campaign is the one an operator most wants a progress line for, and
+        # a line printed after the `break` is a line never printed.
+        progress_line = goal_progress(budget_cfg, budget_state)
+        if progress_line:
+            _progress(progress_line)
+
         stop = evaluate_stops(budget_cfg, budget_state)
         if stop != "none":
             # `failing` is not a completion. Recording it as one would put the
             # campaign that could not run a single experiment in the same state
             # as the campaign that met its target, which is the distinction the
             # breaker exists to draw.
-            store.update_session_status(session_id, "failed" if stop == "failing" else "completed")
+            #
+            # `needs_guidance` is neither a completion nor a failure: nothing is
+            # broken and nothing is finished — the campaign is waiting on a
+            # person. It pauses, which is the status `conduct continue` resumes
+            # and `latest_active_session` still finds, so picking it back up
+            # needs no `--session`.
+            status = _STOP_SESSION_STATUS.get(stop, "completed")
+            store.update_session_status(session_id, status)
             if stop != "metric_target":
                 store.increment_metric(session_id, "unmet_goal")
             rationale = f"stop:{stop}"
+            if stop == "needs_guidance":
+                why = _needs_guidance_reason(budget_cfg, budget_state)
+                rationale = f"stop:{stop} — {why}"
+                record_suggestion(
+                    store,
+                    session_id,
+                    why,
+                    kind="needs_guidance",
+                    context={
+                        "step": step,
+                        "steps_since_new_score": budget_state.steps_since_new_score,
+                        "consecutive_unmapped": budget_state.consecutive_unmapped,
+                    },
+                )
             if stop == "failing":
                 # Say what broke. A bare `stop:failing` reproduces the original
                 # complaint — a campaign that ended and did not say why.
@@ -1160,11 +1239,17 @@ def _run_until_stop_inner(
                         "stop_reason": stop,
                         "consecutive_failures": budget_state.consecutive_failures,
                         "steps_since_success": budget_state.steps_since_success,
+                        "steps_since_new_score": budget_state.steps_since_new_score,
+                        "consecutive_unmapped": budget_state.consecutive_unmapped,
                         "recent_failures": budget_state.recent_failures,
                     },
                 )
             )
             store.append_decision(decisions[-1])
+            if stop == "needs_guidance":
+                # After the stop is on record, so the checkpoint an operator
+                # reads counts the decision that ended the run.
+                save_checkpoint(store, session_id, extra={"stop_reason": stop})
             break
 
         # One step is about to be spent. Counted here rather than on dispatch so
@@ -1172,6 +1257,7 @@ def _run_until_stop_inner(
         # steps without producing an execution, which no per-execution counter
         # would have noticed.
         budget_state.steps_since_success += 1
+        budget_state.steps_since_new_score += 1
         persist_budgets(store, session_id, budget_cfg, budget_state)
 
         if campaign_mode:
@@ -1184,7 +1270,7 @@ def _run_until_stop_inner(
                 # Observe (Context Engine retrieval) + think (LLM) both run
                 # before the first dispatch message, so without this a campaign
                 # step is several silent minutes on a local model.
-                _progress(f"step {step + 1}/{max_steps}: observing + deciding …")
+                _progress(f"step {step_label}: observing + deciding …")
                 started = time.monotonic()
                 next_tool, _obs = decide_next(
                     store,
@@ -1199,7 +1285,7 @@ def _run_until_stop_inner(
                     **policy_kw,
                 )
                 _progress(
-                    f"step {step + 1}/{max_steps}: chose "
+                    f"step {step_label}: chose "
                     f"{next_tool.tool or 'stop'} ({time.monotonic() - started:.1f}s)"
                 )
                 if next_tool.stop or not next_tool.tool:
@@ -1301,8 +1387,16 @@ def _run_until_stop_inner(
                 )
                 store.append_decision(record)
                 decisions.append(record)
+                budget_state.consecutive_unmapped += 1
+                persist_budgets(store, session_id, budget_cfg, budget_state)
                 _progress(f"No capability: {plan.suggestion}")
                 continue
+
+            # The plan maps. Whatever the campaign could not reach before, it
+            # can reach something now.
+            if budget_state.consecutive_unmapped:
+                budget_state.consecutive_unmapped = 0
+                persist_budgets(store, session_id, budget_cfg, budget_state)
 
             prev_id: str | None = None
             for tool_step in plan.steps:
@@ -1533,9 +1627,5 @@ def _run_until_stop_inner(
         store.append_decision(record)
         decisions.append(record)
         save_checkpoint(store, session_id)
-    else:
-        store.update_session_status(session_id, "paused")
-        _progress(f"Reached max_steps={max_steps}")
-        save_checkpoint(store, session_id, extra={"stop_reason": "max_steps"})
 
     return decisions

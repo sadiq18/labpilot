@@ -1,8 +1,11 @@
 # M17 — Run until plateau or goal, and show progress
 
-**Status:** not started · **Blocker cleared:** [M7](01-technique-to-model.md)
-done 2026-08-07, and M8's score writer (PR #125) supplies the durable metric this
-shares with it — unblocked, not started
+**Status:** implementation shipped 2026-08-20 — steps 2–5, plus a scale-free
+plateau this plan did not ask for and could not have fired without ·
+**exit criteria 1–3 not demonstrated:** each needs a campaign log, and none has
+been run · **Blocker cleared:** [M7](01-technique-to-model.md) done 2026-08-07;
+step 1 landed with M8's score writer (PR #125) ·
+**Design:** [design/12-run-until-done.md](design/12-run-until-done.md)
 
 ---
 
