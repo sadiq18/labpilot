@@ -389,7 +389,12 @@ class WorkspaceCapability(BaseCapability):
         checks: list[str],
     ) -> bool | None:
         profile_path = root / "profile.json"
-        if profile_path.is_file() and _profile_is_current(profile_path):
+        # Parsed once. `_profile_is_current` is a wrapper over `_profile_state`,
+        # so asking both read and `json.loads` the same file twice — and for a
+        # partitioned dataset that file carries every column profile and up to
+        # 200 paths.
+        state = _profile_state(profile_path) if profile_path.is_file() else None
+        if state == "current":
             metadata["profile_reused"] = True
             metadata["profile"] = str(profile_path)
             checks.append("profile_present")
@@ -401,7 +406,7 @@ class WorkspaceCapability(BaseCapability):
         # workspace reaches them — none carries a stamp — and both of them could
         # replace a description carrying a target, columns and warnings, or
         # disown it while leaving it on disk for `write_code` to read anyway.
-        stale = profile_path.is_file() and _profile_state(profile_path) == "stale"
+        stale = state == "stale"
 
         def keep_stale(reason: str) -> bool:
             """Serve the old description, and say that is what happened.

@@ -73,20 +73,19 @@ def pytest_configure(config) -> None:
     # and both FAKE_CPUS legs died before collecting a test.
     present = [name for name in _CPU_SOURCES if hasattr(os, name)]
 
-    patched = 0
+    # Loudly, because a plugin that silently patches nothing reports a hostile
+    # run that never happened — the same failure as a mutation sweep that runs
+    # no tests. The loop below cannot skip an entry, so the only thing left to
+    # assert is that there was one: a `patched != len(present)` counter beside
+    # it could never fire and read as a check it was not.
+    if not present:
+        raise RuntimeError(
+            "FAKE_CPUS found none of the CPU sources `available_cpus` consults "
+            f"({', '.join(_CPU_SOURCES)}); the list in hostile_env.py is stale"
+        )
+
     for name in present:
         if name == "sched_getaffinity":
             os.sched_getaffinity = lambda _pid=0, _n=count: set(range(_n))
         else:
             setattr(os, name, lambda _n=count: _n)
-        patched += 1
-    # Loudly, because a plugin that silently patches nothing reports a hostile
-    # run that never happened — the same failure as a mutation sweep that runs
-    # no tests. The invariant is "every source this interpreter offers was
-    # patched", not a count: a count encodes one interpreter's shape.
-    if not present or patched != len(present):
-        raise RuntimeError(
-            f"FAKE_CPUS patched {patched} of {len(present)} available CPU sources "
-            f"({', '.join(present) or 'none'}); the list in hostile_env.py no longer "
-            "matches the sources `available_cpus` consults"
-        )

@@ -195,7 +195,13 @@ class CodegenConfig(BaseModel):
     #: has to contain it, and a slow local model could never finish: every
     #: attempt timed out into a whole-file rewrite that still reported passed.
     #: A subprocess making at least one request needs room for it plus startup.
-    timeout_s: int = 660
+    #:
+    #: `gt=0` because the two bad values fail in opposite, silent ways:
+    #: `subprocess.run(timeout=-5)` raises `TimeoutExpired` before the process
+    #: does any work, so every delta degrades to a whole-file rewrite recorded
+    #: as a passing step — the exact invisible degradation this field exists to
+    #: end — and `0` was falsy enough to slip back to the default instead.
+    timeout_s: int = Field(660, gt=0)
 
 
 class AppConfig(BaseModel):

@@ -15,6 +15,7 @@ from labpilot.research_engine.execution.capabilities.code_engineering.capability
 )
 from labpilot.research_engine.execution.codegen_strategy import (
     resolve_codegen_strategy,
+    resolve_codegen_timeout_s,
     workspace_config_path,
 )
 from labpilot.research_engine.execution.context import TaskContext
@@ -96,6 +97,12 @@ def build_v1_task_context(
     # have this bug, which is why the reader now lives in one module.
     constraints: dict[str, Any] = {
         "codegen_strategy": resolve_codegen_strategy(workspace_config_path(workspace)),
+        # And the timeout, for the same reason and from the same config. Adding
+        # a second constraint that only `engineer.py` supplied made this the
+        # fourth instance of the PR #118 bug the module docstring next door
+        # enumerates — the specialist path silently ran on the packaged default
+        # however the workspace was configured.
+        "codegen_timeout_s": resolve_codegen_timeout_s(workspace_config_path(workspace)),
     }
     if context.summary():
         constraints["context_summary"] = context.summary(max_chars=2000)

@@ -769,11 +769,6 @@ def _objective_unmet(config: Any, state: Any) -> bool:
     return last < target if getattr(config, "maximize", True) else last > target
 
 
-#: `(recorded, target)` pairs already reported by `_measures_the_target`.
-#: Module-level so the warning is once per campaign process, not once per step.
-_WARNED_METRIC_MISMATCHES: set[tuple[str, str]] = set()
-
-
 def _measures_the_target(config: Any, state: Any) -> bool:
     """Whether `last_metric` is a reading of the metric the target names.
 
@@ -797,11 +792,17 @@ def _measures_the_target(config: Any, state: Any) -> bool:
     # budget. Nothing renames either side, so the mismatch is a permanent
     # property of the workspace rather than a transient one, and
     # `metric_names_match` only bridges a `_MEASUREMENT_PREFIXES` prefix —
-    # `holdout_auc` against `auc` does not match. Once per pair, so a 30-step
-    # campaign logs it once and not thirty times.
-    pair = (str(recorded), str(target_metric))
-    if pair not in _WARNED_METRIC_MISMATCHES:
-        _WARNED_METRIC_MISMATCHES.add(pair)
+    # `holdout_auc` against `auc` does not match. Once per campaign, so a
+    # 30-step run logs it once and not thirty times.
+    # Latched on the campaign's own state, so a second campaign in the same
+    # process is told too. `setattr` is guarded because this function is
+    # duck-typed for stand-ins, and a stand-in that refuses the attribute
+    # should warn every step rather than crash the loop.
+    if not getattr(state, "metric_mismatch_reported", False):
+        try:
+            state.metric_mismatch_reported = True
+        except (AttributeError, ValueError):
+            logger.debug("could not latch the metric-mismatch warning on %r", type(state))
         logger.warning(
             "The pipeline records %r but the target names %r, and nothing maps between "
             "them — the objective can never be reported met, so this campaign will run "

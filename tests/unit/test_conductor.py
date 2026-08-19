@@ -1243,6 +1243,20 @@ def test_the_loop_resolves_before_enqueue_on_both_paths():
     )
 
 
+def test_a_second_campaign_is_told_too(caplog):
+    """A process-wide latch reports the first campaign and silences the rest."""
+    import logging
+
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            _objective_unmet(_Cfg(), _Measured(0.9, "holdout_auc"))  # a fresh state each time
+
+    warnings = [r for r in caplog.records if "can never be reported met" in r.message]
+    assert len(warnings) == 3, "each campaign gets its own warning"
+
+
 def test_an_unmatchable_metric_pair_is_reported_once(caplog):
     """The objective becomes unreportable; silence is what made that invisible.
 
@@ -1252,27 +1266,25 @@ def test_an_unmatchable_metric_pair_is_reported_once(caplog):
     """
     import logging
 
-    from labpilot.research_engine.conductor import loop as loop_mod
     from labpilot.research_engine.conductor.loop import _objective_unmet
 
-    loop_mod._WARNED_METRIC_MISMATCHES.clear()
+    state = _Measured(0.9, "holdout_auc")
     with caplog.at_level(logging.WARNING):
         for _ in range(5):
-            assert _objective_unmet(_Cfg(), _Measured(0.9, "holdout_auc")) is True
+            assert _objective_unmet(_Cfg(), state) is True
 
     warnings = [r for r in caplog.records if "can never be reported met" in r.message]
-    assert len(warnings) == 1, "once per pair, not once per step"
+    assert len(warnings) == 1, "once per campaign, not once per step"
     assert "holdout_auc" in warnings[0].getMessage()
+    assert state.metric_mismatch_reported is True
 
 
 def test_a_matching_metric_pair_says_nothing(caplog):
     """A warning that fires on the healthy path is one readers learn to skip."""
     import logging
 
-    from labpilot.research_engine.conductor import loop as loop_mod
     from labpilot.research_engine.conductor.loop import _objective_unmet
 
-    loop_mod._WARNED_METRIC_MISMATCHES.clear()
     with caplog.at_level(logging.WARNING):
         _objective_unmet(_Cfg(), _Measured(4.2, "cv_mse"))
 

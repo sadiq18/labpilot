@@ -176,12 +176,19 @@ def _codegen_timeout_s(context: TaskContext) -> int:
     """
     from labpilot.config import CodegenConfig
 
+    default = CodegenConfig().timeout_s
     configured = context.constraints.get("codegen_timeout_s")
     try:
-        return int(configured) if configured else CodegenConfig().timeout_s
+        value = int(configured)  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        logger.debug("codegen_timeout_s=%r unreadable; using the default", configured)
-        return CodegenConfig().timeout_s
+        return default
+    # One answer for every non-positive value. `if configured else default`
+    # sent 0 to the default and let a negative through to `subprocess.run`,
+    # where it times out before the process starts.
+    if value <= 0:
+        logger.debug("codegen_timeout_s=%r is not a positive number; using %s", configured, default)
+        return default
+    return value
 
 
 def _content_or_none(path: Path) -> str | None:
