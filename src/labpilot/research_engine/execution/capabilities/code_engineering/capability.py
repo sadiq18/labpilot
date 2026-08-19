@@ -164,6 +164,26 @@ def _validation_signals(root: Path) -> ValidationSignals:
         return ValidationSignals()
 
 
+def _codegen_timeout_s(context: TaskContext) -> int:
+    """`codegen.timeout_s` for this run, or `CodegenConfig`'s default.
+
+    Routed through `constraints` exactly as `codegen_strategy` is, so the
+    workspace's config decides and there is one place naming the default.
+    Before this the cap was a module constant with no override anywhere, and it
+    sat below `LLMConfig.request_timeout_seconds` — so a slow local model could
+    never finish a delta, and every attempt degraded to a whole-file rewrite on
+    a step that still reported passed.
+    """
+    from labpilot.config import CodegenConfig
+
+    configured = context.constraints.get("codegen_timeout_s")
+    try:
+        return int(configured) if configured else CodegenConfig().timeout_s
+    except (TypeError, ValueError):
+        logger.debug("codegen_timeout_s=%r unreadable; using the default", configured)
+        return CodegenConfig().timeout_s
+
+
 def _content_or_none(path: Path) -> str | None:
     """The file's text, or None when it is absent or unreadable."""
     try:
@@ -415,7 +435,7 @@ class CodeEngineeringCapability(BaseCapability):
         )
 
         try:
-            agent = AiderAgent(gateway)
+            agent = AiderAgent(gateway, timeout=_codegen_timeout_s(context))
             proposal = agent.propose(structured, Path(context.workspace_root))
         except AiderError as exc:
             # Already recorded to `agent_invocations` with its kind by the

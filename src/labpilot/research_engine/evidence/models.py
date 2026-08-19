@@ -125,6 +125,15 @@ class EvidenceCard(BaseModel):
         lose the qualification by rewriting a sentence.
         """
         parts = [self.decision_reason]
+        uncomparable = self.uncomparable_reason
+        if uncomparable:
+            # Without this the qualification is stored and never shown. Once
+            # `submit_learn` recomputes, `decision_reason` is the bare
+            # "missing_control" while `control_experiment` names a real
+            # execution — a card contradicting itself, with the reason sitting
+            # unread in `metadata`. Exactly the failure the `delta_flags`
+            # treatment below was written for.
+            parts.append(f"not a comparison: {uncomparable}")
         flags = self.delta_flags
         if flags:
             parts.append(f"{len(flags)} delta flag(s): {'; '.join(flags)}")

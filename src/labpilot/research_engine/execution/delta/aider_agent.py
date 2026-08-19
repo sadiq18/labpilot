@@ -98,12 +98,18 @@ CODEGEN_ROLE = "codegen"
 #: costs more — the failure mode is a bill, not an error.
 EDIT_FORMAT = "diff"
 
-#: A codegen attempt that has not landed in five minutes is stuck, not slow.
-#: At 900s a single hung run cost 15 minutes of a 3-hour campaign and returned
-#: nothing — measured on rogii 2026-08-13, step 1 of 30, where the fallback then
-#: produced a proposal in under two. The timeout is not a budget for hard edits;
-#: it is the point past which waiting has never paid.
-_DEFAULT_TIMEOUT_S = 300
+#: Fallback when no `CodegenConfig` reaches the agent — tests, and any caller
+#: constructing it directly. The operator-facing value is `codegen.timeout_s`.
+#:
+#: A codegen attempt that has not landed is stuck, not slow: at 900s a single
+#: hung run cost 15 minutes of a 3-hour campaign and returned nothing, measured
+#: on rogii 2026-08-13, step 1 of 30, where the fallback then produced a
+#: proposal in under two. But it cannot go below `LLMConfig.request_timeout_
+#: seconds` (600) either: aider's calls route through the loopback proxy over
+#: that same gateway, so a shorter cap kills the process while a request it
+#: made is still legally in flight — every slow local-model attempt timing out
+#: into a whole-file rewrite that still reports passed.
+_DEFAULT_TIMEOUT_S = 660
 
 
 class AiderError(RuntimeError):

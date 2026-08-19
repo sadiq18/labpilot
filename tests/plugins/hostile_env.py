@@ -64,12 +64,17 @@ def pytest_configure(config) -> None:
     if count < 1:
         raise ValueError(f"FAKE_CPUS must be >= 1, got {count}")
 
+    # Which sources this interpreter actually has. `available_cpus` asks the
+    # same `hasattr` question before calling each one, so the set it can consult
+    # here is the set worth patching — and it is not the same everywhere:
+    # `os.process_cpu_count` arrives in 3.13 while `pyproject.toml` supports
+    # >=3.11, and `os.sched_getaffinity` is Linux-only. Requiring a fixed count
+    # made the plugin raise on macOS + 3.11/3.12, where only `cpu_count` exists,
+    # and both FAKE_CPUS legs died before collecting a test.
+    present = [name for name in _CPU_SOURCES if hasattr(os, name)]
+
     patched = 0
-    for name in _CPU_SOURCES:
-        if not hasattr(os, name):
-            # `sched_getaffinity` is Linux-only, and `available_cpus` already
-            # skips it by the same `hasattr`. Not an error on macOS.
-            continue
+    for name in present:
         if name == "sched_getaffinity":
             os.sched_getaffinity = lambda _pid=0, _n=count: set(range(_n))
         else:
@@ -77,10 +82,11 @@ def pytest_configure(config) -> None:
         patched += 1
     # Loudly, because a plugin that silently patches nothing reports a hostile
     # run that never happened — the same failure as a mutation sweep that runs
-    # no tests. `cpu_count` and `process_cpu_count` both exist on every
-    # supported interpreter, so fewer than two means the source list is stale.
-    if patched < 2:
+    # no tests. The invariant is "every source this interpreter offers was
+    # patched", not a count: a count encodes one interpreter's shape.
+    if not present or patched != len(present):
         raise RuntimeError(
-            f"FAKE_CPUS patched {patched} CPU sources; "
-            "the list in hostile_env.py no longer matches `available_cpus`"
+            f"FAKE_CPUS patched {patched} of {len(present)} available CPU sources "
+            f"({', '.join(present) or 'none'}); the list in hostile_env.py no longer "
+            "matches the sources `available_cpus` consults"
         )

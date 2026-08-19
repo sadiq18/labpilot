@@ -52,15 +52,29 @@ def _profile_is_current(path: Path) -> bool:
     An unreadable or unstamped profile re-derives: the cost is one profiling
     pass, and the alternative is running on a description nothing can vouch for.
     """
+    return _profile_state(path) == "current"
+
+
+def _profile_state(path: Path) -> str:
+    """``current``, ``stale``, or ``unusable`` for an existing ``profile.json``.
+
+    `_profile_is_current` only needs the first; the rebuild paths need the other
+    two kept apart. A profile we merely failed to *refresh* is worth keeping —
+    an old description beats none. One nothing can parse is not: keeping it
+    leaves `metadata["profile"]` pointing at bytes no reader can use, on a step
+    that reported success, and skips the inventory write that would have put a
+    valid file there. A `profile.json` truncated by a crash or a full disk is
+    the case, and it is indistinguishable from merely old to a boolean.
+    """
     from labpilot.accessor.profiler.tabular import PROFILE_SCHEMA_VERSION
 
     try:
         stored = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False
-    return bool(
-        isinstance(stored, dict) and stored.get("schema_version") == PROFILE_SCHEMA_VERSION
-    )
+        return "unusable"
+    if not isinstance(stored, dict):
+        return "unusable"
+    return "current" if stored.get("schema_version") == PROFILE_SCHEMA_VERSION else "stale"
 
 
 def _has_credentials(kaggle: object) -> bool:
@@ -381,13 +395,13 @@ class WorkspaceCapability(BaseCapability):
             checks.append("profile_present")
             return True
 
-        # Whether there is something to lose. Before the staleness check every
+        # Whether there is something worth keeping. Before the staleness check every
         # existing profile short-circuited above, so the rebuild paths below ran
         # only when there was no profile at all. Now every pre-existing
         # workspace reaches them — none carries a stamp — and both of them could
         # replace a description carrying a target, columns and warnings, or
         # disown it while leaving it on disk for `write_code` to read anyway.
-        stale = profile_path.is_file()
+        stale = profile_path.is_file() and _profile_state(profile_path) == "stale"
 
         def keep_stale(reason: str) -> bool:
             """Serve the old description, and say that is what happened.

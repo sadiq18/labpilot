@@ -9,7 +9,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from labpilot.research_engine.execution.codegen_strategy import resolve_codegen_strategy
+from labpilot.research_engine.execution.codegen_strategy import (
+    resolve_codegen_strategy,
+    resolve_codegen_timeout_s,
+)
 from labpilot.research_engine.execution.context import TaskContext
 from labpilot.research_engine.execution.evidence import read_evidence, write_evidence
 from labpilot.research_engine.execution.recovery import RecoveryAction, decide_recovery
@@ -210,6 +213,10 @@ class ResearchEngineer:
             constraints.setdefault(
                 "codegen_strategy",
                 resolve_codegen_strategy(workspace / "configs" / "default.yaml"),
+            )
+            constraints.setdefault(
+                "codegen_timeout_s",
+                resolve_codegen_timeout_s(workspace / "configs" / "default.yaml"),
             )
             context = TaskContext(
                 plan=plan,

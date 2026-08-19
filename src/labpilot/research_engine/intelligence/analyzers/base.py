@@ -70,7 +70,14 @@ class BaseAnalyzer:
             from labpilot.llm.client import resolve_llm_client
             from labpilot.workspace import load_config_for_cwd
 
-            start = context.knowledge_dir if context is not None else None
+            # `workspace_root` when the caller resolved one, because that is
+            # the only path here that is not operator-overridable:
+            # `--knowledge-dir` may point outside the workspace, and starting
+            # the walk there finds no `labpilot.yaml` and falls back to the
+            # package default — the routing bug this method exists to prevent.
+            start = None
+            if context is not None:
+                start = context.workspace_root or context.knowledge_dir
             config, _ = load_config_for_cwd(start=start)
             self.llm_client = resolve_llm_client(config.llm)
         except Exception:

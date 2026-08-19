@@ -769,6 +769,11 @@ def _objective_unmet(config: Any, state: Any) -> bool:
     return last < target if getattr(config, "maximize", True) else last > target
 
 
+#: `(recorded, target)` pairs already reported by `_measures_the_target`.
+#: Module-level so the warning is once per campaign process, not once per step.
+_WARNED_METRIC_MISMATCHES: set[tuple[str, str]] = set()
+
+
 def _measures_the_target(config: Any, state: Any) -> bool:
     """Whether `last_metric` is a reading of the metric the target names.
 
@@ -781,7 +786,31 @@ def _measures_the_target(config: Any, state: Any) -> bool:
     events = getattr(state, "score_events", None)
     if not events:
         return True
-    return metric_names_match(events[-1].metric_name, getattr(config, "target_metric", None))
+    recorded = events[-1].metric_name
+    target_metric = getattr(config, "target_metric", None)
+    if metric_names_match(recorded, target_metric):
+        return True
+    # Said out loud, because the consequence is invisible otherwise: while the
+    # names disagree this returns False forever, so `_objective_unmet` is always
+    # True, `evaluate_stops` cannot fire `metric_target` either, and a campaign
+    # that has genuinely reached its goal can only end on max_steps, plateau or
+    # budget. Nothing renames either side, so the mismatch is a permanent
+    # property of the workspace rather than a transient one, and
+    # `metric_names_match` only bridges a `_MEASUREMENT_PREFIXES` prefix —
+    # `holdout_auc` against `auc` does not match. Once per pair, so a 30-step
+    # campaign logs it once and not thirty times.
+    pair = (str(recorded), str(target_metric))
+    if pair not in _WARNED_METRIC_MISMATCHES:
+        _WARNED_METRIC_MISMATCHES.add(pair)
+        logger.warning(
+            "The pipeline records %r but the target names %r, and nothing maps between "
+            "them — the objective can never be reported met, so this campaign will run "
+            "to its step or time budget. Set `target_metric` to the key the pipeline "
+            "writes, or have the pipeline write the key the target names.",
+            recorded,
+            target_metric,
+        )
+    return False
 
 
 def _latest_plan_id(workspace: Workspace) -> str | None:

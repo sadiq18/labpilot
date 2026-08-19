@@ -1241,3 +1241,39 @@ def test_the_loop_resolves_before_enqueue_on_both_paths():
     assert source.count("resolve_step_args(") >= 2, (
         "both the multi-step and legacy dispatch paths must resolve @latest"
     )
+
+
+def test_an_unmatchable_metric_pair_is_reported_once(caplog):
+    """The objective becomes unreportable; silence is what made that invisible.
+
+    While the names disagree `_objective_unmet` is True forever and
+    `evaluate_stops` cannot fire `metric_target` either, so a campaign that has
+    reached its goal runs to its step budget with nothing saying why.
+    """
+    import logging
+
+    from labpilot.research_engine.conductor import loop as loop_mod
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    loop_mod._WARNED_METRIC_MISMATCHES.clear()
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            assert _objective_unmet(_Cfg(), _Measured(0.9, "holdout_auc")) is True
+
+    warnings = [r for r in caplog.records if "can never be reported met" in r.message]
+    assert len(warnings) == 1, "once per pair, not once per step"
+    assert "holdout_auc" in warnings[0].getMessage()
+
+
+def test_a_matching_metric_pair_says_nothing(caplog):
+    """A warning that fires on the healthy path is one readers learn to skip."""
+    import logging
+
+    from labpilot.research_engine.conductor import loop as loop_mod
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    loop_mod._WARNED_METRIC_MISMATCHES.clear()
+    with caplog.at_level(logging.WARNING):
+        _objective_unmet(_Cfg(), _Measured(4.2, "cv_mse"))
+
+    assert not [r for r in caplog.records if "can never be reported met" in r.message]

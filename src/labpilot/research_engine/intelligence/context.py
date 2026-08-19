@@ -47,6 +47,7 @@ def build_context(
     knowledge_dir: Path,
     refresh: bool = False,
     data_dir: Path | None = None,
+    workspace_root: Path | None = None,
 ) -> AnalyzeContext:
     slug, url = normalize_competition(competition)
     return AnalyzeContext(
@@ -56,4 +57,5 @@ def build_context(
         refresh=refresh,
         url=url,
         data_dir=data_dir,
+        workspace_root=workspace_root,
     )

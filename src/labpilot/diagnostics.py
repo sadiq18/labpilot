@@ -123,9 +123,16 @@ def _check_llm_provider() -> CheckResult:
     """
     name = "LLM provider"
     try:
-        from labpilot.config import load_config
+        from labpilot.workspace import load_config_for_cwd
 
-        config = load_config().llm
+        # Workspace-aware, as `check_llm_roles` below already is. `load_config()`
+        # reads only the package default, so inside a workspace that configures
+        # a router this reported the legacy provider pin — `doctor` failed a
+        # correctly-configured setup with "gemini selected but no API key
+        # found" and a fix naming the wrong variable, directly above role lines
+        # that had read the workspace. The one command whose job is to say which
+        # provider will serve was the one giving the wrong answer.
+        config = load_config_for_cwd()[0].llm
     except Exception as exc:  # noqa: BLE001 — config errors are reported, not raised
         return CheckResult(name, False, f"config load failed: {exc}", "Check configs/default.yaml")
 

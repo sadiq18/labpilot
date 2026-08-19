@@ -199,3 +199,38 @@ def test_an_absent_profile_with_no_data_still_reports_nothing(tmp_path: Path) ->
 
     assert result is None
     assert metadata["profile_skipped"] == "no_data"
+
+
+def test_a_profile_nothing_can_parse_is_replaced_not_kept(tmp_path: Path) -> None:
+    """"Stale" and "corrupt" are different answers, and only one is worth keeping.
+
+    `stale = profile_path.is_file()` could not tell them apart, so a
+    `profile.json` truncated by a crash took the keep-it branch: the step
+    reported success with `metadata["profile"]` pointing at bytes no reader can
+    use, and the inventory write that would have put a valid file there was
+    skipped.
+    """
+    raw = tmp_path / "data" / "raw"
+    raw.mkdir(parents=True)
+    (raw / "well_logs.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    corrupt = tmp_path / "profile.json"
+    corrupt.write_text('{"competition": "demo", "target_col', encoding="utf-8")
+
+    result, metadata, checks = _ensure_profile(tmp_path)
+
+    assert result is True
+    assert "profile_stale" not in metadata, "a corrupt profile is not worth keeping"
+    assert "profile_inventory" in checks
+    json.loads(corrupt.read_text())  # parses now
+
+
+def test_the_three_profile_states_are_distinguished(tmp_path: Path) -> None:
+    from labpilot.research_engine.execution.capabilities.workspace.capability import (
+        _profile_state,
+    )
+
+    assert _profile_state(_profile(tmp_path, {"schema_version": PROFILE_SCHEMA_VERSION})) == "current"
+    assert _profile_state(_profile(tmp_path, {"competition": "demo"})) == "stale"
+    bad = tmp_path / "profile.json"
+    bad.write_text("{ not json", encoding="utf-8")
+    assert _profile_state(bad) == "unusable"

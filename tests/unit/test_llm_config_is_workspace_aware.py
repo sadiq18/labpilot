@@ -166,3 +166,29 @@ def test_one_analyzer_base_owns_client_attachment() -> None:
     ]
 
     assert definitions == ["base.py"], f"client attachment is defined in {definitions}"
+
+
+def test_the_context_carries_the_workspace_the_cli_resolved() -> None:
+    """`knowledge_dir` is an overridable path, so it cannot be the anchor.
+
+    `--knowledge-dir` may point outside the workspace; walking up from there
+    finds no `labpilot.yaml` and falls back to the package default, which is the
+    routing bug again. The analyze entrypoint has the resolved workspace in
+    hand, so it passes it.
+    """
+    import ast
+
+    from labpilot.research_engine.intelligence.models import AnalyzeContext
+
+    assert "workspace_root" in AnalyzeContext.model_fields
+
+    handler = (SRC / "research_engine" / "tools" / "handlers" / "analyze.py").read_text()
+    tree = ast.parse(handler)
+    passes_it = [
+        call
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and getattr(call.func, "id", "") == "build_context"
+        and any(kw.arg == "workspace_root" for kw in call.keywords)
+    ]
+    assert passes_it, "analyze.py must hand build_context the workspace it resolved"

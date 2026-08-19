@@ -43,6 +43,27 @@ def resolve_codegen_strategy(config_path: Path | None) -> str:
         return default
 
 
+def resolve_codegen_timeout_s(config_path: Path | None) -> int:
+    """`codegen.timeout_s` from a workspace config, or `CodegenConfig`'s default.
+
+    Same contract as `resolve_codegen_strategy` beside it, for the same reason:
+    never raises, and takes its fallback from the model rather than pinning a
+    second literal.
+    """
+    from labpilot.config import CodegenConfig
+
+    default = int(CodegenConfig().timeout_s)
+    if config_path is None:
+        return default
+    try:
+        from labpilot.config import load_config
+
+        return int(load_config(config_path).codegen.timeout_s)
+    except Exception as exc:  # noqa: BLE001 — config trouble must not stop a run
+        logger.debug("codegen timeout unreadable, using %s: %s", default, exc)
+        return default
+
+
 def workspace_config_path(workspace: object) -> Path | None:
     """`configs/default.yaml` for a workspace, or None without one.
 

@@ -182,6 +182,21 @@ class CodegenConfig(BaseModel):
 
     strategy: Literal["whole_file", "delta"] = "delta"
 
+    #: Seconds a single aider subprocess may run before it is killed and the
+    #: run degrades to a whole-file rewrite.
+    #:
+    #: Configurable, and not shorter than the budget of the calls it contains.
+    #: This was a hard-coded 900 in `aider_agent.py`, cut to 300 after one hung
+    #: run cost 15 minutes of a 3-hour campaign — but 300 is below
+    #: `LLMConfig.request_timeout_seconds` (600), which was itself raised
+    #: because "codegen prompts on a 14B model routinely exceed the old
+    #: hard-coded 120s". Aider's calls go through the loopback proxy wrapping
+    #: that same gateway, so one legal request could outlive the process that
+    #: has to contain it, and a slow local model could never finish: every
+    #: attempt timed out into a whole-file rewrite that still reported passed.
+    #: A subprocess making at least one request needs room for it plus startup.
+    timeout_s: int = 660
+
 
 class AppConfig(BaseModel):
     runs_dir: Path = Path("runs")

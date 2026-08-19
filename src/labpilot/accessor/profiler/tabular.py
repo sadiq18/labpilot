@@ -136,10 +136,19 @@ def _detect_anchor_column(
     for name in frames[0].columns:
         if name == target or not reaches_test(str(name)):
             continue
-        verdicts = [_is_known_prefix_of(frame, str(name), target) for frame in frames]
-        if any(v is False for v in verdicts):
-            continue
-        if any(v is True for v in verdicts):
+        # Lazily, and stopping at the first refusal: a candidate ruled out by
+        # partition one must not be compared against the other twenty-four.
+        # Building the full list first cost that short-circuit, which the
+        # `all(...)` generator this replaced had, on frames of up to
+        # `max_rows_sample` rows read inline in the campaign's first step.
+        verdicts = (_is_known_prefix_of(frame, str(name), target) for frame in frames)
+        supported = False
+        for verdict in verdicts:
+            if verdict is False:
+                supported = False
+                break
+            supported = supported or verdict is True
+        if supported:
             return str(name)
     return None
 
