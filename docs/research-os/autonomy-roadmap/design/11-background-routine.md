@@ -21,7 +21,7 @@ otherwise.
 | 1 | **No callable entry point.** The gate lives *inside* `available_tools`, which returns tool names; the invocation is an `OsTask` through `Scheduler.dispatch`. Nothing can ask "gather now, if you should" without the policy step this milestone bypasses | `conductor/policy.py`, `conductor/scheduler.py` |
 | 2 | **No runner.** `_run_until_stop_inner` is `for step in range(max_steps)`, one dispatch per step. M11's fan-out is bounded to a single step and joins before the loop advances | `conductor/loop.py:1116` |
 | 3 | **Content dedupe is unsafe under two writers.** `persist_recommendations` (the producer's own output) does not dedupe at all; `_already_covered_by_proposed` scans the proposed pool *outside* the lock `create()` takes. `create()` holds `.alloc.lock` across allocate-and-write, so two writers cannot collide on an **id** — only on an **idea** | `intelligence/hypothesis/persist.py`, `execution/outcome.py` |
-| 4 | **One weak claim call.** `mark_testing_if_proposed` returns the hypothesis whether or not the caller won, so every racer concludes it claimed. `fanout.py` migrated to `claim_if_proposed`; the reflection path did not | `reflection/hypotheses/evaluator.py:61` |
+| 4 | ~~**One weak claim call.**~~ **Checked and withdrawn.** `evaluator.mark_testing` does use `mark_testing_if_proposed`, and that is correct: the producer never claims — it proposes — so M16 adds no claimer, and its one caller (`execution/engineer.py`) usually runs *inside* a claim `prepare_branches` already made. An exclusive claim there would report "lost" on every branch of a healthy fan-out. Documented at the method instead | `reflection/hypotheses/evaluator.py:57` |
 | 5 | **The LLM ledger has no priority.** `availability()` answers identically for every caller, so nothing implements the plan's "producer yields to consumer". Hypothesis generation is a `reasoning`-role call | `fitroute/budget.py` |
 
 Gaps 1, 2 and 4 are latent-by-design. Gap 3 is latent only because there is
@@ -215,7 +215,7 @@ producer is not the thing standing in M12's way.
 | `shared/experiments/hypothesis.py` | `create_unless_covered` | **new method** |
 | `intelligence/hypothesis/persist.py` | route through it | edit |
 | `execution/outcome.py` | route four `maybe_mint_*` through it; drop the unlocked pre-check | edit |
-| `reflection/hypotheses/evaluator.py` | `claim_if_proposed` | edit |
+| `reflection/hypotheses/evaluator.py` | docstring: why this is a status marker and not a claim | edit |
 | `fitroute/budget.py` | `availability(..., reserve=)` | edit |
 | `cli/conduct.py` | `--gather-background` | edit |
 
@@ -260,13 +260,26 @@ the same thread. So `covered_by` must not call `create()`, and the implementatio
 cannot be "take the lock, then call the existing `create`" — the
 allocate-and-write body has to be factored out and shared.
 
-### 7.3 The claim
+### 7.3 The claim (no change, and why)
 
-`evaluator.mark_testing` moves to `claim_if_proposed`, returning `None` on a lost
-race. Callers must read that as "someone else has it", distinct from the
-`FileNotFoundError` they already handle. `mark_testing_if_proposed` stays for
-callers that genuinely do not care who won; no path that *acts* on the claim uses
-it.
+`claim_if_proposed` already exists and `fanout.py` already uses it. The design's
+first draft called for migrating `evaluator.mark_testing` to it as well; reading
+the call path retired that.
+
+The producer **proposes**; it never claims. So M16 introduces no second claimer,
+and the only concurrent claiming remains M11's fan-out, which claims in
+`prepare_branches` before the branch reaches the engineer. `mark_testing` then
+runs against a hypothesis that is already `testing` and legitimately owned — an
+exclusive claim there would answer `None` on every branch of a healthy fan-out
+and mean nothing by it.
+
+What was actually missing was the rule written down. `mark_testing` now says it
+is a status marker, that `None` means "no such hypothesis" and never "someone
+else has it", and that a caller acting on *ownership* wants
+`HypothesisStore.claim_if_proposed` with `fanout.py` as the worked example.
+
+Exit criterion 4 is unchanged and still worth its test — it pins the property,
+not the migration.
 
 ### 7.4 Shutdown
 
@@ -340,7 +353,8 @@ the predicate in the consumer's allowlist. **Rollback is dropping the flag.**
 
 Ship order, each step independently useful:
 
-1. §7.2 dedupe + §7.3 claim — correctness under two writers, no producer yet.
+1. §7.2 dedupe — correctness under two writers, no producer yet (§7.3 turned
+   out to be documentation, not a change).
 2. §5.1 `gather_once` — callable, invoked from nowhere.
 3. §5.2 runner + §5.3 allowlist + §9 observability, behind the flag.
 4. §8 reserve.

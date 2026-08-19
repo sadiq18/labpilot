@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from labpilot.accessor.common import atomic_write_text, locked
 from labpilot.research_engine.shared.experiments.graph import ExperimentGraph
@@ -148,6 +148,120 @@ class HypothesisStore:
         technique_stack: Iterable[str] = (),
         combo_techniques: Iterable[str] = (),
     ) -> Hypothesis:
+        prepared = self._prepare(
+            observation=observation,
+            reason=reason,
+            prediction=prediction,
+            confidence=confidence,
+            expected_impact=expected_impact,
+            tags=tags,
+            source=source,
+            created_by=created_by,
+            generator=generator,
+            origin=origin,
+            origins=origins,
+            evidence=evidence,
+            technique=technique,
+            parent_hypothesis_id=parent_hypothesis_id,
+            technique_stack=technique_stack,
+            combo_techniques=combo_techniques,
+        )
+        # Locked (M11): _allocate_id() globs for the current max before this
+        # id exists on disk — two concurrent create() calls must not both
+        # glob the same max and both write the same H-NNN path.
+        with locked(self._alloc_lock_path()):
+            hypothesis = self._write_new(prepared)
+        self._mirror_to_db(hypothesis)
+        return hypothesis
+
+    def create_unless_covered(
+        self,
+        *,
+        covered_by: Callable[[list[Hypothesis]], bool],
+        **fields: Any,
+    ) -> Hypothesis | None:
+        """Create, unless an open proposal already covers the same idea (M16).
+
+        `covered_by` receives the current `proposed` pool and answers whether
+        this idea is already in it; `None` comes back when it says yes.
+
+        The point is *where* the check runs. Every minting path already had one
+        — `_already_covered_by_proposed` in `execution/outcome.py`, and three
+        inline scans beside it — and all of them listed the pool, decided, and
+        then called `create()`, with nothing holding across the pair. One
+        writer never noticed. Under M16's background producer there are two,
+        and the second reads the pool a millisecond before the first writes to
+        it: both see "not covered", both create, and the campaign plans the
+        same idea twice.
+
+        Running the predicate inside `.alloc.lock` — the lock `create()`
+        already takes to allocate an id — closes that window without a second
+        lock to reason about.
+
+        **`covered_by` must not call `create()`.** `locked()` is
+        `fcntl.flock(LOCK_EX)`, which is not reentrant: a second acquisition on
+        a new descriptor for the same file blocks forever, including from the
+        thread that already holds it.
+
+        `**fields` is forwarded to `_prepare` verbatim, so this accepts exactly
+        what `create()` does and a typo raises `TypeError` there.
+        """
+        prepared = self._prepare(**fields)
+        with locked(self._alloc_lock_path()):
+            if covered_by(self._proposed_snapshot()):
+                return None
+            hypothesis = self._write_new(prepared)
+        self._mirror_to_db(hypothesis)
+        return hypothesis
+
+    def _proposed_snapshot(self) -> list[Hypothesis]:
+        """Proposed hypotheses, read straight from disk.
+
+        Not `list(status=PROPOSED)`: that backfills `knowledge.db` as a side
+        effect, and this runs inside `.alloc.lock`. A cache refresh unrelated
+        to the decision being made has no business lengthening the critical
+        section every other writer is queued behind.
+        """
+        if not self.hypotheses_dir.is_dir():
+            return []
+        found: list[Hypothesis] = []
+        for path in sorted(self.hypotheses_dir.glob("H-*.json")):
+            try:
+                hypothesis = Hypothesis.model_validate_json(path.read_text())
+            except (OSError, ValueError) as exc:
+                logger.debug("Skipping unreadable hypothesis %s: %s", path, exc)
+                continue
+            if hypothesis.status == HypothesisStatus.PROPOSED:
+                found.append(hypothesis)
+        return found
+
+    def _write_new(self, prepared: dict[str, Any]) -> Hypothesis:
+        """Allocate an id and write the file. **Caller must hold `.alloc.lock`.**"""
+        hypothesis = Hypothesis(id=self._allocate_id(), **prepared)
+        self._write_json(hypothesis)
+        return hypothesis
+
+    def _prepare(
+        self,
+        *,
+        observation: str,
+        reason: str,
+        prediction: str,
+        confidence: float,
+        expected_impact: float = 0.0,
+        tags: Iterable[str] = (),
+        source: Literal["manual", "reflection", "llm", "analyze"] = "manual",
+        created_by: HypothesisCreatedBy | str | None = None,
+        generator: HypothesisGenerator | str | None = None,
+        origin: HypothesisOrigin | str | None = None,
+        origins: Iterable[HypothesisOrigin | str] = (),
+        evidence: Iterable[HypothesisEvidenceRef | dict] = (),
+        technique: str | None = None,
+        parent_hypothesis_id: str | None = None,
+        technique_stack: Iterable[str] = (),
+        combo_techniques: Iterable[str] = (),
+    ) -> dict[str, Any]:
+        """Normalise create() inputs into `Hypothesis` fields. Takes no lock."""
         now = _now()
         resolved_created_by = _coerce_created_by(created_by, source)
         resolved_generator = _coerce_generator(generator, source)
@@ -171,35 +285,27 @@ class HypothesisStore:
                 stack.append(member)
         if combo and not tech:
             tech = "+".join(combo)
-        # Locked (M11): _allocate_id() globs for the current max before this
-        # id exists on disk — two concurrent create() calls must not both
-        # glob the same max and both write the same H-NNN path.
-        with locked(self._alloc_lock_path()):
-            hypothesis = Hypothesis(
-                id=self._allocate_id(),
-                competition=self.competition,
-                observation=observation,
-                reason=reason,
-                prediction=prediction,
-                confidence=confidence,
-                expected_impact=expected_impact,
-                tags=list(tags),
-                source=source,
-                created_by=resolved_created_by,
-                generator=resolved_generator,
-                origin=resolved_origin,
-                origins=resolved_origins,
-                evidence=evidence_refs,
-                technique=tech,
-                parent_hypothesis_id=(parent_hypothesis_id or None),
-                technique_stack=stack,
-                combo_techniques=combo,
-                created_at=now,
-                updated_at=now,
-            )
-            self._write_json(hypothesis)
-        self._mirror_to_db(hypothesis)
-        return hypothesis
+        return {
+            "competition": self.competition,
+            "observation": observation,
+            "reason": reason,
+            "prediction": prediction,
+            "confidence": confidence,
+            "expected_impact": expected_impact,
+            "tags": list(tags),
+            "source": source,
+            "created_by": resolved_created_by,
+            "generator": resolved_generator,
+            "origin": resolved_origin,
+            "origins": resolved_origins,
+            "evidence": evidence_refs,
+            "technique": tech,
+            "parent_hypothesis_id": (parent_hypothesis_id or None),
+            "technique_stack": stack,
+            "combo_techniques": combo,
+            "created_at": now,
+            "updated_at": now,
+        }
 
     def get(self, hypothesis_id: str) -> Hypothesis | None:
         path = self._path_for(hypothesis_id)
