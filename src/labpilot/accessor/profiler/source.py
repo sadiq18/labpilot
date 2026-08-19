@@ -34,6 +34,8 @@ from typing import Protocol, runtime_checkable
 import pandas as pd
 from pydantic import BaseModel
 
+from labpilot.accessor.profiler.schema import MetricRef
+
 __all__ = [
     "DatasetSource",
     "DeclaredFacts",
@@ -64,12 +66,18 @@ class DeclaredFacts(BaseModel):
     is evidence that something is wrong, not an instruction — which is why this
     is returned by the source rather than written onto the schema.
 
-    Only what a consumer reads today lives here. The target, metric and id
-    declarations that step 3 will weigh arrive with the code that weighs them.
+    Only what a consumer reads today lives here. A declared **target** and
+    **id** arrive in step 4 with `schema_answers.json`, which is where an
+    operator's answer belongs — not in a config file that Kaggle metadata
+    rebuilds.
     """
 
     title: str = ""
     description: str = ""
+    #: What the environment says it scores by. Already canonical: the caller
+    #: resolves the name through the metric registry, because `accessor` may not
+    #: import `research_engine`.
+    metric: MetricRef | None = None
 
 
 @runtime_checkable

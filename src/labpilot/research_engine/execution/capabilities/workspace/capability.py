@@ -97,6 +97,7 @@ def _has_credentials(kaggle: object) -> bool:
     key = str(getattr(kaggle, "key", "") or "").strip()
     return bool(token or (username and key))
 
+
 #: Relative dirs under the competition workspace root (idempotent).
 _WORKSPACE_SUBDIRS = (
     "pipeline",
@@ -443,6 +444,8 @@ class WorkspaceCapability(BaseCapability):
 
         try:
             from labpilot.accessor.profiler.report import write_profile
+            from labpilot.accessor.profiler.schema import MetricRef
+            from labpilot.accessor.profiler.source import DeclaredFacts, LocalFileSource
             from labpilot.accessor.profiler.tabular import TabularProfiler
             from labpilot.config import ProfilerConfig
             from labpilot.research_engine.intelligence.competition.models import (
@@ -462,14 +465,35 @@ class WorkspaceCapability(BaseCapability):
                     comp_path.read_text(encoding="utf-8")
                 )
 
-            profile = TabularProfiler(config).profile_directory(
+            # Through a source rather than a directory, so what the competition
+            # *declares* — its evaluation metric — reaches the profiler as
+            # evidence instead of being re-derived there. Canonicalisation stays
+            # on this side of the boundary: `accessor` may not import the metric
+            # registry, so the caller hands over an already-resolved reference.
+            declared_metric = None
+            if competition.evaluation_metric is not None:
+                spec = competition.evaluation_metric
+                declared_metric = MetricRef(
+                    name=spec.name,
+                    key=spec.key,
+                    direction=spec.direction
+                    if spec.direction in ("maximize", "minimize")
+                    else None,
+                )
+            source = LocalFileSource(
                 raw_dir,
+                DeclaredFacts(
+                    title=competition.title,
+                    description=competition.description,
+                    metric=declared_metric,
+                ),
+            )
+            profile = TabularProfiler(config).profile_dataset(
+                source,
                 context.competition,
                 train_pattern=competition.train_file_pattern,
                 test_pattern=competition.test_file_pattern,
                 submission_pattern=competition.submission_file_pattern,
-                competition_title=competition.title,
-                competition_description=competition.description,
             )
             json_path, md_path = write_profile(root, profile)
             metadata["profile"] = str(json_path)
@@ -583,9 +607,7 @@ class WorkspaceCapability(BaseCapability):
                     )
                 else:
                     # Presence of image-like files without CSV roles.
-                    has_images = any(
-                        Path(f).suffix.lower() in IMAGE_EXTENSIONS for f in files
-                    )
+                    has_images = any(Path(f).suffix.lower() in IMAGE_EXTENSIONS for f in files)
                     has_zarr = any(".zarr" in f for f in files) or any(
                         p.is_dir() and p.name.endswith(".zarr") for p in raw_dir.rglob("*")
                     )
@@ -624,6 +646,5 @@ class WorkspaceCapability(BaseCapability):
 
 def default_workspace_dirs(root: Path) -> list[Path]:
     return [
-        root / name
-        for name in ("pipeline", "src", "configs", "data", "logs", "artifacts", "tests")
+        root / name for name in ("pipeline", "src", "configs", "data", "logs", "artifacts", "tests")
     ]

@@ -76,7 +76,15 @@
     }
   ],
   "target_column": "Transported",
-  "id_column": "PassengerId",
+  "id_columns": [
+    "PassengerId"
+  ],
+  "excluded_columns": {
+    "PassengerId": "is_id",
+    "Transported": "is_target"
+  },
+  "train_test_relationship": "disjoint_units",
+  "metric": null,
   "submission_columns": [
     "PassengerId",
     "Transported"
@@ -133,6 +141,25 @@
       "band": "asserted",
       "alternatives": [],
       "rejected": []
+    },
+    "train_test_relationship": {
+      "signals": [
+        {
+          "id": "scoring_input_present",
+          "detail": "a scoring input exists; no split signal"
+        }
+      ],
+      "confidence": 0.5,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
+    },
+    "metric": {
+      "signals": [],
+      "confidence": 0.0,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
     }
   },
   "modality": "tabular",
@@ -147,8 +174,16 @@
   "row_count_estimated": false,
   "scored_is_partition_suffix": false,
   "scored_fraction": 0.0,
-  "train_only_columns": [],
+  "train_only_columns": [
+    "Transported"
+  ],
   "anchor_column": null,
+  "id_column": "PassengerId",
+  "feature_columns": [
+    "HomePlanet",
+    "Age",
+    "RoomService"
+  ],
   "warnings": [
     "default_tabular"
   ]

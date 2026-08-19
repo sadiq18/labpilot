@@ -162,9 +162,13 @@ def test_a_profile_that_cannot_be_refreshed_is_kept_not_replaced(tmp_path: Path)
     """
     raw = tmp_path / "data" / "raw"
     raw.mkdir(parents=True)
-    # Filenames that match no train/test/submission pattern: the tabular
+    # *Two* files that match no train/test/submission pattern: the tabular
     # profiler raises, which is the documented reason the inventory path exists.
+    # One unmatched file no longer does — M22 step 3 reads a lone table as the
+    # training table, because a dataset that is not a competition has no `train`
+    # prefix to match. Two is a genuine ambiguity nobody can resolve from here.
     (raw / "well_logs.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    (raw / "core_samples.csv").write_text("a,b\n3,4\n", encoding="utf-8")
     kept = _profile(tmp_path, {"competition": "demo", "target_column": "DTC", "columns": [1, 2]})
 
     result, metadata, checks = _ensure_profile(tmp_path)
@@ -212,7 +216,10 @@ def test_a_profile_nothing_can_parse_is_replaced_not_kept(tmp_path: Path) -> Non
     """
     raw = tmp_path / "data" / "raw"
     raw.mkdir(parents=True)
+    # Two unmatched files, so the tabular profiler still raises: see the note in
+    # `test_a_profile_that_cannot_be_refreshed_is_kept_not_replaced`.
     (raw / "well_logs.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    (raw / "core_samples.csv").write_text("a,b\n3,4\n", encoding="utf-8")
     corrupt = tmp_path / "profile.json"
     corrupt.write_text('{"competition": "demo", "target_col', encoding="utf-8")
 
