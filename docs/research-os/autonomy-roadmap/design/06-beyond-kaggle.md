@@ -227,7 +227,7 @@ Each phase is separately mergeable and leaves the suite green.
 | # | Ships | Behaviour change |
 |---|---|---|
 | 0 | `ValidationResult` + `HypothesisValidator`, with the Kaggle path wrapped in `KaggleCvValidator`. `build_evidence_card` gains a `result=` path beside its current arguments. | none — the wrapper produces byte-identical cards |
-| 1 | `direction` sourced from the result when present, falling back to `_resolve_direction`. | none for Kaggle; unblocks a validator with no competition file |
+| 1 | ~~`direction` sourced from the result~~ — landed inside phase 0. Phase 1 instead **routes the production caller through the validator**, so the seam is used rather than merely available. | none — same sources, same order |
 | 2 | `HarnessValidator` + `result.json` contract + a fixture harness. | new capability |
 | 3 | An end-to-end campaign against the harness, in CI. | exit criteria 1–3 |
 
