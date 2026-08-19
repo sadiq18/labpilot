@@ -18,7 +18,11 @@ from labpilot.cli.config_helpers import (
 from labpilot.llm.client import resolve_llm_client
 from labpilot.research_engine.conductor import ConductorStore, run_until_stop
 from labpilot.research_engine.conductor.approvals import ApprovalResult
-from labpilot.research_engine.conductor.budgets import BudgetConfig, budgets_to_metadata
+from labpilot.research_engine.conductor.budgets import (
+    BudgetConfig,
+    budgets_to_metadata,
+    goal_progress,
+)
 from labpilot.research_engine.conductor.checkpoint import (
     latest_active_session,
     load_budget_pair,
@@ -27,6 +31,13 @@ from labpilot.research_engine.conductor.checkpoint import (
 from labpilot.research_engine.conductor.metrics import ensure_metrics
 from labpilot.research_engine.tools.descriptors import ToolDescriptor, ToolResult
 from labpilot.research_engine.workspace_facade import Workspace
+
+#: Why the default is no bound: a campaign that ends on a step counter has
+#: not answered its question, it has run out of turns. M17.
+_MAX_STEPS_HELP = (
+    "Stop after N policy steps. Unset, the campaign runs until its objective, "
+    "a plateau, a budget, or a guidance pause"
+)
 
 conduct_app = typer.Typer(
     help="Run the Research Conductor / Campaign Engine (product entry).",
@@ -372,7 +383,7 @@ def _budget_metadata(
 def conduct_run(
     goal: str = typer.Argument(..., help='Research goal, e.g. "Win Rogii"'),
     competition: str | None = typer.Option(None, "--competition", "-c"),
-    max_steps: int = typer.Option(8, "--max-steps", help="Stop after N policy steps"),
+    max_steps: int | None = typer.Option(None, "--max-steps", help=_MAX_STEPS_HELP),
     branches: int = typer.Option(
         1,
         "--branches",
@@ -489,7 +500,7 @@ def _continue_session(
     *,
     session_id: str | None,
     competition: str | None,
-    max_steps: int,
+    max_steps: int | None,
     branches: int,
     yes: bool,
     offline: bool,
@@ -564,7 +575,7 @@ def conduct_continue(
         None, "--session", help="Session id (default: latest active)"
     ),
     competition: str | None = typer.Option(None, "--competition", "-c"),
-    max_steps: int = typer.Option(8, "--max-steps"),
+    max_steps: int | None = typer.Option(None, "--max-steps", help=_MAX_STEPS_HELP),
     branches: int = typer.Option(
         1,
         "--branches",
@@ -601,7 +612,7 @@ def conduct_continue(
 def conduct_resume(
     session: str | None = typer.Option(None, "--session"),
     competition: str | None = typer.Option(None, "--competition", "-c"),
-    max_steps: int = typer.Option(8, "--max-steps"),
+    max_steps: int | None = typer.Option(None, "--max-steps", help=_MAX_STEPS_HELP),
     branches: int = typer.Option(
         1,
         "--branches",
@@ -738,10 +749,22 @@ def conduct_status(
             f"max_wall_s={cfg.max_wall_s} max_cost_usd={cfg.max_cost_usd} "
             f"target={cfg.target_metric}:{cfg.target_value}"
         )
+        # `last_metric` stays on the raw-state line beside the other persisted
+        # counters. It is not a second progress rendering — the goal line below
+        # is the interpreted view, this is the field itself, and it is the one
+        # `metric_target` compares against. Dropping it also blanked the metric
+        # entirely for a session predating `score_events`, which has readings
+        # here and an empty series.
         console.print(
             f"  budget_state: submissions={state.submissions} "
             f"cost={state.llm_cost_usd} last_metric={state.last_metric}"
         )
+        # The same line the campaign prints each step, so a detached run can be
+        # checked without tailing its log — and so there is one rendering of
+        # *progress* rather than two that can disagree.
+        line = goal_progress(cfg, state)
+        if line:
+            console.print(f"  {line}")
         if metrics:
             console.print(
                 f"  metrics: failed={metrics.tasks_failed} blocked={metrics.tasks_blocked} "

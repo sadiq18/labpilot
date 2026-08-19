@@ -23,6 +23,7 @@ StopReason = Literal[
     "policy_stop",
     "max_steps",
     "failing",
+    "needs_guidance",
 ]
 
 #: Consecutive failed executions before a campaign is stopped.
@@ -48,6 +49,71 @@ DEFAULT_MAX_CONSECUTIVE_FAILURES = 3
 #: many steps is not mid-flight.
 DEFAULT_MAX_BARREN_STEPS = 8
 
+#: Conductor steps allowed with no *new comparable score* before pausing.
+#:
+#: The gap `steps_since_success` cannot see. That counter resets on any
+#: successful execution, and the score writer skips a placeholder run or a
+#: non-finite metric — so a campaign can succeed on every step while the series
+#: both objective stops read stays frozen.
+#:
+#: **Derived from the barren threshold, and strictly greater than it.** A score
+#: append always also resets `steps_since_success` (the writer records the
+#: execution before the score), so `steps_since_new_score >= steps_since_success`
+#: for every reachable state. Set below `DEFAULT_MAX_BARREN_STEPS` this counter
+#: therefore fires *first in time* on every campaign, and M20's `failing` — the
+#: stop that keeps a broken campaign from reading as a normal end — becomes
+#: unreachable. The plan asked for 6; 6 would have silently retired a stop that
+#: took nine campaign runs to earn.
+#:
+#: The margin only decides how long a campaign that *is* executing is allowed
+#: to keep producing nothing comparable, which is the case barren cannot see
+#: and this counter exists for.
+DEFAULT_MAX_STEPS_WITHOUT_SCORE = DEFAULT_MAX_BARREN_STEPS + 2
+
+#: Consecutive steps whose plan mapped to no tool before pausing.
+#:
+#: `plan.unmapped` files a suggestion and continues. Bounded by `max_steps`
+#: that cost a few steps; unbounded it is a forever-spin burning one policy
+#: call per step and producing nothing.
+DEFAULT_MAX_CONSECUTIVE_UNMAPPED = 3
+
+#: Noise floor as a fraction of the readings' own magnitude.
+#:
+#: An absolute epsilon only works for metrics that happen to be measured in a
+#: particular range. Three readings within 1e-6 of each other is a plateau on
+#: an accuracy near 0.9 and an impossibility on rogii's RMSE near 1380, so
+#: whether `plateau` could fire at all depended on the metric's units — a
+#: domain assumption sitting in a control-plane stop, which is exactly what
+#: docs/research-os/autonomy-roadmap/06-beyond-kaggle.md (M12) says must not
+#: happen if the loop is to generalise past Kaggle.
+#:
+#: Survivable while `max_steps` ended every campaign. Not survivable once the
+#: step bound is gone: `plateau` becomes the terminator of record, and an
+#: under-firing one just substitutes a wall clock for a step counter.
+#:
+#: 1e-3 is a 0.1% spread. `0` disables the relative test and restores the
+#: absolute comparison exactly, which is this change's rollback.
+DEFAULT_PLATEAU_REL_EPSILON = 1e-3
+
+#: The same idea for "this reading beat the ones before it", and deliberately
+#: two orders of magnitude tighter.
+#:
+#: These read as one question and are two. `plateau` asks whether a whole
+#: *window* failed to move; `_steps_since_improvement` asks whether a single
+#: *step* cleared measurement noise. A window of three readings 0.05% apart
+#: spans 0.1% — a plateau by the wide band while every step was an improvement
+#: by the tight one, and both statements are true.
+#:
+#: Sharing one band made that contradiction resolve the wrong way: an accuracy
+#: series gaining 0.05% a run reported three experiments with no improvement,
+#: which is what `available_tools`' stagnant clause and the stagnation mint
+#: read. A campaign improving on every run was told it was stuck.
+#:
+#: Erring permissive is the safe direction here — a floor set too low calls a
+#: little noise an improvement and resets a counter; set too high it invents
+#: stagnation and mints hypotheses against a campaign that is working.
+DEFAULT_IMPROVEMENT_REL_EPSILON = 1e-5
+
 
 class BudgetConfig(BaseModel):
     """Resource and objective limits for a campaign session."""
@@ -59,11 +125,20 @@ class BudgetConfig(BaseModel):
     target_value: float | None = None
     maximize: bool = True
     plateau_window: int = 3
+    #: Absolute noise floor, and now the *lower* bound of one: `_noise_floor`
+    #: takes the larger of this and the relative test, so no configuration
+    #: that fires today stops firing. It still governs alone for a series
+    #: whose values sit at or near zero, where a relative test degenerates.
     plateau_epsilon: float = 1e-6
+    plateau_rel_epsilon: float = DEFAULT_PLATEAU_REL_EPSILON
+    improvement_rel_epsilon: float = DEFAULT_IMPROVEMENT_REL_EPSILON
     #: `None` disables the breaker. Opt-out exists because a campaign
     #: deliberately probing a broken workspace is a legitimate thing to run.
     max_consecutive_failures: int | None = DEFAULT_MAX_CONSECUTIVE_FAILURES
     max_barren_steps: int | None = DEFAULT_MAX_BARREN_STEPS
+    #: Both `None`-able for the same reason as the breaker above.
+    max_steps_without_score: int | None = DEFAULT_MAX_STEPS_WITHOUT_SCORE
+    max_consecutive_unmapped: int | None = DEFAULT_MAX_CONSECUTIVE_UNMAPPED
 
 
 class ScoreEvent(BaseModel):
@@ -104,10 +179,9 @@ class BudgetState(BaseModel):
     wall_started_at: str | None = None
     metric_history: list[float] = Field(default_factory=list)
     last_metric: float | None = None
-    #: The comparable score series (M8). No writer yet — the conductor loop
-    #: appends one event per successful experiment in M8-2, which also derives
-    #: `metric_history`/`last_metric` from it. Until then those two stay as
-    #: they are: read by `evaluate_stops`, written by nothing.
+    #: The comparable score series (M8). Written by
+    #: `_record_experiment_outcome`, one event per successful experiment,
+    #: which also derives `metric_history`/`last_metric` from it.
     score_events: list[ScoreEvent] = Field(default_factory=list)
     #: Set once the metric-name mismatch has been reported for this campaign.
     #: On the state rather than in a module-level set, for the same reason
@@ -127,6 +201,16 @@ class BudgetState(BaseModel):
     #: `consecutive_failures`: a campaign can burn steps without ever reaching
     #: an execution, which is how 30 steps passed with nothing to count.
     steps_since_success: int = 0
+    #: Steps since `score_events` last grew. Distinct again from the above,
+    #: which resets on any successful execution — a run that succeeds and
+    #: writes a placeholder metric resets that counter while the series it is
+    #: meant to guard stays frozen. Reset in `_record_experiment_outcome`, at
+    #: the append, so it is keyed on the series rather than on a hardcoded
+    #: tool list: a validator that produces scores another way is counted
+    #: with no edit here.
+    steps_since_new_score: int = 0
+    #: Consecutive steps whose plan mapped to no tool at all.
+    consecutive_unmapped: int = 0
     #: What the failures said, most recent last. Bounded — this is a stop
     #: *reason*, not a log, and it is written into session metadata.
     recent_failures: list[str] = Field(default_factory=list)
@@ -239,6 +323,16 @@ class ScoreSummary(BaseModel):
     #: The metric these numbers are readings of, so a consumer cannot compare
     #: them against a threshold for something else.
     metric_name: str | None = None
+    #: The oldest reading in the comparable window — where this campaign
+    #: started measuring the metric it is measuring now. `goal_progress`
+    #: needs it to say how much of the distance to the target is covered.
+    first_score: float | None = None
+    #: How many comparable readings the window holds.
+    result_count: int = 0
+    #: The window's direction, carried so a consumer never re-derives it from
+    #: the metric's name. Meaningless with no readings, hence the default
+    #: rather than an opinion.
+    maximize: bool = True
 
 
 def score_summary(state: BudgetState, config: BudgetConfig) -> ScoreSummary:
@@ -279,27 +373,70 @@ def score_summary(state: BudgetState, config: BudgetConfig) -> ScoreSummary:
 
     return ScoreSummary(
         best_so_far=best,
+        first_score=values[0],
+        result_count=len(values),
+        maximize=maximize,
         last_3_scores=values[-3:],
         delta_vs_best=delta,
-        steps_since_improvement=_steps_since_improvement(values, maximize, config.plateau_epsilon),
+        steps_since_improvement=_steps_since_improvement(
+            values,
+            maximize,
+            _noise_floor(values, config.plateau_epsilon, config.improvement_rel_epsilon),
+        ),
         metric_name=events[-1].metric_name,
     )
 
 
-def _steps_since_improvement(values: list[float], maximize: bool, epsilon: float) -> int:
-    """Experiments since one beat everything before it by more than `epsilon`.
+def _noise_floor(values: list[float], absolute: float, relative: float) -> float:
+    """How large a change has to be before it counts as one.
+
+    The absolute floor, or a fraction of the readings' own magnitude,
+    whichever is larger. A constant alone cannot serve both an RMSE near 1380
+    and an accuracy near 0.9: it is a quantity in the metric's units, and
+    every metric has different ones. Scaling by the window's magnitude asks a
+    question with the same answer in every domain — *did these readings move
+    by more than some fraction of what they measure?*
+
+    `max` of the two rather than either alone. The relative test degenerates
+    as the readings approach zero, and the absolute floor is what catches
+    that; the absolute floor is meaningless at large magnitudes, and the
+    relative one is what catches that. Taking the larger also means no
+    configuration that fires today stops firing.
+
+    Magnitude is `max(abs(v))` over the window rather than the best value, so
+    it is defined without reference to direction and stays stable for a series
+    that straddles zero.
+
+    One definition of *how* to be scale-free, two bands. `relative` is the
+    caller's, because `plateau` and `_steps_since_improvement` are asking
+    different questions — see `DEFAULT_IMPROVEMENT_REL_EPSILON`. An earlier
+    version took one band from the config for both readers, and a campaign
+    gaining 0.05% a run read as stagnant.
+    """
+    scale = max((abs(v) for v in values), default=0.0)
+    return max(absolute, relative * scale)
+
+
+def _steps_since_improvement(values: list[float], maximize: bool, floor: float) -> int:
+    """Experiments since one beat everything before it by more than `floor`.
 
     Measured against the best of the *preceding* readings, not the running
     best including itself — otherwise every event trivially ties its own best
-    and nothing ever counts as an improvement. `epsilon` is the same
-    noise floor `plateau` uses, so the two agree about what "no change" means.
+    and nothing ever counts as an improvement. `floor` comes from
+    `_noise_floor`, the same one `plateau` uses, so the two agree about what
+    "no change" means.
 
-    That epsilon is **absolute**, and must be set to the metric's scale. It
-    was harmless while only `plateau` read it — that stop needs near-exact
-    ties and has fired on essentially nothing — but this drives the gathering
-    gate and the policy's view of progress, so a default of 1e-6 against a
-    metric whose values live near or below it swallows every real gain: the
-    campaign reads as permanently stagnant while improving on every run.
+    That floor used to be a bare absolute epsilon, and the hazard was real:
+    this drives the gathering gate and the policy's view of progress, so
+    1e-6 against a metric whose values live near or below it swallowed every
+    real gain and the campaign read as permanently stagnant while improving
+    on every run. `_noise_floor` scales with the readings, which removes the
+    dependence on what units the metric happens to use.
+
+    It is built from `improvement_rel_epsilon`, **not** the plateau band. A
+    single step clearing measurement noise and a whole window failing to move
+    are different questions, and answering both with the 0.1% plateau band
+    recreated the same hazard from the other side.
 
     One pass, carrying the best rather than re-scanning the prefix: this runs
     in the observe bundle and again in the gathering gate, so it is paid at
@@ -313,10 +450,86 @@ def _steps_since_improvement(values: list[float], maximize: bool, epsilon: float
     for index in range(1, len(values)):
         value = values[index]
         gain = value - best_before if maximize else best_before - value
-        if gain > epsilon:
+        if gain > floor:
             improved_at = index
         best_before = max(best_before, value) if maximize else min(best_before, value)
     return len(values) - 1 - improved_at
+
+
+def _fmt(value: float) -> str:
+    """Short enough to read at a glance, exact enough to compare two lines."""
+    return f"{value:g}"
+
+
+def goal_progress(config: BudgetConfig, state: BudgetState) -> str | None:
+    """One line saying how far this campaign has come, in the metric's own
+    direction.
+
+        goal mse: best 120 → target 5 · 41% closed · 3 result(s) · 0 since improvement
+
+    Derives nothing itself. Every number comes from `score_summary`, because
+    the primary metric already ended up with four disagreeing resolvers in
+    this tree and a renderer quietly becoming the fifth is how that happens
+    again. Direction is `ScoreEvent.maximize`, carried by the series — never
+    read back from competition config and never inferred from the metric's
+    name, which is what lets this line read the same for a campaign scored by
+    a benchmark harness or a simulator as for one scored by a competition.
+
+    **Percent closed** is the fraction of the distance from the *first*
+    comparable reading to the target that has been covered. Measured from
+    `best_so_far`, which includes that first reading, so it never goes
+    negative — progress banked is progress kept, because the best model is
+    the one retained. The plan expected a negative case; there is none to
+    render, and the signal it wanted (the latest run went backwards) is
+    `steps_since_improvement`, already on the line.
+
+    The target is only shown when the series is measuring the metric it names.
+    Rendering an `lb_auc` threshold beside a `cv_rmse` reading is the same
+    mistake `_last_metric_matches_target` exists to keep the `metric_target`
+    stop from making, and it is worse here, because a person reads this one.
+
+    Returns `None` only when there is neither a target nor a result — a
+    campaign with nothing to report, where the caller prints nothing rather
+    than a line of empty fields.
+    """
+    # One scan. `score_summary` has already walked the comparable tail, and
+    # this runs every conductor step against a series the campaign is designed
+    # to grow — `_steps_since_improvement`'s docstring already counts the times
+    # that walk is paid, and a renderer is not a good place to add another.
+    summary = score_summary(state, config)
+
+    metric = summary.metric_name or config.target_metric
+    if metric is None:
+        return None
+
+    target: float | None = None
+    if config.target_metric is not None and config.target_value is not None:
+        # An empty series names no metric, so there is nothing to contradict
+        # the target yet and it is shown.
+        if summary.metric_name is None or metric_names_match(
+            summary.metric_name, config.target_metric
+        ):
+            target = config.target_value
+
+    best = summary.best_so_far
+    first = summary.first_score
+    if best is None or first is None:
+        suffix = f" · target {_fmt(target)}" if target is not None else ""
+        return f"goal {metric}: no result yet{suffix}"
+
+    head = f"goal {metric}: best {_fmt(best)}"
+    parts: list[str] = []
+    if target is not None:
+        head += f" → target {_fmt(target)}"
+        span = (target - first) if summary.maximize else (first - target)
+        gain = (best - first) if summary.maximize else (first - best)
+        # A campaign whose first reading already met the target has no
+        # distance to have covered; a percentage of zero distance is either
+        # a division error or a meaningless 100%.
+        parts.append("target met at first result" if span <= 0 else f"{gain / span:.0%} closed")
+    parts.append(f"{summary.result_count} result(s)")
+    parts.append(f"{summary.steps_since_improvement} since improvement")
+    return " · ".join([head, *parts])
 
 
 def _last_metric_matches_target(config: BudgetConfig, state: BudgetState) -> bool:
@@ -361,6 +574,20 @@ def evaluate_stops(
     finished — it is broken, and each further step spends budget to learn
     nothing. It reports `failing` rather than any of the completion reasons so
     the transcript cannot read as a normal end.
+
+    `needs_guidance` is evaluated **before `plateau`** for a related reason.
+    Plateau is a claim about results — *improvement has flattened*. A campaign
+    that has produced no new score for six steps has not flattened; it is
+    stuck, and the last `plateau_window` readings are unchanged for the
+    trivial reason that nothing wrote to them. Firing `plateau` there is a
+    stop asserting something it never measured, which is the shape M20 exists
+    to remove. The ordering is the whole guard — `plateau` itself needs no
+    freshness check.
+
+    It is evaluated **after `metric_target`** because a campaign that reached
+    its goal is finished, not stuck. That case is unreachable in practice, the
+    target being checked every step, and the ordering should not depend on it
+    being so.
     """
     if (
         config.max_consecutive_failures is not None
@@ -389,12 +616,22 @@ def evaluate_stops(
             return "metric_target"
         if not config.maximize and state.last_metric <= config.target_value:
             return "metric_target"
+    if (
+        config.max_steps_without_score is not None
+        and state.steps_since_new_score >= config.max_steps_without_score
+    ):
+        return "needs_guidance"
+    if (
+        config.max_consecutive_unmapped is not None
+        and state.consecutive_unmapped >= config.max_consecutive_unmapped
+    ):
+        return "needs_guidance"
     hist = state.metric_history
     n = max(1, config.plateau_window)
     if len(hist) >= n:
         window = hist[-n:]
         gain = max(window) - min(window)
-        if gain <= config.plateau_epsilon:
+        if gain <= _noise_floor(window, config.plateau_epsilon, config.plateau_rel_epsilon):
             return "plateau"
     return "none"
 
