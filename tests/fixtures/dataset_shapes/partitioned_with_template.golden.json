@@ -1,0 +1,153 @@
+{
+  "schema_version": 0,
+  "competition": "partitioned-with-template",
+  "files": [
+    "sample_submission.csv",
+    "test/t001__typewell.csv",
+    "test/t002__typewell.csv",
+    "test/t003__typewell.csv",
+    "test/w001__horizontal_well.csv",
+    "test/w002__horizontal_well.csv",
+    "test/w003__horizontal_well.csv",
+    "test/w004__horizontal_well.csv",
+    "test/w005__horizontal_well.csv",
+    "train/t001__typewell.csv",
+    "train/t002__typewell.csv",
+    "train/t003__typewell.csv",
+    "train/w001__horizontal_well.csv",
+    "train/w002__horizontal_well.csv",
+    "train/w003__horizontal_well.csv",
+    "train/w004__horizontal_well.csv",
+    "train/w005__horizontal_well.csv"
+  ],
+  "train_file": "train/w001__horizontal_well.csv",
+  "test_file": "test/w001__horizontal_well.csv",
+  "sample_submission_file": "sample_submission.csv",
+  "row_count": 68,
+  "test_row_count": 0,
+  "column_count": 7,
+  "columns": [
+    {
+      "name": "id",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 68,
+      "is_target_candidate": false,
+      "is_numeric": false,
+      "stats": {}
+    },
+    {
+      "name": "md",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 10,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 0.0,
+        "max": 9.0,
+        "mean": 3.970588,
+        "std": 2.780371
+      }
+    },
+    {
+      "name": "azimuth",
+      "null_count": 18,
+      "null_pct": 26.47,
+      "unique_count": 50,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 0.0,
+        "max": 309.0,
+        "mean": 132.5,
+        "std": 110.399322
+      }
+    },
+    {
+      "name": "Depth_input",
+      "null_count": 38,
+      "null_pct": 55.88,
+      "unique_count": 30,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 0.0,
+        "max": 405.0,
+        "mean": 202.5,
+        "std": 143.849478
+      }
+    },
+    {
+      "name": "Depth",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 68,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 0.0,
+        "max": 1025.0,
+        "mean": 418.382353,
+        "std": 379.365379
+      }
+    },
+    {
+      "name": "Zone_Depth",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 68,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 0.5,
+        "max": 1025.5,
+        "mean": 418.882353,
+        "std": 379.365379
+      }
+    },
+    {
+      "name": "formation",
+      "null_count": 50,
+      "null_pct": 73.53,
+      "unique_count": 2,
+      "is_target_candidate": false,
+      "is_numeric": false,
+      "stats": {}
+    }
+  ],
+  "target_column": "Depth",
+  "id_column": "id",
+  "submission_columns": [
+    "id",
+    "depth"
+  ],
+  "warnings": [
+    "partitioned dataset: 8 train / 8 test CSVs",
+    "primary kind='horizontal_well'; kinds={'horizontal_well': 5, 'typewell': 3}",
+    "row_count estimated from 5 sampled files",
+    "rows are NOT iid across partitions \u2014 validation must group by partition",
+    "train-only columns (unavailable at test): ['Depth', 'Zone_Depth']",
+    "'Depth_input' is the known prefix of 'Depth': equal to it wherever present, absent exactly on the scored rows. Carrying its last known value forward is the baseline to beat \u2014 predict the residual from it, not 'Depth' from the other columns. Note it is identical to the target in training, so using it as a plain feature learns 'copy' and then meets NaN on every scored row."
+  ],
+  "modality": "tabular",
+  "image_dir": null,
+  "image_column": null,
+  "text_column": null,
+  "partitioned": true,
+  "partition_key": "file_stem_entity",
+  "partition_kinds": {
+    "horizontal_well": 5,
+    "typewell": 3
+  },
+  "train_partition_count": 5,
+  "test_partition_count": 5,
+  "row_count_estimated": true,
+  "scored_is_partition_suffix": false,
+  "scored_fraction": 0.0,
+  "train_only_columns": [
+    "Depth",
+    "Zone_Depth"
+  ],
+  "anchor_column": "Depth_input"
+}

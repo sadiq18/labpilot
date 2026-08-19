@@ -1,0 +1,239 @@
+"""What today's profiler says about each M22 dataset shape.
+
+M22 step 0. Every test here asserts **current** behaviour, including the wrong
+parts, and names the step that will flip it. Two reasons for writing them before
+any fix:
+
+* A fixture that cannot express a defect proves nothing about the fix that
+  follows. These tests are how the shapes in `helpers/dataset_shapes.py` earn
+  their place — each one *is* the defect, reproduced.
+* The golden snapshots pin the profile byte for byte, so step 1 (routing the
+  profiler through a source protocol) can be shown to change nothing, rather
+  than asserted to.
+
+Plan: `docs/research-os/autonomy-roadmap/17-dataset-understanding.md` ·
+Design: `docs/research-os/autonomy-roadmap/design/17-dataset-understanding.md`
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
+from labpilot.config import ProfilerConfig
+from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
+
+GOLDEN_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "dataset_shapes"
+
+#: The cap used by the sampling fixture. Small on purpose: the defect is that a
+#: bound cap is reported as an exact count, which is true at any cap, and paying
+#: 690,088 rows to show it would cost seconds per run.
+SAMPLE_CAP = 10
+
+#: fixture name -> profiler config. Shapes that raise are exercised separately.
+PROFILEABLE = {
+    "strong_signals_data_dir": ProfilerConfig(),
+    "partitioned_with_template_data_dir": ProfilerConfig(),
+    "partitioned_without_template_data_dir": ProfilerConfig(),
+    "bool_target_data_dir": ProfilerConfig(),
+    "sampled_beyond_cap_data_dir": ProfilerConfig(max_rows_sample=SAMPLE_CAP),
+}
+
+
+def _profile(data_dir: Path, config: ProfilerConfig | None = None) -> DatasetProfile:
+    return TabularProfiler(config or ProfilerConfig()).profile_directory(data_dir, data_dir.name)
+
+
+def _normalized(profile: DatasetProfile) -> dict:
+    """The profile as JSON, minus what is a fact about the library rather than
+    about the dataset.
+
+    `dtype` is dropped because pandas has changed how it spells "a plain string
+    column" between versions (`ColumnProfile.dtype` says so), and a golden that
+    pins it fails on an upgrade for a reason that has nothing to do with this
+    code. `is_numeric` covers the part that carries meaning. Floats in `stats`
+    are rounded because their last bits are a property of the BLAS underneath.
+    """
+    data = json.loads(profile.model_dump_json())
+    for column in data.get("columns", []):
+        column.pop("dtype", None)
+        column["stats"] = {
+            key: (round(value, 6) if isinstance(value, float) else value)
+            for key, value in (column.get("stats") or {}).items()
+        }
+    return data
+
+
+# --- golden snapshots -------------------------------------------------------
+
+
+@pytest.mark.parametrize("fixture_name", sorted(PROFILEABLE))
+def test_profile_matches_its_golden_snapshot(request, fixture_name: str) -> None:
+    """Pin every profileable shape, so step 1 must change nothing.
+
+    Delete a golden file to regenerate it; the diff is then the review.
+    """
+    data_dir = request.getfixturevalue(fixture_name)
+    actual = _normalized(_profile(data_dir, PROFILEABLE[fixture_name]))
+
+    # A golden comparison passes trivially against an empty description, which
+    # is exactly what a broken profiler produces.
+    assert actual["columns"], "profile has no columns; the snapshot would be vacuous"
+
+    GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
+    golden = GOLDEN_DIR / f"{fixture_name.removesuffix('_data_dir')}.golden.json"
+    if not golden.is_file():
+        golden.write_text(json.dumps(actual, indent=2) + "\n", encoding="utf-8")
+    assert actual == json.loads(golden.read_text(encoding="utf-8"))
+
+
+def test_profiling_does_not_depend_on_where_it_ran(tmp_path: Path) -> None:
+    """Requirement 4 (determinism), and the half a golden cannot see.
+
+    A snapshot compares one run against a file; this compares two runs against
+    each other from different directories. `test_capstone`'s renderer bug was
+    invisible to a comparison that shared a directory.
+    """
+    from helpers.dataset_shapes import build_strong_signals
+
+    first = _normalized(_profile(build_strong_signals(tmp_path / "one")))
+    second = _normalized(_profile(build_strong_signals(tmp_path / "two")))
+
+    assert first["columns"], "an empty profile would make this comparison vacuous"
+    # `competition` is the directory name, which is the one field that is
+    # *supposed* to differ; everything else describes the bytes.
+    assert first["competition"] == second["competition"] == "strong-signals"
+    assert first == second
+
+
+# --- what the profile cannot say --------------------------------------------
+
+
+def test_a_correct_answer_carries_no_evidence(strong_signals_data_dir: Path) -> None:
+    """Case A: right, and unable to say why. Flips at step 2.
+
+    Every strong signal fires here — the template names the label, the label is
+    absent from the scoring input, it is numeric and complete — and the profile
+    records none of that. Its only prose is a modality signal nothing parses.
+    """
+    profile = _profile(strong_signals_data_dir)
+
+    assert profile.target_column == "SalePrice"
+    assert profile.id_column == "Id"
+    dumped = profile.model_dump()
+    assert "confidence" not in dumped
+    assert "inferences" not in dumped
+    assert profile.warnings == ["default_tabular"]
+
+
+def test_the_decoy_wins_when_no_template_names_the_label(
+    partitioned_without_template_data_dir: Path,
+) -> None:
+    """Case B′: the answer is decided by a sort. Flips at step 3.
+
+    `Depth` and `Zone_Depth` are withheld at test, complete, numeric, and in
+    every partition of the primary kind. Nothing in the profile separates them —
+    asserted below rather than claimed — and the tie is broken by taking the
+    last of the sorted candidates.
+    """
+    profile = _profile(partitioned_without_template_data_dir)
+    by_name = {column.name: column for column in profile.columns}
+
+    assert set(profile.train_only_columns) == {"Depth", "Zone_Depth"}
+    # Indistinguishable on every fact the profile records about them.
+    assert by_name["Depth"].is_numeric == by_name["Zone_Depth"].is_numeric is True
+    assert by_name["Depth"].null_pct == by_name["Zone_Depth"].null_pct
+    assert by_name["Depth"].unique_count == by_name["Zone_Depth"].unique_count
+    # And the winner is the last one alphabetically, not the better-evidenced one.
+    assert profile.target_column == sorted(profile.train_only_columns)[-1] == "Zone_Depth"
+
+
+def test_the_only_advertised_escape_does_not_exist(
+    partitioned_without_template_data_dir: Path,
+) -> None:
+    """The ambiguity warning names a config field that was never built.
+
+    Flips at step 4, where the escape becomes a question with an answer file.
+    """
+    profile = _profile(partitioned_without_template_data_dir)
+    advice = [w for w in profile.warnings if "Target inference is ambiguous" in w]
+
+    assert advice, "the ambiguous fixture produced no ambiguity warning"
+    assert "`target_column` in the competition config" in advice[0]
+    assert "target_column" not in CompetitionSpec.model_fields
+
+
+def test_one_file_decides_the_label(
+    partitioned_with_template_data_dir: Path,
+    partitioned_without_template_data_dir: Path,
+) -> None:
+    """The two partitioned shapes differ by exactly one file, and disagree.
+
+    Mutating the *input* rather than the code is what shows the template is
+    load-bearing: same tables, same columns, same values, one file apart.
+    """
+    with_names = {p.name for p in partitioned_with_template_data_dir.rglob("*.csv")}
+    without_names = {p.name for p in partitioned_without_template_data_dir.rglob("*.csv")}
+
+    assert with_names - without_names == {"sample_submission.csv"}
+    assert not without_names - with_names
+
+    assert _profile(partitioned_with_template_data_dir).target_column == "Depth"
+    assert _profile(partitioned_without_template_data_dir).target_column == "Zone_Depth"
+
+
+def test_a_dataset_without_kaggle_inputs_cannot_be_profiled(
+    no_kaggle_inputs_data_dir: Path,
+) -> None:
+    """Case C: one table, no split, no template. Flips at step 3.
+
+    This is the M12 shape, and today it does not produce a weak description —
+    it produces none at all.
+    """
+    with pytest.raises(ValueError, match="Expected one training CSV"):
+        _profile(no_kaggle_inputs_data_dir)
+
+
+def test_an_environment_has_no_description_at_all(environment_data_dir: Path) -> None:
+    """No CSVs, so the profiler refuses. Flips at step 5.
+
+    The workspace layer catches this and writes a filesystem inventory whose
+    modality and null target have nothing behind either
+    (`workspace/capability.py:503-580`).
+    """
+    with pytest.raises(FileNotFoundError, match="No CSV files found"):
+        _profile(environment_data_dir)
+
+
+def test_the_sample_cap_is_reported_as_an_exact_row_count(
+    sampled_beyond_cap_data_dir: Path,
+) -> None:
+    """The row count is the cap, and the profile says it is exact.
+
+    Flips at step 5. On disk today: `playground-series-s6e7/profile.json` says
+    100,000 rows, unstamped, for a file of 690,088.
+    """
+    real_rows = len(pd.read_csv(sampled_beyond_cap_data_dir / "train.csv"))
+    profile = _profile(sampled_beyond_cap_data_dir, ProfilerConfig(max_rows_sample=SAMPLE_CAP))
+
+    assert real_rows > SAMPLE_CAP, "the fixture must exceed the cap or it proves nothing"
+    assert profile.row_count == SAMPLE_CAP
+    assert profile.row_count_estimated is False
+
+
+def test_a_boolean_label_is_not_the_numeric_column(bool_target_data_dir: Path) -> None:
+    """spaceship-titanic's shape: the label is the one column that is not numeric.
+
+    A guard for later steps — "the target is numeric" is worth 0.15 in the
+    catalogue precisely because it is wrong here.
+    """
+    profile = _profile(bool_target_data_dir)
+    by_name = {column.name: column for column in profile.columns}
+
+    assert profile.target_column == "Transported"
+    assert by_name["Transported"].is_numeric is False
+    assert by_name["Age"].is_numeric is True

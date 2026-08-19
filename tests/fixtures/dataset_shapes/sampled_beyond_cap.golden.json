@@ -1,0 +1,82 @@
+{
+  "schema_version": 0,
+  "competition": "sampled-beyond-cap",
+  "files": [
+    "sample_submission.csv",
+    "test.csv",
+    "train.csv"
+  ],
+  "train_file": "train.csv",
+  "test_file": "test.csv",
+  "sample_submission_file": "sample_submission.csv",
+  "row_count": 10,
+  "test_row_count": 4,
+  "column_count": 3,
+  "columns": [
+    {
+      "name": "id",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 10,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 1.0,
+        "max": 10.0,
+        "mean": 5.5,
+        "std": 3.02765
+      }
+    },
+    {
+      "name": "feature",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 10,
+      "is_target_candidate": false,
+      "is_numeric": true,
+      "stats": {
+        "min": 0.0,
+        "max": 9.0,
+        "mean": 4.5,
+        "std": 3.02765
+      }
+    },
+    {
+      "name": "label",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 3,
+      "is_target_candidate": true,
+      "is_numeric": true,
+      "stats": {
+        "min": 0.0,
+        "max": 2.0,
+        "mean": 0.9,
+        "std": 0.875595
+      }
+    }
+  ],
+  "target_column": "label",
+  "id_column": "id",
+  "submission_columns": [
+    "id",
+    "label"
+  ],
+  "warnings": [
+    "default_tabular"
+  ],
+  "modality": "tabular",
+  "image_dir": null,
+  "image_column": null,
+  "text_column": null,
+  "partitioned": false,
+  "partition_key": null,
+  "partition_kinds": {},
+  "train_partition_count": 0,
+  "test_partition_count": 0,
+  "row_count_estimated": false,
+  "scored_is_partition_suffix": false,
+  "scored_fraction": 0.0,
+  "train_only_columns": [],
+  "anchor_column": null
+}
