@@ -121,7 +121,9 @@ new failure counting is needed.
 
 ## 4. Goals & success metrics
 
-The plan's five exit criteria, made checkable:
+The plan's five exit criteria, made checkable. **What seven campaigns actually
+showed is §13** — 3, 4 and 5 met, 1 and 2 still open on a defect outside these
+stops.
 
 | # | Criterion | Check |
 |---|---|---|
@@ -133,7 +135,7 @@ The plan's five exit criteria, made checkable:
 
 Criteria 1–3 cannot be met by unit tests. They need a campaign on a workspace
 that passes PR #142's objective preflight — the same evidence M8 and M11 still
-owe.
+owe. Run 2026-08-20; see §13.
 
 ---
 
@@ -500,7 +502,130 @@ the hollow-layer failure this roadmap is named for.
 
 ---
 
-## 13. Rollout
+## 13. Results — seven campaigns, 2026-08-20
+
+Run in an isolated sandbox workspace (`research init`, own experience store, no
+Kaggle credentials), on a synthetic tabular regression: 900 train / 300 test,
+`target = 3·f_lin − 2·f_sq² + 0.8·f_cat + noise(sd 1.0)`. A constant predictor
+scores RMSE 4.64, so a working model should reach ≈1.0–1.7. Two campaigns —
+one with a reachable target (`rmse ≤ 2.0`), one unreachable (`rmse ≤ 0.1`,
+below the noise floor) — across three model tiers.
+
+**rogii could not host this.** `resolve_objective` on its `competition.json`
+returns `blocks_launch: True, unresolved: ['metric'], evidence: ['no evaluation
+metric stated']` — PR #142's preflight refuses at second zero, which is the gate
+working. Demonstrating stops there would have meant overriding it and building
+evidence on an unknown objective.
+
+### 13.1 Criterion by criterion
+
+| # | Criterion | Verdict |
+|---|---|---|
+| 1 | Unreachable target stops on `plateau` | **Not demonstrated** — §13.3 |
+| 2 | Reachable target stops on `metric_target` | **Not demonstrated** — §13.3 |
+| 3 | Cannot progress → recorded reason, not a spin | **Met, by a different route than the plan's** — §13.4 |
+| 4 | Goal line every step; `status` shows the same | **Met** — 12 lines in a 12-step campaign, in all seven runs |
+| 5 | `metric_history` non-empty after an experiment | **Met** — `recorded cv_score=1.6523199050168489 for E-001` |
+
+**And the result the milestone exists for: `max_steps` ended none of the seven
+campaigns.** Before this work every campaign in the roadmap's evidence logs
+ended on that counter. The stops that ended these were `failing`, a policy
+`Conductor stop`, and — fourteen times across the runs — a goal-persistence
+override refusing an advisory stop while the target was unmet.
+
+### 13.2 Two defects found, one fixed
+
+**The codegen gate enforced a rule no prompt stated.** Every generated
+`train.py` was rejected: *"imports numpy, pandas, sklearn but its PEP 723 block
+does not declare them"*. The rule lived in the code engineer's `skill.md`, which
+nothing loads; `code_engineer_system.md`, `coder.md` and `delta_brief_system.md`
+mentioned it zero times. Two unrelated models — `qwen2.5-coder:14b` and
+`gemini-3.5-flash-lite` — failed identically, which is the signature of an
+undeclared requirement rather than weak codegen. Fixed by stating the rule in
+the prompt the model is actually sent; **zero rejections in the four campaigns
+since**. Note what the gate does *not* do: a file with no block at all skips the
+check entirely, so the models were writing a block and under-filling it — which
+is why the prompt now names `pandas`/`numpy`/`sklearn`, the imports that read as
+ambient.
+
+**A correct score, recorded under a name its target cannot match.** Open.
+See §13.3.
+
+### 13.3 Why criteria 1 and 2 are still open
+
+`gemini-pro-latest` produced training code that ran and wrote a real result:
+
+```json
+{"cv_score": 1.6523199050168489, "metric": "rmse"}
+```
+
+1.65 is comfortably inside the 2.0 target. `metric_target` did not fire, and
+could not have:
+
+```
+metric_names_match('cv_score', 'rmse') = False
+metric_names_match('cv_rmse',  'rmse') = True
+```
+
+The emitted file puts the metric's identity in a *sibling field* while naming
+the column generically, and `resolve_metric_and_direction` keys off the column
+name — so the series records `cv_score`, and no target spelled `rmse` can ever
+be answered by it. Criterion 1 is blocked by the same cause plus its need for
+three comparable readings.
+
+This is the drift the plan warned about — *"resolution order should be
+`cv_<target>` → `<target>` → generic fallbacks"* — occurring at **emission**,
+upstream of the matching logic built to absorb it. The fix belongs to the score
+writer or the codegen contract, not to these stops: `evaluate_stops` is correct
+to refuse a target it is not measuring, which is exactly what
+`_last_metric_matches_target` was added for.
+
+**§8.4's design decision earned itself here.** The goal line dropped the target
+the instant the recorded key stopped answering it:
+
+```
+before the score:  goal rmse:     no result yet · target 2
+after the score:   goal cv_score: best 1.65232 · 1 result(s) · 0 since improvement
+```
+
+A renderer that had shown `target 2` beside a `cv_score` reading would have made
+this invisible; refusing to turned a silent mismatch into something an operator
+watches disappear.
+
+### 13.4 Criterion 3, met by the route this design chose
+
+The plan asks for a `needs_guidance` pause when the trainer dies. Three campaigns
+ended instead on:
+
+```
+stop:failing — 3 consecutive failed execution(s), 5 step(s) since the last
+success. Last: run_experiment for P-001 completed without writing metrics.
+```
+
+That is §9's deliberate divergence behaving as designed — three failed
+*executions* mean something is broken, and M20 puts a broken campaign in
+`failed` rather than a pause. The criterion's substance is met: the campaign
+stopped, named its cause, and named the failing tool, rather than spinning.
+`needs_guidance` itself is covered by unit tests (§12) and has not yet fired on
+a live campaign, because no run reached ten scoreless steps or three unmapped
+ones before another stop bound it first.
+
+### 13.5 Also observed
+
+- **Both campaigns were killed mid-step** by the sandbox reaping long-running
+  processes, and both resumed under `conduct continue` with session, budget
+  state and goal line intact.
+- **Model tier is the limiter, exactly as the roadmap says.**
+  `qwen2.5-coder:14b` and `gemini-3.5-flash-lite` produced no runnable training
+  code even after the prompt fix — a `CodeProposal` schema violation (`files` as
+  a dict, not a list) and a `LightGBMError: number of features in data (4) is
+  not the same as it was in training data (5)`, the train/test mismatch the
+  system prompt warns about at length. Only `gemini-pro-latest` produced a
+  result.
+
+---
+
+## 14. Rollout
 
 **Prerequisites, in order.**
 
