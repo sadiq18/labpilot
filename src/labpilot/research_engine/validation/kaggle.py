@@ -19,6 +19,7 @@ from typing import Any
 
 from labpilot.research_engine.evidence.builder import _primary_cv_keyed
 from labpilot.research_engine.intelligence.competition.direction import resolve_maximize
+from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.validation.models import ValidationResult
 
 SOURCE = "kaggle_cv"
@@ -94,20 +95,52 @@ class KaggleCvValidator:
     source = SOURCE
 
     def validate(self, hypothesis: Any, workspace: Any, context: Any) -> ValidationResult:
-        root = _workspace_root(workspace)
-        competition = str(getattr(context, "competition", "") or "")
-        knowledge_dir = getattr(getattr(context, "paths", None), "base_dir", None)
-
         from labpilot.research_engine.evidence.compare_service import _load_metrics
 
+        root = _workspace_root(workspace)
         metrics_path = root / "metrics.json"
-        maximize = resolve_maximize(
-            competition=competition,
-            workspace_root=root,
-            knowledge_root=Path(knowledge_dir) if knowledge_dir else None,
-        )
         return result_from_metrics(
             _load_metrics(metrics_path),
-            maximize=maximize,
+            maximize=direction_for(
+                str(getattr(context, "competition", "") or ""),
+                knowledge_dir=getattr(getattr(context, "paths", None), "base_dir", None),
+                workspace_root=root,
+            ),
             artifacts={"metrics": str(metrics_path)},
         )
+
+
+def direction_for(
+    competition: str,
+    *,
+    knowledge_dir: Any,
+    workspace_root: Path | None,
+) -> bool | None:
+    """Which way is better, from every source `build_evidence_card` consults.
+
+    All four arguments matter and the list is not obvious, which is why this is
+    one function rather than a call spelled out at each site. `_resolve_direction`
+    passes `ResearchPaths.root` *and* `ResearchPaths.extracted_dir`; an earlier
+    version of this validator passed `paths.base_dir` as the knowledge root and
+    omitted the extracted directory entirely, so it consulted strictly fewer
+    sources than the builder it was standing in for.
+
+    That is not a small difference. The Analyze profile artifact under
+    `extracted_dir` is where rogii's ``minimize`` actually lived — the fallback
+    the direction layer exists for — so the validator would have answered
+    ``None`` for the one competition that motivated the whole thing, and the
+    campaign would have refused to build a card it can build today.
+
+    ``None`` is passed through rather than raised on: a result carries an
+    unknown direction honestly, and `build_evidence_card` is the layer that
+    decides refusing is the right response.
+    """
+    if not knowledge_dir:
+        return resolve_maximize(competition=competition, workspace_root=workspace_root)
+    paths = ResearchPaths(Path(knowledge_dir), competition)
+    return resolve_maximize(
+        competition=competition,
+        workspace_root=workspace_root,
+        knowledge_root=paths.root,
+        extracted_dir=paths.extracted_dir,
+    )
