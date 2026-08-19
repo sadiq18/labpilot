@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from labpilot.accessor.profiler.source import LocalFileSource
 from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
 from labpilot.config import ProfilerConfig
 from labpilot.research_engine.execution.baseline.selector import BaselineSelector
@@ -435,10 +436,11 @@ def test_two_partitions_are_too_few_to_infer_a_partitioned_layout(tmp_path):
     pd.DataFrame({"id": ["t0_1"], "label": [0.0]}).to_csv(
         root / "sample_submission.csv", index=False
     )
+    source = LocalFileSource(root)
     profile = _profiler()._try_profile_partitioned(
-        root,
+        source,
         "thin",
-        sorted(root.rglob("*.csv")),
+        source.tables(),
         train_pattern="train",
         test_pattern="test",
         submission_pattern="submission",
