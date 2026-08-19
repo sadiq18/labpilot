@@ -220,7 +220,7 @@ def _capability_that_finds_redundancy(monkeypatch, *, retired: list[str]):
     cap = mod.CodeEngineeringCapability(llm_client=_Gateway())
 
     class _Agent:
-        def __init__(self, gateway):
+        def __init__(self, gateway, **options):
             pass
 
         def propose(self, structured, parent):
@@ -261,7 +261,7 @@ def test_other_aider_failures_still_fall_back(tmp_path, monkeypatch):
     cap = mod.CodeEngineeringCapability(llm_client=_Gateway())
 
     class _Agent:
-        def __init__(self, gateway):
+        def __init__(self, gateway, **options):
             pass
 
         def propose(self, structured, parent):
@@ -281,7 +281,7 @@ def test_a_failed_retirement_is_named_in_the_error(tmp_path, monkeypatch):
     cap = mod.CodeEngineeringCapability(llm_client=_Gateway())
 
     class _Agent:
-        def __init__(self, gateway):
+        def __init__(self, gateway, **options):
             pass
 
         def propose(self, structured, parent):

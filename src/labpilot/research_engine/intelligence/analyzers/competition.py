@@ -90,7 +90,7 @@ class CompetitionAnalyzer(BaseAnalyzer):
 
     def analyze(self, context: AnalyzeContext) -> ResearchArtifacts:
         self._maybe_attach_kaggle_client()
-        self._maybe_attach_llm_client()
+        self._maybe_attach_llm_client(context)
         notes: list[str] = []
         if not self._fetcher_explicit and self.metadata_fetcher is None:
             notes.append(
@@ -168,21 +168,6 @@ class CompetitionAnalyzer(BaseAnalyzer):
                 self.related_provider = SeriesRelatedCompetitionProvider(
                     metadata_fetcher=client
                 )
-
-    def _maybe_attach_llm_client(self) -> None:
-        """Optional LLM for page enrichment — never required."""
-        if self._llm_explicit or self.llm_client is not None:
-            return
-        try:
-            from labpilot.config import Settings, load_config
-            from labpilot.llm.client import resolve_llm_client
-
-            config = load_config()
-            # Settings may override provider via env; resolve_llm_client handles that.
-            _ = Settings()
-            self.llm_client = resolve_llm_client(config.llm)
-        except Exception:
-            self.llm_client = None
 
     def _resolve_spec(
         self, context: AnalyzeContext, notes: list[str]

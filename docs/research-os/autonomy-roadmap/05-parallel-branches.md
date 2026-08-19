@@ -1,6 +1,9 @@
 # M11 — Parallel research branches
 
-**Status:** not started · **Blocked by:** M7 (branches must be able to differ) ·
+**Status:** implementation shipped 2026-08-11/12 (PRs #122, #126, #127, #132,
+#135, #136, #138) — parallel branches, worktree isolation and disk accounting,
+compute budget, k-way fan-out · **exit criteria not yet demonstrated:** all three
+require a campaign that actually fans out, and none has been run ·
 **Design:** [design/05-parallel-branches.md](design/05-parallel-branches.md)
 
 ---

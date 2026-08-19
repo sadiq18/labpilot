@@ -1,7 +1,7 @@
 # M15 — The capability layer audit
 
-**Status:** not started · **Purpose:** stop the control plane outrunning the
-tools again
+**Status:** in progress — PR #129 open · **Purpose:** stop the control plane
+outrunning the tools again
 
 ---
 

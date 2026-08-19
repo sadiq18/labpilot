@@ -91,6 +91,7 @@ def analyze_competition(
         knowledge_dir=workspace.knowledge_dir,
         refresh=refresh,
         data_dir=getattr(workspace, "raw_data_dir", None),
+        workspace_root=getattr(workspace, "root", None),
     )
     orchestrator = AnalyzeOrchestrator(
         build_default_registry(),

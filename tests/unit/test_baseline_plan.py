@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.intelligence.paths import ResearchPaths
@@ -17,7 +17,7 @@ from labpilot.research_engine.planner import (
 )
 from labpilot.research_engine.planner.schemas.task_types import TaskType
 
-runner = CliRunner()
+runner = cli_runner()
 _HELP_ENV = {
     "COLUMNS": "200",
     "NO_COLOR": "1",

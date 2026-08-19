@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.tools import build_default_tool_registry
 from labpilot.research_engine.workspace_facade import Workspace
 
-runner = CliRunner()
+runner = cli_runner()
 _HELP_ENV = {
     "COLUMNS": "200",
     "NO_COLOR": "1",

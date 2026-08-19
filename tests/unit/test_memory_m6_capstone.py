@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.agents.events import EXPERIMENT_COMPLETED, EventBus
@@ -18,7 +18,7 @@ from labpilot.research_engine.memory.hooks import (
 from labpilot.research_engine.memory.seed import load_seeded_experience_ids
 from labpilot.workspace import scaffold_workspace
 
-runner = CliRunner()
+runner = cli_runner()
 _HELP_ENV = {
     "COLUMNS": "200",
     "NO_COLOR": "1",

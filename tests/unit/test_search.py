@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.shared.experiments.comparator import write_comparison
@@ -215,7 +215,7 @@ def test_search_no_filters_returns_all(tmp_path: Path):
 
 
 def test_search_cli_bad_runtime(tmp_path: Path):
-    runner = CliRunner()
+    runner = cli_runner()
     (tmp_path / "runs").mkdir()
     result = runner.invoke(
         app,

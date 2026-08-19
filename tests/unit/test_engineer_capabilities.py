@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.execution.capabilities.code_engineering import (
@@ -36,7 +36,7 @@ from labpilot.research_engine.planner.schemas.task_types import (
 )
 from labpilot.research_engine.planner.store import PlanStore
 
-runner = CliRunner()
+runner = cli_runner()
 
 
 def _seed_analyze(knowledge: Path, competition: str = "demo") -> None:

@@ -19,7 +19,7 @@ from typing import Any
 import anyio
 import pytest
 from typer.main import get_command
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.conduct import conduct_app
 from labpilot.research_engine.conductor.fanout import prepare_branches, run_branches
@@ -191,5 +191,5 @@ def test_the_cli_exposes_the_fan_out_width() -> None:
 
 
 def test_the_cli_refuses_a_nonsense_width() -> None:
-    result = CliRunner().invoke(conduct_app, ["run", "goal", "--branches", "0"])
+    result = cli_runner().invoke(conduct_app, ["run", "goal", "--branches", "0"])
     assert result.exit_code != 0

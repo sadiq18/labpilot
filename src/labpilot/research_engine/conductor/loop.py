@@ -753,11 +753,65 @@ def _objective_unmet(config: Any, state: Any) -> bool:
     last = getattr(state, "last_metric", None)
     if last is None:
         return True
+    # Same check `evaluate_stops` makes before firing on a target, and for the
+    # same reason: `last_metric` is a bare number. Without it a `cv_rmse` of
+    # 1789.7 reads as having met an `mse` target of 5 — 1789.7 > 5 is the
+    # *unmet* branch here, but an accuracy of 0.9 against that target is not,
+    # and this function's answer is what keeps a campaign going after an
+    # advisory stop. Measured on rogii 2026-08-12: the competition metric is
+    # mean_squared_error and the pipeline records cv_rmse.
+    if not _measures_the_target(config, state):
+        return True
     # `getattr(..., True)` matches `BudgetConfig.maximize`'s own default. This
     # read used `False`, so the two disagreed about the same field whenever the
     # attribute was missing — one more place where direction was assumed rather
     # than resolved.
     return last < target if getattr(config, "maximize", True) else last > target
+
+
+def _measures_the_target(config: Any, state: Any) -> bool:
+    """Whether `last_metric` is a reading of the metric the target names.
+
+    Duck-typed like its caller, which takes `Any` so tests can pass stand-ins.
+    An unknown metric name keeps the older, looser behaviour, exactly as
+    `budgets._last_metric_matches_target` does.
+    """
+    from labpilot.research_engine.conductor.budgets import metric_names_match
+
+    events = getattr(state, "score_events", None)
+    if not events:
+        return True
+    recorded = events[-1].metric_name
+    target_metric = getattr(config, "target_metric", None)
+    if metric_names_match(recorded, target_metric):
+        return True
+    # Said out loud, because the consequence is invisible otherwise: while the
+    # names disagree this returns False forever, so `_objective_unmet` is always
+    # True, `evaluate_stops` cannot fire `metric_target` either, and a campaign
+    # that has genuinely reached its goal can only end on max_steps, plateau or
+    # budget. Nothing renames either side, so the mismatch is a permanent
+    # property of the workspace rather than a transient one, and
+    # `metric_names_match` only bridges a `_MEASUREMENT_PREFIXES` prefix —
+    # `holdout_auc` against `auc` does not match. Once per campaign, so a
+    # 30-step run logs it once and not thirty times.
+    # Latched on the campaign's own state, so a second campaign in the same
+    # process is told too. `setattr` is guarded because this function is
+    # duck-typed for stand-ins, and a stand-in that refuses the attribute
+    # should warn every step rather than crash the loop.
+    if not getattr(state, "metric_mismatch_reported", False):
+        try:
+            state.metric_mismatch_reported = True
+        except (AttributeError, ValueError):
+            logger.debug("could not latch the metric-mismatch warning on %r", type(state))
+        logger.warning(
+            "The pipeline records %r but the target names %r, and nothing maps between "
+            "them — the objective can never be reported met, so this campaign will run "
+            "to its step or time budget. Set `target_metric` to the key the pipeline "
+            "writes, or have the pipeline write the key the target names.",
+            recorded,
+            target_metric,
+        )
+    return False
 
 
 def _latest_plan_id(workspace: Workspace) -> str | None:

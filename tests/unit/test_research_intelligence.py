@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli import main as cli_main
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
@@ -28,7 +28,7 @@ from labpilot.research_engine.intelligence.renderers.json import (
     write_report,
 )
 
-runner = CliRunner()
+runner = cli_runner()
 
 
 def _plain(text: str) -> str:

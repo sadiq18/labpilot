@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 from labpilot.research_engine.artifacts.base import ArtifactRef
 from labpilot.research_engine.conductor.approvals import maybe_approve
@@ -662,6 +663,39 @@ def test_objective_unmet_respects_maximise_direction():
     assert _objective_unmet(cfg, _State(0.95)) is False
 
 
+class _Measured(_State):
+    """A state whose score series says which metric produced `last_metric`."""
+
+    def __init__(self, last, metric_name):
+        super().__init__(last)
+        self.score_events = [SimpleNamespace(metric_name=metric_name)]
+
+
+def test_a_target_is_not_met_by_a_number_from_another_metric():
+    """`last_metric` is a bare number, and this answer is what keeps a campaign
+    running after an advisory stop.
+
+    Measured on rogii 2026-08-12: the competition metric is mean_squared_error,
+    the pipeline records `cv_rmse`, and `metric_names_match('cv_rmse', 'mse')`
+    is False. An accuracy of 0.9 against a minimised target of 5 lands on the
+    *met* branch, so the campaign accepts the stop and reports a goal it never
+    measured.
+    """
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    assert _objective_unmet(_Cfg(), _Measured(0.9, "cv_accuracy")) is True
+    # The same reading that would have ended it, now that the series names it.
+    assert _objective_unmet(_Cfg(), _Measured(4.2, "cv_rmse")) is True
+
+
+def test_a_target_is_met_by_a_reading_of_its_own_metric():
+    """The check must not cost the behaviour it guards: `cv_mse` answers `mse`."""
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    assert _objective_unmet(_Cfg(), _Measured(4.2, "cv_mse")) is False
+    assert _objective_unmet(_Cfg(), _Measured(194.8, "cv_mse")) is True
+
+
 def test_no_target_means_policy_stop_is_honoured():
     """Without an objective there is nothing to persist toward."""
     from labpilot.research_engine.conductor.loop import _objective_unmet
@@ -1207,3 +1241,51 @@ def test_the_loop_resolves_before_enqueue_on_both_paths():
     assert source.count("resolve_step_args(") >= 2, (
         "both the multi-step and legacy dispatch paths must resolve @latest"
     )
+
+
+def test_a_second_campaign_is_told_too(caplog):
+    """A process-wide latch reports the first campaign and silences the rest."""
+    import logging
+
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            _objective_unmet(_Cfg(), _Measured(0.9, "holdout_auc"))  # a fresh state each time
+
+    warnings = [r for r in caplog.records if "can never be reported met" in r.message]
+    assert len(warnings) == 3, "each campaign gets its own warning"
+
+
+def test_an_unmatchable_metric_pair_is_reported_once(caplog):
+    """The objective becomes unreportable; silence is what made that invisible.
+
+    While the names disagree `_objective_unmet` is True forever and
+    `evaluate_stops` cannot fire `metric_target` either, so a campaign that has
+    reached its goal runs to its step budget with nothing saying why.
+    """
+    import logging
+
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    state = _Measured(0.9, "holdout_auc")
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            assert _objective_unmet(_Cfg(), state) is True
+
+    warnings = [r for r in caplog.records if "can never be reported met" in r.message]
+    assert len(warnings) == 1, "once per campaign, not once per step"
+    assert "holdout_auc" in warnings[0].getMessage()
+    assert state.metric_mismatch_reported is True
+
+
+def test_a_matching_metric_pair_says_nothing(caplog):
+    """A warning that fires on the healthy path is one readers learn to skip."""
+    import logging
+
+    from labpilot.research_engine.conductor.loop import _objective_unmet
+
+    with caplog.at_level(logging.WARNING):
+        _objective_unmet(_Cfg(), _Measured(4.2, "cv_mse"))
+
+    assert not [r for r in caplog.records if "can never be reported met" in r.message]

@@ -106,6 +106,12 @@ class BudgetState(BaseModel):
     #: `metric_history`/`last_metric` from it. Until then those two stay as
     #: they are: read by `evaluate_stops`, written by nothing.
     score_events: list[ScoreEvent] = Field(default_factory=list)
+    #: Set once the metric-name mismatch has been reported for this campaign.
+    #: On the state rather than in a module-level set, for the same reason
+    #: `stagnation_mint_fired` below is: a process-wide latch reports the first
+    #: campaign and silently skips every one after it, and the operator who has
+    #: not yet met the failure mode is exactly the one running the second.
+    metric_mismatch_reported: bool = False
     #: Set when the M8-6 stagnation mint fires for the current plateau, so a
     #: long plateau doesn't mint a near-duplicate hypothesis every step.
     #: Cleared on the next improvement. Read by `_maybe_mint_on_stagnation`

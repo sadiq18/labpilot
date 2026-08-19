@@ -69,6 +69,25 @@ uv run pytest -m "not llm and not image and not deep"
 
 LLM / image / deep jobs are separate markers — see [`tests/README.md`](tests/README.md).
 
+Before pushing anything with concurrency, CPU budgeting, or CLI output, also run:
+
+```bash
+scripts/hostile-test.sh
+```
+
+It re-runs the unit suite under a faked core count (1 and 2) and a 40-column
+terminal. A green mutation sweep proves an assertion is wired to its code; it
+cannot prove the assertion means the same thing on another machine. Four tests
+on the M11 fan-out branch passed on a ten-core laptop and failed on a two-core
+CI runner — a hardcoded core count, a `--help` string Rich truncates when
+narrow, and two frozen race outcomes.
+
+`tests/unit/test_tests_do_not_assert_the_machine.py` catches the other half
+structurally: a test that compares *equality* against `available_cpus()`,
+`gethostname()`, `now()` and friends is asserting the box, not the behaviour.
+Neither guardrail subsumes the other — a hardcoded literal only the hostile run
+sees, an ambient read only the structural rule sees.
+
 ## Secrets
 
 - Never commit `.env`, API keys, or tokens.

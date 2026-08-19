@@ -9,6 +9,11 @@ from typing import Any
 
 from labpilot.research_engine.evidence.builder import (
     build_evidence_card,
+    # Re-exported: this is where the check was defined and where its callers
+    # still import it from. It lives in `builder` now because that is where the
+    # card is made, and a disqualification the card does not carry is one only
+    # this function honours.
+    compared_against_itself,
     write_comparison_files,
 )
 from labpilot.research_engine.evidence.models import EvidenceCard
@@ -174,6 +179,20 @@ def run_compare_and_build_card(context: TaskContext) -> EvidenceCard:
         )
     except Exception as exc:
         logger.warning("Research graph write failed: %s", exc)
+    # The card is still written and still persisted — "this change did nothing"
+    # is worth recording. What must not happen is that reading moving a
+    # hypothesis to confirmed/rejected, or shifting a belief's confidence, on
+    # the strength of a measurement that never varied.
+    self_comparison = compared_against_itself(
+        str(context.execution.id), control_exec, treatment_metrics, control_metrics
+    )
+    if self_comparison:
+        logger.warning(
+            "Not applying evidence for %s: %s",
+            context.plan.hypothesis_id or context.plan.id,
+            self_comparison,
+        )
+        return card
     try:
         from labpilot.research_engine.evidence.apply import (
             apply_card_to_beliefs,

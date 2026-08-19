@@ -70,7 +70,7 @@ class RepositoryAnalyzer(BaseAnalyzer):
         self._llm_explicit = llm_client is not None
 
     def analyze(self, context: AnalyzeContext) -> ResearchArtifacts:
-        self._maybe_attach_llm_client()
+        self._maybe_attach_llm_client(context)
         notes: list[str] = []
         provider = self.provider or repositories_from_settings(
             knowledge_dir=context.knowledge_dir,
@@ -204,17 +204,6 @@ class RepositoryAnalyzer(BaseAnalyzer):
         card.training_tricks = _ground_terms(card.training_tricks, corpus)
         card.confidence = _confidence_after_grounding(card)
         return card
-
-    def _maybe_attach_llm_client(self) -> None:
-        if self._llm_explicit or self.llm_client is not None:
-            return
-        try:
-            from labpilot.config import load_config
-            from labpilot.llm.client import resolve_llm_client
-
-            self.llm_client = resolve_llm_client(load_config().llm)
-        except Exception:
-            self.llm_client = None
 
     def _persist(
         self,

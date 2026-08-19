@@ -730,3 +730,400 @@ def test_a_genuine_tie_does_not_let_column_order_decide(tmp_path):
 
     assert first.target_column == reversed_order.target_column
     assert any("ambiguous" in w for w in first.warnings)
+
+
+# --- the target's known prefix ----------------------------------------------
+#
+# Measured on rogii 2026-08-13. `TVT_input` is a contiguous, byte-exact prefix
+# of `TVT` in every well and NaN over exactly the scored rows. The profile
+# listed it as an ordinary numeric column with 164k nulls, so codegen built
+# KMeans clusters and a kriging feature from it and never anchored to it.
+# Carrying it forward scores RMSE 15.1; the pipeline built without knowing what
+# it was scored 1380 — worse than predicting a constant.
+
+
+def _anchor_dir(tmp_path, *, anchor_values=None, name="TVT_input", train_only=False):
+    """Partitioned dataset whose `name` column holds a prefix of the target."""
+    root = tmp_path / f"anchor-{name}-{train_only}"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    n, known = 10, 4
+
+    def frame(with_label):
+        target = [float(i) * 3 for i in range(n)]
+        col = anchor_values(target, known) if anchor_values else (
+            target[:known] + [None] * (n - known)
+        )
+        data = {"MD": list(range(n)), "Z": [t + 1000 for t in target], name: col}
+        if with_label:
+            data["TVT"] = target
+        return pd.DataFrame(data)
+
+    for i in range(4):
+        frame(True).to_csv(root / "train" / f"e{i}__main.csv", index=False)
+    for i in range(2):
+        test = frame(False)
+        if train_only:
+            test = test.drop(columns=[name])
+        test.to_csv(root / "test" / f"t{i}__main.csv", index=False)
+    pd.DataFrame({"id": [f"t{w}_{i}" for w in range(2) for i in range(known, n)],
+                  "tvt": [0.0] * (2 * (n - known))}).to_csv(
+        root / "sample_submission.csv", index=False)
+    return root
+
+
+def test_the_targets_known_prefix_is_named(tmp_path):
+    """The gap: without this the anchor is just a sparse numeric column."""
+    profile = _profiler().profile_directory(_anchor_dir(tmp_path), "anchor-comp")
+
+    assert profile.target_column == "TVT"
+    assert profile.anchor_column == "TVT_input"
+    assert any("known prefix" in w for w in profile.warnings)
+
+
+def test_the_warning_says_what_to_do_with_it(tmp_path):
+    """A name codegen cannot act on is the finding-that-gates-nothing failure."""
+    profile = _profiler().profile_directory(_anchor_dir(tmp_path), "anchor-comp")
+    note = next(w for w in profile.warnings if "known prefix" in w)
+
+    assert "residual" in note
+    assert "copy" in note, "the leak — identical to the target in training — must be stated"
+
+
+def test_a_complete_correlated_column_is_not_an_anchor(tmp_path):
+    """`Z` tracks the target closely and is never missing. Correlation is not a
+    prefix, and anchoring to it would predict the wrong series."""
+    profile = _profiler().profile_directory(
+        _anchor_dir(tmp_path, anchor_values=lambda t, k: [v + 1000 for v in t]),
+        "anchor-comp",
+    )
+
+    assert profile.anchor_column is None
+
+
+def test_scattered_nulls_are_missing_data_not_a_masked_future(tmp_path):
+    profile = _profiler().profile_directory(
+        _anchor_dir(
+            tmp_path,
+            anchor_values=lambda t, k: [v if i % 2 else None for i, v in enumerate(t)],
+        ),
+        "anchor-comp",
+    )
+
+    assert profile.anchor_column is None
+
+
+def test_a_prefix_that_disagrees_with_the_target_is_not_an_anchor(tmp_path):
+    """Equality is the whole test — a shifted or smoothed column is a feature."""
+    profile = _profiler().profile_directory(
+        _anchor_dir(
+            tmp_path,
+            anchor_values=lambda t, k: [v + 0.5 for v in t[:k]] + [None] * (len(t) - k),
+        ),
+        "anchor-comp",
+    )
+
+    assert profile.anchor_column is None
+
+
+def test_a_train_only_column_cannot_anchor_anything(tmp_path):
+    """It is absent exactly when a prediction needs it."""
+    profile = _profiler().profile_directory(
+        _anchor_dir(tmp_path, train_only=True), "anchor-comp"
+    )
+
+    assert profile.anchor_column is None
+
+
+def test_a_secondary_table_sharing_the_targets_name_does_not_hide_it(tmp_path):
+    """Per-kind column roles, both directions.
+
+    Measured on rogii 2026-08-13. `typewell.csv` carries its own `TVT` and ships
+    in test, so against the *union* of every kind's test columns the horizontal
+    well's `TVT` — the real label, absent from horizontal test files — stopped
+    looking withheld and target inference fell through to `EGFDU`, a horizon
+    depth. Against the primary kind alone, PR #117's `Geology` bug returns.
+    """
+    root = tmp_path / "shared-name"
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for i in range(4):
+        pd.DataFrame({"MD": [0, 1], "GR": [1.0, 2.0], "TVT": [5.0, 6.0]}).to_csv(
+            root / "train" / f"e{i}__main.csv", index=False
+        )
+        # The secondary table has a TVT of its own, and keeps it at test.
+        pd.DataFrame({"TVT": [1.0, 2.0], "GR": [3.0, 4.0], "Note": ["a", "b"]}).to_csv(
+            root / "train" / f"e{i}__ref.csv", index=False
+        )
+    for i in range(2):
+        pd.DataFrame({"MD": [0, 1], "GR": [1.0, 2.0]}).to_csv(
+            root / "test" / f"t{i}__main.csv", index=False
+        )
+        pd.DataFrame({"TVT": [1.0, 2.0], "GR": [3.0, 4.0]}).to_csv(
+            root / "test" / f"t{i}__ref.csv", index=False
+        )
+    pd.DataFrame({"id": ["t0_1"], "tvt": [0.0]}).to_csv(
+        root / "sample_submission.csv", index=False
+    )
+
+    profile = _profiler().profile_directory(root, "shared-comp")
+
+    assert profile.target_column == "TVT"
+    assert "TVT" in profile.train_only_columns
+    # `Note` is withheld by its own kind; `GR` reaches test in both kinds.
+    assert "Note" in profile.train_only_columns
+    assert "GR" not in profile.train_only_columns
+
+
+# --- the per-kind rule's blind spots ----------------------------------------
+#
+# `_is_withheld_at_test` reads a column's availability from the kind that
+# carries it. Kinds are parsed out of filenames, and every one of these is a
+# shape where that parse does not line up with reality. All three inferred the
+# wrong target — or none — while `train_only_columns` said something else.
+
+
+def _partitioned(root, train, test, submission):
+    """Write a partitioned dataset: {filename: frame} for train and test."""
+    (root / "train").mkdir(parents=True)
+    (root / "test").mkdir()
+    for name, frame in train.items():
+        frame.to_csv(root / "train" / name, index=False)
+    for name, frame in test.items():
+        frame.to_csv(root / "test" / name, index=False)
+    pd.DataFrame(submission).to_csv(root / "sample_submission.csv", index=False)
+    return root
+
+
+def test_train_and_test_need_not_spell_the_kind_the_same_way(tmp_path):
+    """`train/well_001.csv` against `test/well_051.csv`: no kind matches.
+
+    `_split_entity_kind` partitions on the first separator, so each partition
+    lands in a kind of its own and no train kind has a test counterpart. Read as
+    "a kind with no test files withholds everything", every column became a
+    label candidate and the first one named in the submission won — the id
+    column. Base inferred `TVT` here; the per-kind rule had to not lose that.
+    """
+    labelled = pd.DataFrame({"id": [1, 2], "MD": [0, 1], "GR": [1.0, 2.0], "TVT": [5.0, 6.0]})
+    unlabelled = pd.DataFrame({"id": [3, 4], "MD": [0, 1], "GR": [1.0, 2.0]})
+    root = _partitioned(
+        tmp_path / "unmatched",
+        {f"well_00{i}.csv": labelled for i in range(1, 5)},
+        {f"well_0{i}.csv": unlabelled for i in (51, 52)},
+        {"id": [3], "TVT": [0.0]},
+    )
+
+    profile = _profiler().profile_directory(root, "c")
+
+    assert profile.target_column == "TVT"
+    assert profile.target_column != profile.id_column
+    assert profile.train_only_columns == ["TVT"]
+
+
+def test_a_column_missing_from_one_partition_is_still_the_target(tmp_path):
+    """The kind's columns are every sampled file's, not `frames[0]`'s.
+
+    With `max_files_sample` at 25 a single file with a schema quirk is likely
+    rather than remote. Reading only the first made the label resolve to no kind
+    at all, so it was declared available at test, dropped out of `train_only`,
+    and `target_column` came back None — the `frames[0]` mistake PR #117 removed
+    from the fallback, re-made one layer up.
+    """
+    root = _partitioned(
+        tmp_path / "quirk",
+        {
+            "e0__main.csv": pd.DataFrame({"MD": [0, 1], "GR": [1.0, 2.0]}),
+            **{
+                f"e{i}__main.csv": pd.DataFrame(
+                    {"MD": [0, 1], "GR": [1.0, 2.0], "TVT": [5.0, 6.0]}
+                )
+                for i in range(1, 4)
+            },
+        },
+        {f"t{i}__main.csv": pd.DataFrame({"MD": [0, 1], "GR": [1.0, 2.0]}) for i in range(2)},
+        {"id": [3], "tvt": [0.0]},
+    )
+
+    profile = _profiler().profile_directory(root, "c")
+
+    assert profile.target_column == "TVT"
+    assert profile.train_only_columns == ["TVT"]
+
+
+def test_the_target_fallback_asks_the_same_question_as_train_only(tmp_path):
+    """The submission-header path was fixed; the fallback beside it was not.
+
+    Same fixture as `test_a_secondary_table_sharing_the_targets_name_does_not_hide_it`
+    with a submission that does not name the label, which is the only difference
+    between the two. The fallback filtered against the cross-kind union, so
+    `typewell`'s own `TVT` still hid the real one and the answer fell through to
+    a text column — a profile asserting `TVT` is withheld and `Note` is the
+    label, in the same breath.
+    """
+    root = _partitioned(
+        tmp_path / "fallback",
+        {
+            **{
+                f"e{i}__main.csv": pd.DataFrame(
+                    {"MD": [0, 1], "GR": [1.0, 2.0], "TVT": [5.0, 6.0]}
+                )
+                for i in range(4)
+            },
+            **{
+                f"e{i}__ref.csv": pd.DataFrame(
+                    {"TVT": [1.0, 2.0], "GR": [3.0, 4.0], "Note": ["a", "b"]}
+                )
+                for i in range(4)
+            },
+        },
+        {
+            **{f"t{i}__main.csv": pd.DataFrame({"MD": [0, 1], "GR": [1.0, 2.0]}) for i in range(2)},
+            **{
+                f"t{i}__ref.csv": pd.DataFrame({"TVT": [1.0, 2.0], "GR": [3.0, 4.0]})
+                for i in range(2)
+            },
+        },
+        {"id": ["t0_1"], "prediction": [0.0]},
+    )
+
+    profile = _profiler().profile_directory(root, "c")
+
+    assert profile.target_column == "TVT"
+
+
+def test_the_profile_never_names_an_anchor_it_calls_withheld(tmp_path):
+    """One predicate for both, so the two answers cannot disagree.
+
+    The anchor took a column set and the call site defaulted to the cross-kind
+    union whenever the primary kind had no test files of its own — reachable,
+    since the only entry guard counts *train* files. The profile then told
+    codegen to carry forward a column it also listed as unavailable at test.
+    """
+    masked = pd.DataFrame(
+        {
+            "MD": range(6),
+            "TVT_input": [1.0, 2.0, 3.0, None, None, None],
+            "TVT": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+    complete = pd.DataFrame({"MD": range(6), "TVT_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]})
+    root = _partitioned(
+        tmp_path / "contradiction",
+        {
+            **{f"e{i}__horizontal.csv": masked for i in range(4)},
+            **{f"e{i}__typewell.csv": complete for i in range(2)},
+        },
+        {f"t{i}__typewell.csv": complete for i in range(2)},
+        {"id": ["t0_1"], "tvt": [0.0]},
+    )
+
+    profile = _profiler().profile_directory(root, "c")
+
+    assert profile.anchor_column not in profile.train_only_columns
+
+
+def test_one_fully_observed_partition_does_not_veto_the_anchor(tmp_path):
+    """A well with no masked tail has no opinion; it is not a contradiction.
+
+    Requiring every partition to show the prefix meant one complete well — or
+    one merely longer than `max_rows_sample`, whose sample holds only the known
+    part — discarded the anchor for the whole dataset, with no warning to say
+    so. Four wells here carry the prefix and the fifth is complete.
+    """
+    masked = pd.DataFrame(
+        {
+            "MD": range(6),
+            "TVT_input": [1.0, 2.0, 3.0, None, None, None],
+            "TVT": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+    complete = pd.DataFrame(
+        {
+            "MD": range(6),
+            "TVT_input": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "TVT": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+    root = _partitioned(
+        tmp_path / "unanimity",
+        {"e0__main.csv": complete, **{f"e{i}__main.csv": masked for i in range(1, 5)}},
+        {
+            f"t{i}__main.csv": pd.DataFrame(
+                {"MD": range(6), "TVT_input": [1.0, 2.0, 3.0, None, None, None]}
+            )
+            for i in range(2)
+        },
+        {"id": ["t0_3"], "tvt": [0.0]},
+    )
+
+    profile = _profiler().profile_directory(root, "c")
+
+    assert profile.anchor_column == "TVT_input"
+
+
+def test_a_partition_that_disagrees_still_vetoes_the_anchor(tmp_path):
+    """The other half: "no opinion" must not become "anything goes"."""
+    masked = pd.DataFrame(
+        {
+            "MD": range(6),
+            "TVT_input": [1.0, 2.0, 3.0, None, None, None],
+            "TVT": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+    disagrees = pd.DataFrame(
+        {
+            "MD": range(6),
+            "TVT_input": [9.0, 9.0, 9.0, None, None, None],
+            "TVT": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+    root = _partitioned(
+        tmp_path / "veto",
+        {"e0__main.csv": disagrees, **{f"e{i}__main.csv": masked for i in range(1, 5)}},
+        {
+            f"t{i}__main.csv": pd.DataFrame(
+                {"MD": range(6), "TVT_input": [1.0, 2.0, 3.0, None, None, None]}
+            )
+            for i in range(2)
+        },
+        {"id": ["t0_3"], "tvt": [0.0]},
+    )
+
+    profile = _profiler().profile_directory(root, "c")
+
+    assert profile.anchor_column is None
+
+
+def test_the_anchor_reaches_the_validation_plan(tmp_path):
+    """A field nothing reads gates nothing.
+
+    `anchor_column` was written by the profiler and read nowhere in `src/`:
+    `BaselineSelector.select`, `derive_validation_plan` and every prompt builder
+    ignored it, so the profiler's finding reached the pipeline only as one
+    sentence in `profile.warnings`. The validation plan is where it belongs —
+    it already decides `exclude_features`, and the anchor is precisely the
+    column that must be neither a plain feature nor excluded.
+    """
+    from labpilot.research_engine.execution.baseline.selector import derive_validation_plan
+
+    profile = _profiler().profile_directory(_anchor_dir(tmp_path), "anchor-comp")
+    plan = derive_validation_plan(profile)
+
+    assert profile.anchor_column == "TVT_input"
+    assert plan.anchor_column == "TVT_input"
+    assert "residual" in plan.rationale
+    # Not excluded: dropping it discards the strongest signal in the dataset.
+    assert "TVT_input" not in plan.exclude_features
+
+
+def test_a_dataset_with_no_anchor_says_nothing_about_one(tmp_path):
+    """The note must not fire on every plan, or readers learn to skip it."""
+    from labpilot.research_engine.execution.baseline.selector import derive_validation_plan
+
+    profile = _profiler().profile_directory(
+        _anchor_dir(tmp_path, anchor_values=lambda t, k: [v + 1000 for v in t]), "anchor-comp"
+    )
+    plan = derive_validation_plan(profile)
+
+    assert plan.anchor_column is None
+    assert "residual" not in plan.rationale

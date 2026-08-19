@@ -2,14 +2,19 @@ import json
 from pathlib import Path
 
 from labpilot.accessor.common.derived import derived_note
-from labpilot.accessor.profiler.tabular import DatasetProfile
+from labpilot.accessor.profiler.tabular import PROFILE_SCHEMA_VERSION, DatasetProfile
 
 
 def write_profile(run_dir: Path, profile: DatasetProfile) -> tuple[Path, Path]:
     json_path = run_dir / "profile.json"
     md_path = run_dir / "profile.md"
 
-    json_path.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
+    # Stamped here, by the one writer, rather than defaulted on the model: the
+    # field says which profiler produced *this file*, and a default would make
+    # every unstamped legacy profile validate as current. `model_copy` because
+    # the caller's object is not ours to mutate.
+    stamped = profile.model_copy(update={"schema_version": PROFILE_SCHEMA_VERSION})
+    json_path.write_text(stamped.model_dump_json(indent=2), encoding="utf-8")
     md_path.write_text(
         derived_note(
             source_of_record="profile.json",

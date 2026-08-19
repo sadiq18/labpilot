@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.shared.experiments.knowledge import (
@@ -255,7 +255,7 @@ def test_knowledge_list_cli_filters_hurts(tmp_path: Path):
             ],
         )
     )
-    runner = CliRunner()
+    runner = cli_runner()
     result = runner.invoke(
         app,
         [

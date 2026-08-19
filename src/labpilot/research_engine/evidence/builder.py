@@ -374,6 +374,39 @@ def unverified_steps_for(knowledge_dir: Path, competition: str, execution_id: st
     return _unverified_steps_in(_task_evidence_for(knowledge_dir, competition, execution_id))
 
 
+def compared_against_itself(
+    treatment_execution_id: str,
+    control_execution_id: str | None,
+    treatment_metrics: dict[str, Any],
+    control_metrics: dict[str, Any],
+) -> str | None:
+    """Why this comparison measured one thing twice, or None when it is a real one.
+
+    A card moves a hypothesis to confirmed or rejected and shifts belief
+    confidence. Both readings have to come from different runs for that to mean
+    anything.
+
+    The second check is the one that fires in practice. `write_code` now refuses
+    a proposal that leaves the pipeline byte-identical, but a change can also be
+    *behaviourally* inert — measured on rogii 2026-08-12, E-244 and E-246
+    returned cv_rmse 1789.6796883967336 and the same 31-feature list for H-020
+    and H-021. That a treatment made no difference is a legitimate finding; it
+    is not evidence for the hypothesis that asked for it.
+
+    Called from `build_evidence_card`, so the answer lands on the card as
+    `uncomparable_reason` and reaches every reader. It used to be called by
+    `run_compare_and_build_card` alone, after the card had been persisted and
+    `comparison.json` written — so reflection read the refused numbers back and
+    confirmed the hypothesis, and `submit_learn` re-derived `accepted` from the
+    same card, both without ever consulting it.
+    """
+    if control_execution_id and control_execution_id == treatment_execution_id:
+        return f"control and treatment are the same execution ({treatment_execution_id})"
+    if treatment_metrics and treatment_metrics == control_metrics:
+        return "treatment and control metrics are identical, so the change was behaviourally inert"
+    return None
+
+
 def build_evidence_card(
     *,
     knowledge_dir: Path,
@@ -428,7 +461,19 @@ def build_evidence_card(
     # but at this one the run itself says so.
     placeholder_treatment = is_placeholder_metrics(treatment_metrics)
     placeholder_control = is_placeholder_metrics(control_metrics)
-    uncomparable = mismatched_metric or placeholder_treatment or placeholder_control
+    # Here rather than in `run_compare_and_build_card`, which is where it
+    # started: that caller skipped its own `apply_card_to_*` and returned, but
+    # the card was already persisted and `comparison.json` already written, so
+    # reflection read the refused numbers back off disk and confirmed the
+    # hypothesis anyway, and `submit_learn` re-derived a decision from the same
+    # card without consulting the check at all. A disqualification the card does
+    # not carry is a disqualification only its first reader honours.
+    self_comparison = compared_against_itself(
+        treatment_execution_id, control_execution_id, treatment_metrics, control_metrics
+    )
+    uncomparable = (
+        mismatched_metric or placeholder_treatment or placeholder_control or bool(self_comparison)
+    )
     cv_gain = None
     if parent_cv is not None and treatment_cv is not None and not uncomparable:
         cv_gain = treatment_cv - parent_cv
@@ -496,6 +541,8 @@ def build_evidence_card(
             f"metric_key_mismatch: control scored {parent_found[1]!r}, "
             f"treatment scored {treatment_found[1]!r}"
         )
+    elif self_comparison:
+        reason = f"self_comparison: {self_comparison}"
 
     impact_error = None
     if cv_gain is not None and expected_cv is not None:
@@ -557,6 +604,12 @@ def build_evidence_card(
         metadata={
             **({"delta_flags": flags} if flags else {}),
             **({"unverified_steps": unverified} if unverified else {}),
+            # Stored, for the same reason `delta_flags` is: three writers
+            # recompute `decision` and `decision_reason` after the card is
+            # built, and a qualification that lives only in those fields is one
+            # each of them drops. `EvidenceCard.uncomparable_reason` reads it
+            # back, and every re-derivation feeds it into `missing_control`.
+            **({"uncomparable_reason": self_comparison} if self_comparison else {}),
         },
     )
 

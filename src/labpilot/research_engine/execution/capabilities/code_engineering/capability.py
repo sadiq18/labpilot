@@ -164,6 +164,74 @@ def _validation_signals(root: Path) -> ValidationSignals:
         return ValidationSignals()
 
 
+def _codegen_timeout_s(context: TaskContext) -> int:
+    """`codegen.timeout_s` for this run, or `CodegenConfig`'s default.
+
+    Routed through `constraints` exactly as `codegen_strategy` is, so the
+    workspace's config decides and there is one place naming the default.
+    Before this the cap was a module constant with no override anywhere, and it
+    sat below `LLMConfig.request_timeout_seconds` — so a slow local model could
+    never finish a delta, and every attempt degraded to a whole-file rewrite on
+    a step that still reported passed.
+    """
+    from labpilot.config import CodegenConfig
+
+    default = CodegenConfig().timeout_s
+    configured = context.constraints.get("codegen_timeout_s")
+    try:
+        value = int(configured)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    # One answer for every non-positive value. `if configured else default`
+    # sent 0 to the default and let a negative through to `subprocess.run`,
+    # where it times out before the process starts.
+    if value <= 0:
+        logger.debug("codegen_timeout_s=%r is not a positive number; using %s", configured, default)
+        return default
+    return value
+
+
+def _content_or_none(path: Path) -> str | None:
+    """The file's text, or None when it is absent or unreadable."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _treatment_is_its_own_parent(written: list[Path], prior: dict[Path, str | None]) -> bool:
+    """Whether apply left every file it touched exactly as the parent left it.
+
+    Exact, not heuristic — which is why this one gates where `_observe_delta`
+    only observes. Its three checks compare a change against a claim and need a
+    false-positive rate before they can block; "the bytes are the same" needs
+    none.
+
+    Asked of every applied file rather than of `pipeline/train.py` alone. A
+    delta may legitimately be confined to another file there: `_copy_tree`
+    offers aider every `*.py` under `pipeline/`, `_ensure_pipeline_modules`
+    creates `infer.py` when it is absent and the coding prompt tells codegen to
+    use it, and `changed` keeps only the files aider actually edited. Judging
+    the run by train.py alone failed every such proposal as a no-op — with its
+    edits already applied to disk, and its `record_execution_source` snapshot
+    skipped.
+
+    A file with no prior content is a first write, not a repeat, so it is never
+    a no-op. Unreadable after a successful apply is its own problem and not this
+    gate's to report: saying "changed" leaves the run to the gates that own
+    reading it.
+    """
+    if not written:
+        return False
+    for path in written:
+        before = prior.get(path.resolve())
+        if before is None or not before.strip():
+            return False
+        if _content_or_none(path) != before:
+            return False
+    return True
+
+
 def _observe_delta(
     prior_train: str,
     proposal: CodeProposal,
@@ -374,7 +442,7 @@ class CodeEngineeringCapability(BaseCapability):
         )
 
         try:
-            agent = AiderAgent(gateway)
+            agent = AiderAgent(gateway, timeout=_codegen_timeout_s(context))
             proposal = agent.propose(structured, Path(context.workspace_root))
         except AiderError as exc:
             # Already recorded to `agent_invocations` with its kind by the
@@ -638,6 +706,14 @@ class CodeEngineeringCapability(BaseCapability):
                 metadata={"origin": origin, "problem_type": problem_type},
             )
 
+        # Read before apply, for every path the proposal claims — the no-op
+        # check below asks whether *anything* landed, and after apply there is
+        # nothing left to compare against.
+        prior_by_path: dict[Path, str | None] = {
+            (root / spec.path).resolve(): _content_or_none((root / spec.path).resolve())
+            for spec in proposal.files
+        }
+
         try:
             written = apply_proposal(root, proposal)
         except ApplyError as exc:
@@ -650,6 +726,32 @@ class CodeEngineeringCapability(BaseCapability):
                 checks=["write_code", "apply"],
                 error=str(exc),
                 metadata={"origin": origin, "problem_type": problem_type},
+            )
+
+        # A dry run writes the same file twice by design, and asks the plumbing
+        # rather than the science. Checked first so it does not pay the reads.
+        if not is_dry_run(context) and _treatment_is_its_own_parent(written, prior_by_path):
+            return evidence(
+                context,
+                capability=self.name,
+                passed=False,
+                summary="the proposal left the pipeline unchanged",
+                checks=["write_code", "apply", "differs_from_parent"],
+                error=(
+                    "Applying this proposal left every file it touched "
+                    f"({', '.join(sorted(str(p.name) for p in written))}) byte-identical "
+                    "to the parent's. An experiment compares a treatment against a "
+                    "control, so a treatment that *is* the control measures the "
+                    "control twice and attributes the result to a hypothesis it "
+                    "never tested. Measured on rogii 2026-08-12: E-244 and E-246 "
+                    "returned the same cv_rmse to sixteen digits for H-020 and "
+                    "H-021, and the second was recorded as a successful experiment."
+                ),
+                metadata={
+                    "origin": origin,
+                    "problem_type": problem_type,
+                    "digests": {str(p): file_digest(p) for p in written},
+                },
             )
 
         digests = {str(p): file_digest(p) for p in written}

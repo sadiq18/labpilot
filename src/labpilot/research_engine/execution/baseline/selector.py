@@ -60,12 +60,34 @@ class ValidationPlan(BaseModel):
     # features trains a model that cannot be served (and usually leaks the
     # target outright).
     exclude_features: list[str] = Field(default_factory=list)
+    # The target's known prefix, when the profiler found one: equal to the
+    # target wherever present, absent exactly on the scored rows. Neither a
+    # plain feature nor an excluded one — as a feature it learns "copy" and
+    # then meets NaN on every row it has to predict, and dropping it discards
+    # the strongest signal in the dataset. It is a *baseline to subtract*:
+    # carry its last known value forward and model the residual.
+    #
+    # Named on the plan rather than left in `profile.warnings`, which is where
+    # it was: nothing in `src/` read `anchor_column`, so the profiler's finding
+    # reached the pipeline only as one sentence in a warnings array that the
+    # model was free to skip. A field the validation plan carries is one the
+    # baseline choice records and the delta checks can see.
+    anchor_column: str | None = None
     rationale: str = ""
 
 
 def derive_validation_plan(profile: DatasetProfile, n_splits: int = 5) -> ValidationPlan:
     """Choose a validation scheme that mirrors the test-time information split."""
     exclude = [c for c in profile.train_only_columns if c != profile.target_column]
+    anchor = profile.anchor_column
+    anchor_note = (
+        f" {anchor!r} is the target's known prefix: carry its last known value forward "
+        f"and model the residual, rather than fitting {profile.target_column!r} from the "
+        "other columns. Do not pass it as a plain feature — it equals the target in "
+        "training, so the model learns to copy it and then meets NaN on every scored row."
+        if anchor
+        else ""
+    )
 
     if profile.scored_is_partition_suffix:
         return ValidationPlan(
@@ -74,10 +96,11 @@ def derive_validation_plan(profile: DatasetProfile, n_splits: int = 5) -> Valida
             n_splits=n_splits,
             holdout_fraction=profile.scored_fraction or 0.5,
             exclude_features=exclude,
+            anchor_column=anchor,
             rationale=(
                 "scored rows form a contiguous suffix of each test partition, so "
                 "validation holds out each training partition's tail to reproduce "
-                "the same predict-forward gap"
+                "the same predict-forward gap." + anchor_note
             ),
         )
     if profile.partitioned:
@@ -86,16 +109,19 @@ def derive_validation_plan(profile: DatasetProfile, n_splits: int = 5) -> Valida
             group_key=profile.partition_key,
             n_splits=n_splits,
             exclude_features=exclude,
+            anchor_column=anchor,
             rationale=(
                 "rows are not iid across partitions; grouping prevents "
-                "near-duplicate rows from spanning the train/validation boundary"
+                "near-duplicate rows from spanning the train/validation boundary."
+                + anchor_note
             ),
         )
     return ValidationPlan(
         scheme="kfold",
         n_splits=n_splits,
         exclude_features=exclude,
-        rationale="iid rows — plain KFold is appropriate",
+        anchor_column=anchor,
+        rationale="iid rows — plain KFold is appropriate." + anchor_note,
     )
 
 

@@ -24,6 +24,7 @@ from labpilot.research_engine.planner.schemas.models import (
 )
 from labpilot.research_engine.planner.schemas.task_types import (
     RUNNABLE_PLAN_STATUSES,
+    UNRUN_PLAN_STATUSES,
     PlanStatus,
     RuntimeTarget,
     TaskStatus,
@@ -263,8 +264,31 @@ class PlanStore:
         unmirrored hypothesis (`h.status IS NULL`) fails *open*: not knowing
         must never silently disable every plan in the workspace.
         """
-        statuses = sorted(str(s) for s in RUNNABLE_PLAN_STATUSES)
-        placeholders = ",".join("?" for _ in statuses)
+        return self._plan_ids_backing_a_live_idea(RUNNABLE_PLAN_STATUSES)
+
+    def unrun_plan_ids(self) -> list[str]:
+        """Ids of plans that still represent outstanding work, ascending.
+
+        Wider than `selectable_plan_ids` by status — a DRAFT is pending work
+        the Engineer cannot yet dispatch — but retired the same way, and that
+        part is the point. `has_unrun_plan` counted a plan this method drops,
+        while `has_runnable_plan` did not, so the two disagreed about the same
+        rows: `generate_plan` was gated for having outstanding work and
+        `run_plan` was gated for having none.
+
+        Measured on rogii 2026-08-12: P-021..P-024, abandoned on 08-09 against
+        hypotheses since rejected, left `query_memory` as the only tool in the
+        allowlist. Three campaigns spent every step there and stopped on
+        stagnation with no experiment run. The state is permanent — nothing
+        retries a rejected hypothesis — so the workspace could not have
+        recovered on its own.
+        """
+        return self._plan_ids_backing_a_live_idea(UNRUN_PLAN_STATUSES)
+
+    def _plan_ids_backing_a_live_idea(self, statuses: frozenset[PlanStatus]) -> list[str]:
+        """Plan ids in `statuses` whose hypothesis is not rejected."""
+        wanted = sorted(str(s) for s in statuses)
+        placeholders = ",".join("?" for _ in wanted)
         rows = self._conn.execute(
             f"""
             SELECT p.id
@@ -279,7 +303,7 @@ class PlanStore:
               )
             ORDER BY p.id
             """,  # noqa: S608 - placeholders are generated from a frozen constant
-            (*statuses, str(HypothesisStatus.REJECTED)),
+            (*wanted, str(HypothesisStatus.REJECTED)),
         ).fetchall()
         return [str(row["id"]) for row in rows]
 

@@ -68,7 +68,15 @@ def _run_llm_check(monkeypatch, *, provider, model, reachable=True, models=None)
     config = load_config()
     config.llm.provider = provider
     config.llm.model = model
-    monkeypatch.setattr("labpilot.config.load_config", lambda *a, **k: config)
+    # `load_config_for_cwd`, because that is what the check reads now — it used
+    # to call `load_config()`, which sees only the package default, so inside a
+    # workspace configuring a router `doctor` reported the legacy provider pin.
+    # Patching `labpilot.config.load_config` no longer reaches it: `workspace.py`
+    # binds the name at import, so the rebind misses and this helper would stub
+    # nothing at all.
+    monkeypatch.setattr(
+        "labpilot.workspace.load_config_for_cwd", lambda *a, **k: (config, None)
+    )
     monkeypatch.setattr(
         ollama_mod, "OllamaProvider", _FakeOllama(reachable, models or [])
     )

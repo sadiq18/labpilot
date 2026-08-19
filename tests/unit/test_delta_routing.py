@@ -266,3 +266,47 @@ def test_a_workspace_root_path_is_not_duck_typed():
     assert workspace_config_path(Path("/a/b")) == Path("/a/b/configs/default.yaml")
     assert workspace_config_path("/a/b") == Path("/a/b/configs/default.yaml")
     assert workspace_config_path(None) is None
+
+
+def test_every_task_context_sets_the_codegen_timeout():
+    """The sibling of the rule above, for the constraint added beside it.
+
+    `codegen_timeout_s` was supplied by `engineer.py` alone, so the Conductor's
+    specialist path ran on the packaged default however the workspace was
+    configured — the fourth instance of the shape this file already enumerates
+    for `codegen_strategy`, added by the change that was fixing the timeout.
+    A constraint the capability reads is a constraint every constructor owes.
+    """
+    import ast
+    from pathlib import Path
+
+    def enclosing_functions(tree: ast.Module) -> dict[int, ast.AST]:
+        owner: dict[int, ast.AST] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                for inner in ast.walk(node):
+                    owner.setdefault(id(inner), node)
+        return owner
+
+    sites: list[tuple[str, str]] = []
+    for path in Path("src/labpilot").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if "TaskContext(" not in source:
+            continue
+        tree = ast.parse(source)
+        owner = enclosing_functions(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or getattr(node.func, "id", "") != "TaskContext":
+                continue
+            fn = owner.get(id(node))
+            if fn is None:
+                continue
+            body = ast.get_source_segment(source, fn) or ""
+            if "codegen_timeout_s" not in body:
+                sites.append((str(path), getattr(fn, "name", "?")))
+
+    assert sites == [], (
+        "these build a TaskContext without setting `codegen_timeout_s`, so the "
+        "workspace's `codegen.timeout_s` is ignored and aider runs on the packaged "
+        f"default: {', '.join(f'{p}::{n}' for p, n in sites)}"
+    )

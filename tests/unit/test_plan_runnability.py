@@ -188,3 +188,76 @@ def test_a_baseline_plan_is_runnable_with_no_hypothesis(tmp_path):
         store.close()
 
     assert has_runnable_plan(_WS(tmp_path)) is True
+
+
+# --- the deadlock the two predicates could produce together -----------------
+
+
+def _retired_plan_workspace(tmp_path):
+    """The rogii shape: every plan finished, plus one abandoned against a
+    hypothesis that has since been rejected."""
+    hstore = HypothesisStore(tmp_path / "knowledge", _COMP)
+    hyp = hstore.create(observation="o", reason="r", prediction="p", confidence=0.5)
+    hstore.update_status(hyp.id, HypothesisStatus.REJECTED)
+
+    store = PlanStore(tmp_path / "knowledge", _COMP)
+    try:
+        _plan(store, "P-001", PlanStatus.DONE)
+        _plan(store, "P-002", PlanStatus.ABANDONED, hypothesis_id=hyp.id)
+    finally:
+        store.close()
+    return _WS(tmp_path)
+
+
+def test_a_retired_plan_is_not_outstanding_work(tmp_path):
+    """Both predicates must agree about the same row.
+
+    `has_unrun_plan` read the plan *files* and counted every unrun status, so an
+    abandoned plan behind a rejected hypothesis counted as pending work while
+    `has_runnable_plan` — reading the store, with the retirement join — did not.
+    """
+    from labpilot.research_engine.conductor.policy import has_runnable_plan, has_unrun_plan
+
+    workspace = _retired_plan_workspace(tmp_path)
+
+    assert has_unrun_plan(workspace) is False
+    assert has_runnable_plan(workspace) is False
+
+
+def test_the_allowlist_still_offers_a_way_forward(tmp_path):
+    """The failure this is really about.
+
+    Measured on rogii 2026-08-12: `generate_plan` gated for having outstanding
+    work, `run_plan`/`run_experiment`/`implement` gated for having none, and
+    `query_memory` the only tool left. Three campaigns spent every step there
+    and stopped on stagnation with no experiment run. Nothing retries a
+    rejected hypothesis, so the workspace could not recover on its own.
+
+    Asserted on the allowlist rather than the predicates because that is what
+    the campaign actually consumes — and `generate_plan` is the one entry that
+    leads anywhere.
+    """
+    from labpilot.research_engine.conductor.policy import available_tools
+
+    workspace = _retired_plan_workspace(tmp_path)
+    catalog = {"generate_plan", "run_plan", "run_experiment", "implement", "query_memory"}
+
+    assert "generate_plan" in available_tools(workspace, catalog)
+
+
+def test_a_draft_against_a_live_idea_still_blocks_generating(tmp_path):
+    """The brake the fix must not release: one unrun plan at a time."""
+    from labpilot.research_engine.conductor.policy import available_tools, has_unrun_plan
+
+    hstore = HypothesisStore(tmp_path / "knowledge", _COMP)
+    hyp = hstore.create(observation="o", reason="r", prediction="p", confidence=0.5)
+
+    store = PlanStore(tmp_path / "knowledge", _COMP)
+    try:
+        _plan(store, "P-001", PlanStatus.DRAFT, hypothesis_id=hyp.id)
+    finally:
+        store.close()
+
+    workspace = _WS(tmp_path)
+    assert has_unrun_plan(workspace) is True
+    assert "generate_plan" not in available_tools(workspace, {"generate_plan", "query_memory"})

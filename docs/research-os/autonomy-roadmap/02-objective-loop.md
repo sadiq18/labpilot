@@ -1,6 +1,9 @@
 # M8 — Close the objective feedback loop
 
-**Status:** not started · **Blocked by:** M7 (scores must be able to differ) ·
+**Status:** implementation shipped 2026-08-11 (PRs #123, #125, #128, #131) —
+score writer, score summary, stagnation mint · **exit criteria not yet
+demonstrated:** all three ask for evidence from a *campaign log*, and no campaign
+has been run since ·
 **Design:** [design/02-objective-loop.md](design/02-objective-loop.md)
 
 ---

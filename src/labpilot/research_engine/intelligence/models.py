@@ -81,6 +81,13 @@ class AnalyzeContext(BaseModel):
     # Raw data root, so analysis can profile the dataset before any run exists.
     # Planning is otherwise data-blind on a fresh workspace.
     data_dir: Path | None = None
+    # The workspace the caller already resolved, when there is one. Analyzers
+    # need the workspace's `llm.routing`, and every other path here is an
+    # operator-overridable directory: `--knowledge-dir` can point outside the
+    # workspace, and re-deriving the workspace by walking up from it then finds
+    # nothing and falls back to the package default — the routing bug again.
+    # Carried rather than re-derived, because the CLI has the answer in hand.
+    workspace_root: Path | None = None
 
     @property
     def paths(self) -> ResearchPaths:

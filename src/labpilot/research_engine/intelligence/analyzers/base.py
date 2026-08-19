@@ -42,3 +42,43 @@ class BaseAnalyzer:
 
     def _empty(self, *notes: str) -> ResearchArtifacts:
         return ResearchArtifacts(analyzer=self.name, notes=list(notes))
+
+    def _maybe_attach_llm_client(self, context: AnalyzeContext | None = None) -> None:
+        """Attach an optional LLM client, resolved from the *workspace's* config.
+
+        One implementation, on the base, because there were three identical ones
+        and the bug this fixes was that a change had to be made in all of them:
+        `load_config()` reads only the package default, where `routing` is empty,
+        so `build_gateway` returned None and every call fell through to the
+        legacy provider pin — a workspace naming fourteen routable endpoints ran
+        every campaign on `ollama`.
+
+        `context` matters. `load_config_for_cwd()` with no arguments discovers
+        the workspace by walking up from the *process* directory, and nothing in
+        `labpilot` ever chdirs — so `research conduct --workspace /data/rogii`
+        launched from a checkout finds no `labpilot.yaml`, falls back to the
+        package default, and reproduces the same bug the workspace-aware loader
+        was supposed to end. `knowledge_dir` sits inside the workspace, so
+        starting the walk there finds the right one wherever the process lives.
+
+        Never required: any failure leaves `llm_client` None, which every caller
+        already treats as "no enrichment".
+        """
+        if getattr(self, "_llm_explicit", False) or getattr(self, "llm_client", None) is not None:
+            return
+        try:
+            from labpilot.llm.client import resolve_llm_client
+            from labpilot.workspace import load_config_for_cwd
+
+            # `workspace_root` when the caller resolved one, because that is
+            # the only path here that is not operator-overridable:
+            # `--knowledge-dir` may point outside the workspace, and starting
+            # the walk there finds no `labpilot.yaml` and falls back to the
+            # package default — the routing bug this method exists to prevent.
+            start = None
+            if context is not None:
+                start = context.workspace_root or context.knowledge_dir
+            config, _ = load_config_for_cwd(start=start)
+            self.llm_client = resolve_llm_client(config.llm)
+        except Exception:
+            self.llm_client = None

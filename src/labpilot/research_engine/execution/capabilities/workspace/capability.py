@@ -11,6 +11,7 @@ artifacts or a local contract (``configs/competition.yaml`` in a workspace).
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,43 @@ def _cache_may_serve(kaggle: object, context: TaskContext) -> bool:
     if not cached.is_absolute():
         cached = Path(context.workspace_root) / cached
     return cached.is_dir() and any(cached.rglob("*"))
+
+
+def _profile_is_current(path: Path) -> bool:
+    """Whether an existing `profile.json` was written by today's profiler.
+
+    Reuse is right — profiling samples every partition and costs real time — but
+    reuse *forever* means a workspace keeps whatever description it was first
+    given. rogii's profile was written 2026-08-02 and served every campaign
+    since, so the partition warnings and the anchor column added later never
+    reached the codegen that needed them.
+
+    An unreadable or unstamped profile re-derives: the cost is one profiling
+    pass, and the alternative is running on a description nothing can vouch for.
+    """
+    return _profile_state(path) == "current"
+
+
+def _profile_state(path: Path) -> str:
+    """``current``, ``stale``, or ``unusable`` for an existing ``profile.json``.
+
+    `_profile_is_current` only needs the first; the rebuild paths need the other
+    two kept apart. A profile we merely failed to *refresh* is worth keeping —
+    an old description beats none. One nothing can parse is not: keeping it
+    leaves `metadata["profile"]` pointing at bytes no reader can use, on a step
+    that reported success, and skips the inventory write that would have put a
+    valid file there. A `profile.json` truncated by a crash or a full disk is
+    the case, and it is indistinguishable from merely old to a boolean.
+    """
+    from labpilot.accessor.profiler.tabular import PROFILE_SCHEMA_VERSION
+
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "unusable"
+    if not isinstance(stored, dict):
+        return "unusable"
+    return "current" if stored.get("schema_version") == PROFILE_SCHEMA_VERSION else "stale"
 
 
 def _has_credentials(kaggle: object) -> bool:
@@ -351,15 +389,43 @@ class WorkspaceCapability(BaseCapability):
         checks: list[str],
     ) -> bool | None:
         profile_path = root / "profile.json"
-        if profile_path.is_file():
+        # Parsed once. `_profile_is_current` is a wrapper over `_profile_state`,
+        # so asking both read and `json.loads` the same file twice — and for a
+        # partitioned dataset that file carries every column profile and up to
+        # 200 paths.
+        state = _profile_state(profile_path) if profile_path.is_file() else None
+        if state == "current":
             metadata["profile_reused"] = True
             metadata["profile"] = str(profile_path)
             checks.append("profile_present")
             return True
 
+        # Whether there is something worth keeping. Before the staleness check every
+        # existing profile short-circuited above, so the rebuild paths below ran
+        # only when there was no profile at all. Now every pre-existing
+        # workspace reaches them — none carries a stamp — and both of them could
+        # replace a description carrying a target, columns and warnings, or
+        # disown it while leaving it on disk for `write_code` to read anyway.
+        stale = state == "stale"
+
+        def keep_stale(reason: str) -> bool:
+            """Serve the old description, and say that is what happened.
+
+            `write_code` gates on `profile_path.is_file()` alone, so reporting
+            "no profile" while one sits on disk changed the bookkeeping and
+            nothing else. A profile we cannot refresh still beats none; what it
+            must not be is silent.
+            """
+            metadata["profile_stale"] = reason
+            metadata["profile"] = str(profile_path)
+            checks.append("profile_stale")
+            return True
+
         raw_dir = root / "data" / "raw"
         raw_files = [p for p in raw_dir.rglob("*") if p.is_file()] if raw_dir.is_dir() else []
         if not raw_files:
+            if stale:
+                return keep_stale("no_data")
             if context.constraints.get("dry_run"):
                 metadata["profile_skipped"] = "no_data_dry_run"
                 checks.append("profile_skipped")
@@ -406,6 +472,15 @@ class WorkspaceCapability(BaseCapability):
         except Exception as exc:
             logger.warning("Workspace tabular profile failed: %s", exc)
             metadata["profile_error"] = str(exc)
+            if stale:
+                # The inventory profile is for a workspace that has no
+                # description, not for one whose description we merely failed to
+                # refresh. `write_profile` overwrites in place, so letting this
+                # through replaced a profile naming a target, its columns and
+                # its warnings with a file listing — and returned True, so the
+                # step passed. Worse, the listing is stamped current, which made
+                # `_profile_is_current` accept it forever after.
+                return keep_stale("reprofile_failed")
             # Non-CSV / scientific layouts: still write an inventory profile so
             # baseline selection + codegen know what files exist.
             inventory_ok = self._write_inventory_profile(

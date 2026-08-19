@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.shared.experiments.graph import build_graph
@@ -207,7 +207,7 @@ def test_cli_report_and_dashboard(tmp_path: Path):
     runs = tmp_path / "runs"
     knowledge = tmp_path / "knowledge"
     _write_run(runs, "r1", metric=0.66)
-    runner = CliRunner()
+    runner = cli_runner()
 
     empty = runner.invoke(
         app,

@@ -6,14 +6,14 @@ import json
 import re
 from pathlib import Path
 
-from typer.testing import CliRunner
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.memory import ExperienceStore
 from labpilot.research_engine.memory.models import ExperienceFacet
 from labpilot.workspace import scaffold_workspace
 
-runner = CliRunner()
+runner = cli_runner()
 _HELP_ENV = {
     "COLUMNS": "200",
     "NO_COLOR": "1",

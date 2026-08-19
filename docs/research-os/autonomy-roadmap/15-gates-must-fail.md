@@ -1,6 +1,7 @@
 # M20 — A gate that cannot fail is not a gate
 
-**Status:** in progress — the mechanism landed 2026-08-09 · **Evidence:**
+**Status:** all five exit criteria addressed 2026-08-12 (PRs #120, #121, #124,
+#130, #134, #137); criterion 4 carries two stated gaps, below · **Evidence:**
 [evidence-log-2026-08-08.md](evidence-log-2026-08-08.md) ·
 **Generalises:** M9 (verification-first), M15's contract test ·
 **Blocked by:** nothing — every item is independent of the research loop

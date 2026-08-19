@@ -1,5 +1,6 @@
 import logging
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,25 @@ class ColumnProfile(BaseModel):
     stats: dict[str, Any] = Field(default_factory=dict)
 
 
+#: Bumped whenever the profiler learns to describe something it could not
+#: before. `prepare_workspace` reuses an existing `profile.json` rather than
+#: paying to rebuild it, so without this a workspace keeps the description it
+#: was first given and every later improvement is invisible to it. rogii's was
+#: written 2026-08-02 and reused by every campaign since; the anchor column
+#: added on 08-13 would never have reached it.
+PROFILE_SCHEMA_VERSION = 2
+
+
 class DatasetProfile(BaseModel):
+    #: Zero, not `PROFILE_SCHEMA_VERSION`: the default is what an *unstamped*
+    #: file validates to, and defaulting it to the current version made every
+    #: legacy profile claim to be current the moment it went through the model.
+    #: Only `_profile_is_current` was unaffected, because it reads the raw dict;
+    #: `load_profile` and `DatasetProfile.model_validate_json` — which feed
+    #: planning and baseline selection — could not tell a 2026-08-02 profile
+    #: from today's. `write_profile` stamps the current version on the way out,
+    #: so the value is a fact about the file rather than about the reader.
+    schema_version: int = 0
     competition: str
     files: list[str] = Field(default_factory=list)
     train_file: str | None = None
@@ -60,12 +79,141 @@ class DatasetProfile(BaseModel):
     scored_is_partition_suffix: bool = False
     scored_fraction: float = 0.0
     train_only_columns: list[str] = Field(default_factory=list)
+    # A column carrying the target's *known prefix*: equal to the target
+    # wherever it is present, absent exactly where the scored rows are. It is
+    # the strongest predictor in the dataset and the only one that says where
+    # the series actually was, so a forecast should be a residual from its last
+    # known value rather than a fit over the other columns.
+    anchor_column: str | None = None
 
 
 # Below this many per-entity train files, treat the dataset as ordinary
 # multi-file rather than partitioned. Group-aware splits and the partitioned
 # template are expensive to get wrong on a normal competition.
 _MIN_PARTITIONS = 3
+
+
+def _detect_anchor_column(
+    frames: list["pd.DataFrame"],
+    target: str | None,
+    reaches_test: Callable[[str], bool],
+) -> str | None:
+    """The column holding the target's known prefix, or None.
+
+    Three conditions, all mechanical:
+
+    * it survives to test — a train-only column cannot anchor a prediction;
+    * wherever it is present it **equals** the target, exactly;
+    * its nulls are a contiguous suffix, which is the region being scored.
+
+    Equality is what separates an anchor from a merely correlated column, and
+    the suffix shape is what separates it from an ordinary sparse feature. Both
+    are required: `Z` correlates with `TVT` and is complete, while a column with
+    scattered nulls is missing data rather than a masked future.
+
+    Measured on rogii 2026-08-13. `TVT_input` satisfies all three in every well
+    and appeared in the profile as an ordinary numeric column with 164k nulls,
+    so codegen built KMeans clusters and a kriging feature from it and never
+    anchored to it. Carrying it forward scores RMSE 15.1; the pipeline built
+    without knowing what it was scored 1380.
+
+    Availability at test is asked through `reaches_test`, which is the same
+    predicate that decides `train_only_columns`. This took a column set and the
+    call site passed the cross-kind union whenever the primary kind had no test
+    files of its own, so one profile could name an anchor and list it as
+    withheld in the same breath.
+
+    Evidence is per partition, and a partition may have none to give: one whose
+    column is fully observed has no masked tail to judge, which is not the same
+    as contradicting the prefix. Requiring *every* partition to show one meant a
+    single complete well — or merely one longer than `max_rows_sample`, whose
+    sample then holds only the known part — discarded the anchor for the whole
+    dataset, silently. One partition showing the prefix and none contradicting
+    it is the rule.
+    """
+    if not target or not frames:
+        return None
+    for name in frames[0].columns:
+        if name == target or not reaches_test(str(name)):
+            continue
+        # Lazily, and stopping at the first refusal: a candidate ruled out by
+        # partition one must not be compared against the other twenty-four.
+        # Building the full list first cost that short-circuit, which the
+        # `all(...)` generator this replaced had, on frames of up to
+        # `max_rows_sample` rows read inline in the campaign's first step.
+        verdicts = (_is_known_prefix_of(frame, str(name), target) for frame in frames)
+        supported = False
+        for verdict in verdicts:
+            if verdict is False:
+                supported = False
+                break
+            supported = supported or verdict is True
+        if supported:
+            return str(name)
+    return None
+
+
+def _is_withheld_at_test(
+    column: str,
+    primary_kind: str,
+    train_cols_by_kind: dict[str, set[str]],
+    test_cols_by_kind: dict[str, set[str]],
+    any_test_columns: set[str],
+) -> bool:
+    """Whether `column` is absent from test **in the kind that carries it**.
+
+    Compared against the union of every kind's test columns, a target shared by
+    name with a secondary table stops looking withheld. Measured on rogii
+    2026-08-13: `typewell.csv` carries its own `TVT`, and it ships in test, so
+    the horizontal well's `TVT` — the actual label, absent from horizontal test
+    files — dropped out of `train_only` and target inference fell through to
+    `EGFDU`. Codegen would have trained against a horizon depth.
+
+    Compared against the primary kind alone, the opposite happens: `Geology`
+    lives only in `typewell`, is present on both sides of it, and looked
+    train-only. That was PR #117. Per-kind is what both bugs were reaching for —
+    ask the question of the table the column actually comes from.
+
+    But the per-kind question is only answerable when the column's kind has test
+    files of its own, and kinds are parsed out of filenames that train and test
+    need not spell the same way. `train/well_001.csv` against `test/well_051.csv`
+    puts every partition in a kind of its own, so no train kind has a test
+    counterpart at all; reading that as "withheld" made every column a label
+    candidate and target inference picked the submission's id column. An
+    unmatched kind therefore falls back to the cross-kind union — the older,
+    looser rule, conservative in the right direction, since it calls a column
+    withheld only when no test file anywhere names it.
+    """
+    kind = primary_kind if column in train_cols_by_kind.get(primary_kind, set()) else None
+    if kind is None:
+        kind = next((k for k, cols in train_cols_by_kind.items() if column in cols), None)
+    if kind is None:
+        return False
+    test_cols = test_cols_by_kind.get(kind)
+    if test_cols is None:
+        return column not in any_test_columns
+    return column not in test_cols
+
+
+def _is_known_prefix_of(frame: "pd.DataFrame", name: str, target: str) -> bool | None:
+    """Whether `name` holds a contiguous, exact prefix of `target` in one partition.
+
+    Tri-state, because "this partition cannot say" is a real answer and is not a
+    refusal. `None` when the column is absent, entirely null, or fully observed
+    — and that last case covers both a partition with no masked tail and one
+    longer than `max_rows_sample`, whose sample holds only the known prefix.
+    Returning False for those let a single such partition veto an anchor that
+    every other partition supported.
+    """
+    if name not in frame or target not in frame:
+        return None
+    known = frame[name].notna().to_numpy()
+    if not known.any() or known.all():
+        return None
+    # Contiguous prefix: the first False sits exactly at the count of Trues.
+    if int(known.argmin()) != int(known.sum()):
+        return False
+    return bool((frame.loc[known, name] == frame.loc[known, target]).all())
 
 
 class TabularProfiler:
@@ -366,6 +514,17 @@ class TabularProfiler:
         # whatever the other kinds contribute — the same mistake as profiling
         # one kind's columns, one field over.
         row_count = int(sum(len(f) for f in frames) / len(frames) * len(kinds[primary_kind]))
+        # Every sampled file of the kind, not `frames[0]`. A column missing from
+        # the first file alone resolved to "no kind" below and was declared
+        # available at test, so it dropped out of `train_only` — and when the
+        # label was the column that happened to be missing, `target_column` came
+        # back None. That is the `frames[0]`-only mistake PR #117 spent four
+        # rounds removing from the fallback fifty lines down, re-made one layer
+        # up: with `max_files_sample` at 25, one file with a schema quirk is
+        # likely rather than remote.
+        train_cols_by_kind: dict[str, set[str]] = {
+            primary_kind: {str(c) for f in frames for c in f.columns}
+        }
         for kind, paths in kinds.items():
             if kind == primary_kind:
                 continue
@@ -373,6 +532,7 @@ class TabularProfiler:
             kind_frames = [
                 pd.read_csv(p, nrows=self.config.max_rows_sample) for p in paths[:kind_limit]
             ]
+            train_cols_by_kind[kind] = {str(c) for f in kind_frames for c in f.columns}
             union_frames.extend(kind_frames)
             row_count += int(sum(len(f) for f in kind_frames) / len(kind_frames) * len(paths))
         sample_df = pd.concat(union_frames, ignore_index=True)
@@ -385,14 +545,28 @@ class TabularProfiler:
         # label while the real target `TVT` was passed over. Codegen then trains
         # against the wrong column entirely.
         test_columns: set[str] = set()
+        test_cols_by_kind: dict[str, set[str]] = {}
         test_by_kind: dict[str, list[Path]] = {}
         for path in test_files:
             test_by_kind.setdefault(self._split_entity_kind(path.stem)[1], []).append(path)
         for kind, paths in test_by_kind.items():
             kind_limit = max(1, min(self.config.max_files_sample, len(paths)))
             for path in paths[:kind_limit]:
-                test_columns.update(pd.read_csv(path, nrows=0).columns)
+                found = {str(c) for c in pd.read_csv(path, nrows=0).columns}
+                test_columns.update(found)
+                test_cols_by_kind.setdefault(kind, set()).update(found)
         test_kind_files = test_by_kind.get(primary_kind, [])
+
+        # One predicate, asked the same way everywhere a column's availability
+        # at test matters: `train_only`, the target fallback, and the anchor.
+        # Each of the three used to spell it differently — the fallback against
+        # the cross-kind union, the anchor against the primary kind with the
+        # union as a default — so one profile could report a column withheld and
+        # name it as the anchor at the same time.
+        def withheld_at_test(column: str) -> bool:
+            return _is_withheld_at_test(
+                column, primary_kind, train_cols_by_kind, test_cols_by_kind, test_columns
+            )
 
         submission_columns: list[str] = []
         if sample_path is not None:
@@ -401,7 +575,7 @@ class TabularProfiler:
         # Target inference: a column present in train but absent from test is a
         # label candidate; the one also named in the submission header wins.
         ambiguous_target: list[str] = []
-        train_only = [c for c in sample_df.columns if c not in test_columns]
+        train_only = [c for c in sample_df.columns if withheld_at_test(str(c))]
         sub_lower = {c.lower() for c in submission_columns}
         target = next((c for c in train_only if c.lower() in sub_lower), None)
         if target is None and train_only:
@@ -441,7 +615,13 @@ class TabularProfiler:
             for frame in frames:
                 seen_in.update(set(frame.columns))
                 union.extend(c for c in frame.columns if c not in union)
-            candidates = [c for c in union if c not in test_columns]
+            # The same per-kind question `train_only` asks. This filtered against
+            # the cross-kind union, so the bug the per-kind rule was written for
+            # survived here untouched: whenever no sample submission named the
+            # label, a secondary table shipping a column of the same name still
+            # removed the real target from the candidates and the answer fell
+            # through to a note column.
+            candidates = [c for c in union if withheld_at_test(str(c))]
             if candidates:
                 most = max(seen_in[c] for c in candidates)
                 candidates = [c for c in candidates if seen_in[c] == most]
@@ -502,6 +682,18 @@ class TabularProfiler:
                 f"scored rows are a contiguous suffix of each test partition "
                 f"(~{profile.scored_fraction:.0%} of rows) — this is a forecast task; "
                 "validate by holding out each partition's tail"
+            )
+        profile.anchor_column = _detect_anchor_column(
+            frames, profile.target_column, lambda name: not withheld_at_test(name)
+        )
+        if profile.anchor_column:
+            profile.warnings.append(
+                f"{profile.anchor_column!r} is the known prefix of {profile.target_column!r}: "
+                f"equal to it wherever present, absent exactly on the scored rows. Carrying its "
+                f"last known value forward is the baseline to beat — predict the residual from "
+                f"it, not {profile.target_column!r} from the other columns. Note it is identical "
+                f"to the target in training, so using it as a plain feature learns 'copy' and "
+                f"then meets NaN on every scored row."
             )
         return profile
 

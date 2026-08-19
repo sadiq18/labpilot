@@ -93,6 +93,21 @@ class EvidenceCard(BaseModel):
         return [str(step) for step in recorded] if isinstance(recorded, list) else []
 
     @property
+    def uncomparable_reason(self) -> str | None:
+        """Why this card's two readings are not a comparison, if they are not.
+
+        Set when the control and the treatment are the same execution, or when
+        the two runs returned identical metrics. Every writer that re-derives
+        `decision` — `submit_learn` when leaderboard results land, `repair` when
+        a direction is corrected — must fold this into `missing_control`, or it
+        will sign a verdict on a measurement that never varied. Carried in
+        `metadata` rather than `decision_reason` because those writers overwrite
+        the reason and would drop it.
+        """
+        recorded = (self.metadata or {}).get("uncomparable_reason")
+        return str(recorded) if recorded else None
+
+    @property
     def decision_summary(self) -> str:
         """`decision_reason`, qualified by the flags that should temper it.
 
@@ -110,6 +125,15 @@ class EvidenceCard(BaseModel):
         lose the qualification by rewriting a sentence.
         """
         parts = [self.decision_reason]
+        uncomparable = self.uncomparable_reason
+        if uncomparable:
+            # Without this the qualification is stored and never shown. Once
+            # `submit_learn` recomputes, `decision_reason` is the bare
+            # "missing_control" while `control_experiment` names a real
+            # execution — a card contradicting itself, with the reason sitting
+            # unread in `metadata`. Exactly the failure the `delta_flags`
+            # treatment below was written for.
+            parts.append(f"not a comparison: {uncomparable}")
         flags = self.delta_flags
         if flags:
             parts.append(f"{len(flags)} delta flag(s): {'; '.join(flags)}")
