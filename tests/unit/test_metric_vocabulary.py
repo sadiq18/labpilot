@@ -21,12 +21,16 @@ import pytest
 from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
     _METRICS,
     MEASUREMENT_PREFIXES,
+    bare_probe_keys,
+    cv_probe_keys,
     cv_search_order,
     direction_of,
     is_scorable,
     known_keys,
+    maximize_from_spec,
     metrics_for,
     metrics_for_problem_type,
+    normalize_direction,
     normalize_metric_key,
     scorable_keys,
 )
@@ -278,3 +282,136 @@ def test_an_unrecognised_problem_type_yields_nothing_rather_than_guessing() -> N
     this pretending to know what an unmapped task needs."""
     assert metrics_for_problem_type("audio_classification") == frozenset()
     assert metrics_for_problem_type("unknown") == frozenset()
+
+
+# --- A3: the registry is the only metric list -------------------------------
+
+
+def test_no_literal_metric_list_survives_outside_this_module() -> None:
+    """The A3 exit criterion, asserted structurally rather than by memory.
+
+    Five modules each kept their own spelling of "the metrics we know", and they
+    disagreed: the parser's substring hints mapped `mean_squared_error` to
+    nothing the selector would accept, and `budgets` carried a second copy of the
+    measurement prefixes. A sixth copy is one edit away at any time, so the
+    check has to be automatic.
+    """
+    import pathlib
+    import re
+
+    known = {"accuracy", "auc", "logloss", "f1", "rmse", "mse", "mae", "rmsle"}
+    root = pathlib.Path(__file__).resolve().parents[2] / "src" / "labpilot"
+    this_module = "metric_vocabulary.py"
+    literal = re.compile(r"[{(\[]\s*((?:\"[a-z0-9_]+\"\s*,\s*){2,}\"[a-z0-9_]+\")\s*,?\s*[})\]]")
+
+    offenders: list[str] = []
+    for path in root.rglob("*.py"):
+        if path.name == this_module:
+            continue
+        for match in literal.finditer(path.read_text(encoding="utf-8")):
+            names = set(re.findall(r'"([a-z0-9_]+)"', match.group(1)))
+            # Every member a canonical key. `objective.py`'s morphological hints
+            # ("error", "loss", "gain", "precision") overlap this vocabulary
+            # without being a metric list — they orient a metric *no* catalogue
+            # knows, which is the case the registry cannot serve.
+            if len(names & known) >= 3 and names <= known:
+                offenders.append(f"{path.relative_to(root)}: {sorted(names)}")
+
+    assert not offenders, "metric list outside the registry:\n" + "\n".join(offenders)
+
+
+def test_a_name_and_its_own_abbreviation_resolve_to_one_metric() -> None:
+    """`Root Mean Squared Error (RMSE)` is how Kaggle actually spells it — and
+    exact alias matching alone could not read it, which broke house-prices."""
+    assert normalize_metric_key("Root Mean Squared Error (RMSE)") == "rmse"
+    assert normalize_metric_key("Area Under the ROC Curve (AUC)") == "auc"
+
+
+def test_a_gloss_that_contradicts_its_name_resolves_to_nothing() -> None:
+    """Preferring the left half because it is written first is the positional
+    tie-break this module exists to remove."""
+    assert normalize_metric_key("Accuracy (RMSE)") is None
+
+
+def test_a_composite_metric_is_not_read_as_the_one_it_contains() -> None:
+    """MCRMSE is column-wise RMSE and is a *different* number. The substring
+    matcher this replaced answered `rmse` here, which is the whole bug class:
+    `"mse" in "rmse"` is also True, and the old table survived only by listing
+    `rmse` first."""
+    assert normalize_metric_key("Mean Columnwise RMSE (MCRMSE)") is None
+    assert normalize_metric_key("mean_columnwise_rmse") is None
+
+
+def test_the_probe_order_covers_the_spellings_runs_actually_write() -> None:
+    """`cv_roc_auc` is what the classification template writes; `cv_auc` is what
+    the canonical key would suggest. Both must be found."""
+    keys = cv_probe_keys()
+
+    assert "cv_roc_auc" in keys and "cv_auc" in keys
+    assert keys.index("cv_balanced_accuracy") < keys.index("cv_accuracy") < keys.index("cv_rmse")
+
+
+def test_cross_validated_and_bare_spellings_are_offered_separately() -> None:
+    """Review finding. Returning both from one function put every bare
+    catalogued key ahead of the caller's generic `cv_*` sweep, so a single-split
+    `mae` displaced the `cv_wrmsse` a campaign was actually judged on. The split
+    is what lets the caller sequence them around that sweep.
+    """
+    assert all(k.startswith("cv_") for k in cv_probe_keys())
+    assert not any(k.startswith("cv_") for k in bare_probe_keys())
+    assert len(cv_probe_keys()) == len(bare_probe_keys())
+    assert bare_probe_keys().index("accuracy") < bare_probe_keys().index("rmse")
+
+
+# --- one spelling of "which way is better" ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("min", "minimize"),
+        ("Minimize", "minimize"),
+        ("MIN", "minimize"),
+        ("minimise", "minimize"),
+        ("max", "maximize"),
+        ("Maximize", "maximize"),
+        ("sideways", "unknown"),
+        ("", "unknown"),
+        (None, "unknown"),
+    ],
+)
+def test_every_spelling_direction_py_reads_is_accepted(raw, expected) -> None:
+    """Review finding. `direction.py` has always read any `min*`/`max*` prefix,
+    so a `Literal` that rejected them made the model stricter than the reader —
+    and a hand-written `configs/competitions/<slug>.yaml` saying `direction: min`
+    raised out of `CompetitionParser`."""
+    assert normalize_direction(raw) == expected
+
+
+def test_an_unreadable_direction_becomes_unknown_rather_than_an_error() -> None:
+    """Never a guess, never a crash: a misspelled direction is exactly the case
+    where the registry and the probe should get to answer instead."""
+    assert normalize_direction("lower_is_better") == "unknown"
+
+
+def test_the_registry_outranks_a_contract_that_contradicts_it() -> None:
+    from labpilot.research_engine.intelligence.competition.models import MetricSpec
+
+    assert maximize_from_spec(MetricSpec(name="rmse", key="rmse", direction="maximize")) is False
+    assert maximize_from_spec(MetricSpec(name="auc", key="auc", direction="minimize")) is True
+
+
+def test_a_stated_direction_decides_a_key_the_registry_cannot_know() -> None:
+    from labpilot.research_engine.intelligence.competition.models import MetricSpec
+
+    unknown_key = MetricSpec(name="wellbore misfit", key="wellbore_misfit", direction="minimize")
+    assert maximize_from_spec(unknown_key) is False
+
+
+def test_nothing_knowable_is_none_rather_than_maximize() -> None:
+    """`None` is what lets the caller keep its own default and say so. Answering
+    `True` here is the silent-maximize this whole layer exists to remove."""
+    from labpilot.research_engine.intelligence.competition.models import MetricSpec
+
+    assert maximize_from_spec(None) is None
+    assert maximize_from_spec(MetricSpec(name="wellbore misfit", key="wellbore_misfit")) is None

@@ -246,7 +246,14 @@ class WorkspaceCapability(BaseCapability):
                 if isinstance(metric_raw, dict) and metric_raw.get("name"):
                     metric = MetricSpec(
                         name=str(metric_raw.get("name")),
-                        direction=str(metric_raw.get("direction") or "maximize"),
+                        # "unknown", never "maximize": the model derives the
+                        # direction from the key, and it derives only when the
+                        # stated one is unknown. Restating the old default here
+                        # meant an analyze report that omitted `direction` wrote
+                        # `maximize` for RMSE into the workspace contract every
+                        # later stage reads — the rogii inversion, surviving the
+                        # fix that was supposed to remove it.
+                        direction=metric_raw.get("direction") or "unknown",
                         description=str(metric_raw.get("description") or ""),
                         key=metric_raw.get("key"),
                     )

@@ -1,5 +1,6 @@
 """Unit tests for Milestone 2 Plan 3 — Automatic Comparator."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from labpilot.research_engine.shared.experiments.comparator import (
     compare,
     load_comparison,
     render_markdown,
+    resolve_primary_metric_key_and_direction,
     write_comparison,
 )
 from labpilot.research_engine.shared.experiments.models import (
@@ -217,3 +219,98 @@ def test_missing_primary_metric_is_inconclusive():
     result = compare(base, child, primary_metric_key="cv_accuracy")
     assert result.verdict == Verdict.INCONCLUSIVE
     assert result.primary_metric_key is None
+
+
+# --- direction comes from the metric, not from the contract -----------------
+
+
+def _competition_dir(tmp_path: Path, metric: dict) -> tuple[Path, ...]:
+    (tmp_path / "competition.json").write_text(
+        json.dumps({"slug": "demo", "evaluation_metric": metric}), encoding="utf-8"
+    )
+    return (tmp_path,)
+
+
+def test_a_contract_that_states_the_wrong_direction_does_not_invert_the_verdict(
+    tmp_path: Path,
+) -> None:
+    """The rogii failure, at the comparator. A contract claiming RMSE is
+    maximised made a *worse* score read as an improvement, and fifteen evidence
+    cards were built that way. The registry knows RMSE from its key, and the key
+    is what the run was actually scored on.
+    """
+    dirs = _competition_dir(tmp_path, {"name": "rmse", "key": "rmse", "direction": "maximize"})
+
+    comparison = compare(
+        _exp("base", metrics={"cv_rmse": 10.0}, problem_type="tabular_regression"),
+        _exp("child", metrics={"cv_rmse": 20.0}, problem_type="tabular_regression"),
+        competition_dirs=dirs,
+    )
+
+    assert comparison.primary_metric_key == "cv_rmse"
+    assert comparison.verdict is Verdict.REGRESSION, "a doubled RMSE read as an improvement"
+
+
+def test_a_contract_that_states_no_direction_is_not_read_as_maximize(
+    tmp_path: Path,
+) -> None:
+    """`direction != "minimize"` read *everything* that was not that literal
+    string as maximize — including a contract that never said."""
+    dirs = _competition_dir(tmp_path, {"name": "rmse", "key": "rmse"})
+
+    comparison = compare(
+        _exp("base", metrics={"cv_rmse": 10.0}, problem_type="tabular_regression"),
+        _exp("child", metrics={"cv_rmse": 5.0}, problem_type="tabular_regression"),
+        competition_dirs=dirs,
+    )
+
+    assert comparison.verdict is Verdict.WORTH_KEEPING, "halving RMSE is an improvement"
+
+
+def test_a_stated_direction_still_decides_a_metric_the_registry_cannot_know(
+    tmp_path: Path,
+) -> None:
+    """The registry answers for catalogued keys only. For anything else the
+    contract is the best evidence available, and must still be used."""
+    dirs = _competition_dir(
+        tmp_path, {"name": "wellbore misfit", "key": "wellbore_misfit", "direction": "minimize"}
+    )
+
+    comparison = compare(
+        _exp("base", metrics={"cv_wellbore_misfit": 10.0}, problem_type="tabular_regression"),
+        _exp("child", metrics={"cv_wellbore_misfit": 5.0}, problem_type="tabular_regression"),
+        competition_dirs=dirs,
+    )
+
+    assert comparison.verdict is Verdict.WORTH_KEEPING
+
+
+def test_the_graph_and_the_comparator_never_disagree(tmp_path: Path) -> None:
+    """Review finding. Both carried their own `direction != "minimize"`, and
+    rewiring only the comparator was worse than rewiring neither: for a contract
+    claiming RMSE is maximised, `compare()` reported a regression while
+    `build_graph`'s flag fed `_pick_best`, which selected that same worse run as
+    the best node on the path. One resolver, so a third caller cannot diverge.
+    """
+    from labpilot.research_engine.shared.experiments.graph import _resolve_metric_direction
+
+    contracts = [
+        {"name": "rmse", "key": "rmse", "direction": "maximize"},
+        {"name": "rmse", "key": "rmse"},
+        {"name": "auc", "key": "auc", "direction": "minimize"},
+        {"name": "misfit", "key": "wellbore_misfit", "direction": "minimize"},
+        {"name": "misfit", "key": "wellbore_misfit"},
+    ]
+    for index, metric in enumerate(contracts):
+        run = tmp_path / f"r{index}"
+        run.mkdir()
+        (run / "competition.json").write_text(
+            json.dumps({"slug": "demo", "evaluation_metric": metric}), encoding="utf-8"
+        )
+        _key, comparator_maximize = resolve_primary_metric_key_and_direction(
+            _exp("a", metrics={"cv_rmse": 10.0}),
+            _exp("b", metrics={"cv_rmse": 5.0}),
+            competition_dirs=(run,),
+        )
+
+        assert _resolve_metric_direction(tmp_path, [f"r{index}"]) is comparator_maximize, metric

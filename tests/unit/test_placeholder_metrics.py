@@ -223,3 +223,44 @@ def test_a_real_card_is_re_oriented_not_retired(knowledge):
     fixed = cards.get(card.id)
     assert fixed.decision == EvidenceDecision.ACCEPTED
     assert "re-oriented" in fixed.decision_reason
+
+
+# --- a cross-validated reading outranks every bare one ----------------------
+
+
+def test_a_bare_metric_never_displaces_the_cross_validated_primary() -> None:
+    """Review finding. Alias-expanding bare spellings into the probe list put
+    every catalogued bare key ahead of the generic `cv_*` sweep, so a run whose
+    primary metric is uncatalogued answered with whatever else it happened to
+    log. m5's WRMSSE is exactly that competition, and rogii's real metrics.json
+    carries bare `rmse`/`mse` beside `cv_rmse`, so the collision is live.
+    """
+    from labpilot.research_engine.evidence.builder import _primary_cv_keyed
+
+    assert _primary_cv_keyed({"cv_wrmsse": 1.2, "mae": 5.0}) == (1.2, "cv_wrmsse")
+    assert _primary_cv_keyed({"cv_map_at_3": 0.4, "f1": 0.7}) == (0.4, "cv_map_at_3")
+
+
+def test_a_catalogued_cross_validated_key_still_wins_over_an_unknown_one() -> None:
+    """The registry pass runs before the generic sweep, so priority order still
+    decides between two CV readings."""
+    from labpilot.research_engine.evidence.builder import _primary_cv_keyed
+
+    assert _primary_cv_keyed({"cv_wrmsse": 1.2, "cv_rmse": 3.0}) == (3.0, "cv_rmse")
+
+
+def test_cross_validation_bookkeeping_is_never_read_as_a_score() -> None:
+    """`cv_folds` is the fold count. The generic sweep moving ahead of the bare
+    keys makes this exclusion load-bearing: without it the answer would be
+    "the run scored 5"."""
+    from labpilot.research_engine.evidence.builder import _primary_cv_keyed
+
+    assert _primary_cv_keyed({"cv_folds": 5, "cv_std": 0.1, "rmse": 2.0}) == (2.0, "rmse")
+
+
+def test_a_bare_metric_is_still_found_when_it_is_all_there_is() -> None:
+    """Deprioritised, not dropped."""
+    from labpilot.research_engine.evidence.builder import _primary_cv_keyed
+
+    assert _primary_cv_keyed({"rmse": 2.0}) == (2.0, "rmse")
+    assert _primary_cv_keyed({"n_features": 12}) is None

@@ -3,12 +3,15 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from labpilot.accessor.profiler.tabular import DatasetProfile
 from labpilot.research_engine.execution.baseline.registry import get_template
 from labpilot.research_engine.intelligence.competition.infer_problem_type import (
     infer_problem_type_from_metadata,
 )
+from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+    metrics_for_problem_type,
+)
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, ProblemType
-from labpilot.accessor.profiler.tabular import DatasetProfile
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +29,18 @@ DEFAULT_METRIC_BY_PROBLEM_TYPE: dict[str, str] = {
     ProblemType.IMAGE_CLASSIFICATION.value: "accuracy",
 }
 
+#: Derived from the registry rather than restated. Kept as a module constant
+#: because it is imported elsewhere, but every entry now comes from the metric
+#: definitions, so a metric added there is supported here without a second edit —
+#: and a metric named but not scorable (`balanced_accuracy`) stays out of both.
 SUPPORTED_METRICS_BY_PROBLEM_TYPE: dict[str, set[str]] = {
-    ProblemType.TABULAR_CLASSIFICATION.value: {"accuracy", "auc", "logloss", "f1"},
-    ProblemType.TEXT_CLASSIFICATION.value: {"accuracy", "auc", "logloss", "f1"},
-    ProblemType.IMAGE_CLASSIFICATION.value: {"accuracy", "auc", "logloss", "f1"},
-    ProblemType.TABULAR_REGRESSION.value: {"rmse", "mse", "mae", "rmsle"},
+    problem_type.value: set(metrics_for_problem_type(problem_type))
+    for problem_type in (
+        ProblemType.TABULAR_CLASSIFICATION,
+        ProblemType.TEXT_CLASSIFICATION,
+        ProblemType.IMAGE_CLASSIFICATION,
+        ProblemType.TABULAR_REGRESSION,
+    )
 }
 
 # A target is treated as classification if it's non-numeric, OR numeric with

@@ -220,7 +220,86 @@ def normalize_metric_key(raw: str | None) -> str | None:
     if not slug:
         return None
     metric = _BY_ALIAS.get(slug) or _BY_ALIAS.get(strip_measurement_prefix(slug))
-    return metric.key if metric else None
+    if metric:
+        return metric.key
+    return _resolve_glossed(raw)
+
+
+#: ``Root Mean Squared Error (RMSE)`` — a name and its own abbreviation. Kaggle
+#: writes metrics this way constantly, and it is the one composite form worth
+#: reading, because both halves are supposed to name the same metric.
+_GLOSS = re.compile(r"^(?P<name>[^(]+)\((?P<gloss>[^)]+)\)\s*$")
+
+
+def _resolve_glossed(raw: str) -> str | None:
+    """Resolve ``"Full Name (ABBR)"`` when both halves agree, else None.
+
+    Each half is matched *exactly*, against the same alias table — this is not
+    substring matching returning under a new name. The old parser scanned
+    ``("mean squared error", "mse")`` pairs for containment, which made
+    ``"mse" in "rmse"`` true and left the whole table depending on `rmse` being
+    listed first.
+
+    Disagreement returns None rather than preferring a half. ``"Accuracy (RMSE)"``
+    is a contract that contradicts itself, and picking the left one because it is
+    written first is position standing in for evidence.
+    """
+    match = _GLOSS.match(raw.strip())
+    if not match:
+        return None
+    halves = {
+        _BY_ALIAS[slug].key
+        for slug in (_slug(match["name"]), _slug(match["gloss"]))
+        if slug in _BY_ALIAS
+    }
+    return halves.pop() if len(halves) == 1 else None
+
+
+def normalize_direction(raw: object) -> str:
+    """Any spelling of a direction, as one of the three canonical values.
+
+    `min`, `Minimize`, `MIN` and `minimise` all mean minimize, and
+    `direction.py` has always read them that way via a `startswith` test.
+    `MetricSpec.direction` narrowing to a `Literal` without this made the model
+    stricter than the reader: a hand-written `configs/competitions/<slug>.yaml`
+    saying `direction: min` raised out of `CompetitionParser`, and under
+    `capability.py`'s broad `except Exception` that discarded the whole
+    analyze-derived contract with an INFO log.
+
+    Anything unrecognised is `"unknown"` — never a guess, and never an error,
+    because a misspelled direction is exactly the case where the registry and
+    the probe should get to answer instead.
+    """
+    text = str(raw or "").strip().lower()
+    if text.startswith("min"):
+        return "minimize"
+    if text.startswith("max"):
+        return "maximize"
+    return "unknown"
+
+
+def maximize_from_spec(metric: object) -> bool | None:
+    """``True`` to maximise a `MetricSpec`, ``False`` to minimise, ``None`` if unknowable.
+
+    The single implementation of "which way is better for this contract".
+    `comparator` and `graph` each carried their own `direction != "minimize"`,
+    which read every value that was not literally that string — a missing
+    direction, an empty one, a typo — as *maximize*. Fixing one of the two would
+    be worse than fixing neither: the two subsystems would then disagree, and
+    `compare()` would call a run a regression while `build_graph` picked that
+    same run as the best node on the path.
+
+    The registry outranks the file. `direction_of` answers from the metric's own
+    identity, which a contract cannot get wrong; a stated direction is consulted
+    only for a key no catalogue knows.
+    """
+    if metric is None:
+        return None
+    measured = direction_of(getattr(metric, "key", None))
+    if measured is not None:
+        return measured == "maximize"
+    stated = normalize_direction(getattr(metric, "direction", None))
+    return None if stated == "unknown" else stated == "maximize"
 
 
 def direction_of(key: str | None) -> MetricDirection | None:
@@ -290,6 +369,48 @@ def metrics_for_problem_type(problem_type: ProblemType | str) -> frozenset[str]:
 def cv_search_order() -> tuple[str, ...]:
     """Canonical keys by ``cv_priority``, for picking a primary metric from a blob."""
     return tuple(m.key for m in sorted(_METRICS, key=lambda m: m.cv_priority))
+
+
+def _spellings(metric: CanonicalMetric) -> list[str]:
+    """Every way this metric can appear in a recorded key, canonical first.
+
+    A run writes whatever spelling its template chose: `cv_roc_auc` and `cv_auc`
+    are the same measurement. Ordering is fixed so two reads of one blob pick the
+    same key — a primary metric that moves between runs is not comparable.
+    """
+    return [metric.key, *sorted(metric.aliases - {metric.key})]
+
+
+def _ordered_spellings() -> list[str]:
+    return [name for metric in sorted(_METRICS, key=lambda m: m.cv_priority)
+            for name in _spellings(metric)]
+
+
+def cv_probe_keys() -> tuple[str, ...]:
+    """Cross-validated spellings to look for in a metrics blob, best first.
+
+    Alias-expanded because the blob holds the *recorded* spelling, not the
+    canonical key. Callers return the key they matched rather than the canonical
+    one: it is what the run actually wrote, and rewriting it would make an
+    evidence card cite a key no metrics.json contains.
+
+    Bare spellings are deliberately **not** here — see `bare_probe_keys`.
+    Returning both from one function put every bare catalogued key ahead of the
+    caller's generic `cv_*` scan, so a single-split `mae` displaced the
+    cross-validated `cv_wrmsse` a campaign was actually judged on.
+    """
+    return tuple(f"cv_{name}" for name in _ordered_spellings())
+
+
+def bare_probe_keys() -> tuple[str, ...]:
+    """Unqualified spellings, best first — the last resort before giving up.
+
+    Separate from `cv_probe_keys` because of where they belong in the search,
+    not because of what they are: a bare key is a single measurement of unstated
+    provenance, so *any* cross-validated reading outranks *every* one of these,
+    including a CV reading of a metric no catalogue knows.
+    """
+    return tuple(_ordered_spellings())
 
 
 def known_keys() -> frozenset[str]:

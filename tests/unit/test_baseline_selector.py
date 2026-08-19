@@ -109,3 +109,32 @@ def test_selector_uses_competition_metric_key_when_supported() -> None:
     )
     choice = BaselineSelector().select(competition, profile)
     assert choice.metric_name == "auc"
+
+
+def test_the_workspace_contract_does_not_claim_maximize_for_a_loss(tmp_path) -> None:
+    """Review finding, at the one call site that restated the removed default.
+
+    `_ensure_competition_json` hydrated the workspace contract with
+    `direction=str(metric_raw.get("direction") or "maximize")`. Because
+    `MetricSpec` derives a direction only when the stated one is unknown, that
+    literal blocked the derivation — so an analyze report omitting `direction`
+    wrote `maximize` for RMSE into the file every later stage reads. That is the
+    rogii inversion surviving the change meant to remove it.
+    """
+    import inspect
+
+    from labpilot.research_engine.execution.capabilities.workspace import capability
+    from labpilot.research_engine.intelligence.competition.models import MetricSpec
+
+    source = inspect.getsource(capability)
+    assert 'or "maximize"' not in source, "the removed default is restated here"
+
+    metric_raw = {"name": "Root Mean Squared Error", "key": "rmse"}
+    metric = MetricSpec(
+        name=str(metric_raw.get("name")),
+        direction=metric_raw.get("direction") or "unknown",
+        description="",
+        key=metric_raw.get("key"),
+    )
+
+    assert metric.direction == "minimize"

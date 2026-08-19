@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from labpilot.accessor.common.derived import derived_note
+from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+    maximize_from_spec,
+)
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec
 from labpilot.research_engine.shared.experiments.models import (
     ChangeCategory,
@@ -115,8 +118,24 @@ def resolve_primary_metric_key_and_direction(
     """Pick primary metric key + maximize flag from competition.json when present.
 
     Prefer `cv_<MetricSpec.key>` when both sides have it, else bare `key`,
-    else the first shared metric key (sorted). Direction defaults to maximize
-    when no MetricSpec is found.
+    else the first shared metric key (sorted).
+
+    **Direction comes from the registry before the file.** `direction != "minimize"`
+    read every value that was not literally that string — a missing direction, an
+    empty one, a typo — as *maximize*, so a contract that failed to state it
+    inverted every verdict for an RMSE competition: a worse score recorded as an
+    improvement. That is the failure that cost rogii all fifteen of its evidence
+    cards. `direction_of` answers from the metric's own identity, which the
+    contract cannot get wrong.
+
+    A stated direction is used only for a key the registry does not know, and
+    maximize remains the last resort — it is what an uncatalogued metric with no
+    stated direction has always meant here, and changing that is a separate
+    decision from removing the silent override.
+
+    `maximize_from_spec` is shared with `graph._resolve_metric_direction`, which
+    carried the same expression. Two copies meant fixing one made the pair
+    *disagree* about a competition rather than merely both be wrong.
     """
     maximize = True
     spec_key: str | None = None
@@ -129,8 +148,10 @@ def resolve_primary_metric_key_and_direction(
         except (OSError, ValueError):
             continue
         if spec.evaluation_metric is not None:
-            maximize = spec.evaluation_metric.direction != "minimize"
             spec_key = spec.evaluation_metric.key
+            resolved = maximize_from_spec(spec.evaluation_metric)
+            if resolved is not None:
+                maximize = resolved
             break
 
     shared = sorted(set(base.metrics) & set(compare_exp.metrics))
