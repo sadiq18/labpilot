@@ -4,6 +4,16 @@
 scores · **Blocks:** everything · **Blocked by:** ~~[M10](04-llm-tiering.md)~~
 (shipped)
 
+> **Scope, recorded 2026-08-19.** "Done" covers the **plan-execution** path —
+> `run_plan`/`run_experiment` → `CodeEngineeringCapability` — which is what the
+> exit criteria below measure and what the differ-table validated.
+> [M15](10-capability-audit.md)'s re-audit later found the Conductor's
+> standalone `implement` **tool** takes a different route that this milestone
+> never scoped, and that still drops the technique. Those two defects are
+> tracked in
+> [backlog/implement-tool-technique-path.md](../backlog/implement-tool-technique-path.md)
+> — M7 is not reopened for them.
+
 > A differ-table taken 2026-08-07 confirmed the technique path is sound: every
 > `applied` technique changes the emitted code, and every `not_applicable` one
 > reports why. The campaign blocker turned out to be undeclared dependencies —

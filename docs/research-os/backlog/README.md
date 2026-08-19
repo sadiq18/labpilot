@@ -19,6 +19,7 @@ milestone or explicit pickup.
 | [future-specialists.md](future-specialists.md) | Paper, Critic, Eval, Submit, EDA, Feature Engineering (post M5 Impl+Experiment) |
 | [parallel-research-branches.md](parallel-research-branches.md) | Full branch-merge research campaigns (Campaign Engine v2) |
 | [coding-tool-adapters.md](coding-tool-adapters.md) | Claude Code / Aider / OpenHands behind CodingTool |
+| [implement-tool-technique-path.md](implement-tool-technique-path.md) | The `implement` tool's `prefer_patch` no-op + technique never reaching codegen — orphaned when M7 closed |
 | [async-conductor.md](async-conductor.md) | Async Conductor + distributed scheduler — pull for multi-campaign orchestration |
 | [git-remote-adapters.md](git-remote-adapters.md) | GitHub/GitLab adapters behind GitTool (after local GitPython) |
 | [git-worktrees-patches.md](git-worktrees-patches.md) | Parallel experiment worktrees + PatchManager for review |
