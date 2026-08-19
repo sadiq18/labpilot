@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from helpers.cli import cli_runner
 
 from labpilot.cli.main import app
 from labpilot.research_engine.conductor.budgets import (
@@ -40,7 +41,6 @@ from labpilot.research_engine.tools.descriptors import ToolDescriptor, ToolResul
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import scaffold_workspace
-from tests.helpers.cli import cli_runner
 
 
 def _ws(tmp_path: Path, slug: str = "m17") -> Workspace:
@@ -309,7 +309,9 @@ def _echo(workspace: Workspace, **kwargs: object) -> ToolResult:
 def _registry() -> ToolRegistry:
     reg = ToolRegistry()
     for name in ("analyze_competition", "query_memory", "reflect"):
-        reg.register(ToolDescriptor(name=name, handler=_echo))
+        # `capability_status` is required since M15; these stubs return a
+        # constant, which is exactly what `fixed` declares.
+        reg.register(ToolDescriptor(name=name, handler=_echo, capability_status="fixed"))
     return reg
 
 
