@@ -1,0 +1,359 @@
+# Design — M16: the evidence routine as a background producer
+
+**Plan:** [../11-background-routine.md](../11-background-routine.md) · **Status:** design ·
+**Owner:** unassigned · **Depends on:** M7, M11, M14 (all shipped) ·
+**Unbuilt dependency it carries:** producer priority on the LLM ledger (§8)
+
+---
+
+## 1. Problem
+
+`should_gather_evidence` ships, and it is a **brake on a sequential loop**, not a
+second worker. When the gate says yes, the campaign still stops testing and
+sweeps kernels for ~15 minutes on the same thread — the observation that opened
+the plan, unchanged.
+
+The plan calls the remainder "mostly a scheduling change". Five things say
+otherwise.
+
+| # | Gap | Where |
+|---|---|---|
+| 1 | **No callable entry point.** The gate lives *inside* `available_tools`, which returns tool names; the invocation is an `OsTask` through `Scheduler.dispatch`. Nothing can ask "gather now, if you should" without the policy step this milestone bypasses | `conductor/policy.py`, `conductor/scheduler.py` |
+| 2 | **No runner.** `_run_until_stop_inner` is `for step in range(max_steps)`, one dispatch per step. M11's fan-out is bounded to a single step and joins before the loop advances | `conductor/loop.py:1116` |
+| 3 | **Content dedupe is unsafe under two writers.** `persist_recommendations` (the producer's own output) does not dedupe at all; `_already_covered_by_proposed` scans the proposed pool *outside* the lock `create()` takes. `create()` holds `.alloc.lock` across allocate-and-write, so two writers cannot collide on an **id** — only on an **idea** | `intelligence/hypothesis/persist.py`, `execution/outcome.py` |
+| 4 | **One weak claim call.** `mark_testing_if_proposed` returns the hypothesis whether or not the caller won, so every racer concludes it claimed. `fanout.py` migrated to `claim_if_proposed`; the reflection path did not | `reflection/hypotheses/evaluator.py:61` |
+| 5 | **The LLM ledger has no priority.** `availability()` answers identically for every caller, so nothing implements the plan's "producer yields to consumer". Hypothesis generation is a `reasoning`-role call | `fitroute/budget.py` |
+
+Gaps 1, 2 and 4 are latent-by-design. Gap 3 is latent only because there is
+currently exactly one writer, which is what this milestone changes.
+
+**One correction to the plan.** Step 4 ("feed reflection back into the
+producer") is largely built — the consumer already mints from its own outcomes
+at five sites (four `maybe_mint_*` in `execution/outcome.py`, plus
+`mint_stagnation_hypothesis`) into the same store the producer writes to. What
+the plan misses is the coupling: those mints raise the **viable count**, which
+is the producer's own brake, so a campaign can hold gathering shut with
+hypotheses it generated itself. That is the 46-row ratchet in a new costume, and
+the reason the stagnant clause must stay independent of the count.
+
+## 2. Requirements
+
+**Functional** — 1–4 are the plan's exit criteria; 5–7 are what the design adds.
+
+1. A campaign step never blocks on evidence gathering.
+2. The producer re-evaluates the gate each tick and no-ops with a logged reason.
+3. A thin pool refills without the consumer stalling.
+4. Producer and consumer never claim the same hypothesis.
+5. Producer and consumer minting the same idea concurrently produce **one** row.
+6. Exactly one component gathers — the consumer's allowlist loses
+   `analyze_competition` unconditionally, not via the gate.
+7. Producer state is visible in the observe bundle.
+8. **The producer owns no source policy.** It is handed *what to gather*; it
+   decides only *whether* and *when*. No Kaggle constant is readable from
+   `conductor/producer.py` (§5.4).
+
+**Non-functional**
+
+| Constraint | Number |
+|---|---|
+| Skip-path tick cost | **< 50ms** — one `MAX(created_at)` read, one pool scan, one score summary. It runs on a timer; the skip must be ~10⁴× cheaper than the sweep |
+| Campaign shutdown delay | **≤ 1 pipeline stage** (~1 analyzer), not the full sweep |
+| Producer crash impact on campaign | **zero** — every tick exception-isolated, same shape as `_maybe_mint_on_stagnation` |
+| Behaviour change when off | **zero** — off is the default (§11) |
+
+## 3. Success metrics
+
+Measured on one workspace, two campaign runs, producer off then on:
+
+| Metric | Now | Target |
+|---|---|---|
+| Campaign steps per hour | baseline TBD from the paired run | **higher** — the whole point |
+| Wall-clock a step spends inside the gathering tool | up to ~15 min | **0** |
+| Untested hypotheses idle during a sweep | 10 observed | not applicable — nothing idles |
+| Duplicate hypothesis rows after a concurrent run | n/a (one writer) | **0** |
+
+"The tool was skipped" is **not** a success metric — the shipped gate already
+achieves that without a producer. Steps per hour is the number that settles
+criterion 1.
+
+## 4. Scope
+
+**In:** `gather_once` as a callable unit; a thread runner; the allowlist change;
+store-level dedupe across check-then-create; the `claim_if_proposed` migration;
+a producer-side quota reserve; producer state in observe.
+
+**Out:** a separate long-lived process (`research gather --watch`) — deferred,
+not rejected (§5.2); any change to *what* gathering does; hypothesis **quality**
+— the plan's fourth trap is M21's viability filter plus the stagnant clause,
+both shipped; and **removing the Kaggle coupling that already exists** in
+`ANALYZE_ARGS` and the `analyze_competition` tool name, which is
+[M12](../06-beyond-kaggle.md)'s job. This milestone's obligation is not to
+deepen it (§5.4).
+
+## 5. Design
+
+```
+campaign thread (consumer)              producer thread
+  step 1  claim → plan → run              tick: should_gather_evidence()?
+  step 2  claim → plan → run                └─ no: log reason, wait
+  step 3  claim → plan → run              tick: yes
+  step 4  claim → plan → run                ├─ analyzers
+  step 5  claim → plan → run                ├─ fetch → ingest
+    ▲                                       ├─ hypothesize ──┐
+    │                                       └─ brief         │
+    └───────────── shared HypothesisStore ◄──────────────────┘
+                   (flock per id; .alloc.lock for create)
+```
+
+### 5.1 The unit
+
+```python
+# conductor/producer.py
+@dataclass(frozen=True)
+class GatherPlan:
+    tool: str                     # which gathering tool to invoke
+    args: dict[str, Any]          # what to ask it for
+
+@dataclass(frozen=True)
+class GatherOutcome:
+    gathered: bool
+    reason: str                   # the gate's reason, verbatim, either way
+    hypotheses_created: int = 0
+    duration_s: float = 0.0
+
+def gather_once(workspace, registry, plan: GatherPlan, *,
+                llm_client=None, budgets=None) -> GatherOutcome: ...
+```
+
+**The plan is an argument, not a constant** (§5.4). `gather_once` evaluates the
+gate and invokes `plan.tool` through the registry with `plan.args`; it contains
+no source names, no fetch plans and no competition vocabulary. Resolution lives
+in one function beside it — `default_gather_plan(workspace)`, returning today's
+`("analyze_competition", ANALYZE_ARGS)` — which is the only place in this
+milestone that may name a source.
+
+Through the registry, not straight to `AnalyzeOrchestrator`, so the
+`verify_ai_artifact` gate and the report write stay in the path; `verify_auto`
+defaults to `True`, so nothing prompts on a background thread.
+
+`llm_client` is **required, not optional**. `Scheduler._with_llm_client` injects
+it by signature and the producer does not go through the Scheduler — that
+omission is the mechanism behind twelve identical MSE 194.80 runs.
+
+### 5.2 The runner
+
+| Option | Verdict |
+|---|---|
+| Blinker subscriber on `ExperimentCompleted` | **Rejected.** `EventBus.publish` is a synchronous `signal.send` — the handler runs on the publisher's thread, blocking the consumer at exactly the moment this milestone exists to unblock it |
+| `anyio` task beside the campaign | **Rejected.** `_run_until_stop_inner` is synchronous throughout; an event loop for one background task buys nothing a thread does not |
+| Separate OS process | **Deferred.** Correct eventually; outliving the campaign means orphan detection, its own config and LLM resolution, and sweeps against a workspace nobody is using |
+| **Daemon thread in `_run_until_stop_inner`** | **Chosen.** Workspace, registry, `llm_client` and budgets are already resolved there; it dies with the campaign; M11 made every store it touches safe for a second thread |
+
+Ticks on `LABPILOT_GATHER_TICK_S` (default 300), waiting on a `threading.Event`
+so idle shutdown is immediate. Each tick opens its own `ConductorStore`, re-reads
+the session, `load_budget_pair`s it, resolves the `GatherPlan`, and calls
+`gather_once` — keeping the unit a pure gate-then-pipeline a test can call with a
+hand-built pair and a fake plan.
+
+The interval is a **rate limit, not a cadence assumption**. A domain whose
+evidence moves weekly rather than hourly does not need a different runner; it
+gets more no-ops, and a no-op costs < 50ms.
+
+### 5.3 The consumer loses the tool
+
+`available_tools` sets `analyze_competition: False` unconditionally while the
+producer runs — the shape `search_papers` already has. Leaving it gated on the
+predicate lets both components pass the same gate in the same second and sweep
+twice. It also makes criterion 1 checkable: the tool is not on the table, so
+"never blocks on gathering" is a property of the allowlist rather than a hope
+about scheduling. The gate is unchanged; it moves from deciding the consumer's
+allowlist to deciding the producer's tick.
+
+### 5.4 Domain coupling: what this milestone may and may not assume
+
+[M12](../06-beyond-kaggle.md) is blocked by exactly one thing going wrong here —
+"Kaggle assumptions already leaking" into the control plane. The producer sits
+*in* the control plane, so every element is audited:
+
+| Element | Domain-coupled? | Why |
+|---|---|---|
+| `should_gather_evidence` | **No** | Reads `MAX(created_at)` from `research_artifacts`, a viable-hypothesis count, and a score series. None of the three knows what a Kaggle kernel is |
+| `GatherPlan` | **No, by construction** | The one field that could name a source is data passed in |
+| `default_gather_plan(workspace)` | **Yes, deliberately** | The single quarantined site. M12 changes this function and nothing else in `producer.py` |
+| Tick interval, reserve, thresholds | **No** | Knobs with defaults, not branches on domain |
+| `create_unless_covered(covered_by=…)` | **No** | The duplicate predicate is caller-supplied, so a domain-specific notion of "same idea" never lands in the store |
+| `claim_if_proposed`, the runner, shutdown | **No** | Concurrency mechanism |
+| Tool name `analyze_competition`, `workspace.competition` | **Inherited** | Repo-wide naming that predates this milestone. The producer names the tool once, through `GatherPlan`. It does not deepen the coupling and does not fix it |
+
+**The failure this prevents is concrete.** `ANALYZE_ARGS` — the campaign's
+existing gathering args — is Kaggle-shaped twice over: `fetch_kaggle=True` with
+`kaggle_fetch_plan="best_score"`, and `exclude=["papers"]`, whose stated
+rationale is *"on a Kaggle competition the kernels are the better-grounded source
+anyway: they ran against this dataset."* Off Kaggle that rationale inverts —
+papers and repositories may be the only sources there are.
+
+Had the producer hardcoded those args, a non-Kaggle workspace would get: a
+Kaggle fetch that soft-fails to a log warning (`_fetch_kaggle_run` catches and
+notes), papers excluded, and therefore near-zero new evidence — while the gate,
+seeing a pool that never fills, keeps answering *gather*. The result is a sweep
+every `_MIN_RESWEEP_HOURS` (30 min), forever, producing nothing. Sequentially
+that is one bad step; as a background producer it is a permanent one, and this
+milestone is precisely what turns the first into the second.
+
+Not in scope, per M12's own trap ("do not build a plugin system first"): a
+source-provider registry, or making `analyze_competition` domain-neutral. One
+dataclass and one resolver is the whole abstraction, and it is there so the
+producer is not the thing standing in M12's way.
+
+## 6. Components
+
+| Component | Responsibility | Change |
+|---|---|---|
+| `conductor/producer.py` | `gather_once` + thread runner + `default_gather_plan` (the one quarantined domain site) | **new** |
+| `conductor/policy.py` | gate unchanged; `available_tools` gains the producer-owned case | edit |
+| `conductor/loop.py` | start/stop the runner | edit |
+| `shared/experiments/hypothesis.py` | `create_unless_covered` | **new method** |
+| `intelligence/hypothesis/persist.py` | route through it | edit |
+| `execution/outcome.py` | route four `maybe_mint_*` through it; drop the unlocked pre-check | edit |
+| `reflection/hypotheses/evaluator.py` | `claim_if_proposed` | edit |
+| `fitroute/budget.py` | `availability(..., reserve=)` | edit |
+| `cli/conduct.py` | `--gather-background` | edit |
+
+## 7. Implementation details
+
+### 7.1 Nothing live is shared across the thread boundary
+
+`SqliteClient` opens `check_same_thread=True` and `ConductorStore` does not opt
+out — its docstring records the cost of opening one instead: **~1.7ms warm**. The
+producer opens and closes its own handles per tick. Any patch handing it the
+campaign's `store` is the bug.
+
+The same applies to `budgets`. `BudgetState` is mutated by the campaign on every
+recorded experiment, and the producer's stagnant clause reads its score series;
+sharing the instance yields a verdict assembled from two campaign states — the
+defect `availability`'s own docstring records having had once. The producer
+re-loads the pair each tick. One tick of staleness is acceptable: "has this
+campaign stopped improving" does not change meaningfully inside 5 minutes.
+
+The three SQLite stores it touches are WAL with a 5s `busy_timeout`;
+multi-statement writes take `write_lock_for`, a **file** lock that keeps holding
+if the producer ever becomes a process.
+
+### 7.2 Dedupe: one lock across check-and-create
+
+```python
+def create_unless_covered(self, *, covered_by, **fields) -> Hypothesis | None:
+    """Create, unless `covered_by(existing_proposed)` says one already is.
+
+    The predicate runs inside `.alloc.lock`, so a concurrent writer cannot
+    slip a near-duplicate in between the check and the write.
+    """
+```
+
+`covered_by` comes from the caller — token overlap for the outcome mints, a
+stricter identity for the producer's recommendations — so this method arbitrates
+*when* the check runs, not *what counts as a duplicate*.
+
+**`.alloc.lock` is not reentrant.** `locked()` is `fcntl.flock(LOCK_EX)`, and a
+second acquisition on a new descriptor for the same file blocks, including from
+the same thread. So `covered_by` must not call `create()`, and the implementation
+cannot be "take the lock, then call the existing `create`" — the
+allocate-and-write body has to be factored out and shared.
+
+### 7.3 The claim
+
+`evaluator.mark_testing` moves to `claim_if_proposed`, returning `None` on a lost
+race. Callers must read that as "someone else has it", distinct from the
+`FileNotFoundError` they already handle. `mark_testing_if_proposed` stays for
+callers that genuinely do not care who won; no path that *acts* on the claim uses
+it.
+
+### 7.4 Shutdown
+
+The campaign sets the stop event and joins with a bounded timeout. A tick
+mid-sweep checks the event at each pipeline stage boundary —
+`apply_side_effects` already runs four labelled steps through an `on_progress`
+hook — and returns early. Each stage writes as it completes, so an abandoned tick
+loses work, not consistency. Past the timeout the thread is daemon and the
+process exits.
+
+## 8. Tradeoffs
+
+| Decision | Chosen | Alternative | Cost of the choice |
+|---|---|---|---|
+| Runner lifetime | Thread owned by the campaign | Long-lived process | No gathering between campaigns — the cadence a producer ideally wants. Accepted: a producer with no consumer grows a store for nobody |
+| Trigger | Timer | Bus event | Up to one tick of latency before a drained pool is noticed. The bus is synchronous, so event-driven costs the consumer the very block being removed |
+| Gate | Reuse `should_gather_evidence` unchanged | Producer-specific policy | Inherits its blind spots exactly. Deliberate: one predicate, one place, already tested |
+| Budget priority | `reserve=<fraction>` on `availability()` | Priority queue in `fitroute` | Coarse — does not distinguish a cheap producer call from an expensive one. The queue is the better design and needs a scheduler and fairness policy to serve one background caller; the reserve is four lines for the same intent |
+| Dedupe | In the store, under `.alloc.lock` | Per-caller checks | Every minting caller pays a `list(PROPOSED)` scan under a lock — milliseconds, against a sweep measured in minutes |
+
+The reserve, concretely: `availability(provider, *, rpm, rpd, tpm,
+reserve=0.0)` withholds a **fraction** of each configured window — request or
+token — from the caller. A fraction rather than a call count because `rpm`/`rpd`
+are free-tier shapes; a paid, token-metered provider binds on `tpm`, where "5
+calls" means nothing. The consumer passes 0 and sees the real limit; the producer
+passes `LABPILOT_GATHER_RESERVE` (default `0.2`) and runs out first, by that
+margin, against whichever window binds. The ledger already holds its own `RLock`
+across `availability`'s read-compare and opens `check_same_thread=False`, so a
+producer thread needs no new synchronisation.
+
+## 9. Observability
+
+Three signals, all of which must exist before the paired campaign run in §3 is
+worth doing:
+
+| Signal | Where | Why |
+|---|---|---|
+| Per-tick line: decision, gate reason, duration, rows created | log | Criterion 2 is literally "no-ops with a logged reason" |
+| `evidence_producer` — last tick, last decision, last reason | observe bundle | Otherwise the policy watches the pool grow between steps with no account of why |
+| Steps per hour | campaign log | The only number that settles criterion 1 |
+
+`evidence_producer` is deliberately *description*, not control. The gate decides;
+a number in the prompt has changed no decision in nine campaigns and this one is
+not expected to either.
+
+## 10. Testing
+
+| # | Scenario | Passes only if |
+|---|---|---|
+| 1 | Producer on, campaign runs N steps | The gathering tool (`analyze_competition` today) is absent from every step's allowlist |
+| 2 | Full pool, 3 ticks | Three logged no-ops naming the gate's reason; zero `research_artifacts` rows |
+| 3 | Thin pool, producer ticks | Pool refills; consumer's step count over the same wall-clock matches the producer-off run |
+| 4 | Producer and consumer race one `proposed` hypothesis | Exactly one `claim_if_proposed` returns non-`None` |
+| 5 | Producer and consumer mint the same idea concurrently | One row. **Must fail before §7.2 lands** — if it passes against today's `create`, the fixture is not expressing the race and the test is worthless |
+| 6 | Producer tick raises | Campaign completes its remaining steps; exception in the log |
+| 7 | `gather_once` driven with a `GatherPlan` naming a stub tool and empty args | It gates, invokes, and reports normally. **This is the check that keeps §5.4 true** — it fails the moment someone reaches for `ANALYZE_ARGS` inside the producer |
+
+Write #5 first and watch it fail. The rest of this design is mechanism whose
+absence is visible; the duplicate is mechanism whose absence looks like success.
+
+Concurrency tests use the existing fake clock and the **real** `flock` — a
+`threading.Lock` substitute passes while proving nothing, the mistake
+`file_lock.py`'s docstring already records.
+
+## 11. Rollout
+
+Off by default. `research conduct run --gather-background` (or
+`LABPILOT_GATHER_BACKGROUND=1`) starts the producer; without it the loop is
+byte-for-byte today's behaviour, including `analyze_competition` staying gated on
+the predicate in the consumer's allowlist. **Rollback is dropping the flag.**
+
+Ship order, each step independently useful:
+
+1. §7.2 dedupe + §7.3 claim — correctness under two writers, no producer yet.
+2. §5.1 `gather_once` — callable, invoked from nowhere.
+3. §5.2 runner + §5.3 allowlist + §9 observability, behind the flag.
+4. §8 reserve.
+
+Then the paired campaign run in §3. Until it exists, this milestone sits exactly
+where M8 and M11 do: implementation complete, exit criteria undemonstrated.
+
+**It does not fix what a campaign is short of.** The plan's first trap stands,
+now aimed at M22–M26: a faster supply of hypotheses tested against a target
+nobody verified is a faster way to learn nothing. This makes the supply cheap,
+not worth having.
+
+**Handoff to M12.** One function — `default_gather_plan(workspace)` — is
+everything that must change for a non-Kaggle domain to gather. If a second
+domain arrives and any *other* file in this milestone needs editing, §5.4 was
+wrong and the review that let it through is the thing to fix.
