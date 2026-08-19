@@ -73,6 +73,15 @@ rather than deriving the same four numbers a second way. `conduct status` prints
 ([conduct.py:592](../../../../src/labpilot/cli/conduct.py#L592)) — no target, no
 best, no direction, no distance.
 
+That raw field **stays** where it is; the goal line joins it rather than
+replacing it. An earlier version of this design removed it, on the argument that
+progress deserves one rendering — which conflated a field dump with an
+interpretation. `metric_target` fires on `last_metric` while the goal line shows
+`best`, and the two differ the moment a run regresses, so removing it displayed
+the number the stop is evaluated against nowhere at all. It also blanked the
+metric entirely for a session predating `score_events`, which has readings here
+and an empty series.
+
 **One correction to the plan's evidence.** Dispatch failures *do* reach the
 breaker on the campaign path: the `except` at
 [loop.py:1436](../../../../src/labpilot/research_engine/conductor/loop.py#L1436)
@@ -322,7 +331,7 @@ config (N2).
 | No comparable score yet | `goal rmse: no result yet · target 2.236` |
 | Neither target nor score | `None` — caller prints nothing |
 | `span <= 0` (first reading already met the target) | `target met at first result`, no percentage |
-| Latest reading worse than the best | percentage unchanged — see below |
+| Latest reading worse than the best | percentage unchanged; never negative, because `best_so_far` includes the first reading — see below |
 | One reading | `first == best` → `0% closed` |
 
 **One divergence from the plan.** It describes percent-closed as able to go
@@ -441,6 +450,7 @@ deliverable rather than instrumentation around it.
 | `goal <metric>: best … → target … · N% closed · R result(s) · S since improvement` | every step *before* its stop evaluation, and `conduct status` | How far along, and whether the last runs moved anything |
 | `stop_reason` | session metadata via `save_checkpoint` | Which condition ended it — `max_steps` should become rare |
 | suggestion of kind `needs_guidance` | `conduct status`, gap ledger | What the operator must fix before resuming |
+| `last_metric` | the raw `budget_state` line in `conduct status` | The reading `metric_target` is actually evaluated against |
 | `steps_since_new_score`, `consecutive_unmapped` | the stop's `observe` payload | Stuck producing nothing, or stuck choosing nothing |
 | resolved noise floor | logged once per plateau evaluation that fires | Whether a plateau was a real flattening or a floor set too wide |
 
