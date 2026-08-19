@@ -19,6 +19,7 @@ import os
 import socket
 import time
 from collections.abc import Callable
+from types import MappingProxyType
 from typing import Any
 
 from labpilot.accessor.common.micro_agents import LLMDegradedError
@@ -83,7 +84,11 @@ _EXPERIMENT_TOOLS = frozenset({"run_experiment", "run_plan"})
 #: must not land where one that met its target does — and `needs_guidance` is
 #: not one either: nothing is broken and nothing is finished, so it pauses,
 #: which is the status a `conduct continue` picks back up.
-_STOP_SESSION_STATUS = {"failing": "failed", "needs_guidance": "paused"}
+#:
+#: Immutable for the same reason `_EXPERIMENT_TOOLS` beside it is a frozenset:
+#: an importer that could rewrite this would silently change how every
+#: campaign's terminal status is recorded.
+_STOP_SESSION_STATUS = MappingProxyType({"failing": "failed", "needs_guidance": "paused"})
 
 
 #: Each experiment tool's own `dry_run` default, so a fan-out of a step that

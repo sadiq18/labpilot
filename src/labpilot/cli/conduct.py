@@ -749,10 +749,19 @@ def conduct_status(
             f"max_wall_s={cfg.max_wall_s} max_cost_usd={cfg.max_cost_usd} "
             f"target={cfg.target_metric}:{cfg.target_value}"
         )
-        console.print(f"  budget_state: submissions={state.submissions} cost={state.llm_cost_usd}")
+        # `last_metric` stays on the raw-state line beside the other persisted
+        # counters. It is not a second progress rendering — the goal line below
+        # is the interpreted view, this is the field itself, and it is the one
+        # `metric_target` compares against. Dropping it also blanked the metric
+        # entirely for a session predating `score_events`, which has readings
+        # here and an empty series.
+        console.print(
+            f"  budget_state: submissions={state.submissions} "
+            f"cost={state.llm_cost_usd} last_metric={state.last_metric}"
+        )
         # The same line the campaign prints each step, so a detached run can be
         # checked without tailing its log — and so there is one rendering of
-        # progress rather than two that can disagree.
+        # *progress* rather than two that can disagree.
         line = goal_progress(cfg, state)
         if line:
             console.print(f"  {line}")

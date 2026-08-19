@@ -18,22 +18,29 @@ from unittest.mock import patch
 
 import pytest
 
+from labpilot.cli.main import app
 from labpilot.research_engine.conductor.budgets import (
     BudgetConfig,
     BudgetState,
     ScoreEvent,
+    budgets_to_metadata,
     evaluate_stops,
     goal_progress,
     score_summary,
 )
 from labpilot.research_engine.conductor.checkpoint import latest_active_session, load_budget_pair
-from labpilot.research_engine.conductor.loop import _record_experiment_outcome, run_until_stop
+from labpilot.research_engine.conductor.loop import (
+    _STOP_SESSION_STATUS,
+    _record_experiment_outcome,
+    run_until_stop,
+)
 from labpilot.research_engine.conductor.store import ConductorStore
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.tools.descriptors import ToolDescriptor, ToolResult
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
 from labpilot.workspace import scaffold_workspace
+from tests.helpers.cli import cli_runner
 
 
 def _ws(tmp_path: Path, slug: str = "m17") -> Workspace:
@@ -495,6 +502,59 @@ def test_the_two_bands_are_read_from_their_own_fields() -> None:
 
     assert score_summary(improving, wide_plateau).steps_since_improvement == 0
     assert evaluate_stops(wide_plateau, BudgetState(metric_history=[0.91, 0.92, 0.93])) == "plateau"
+
+
+# -- what `conduct status` still has to say --------------------------------
+
+
+def _status(tmp_path: Path, slug: str, metadata: dict) -> str:
+    ws = _ws(tmp_path, slug)
+    store = ConductorStore(ws.knowledge_dir, ws.competition)
+    try:
+        store.create_session("beat the baseline", metadata=metadata)
+    finally:
+        store.close()
+    result = cli_runner().invoke(
+        app, ["conduct", "status", "--workspace", str(ws.root), "-c", ws.competition]
+    )
+    assert result.exit_code == 0, result.output
+    return result.output
+
+
+def test_status_still_reports_the_value_the_target_stop_compares(tmp_path: Path) -> None:
+    """`metric_target` fires on `last_metric`, and the goal line shows `best`.
+
+    They differ the moment a run regresses, so dropping the raw field left the
+    number the stop is actually evaluated against displayed nowhere.
+    """
+    config = BudgetConfig(target_metric="rmse", target_value=5.0, maximize=False)
+    state = _state(199.9, 120.0, 150.0)
+    state.last_metric = 150.0
+
+    out = _status(tmp_path, "raw", budgets_to_metadata({}, config, state))
+
+    assert "last_metric=150.0" in out
+    assert "best 120" in out
+
+
+def test_status_reports_a_session_that_predates_the_score_series(tmp_path: Path) -> None:
+    """The back-compat case `_record_experiment_outcome` deliberately keeps:
+    readings in `metric_history`, an empty `score_events`, no target. The goal
+    line has nothing to render, so the raw field is the only thing that can
+    report the campaign has a metric at all."""
+    legacy = BudgetState(metric_history=[0.5, 0.6], last_metric=0.6)
+
+    out = _status(tmp_path, "legacy", budgets_to_metadata({}, BudgetConfig(), legacy))
+
+    assert "last_metric=0.6" in out
+    assert "goal " not in out
+
+
+def test_the_stop_status_map_cannot_be_rewritten() -> None:
+    """A lookup table that decides how every campaign's end is recorded, held
+    the way `_EXPERIMENT_TOOLS` beside it is held."""
+    with pytest.raises(TypeError):
+        _STOP_SESSION_STATUS["failing"] = "completed"  # type: ignore[index]
 
 
 # -- the rule the thresholds follow ---------------------------------------

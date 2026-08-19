@@ -323,6 +323,16 @@ class ScoreSummary(BaseModel):
     #: The metric these numbers are readings of, so a consumer cannot compare
     #: them against a threshold for something else.
     metric_name: str | None = None
+    #: The oldest reading in the comparable window — where this campaign
+    #: started measuring the metric it is measuring now. `goal_progress`
+    #: needs it to say how much of the distance to the target is covered.
+    first_score: float | None = None
+    #: How many comparable readings the window holds.
+    result_count: int = 0
+    #: The window's direction, carried so a consumer never re-derives it from
+    #: the metric's name. Meaningless with no readings, hence the default
+    #: rather than an opinion.
+    maximize: bool = True
 
 
 def score_summary(state: BudgetState, config: BudgetConfig) -> ScoreSummary:
@@ -363,6 +373,9 @@ def score_summary(state: BudgetState, config: BudgetConfig) -> ScoreSummary:
 
     return ScoreSummary(
         best_so_far=best,
+        first_score=values[0],
+        result_count=len(values),
+        maximize=maximize,
         last_3_scores=values[-3:],
         delta_vs_best=delta,
         steps_since_improvement=_steps_since_improvement(
@@ -405,7 +418,7 @@ def _noise_floor(values: list[float], absolute: float, relative: float) -> float
 
 
 def _steps_since_improvement(values: list[float], maximize: bool, floor: float) -> int:
-    """Experiments since one beat everything before it by more than `epsilon`.
+    """Experiments since one beat everything before it by more than `floor`.
 
     Measured against the best of the *preceding* readings, not the running
     best including itself — otherwise every event trivially ties its own best
@@ -463,9 +476,12 @@ def goal_progress(config: BudgetConfig, state: BudgetState) -> str | None:
     a benchmark harness or a simulator as for one scored by a competition.
 
     **Percent closed** is the fraction of the distance from the *first*
-    comparable reading to the target that has been covered. It can go
-    negative, which is worth printing: a campaign below where it started is
-    exactly what an operator needs told.
+    comparable reading to the target that has been covered. Measured from
+    `best_so_far`, which includes that first reading, so it never goes
+    negative — progress banked is progress kept, because the best model is
+    the one retained. The plan expected a negative case; there is none to
+    render, and the signal it wanted (the latest run went backwards) is
+    `steps_since_improvement`, already on the line.
 
     The target is only shown when the series is measuring the metric it names.
     Rendering an `lb_auc` threshold beside a `cv_rmse` reading is the same
@@ -476,9 +492,11 @@ def goal_progress(config: BudgetConfig, state: BudgetState) -> str | None:
     campaign with nothing to report, where the caller prints nothing rather
     than a line of empty fields.
     """
+    # One scan. `score_summary` has already walked the comparable tail, and
+    # this runs every conductor step against a series the campaign is designed
+    # to grow — `_steps_since_improvement`'s docstring already counts the times
+    # that walk is paid, and a renderer is not a good place to add another.
     summary = score_summary(state, config)
-    events = comparable_tail(state.score_events)
-    values = [event.value for event in events]
 
     metric = summary.metric_name or config.target_metric
     if metric is None:
@@ -493,24 +511,23 @@ def goal_progress(config: BudgetConfig, state: BudgetState) -> str | None:
         ):
             target = config.target_value
 
-    if not values or summary.best_so_far is None:
+    best = summary.best_so_far
+    first = summary.first_score
+    if best is None or first is None:
         suffix = f" · target {_fmt(target)}" if target is not None else ""
         return f"goal {metric}: no result yet{suffix}"
 
-    best = summary.best_so_far
     head = f"goal {metric}: best {_fmt(best)}"
     parts: list[str] = []
     if target is not None:
         head += f" → target {_fmt(target)}"
-        maximize = events[-1].maximize
-        first = values[0]
-        span = (target - first) if maximize else (first - target)
-        gain = (best - first) if maximize else (first - best)
+        span = (target - first) if summary.maximize else (first - target)
+        gain = (best - first) if summary.maximize else (first - best)
         # A campaign whose first reading already met the target has no
         # distance to have covered; a percentage of zero distance is either
         # a division error or a meaningless 100%.
         parts.append("target met at first result" if span <= 0 else f"{gain / span:.0%} closed")
-    parts.append(f"{len(values)} result(s)")
+    parts.append(f"{summary.result_count} result(s)")
     parts.append(f"{summary.steps_since_improvement} since improvement")
     return " · ".join([head, *parts])
 
