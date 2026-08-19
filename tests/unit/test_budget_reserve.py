@@ -68,3 +68,27 @@ def test_no_reserve_is_the_behaviour_every_existing_caller_had(ledger) -> None:
 
     _spend(ledger, 1)
     assert ledger.availability("free-tier", rpm=10).ok is False
+
+
+def test_a_reserved_refusal_quotes_the_real_limit_not_the_reserved_one(ledger) -> None:
+    """The reason string reaches `RouteDecision.reason`, the producer's skip
+    reason and `research doctor`. Naming the reduced number there reads as the
+    provider's published quota and cannot be reconciled with its dashboard.
+    """
+    _spend(ledger, 8)
+
+    refused = ledger.availability("free-tier", rpm=10, reserve=0.2)
+
+    assert refused.ok is False
+    assert "rate limit 10/min" in refused.reason
+    assert "8" not in refused.reason.split("holding")[0]
+    assert "holding 20% in reserve" in refused.reason
+
+
+def test_an_unreserved_refusal_says_nothing_about_a_reserve(ledger) -> None:
+    _spend(ledger, 10)
+
+    refused = ledger.availability("free-tier", rpm=10)
+
+    assert refused.ok is False
+    assert "reserve" not in refused.reason

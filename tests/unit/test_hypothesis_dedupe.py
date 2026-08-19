@@ -211,3 +211,44 @@ def test_one_batch_may_carry_several_cards_for_the_same_technique(tmp_path: Path
 
     assert len(kept) == 5
     assert len(HypothesisStore(knowledge, "titanic").list(status=HypothesisStatus.PROPOSED)) == 5
+
+
+def test_a_combination_card_is_deduped_like_every_other_kind(tmp_path: Path) -> None:
+    """The identity has to be the *stored* technique, not the one passed in.
+
+    A combination proposal arrives with `technique=""` and its members in
+    `combo_techniques`; the store fills the first from the second. Comparing
+    the raw fields put `("", "alpha+beta", …)` beside `("alphabeta",
+    "alpha+beta", …)` and called them different ideas, so every combination
+    card duplicated freely while every other kind was caught.
+    """
+    from labpilot.research_engine.intelligence.hypothesis.persist import (
+        persist_recommendations,
+    )
+
+    knowledge = tmp_path / "knowledge"
+    combo = _card(1, prediction="combine alpha and beta")
+    combo = combo.model_copy(update={"technique": "", "combo_techniques": ["alpha", "beta"]})
+
+    first = persist_recommendations([combo], knowledge_dir=knowledge, competition="titanic")
+    second = persist_recommendations([combo], knowledge_dir=knowledge, competition="titanic")
+
+    assert len(first) == 1
+    assert second == []
+    assert len(HypothesisStore(knowledge, "titanic").list(status=HypothesisStatus.PROPOSED)) == 1
+
+
+def test_the_stored_technique_is_derived_by_one_rule(tmp_path: Path) -> None:
+    """`derive_technique` is that rule; both the store and the dedupe use it."""
+    from labpilot.research_engine.shared.experiments.hypothesis import derive_technique
+
+    assert derive_technique("", ["alpha", "beta"]) == "alpha+beta"
+    assert derive_technique("SWA", ["alpha"]) == "SWA"
+    assert derive_technique("  ", []) is None
+
+    store = _store(tmp_path)
+    minted = store.create(
+        observation="o", reason="r", prediction="p", confidence=0.5,
+        combo_techniques=["alpha", "beta"],
+    )
+    assert minted.technique == derive_technique("", ["alpha", "beta"])

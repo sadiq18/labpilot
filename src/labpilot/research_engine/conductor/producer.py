@@ -13,6 +13,8 @@ the runner's job; see `design/11-background-routine.md` §5.
 
 from __future__ import annotations
 
+import contextvars
+import copy
 import logging
 import os
 import threading
@@ -79,7 +81,11 @@ def default_gather_plan(_workspace: Workspace) -> GatherPlan:
     """
     from labpilot.research_engine.conductor.actions import ANALYZE_ARGS
 
-    return GatherPlan(tool="analyze_competition", args=dict(ANALYZE_ARGS))
+    # Deep, not `dict(...)`: `ANALYZE_ARGS["exclude"]` is a list, and a shallow
+    # copy shares it with the module constant. A handler appending one analyzer
+    # to skip would edit what every later campaign step and producer tick
+    # gathers, for the life of the process.
+    return GatherPlan(tool="analyze_competition", args=copy.deepcopy(ANALYZE_ARGS))
 
 
 def _created_count(result: Any) -> int:
@@ -109,6 +115,12 @@ def _created_count(result: Any) -> int:
 _PRODUCER_ROLE = "reasoning"
 
 
+#: Clients whose `preview` has already raised. A signature mismatch does not
+#: heal, and a traceback every tick for twelve hours buries the campaign's own
+#: log without telling the operator anything the first one did not.
+_PREVIEW_REFUSED: set[int] = set()
+
+
 def _budget_headroom(llm_client: Any | None, reserve: float) -> str | None:
     """Reason to skip when the producer would be spending the consumer's quota.
 
@@ -131,10 +143,16 @@ def _budget_headroom(llm_client: Any | None, reserve: float) -> str | None:
     preview = getattr(llm_client, "preview", None)
     if not callable(preview):
         return None
+    if id(llm_client) in _PREVIEW_REFUSED:
+        return None
     try:
         route = preview(_PRODUCER_ROLE, reserve=reserve)
     except Exception:
-        logger.exception("Evidence producer could not preview its route; gathering anyway")
+        _PREVIEW_REFUSED.add(id(llm_client))
+        logger.exception(
+            "Evidence producer could not preview its route; gathering without a "
+            "budget reserve for the rest of this run"
+        )
         return None
     if getattr(route, "provider", None) is not None:
         return None
@@ -206,6 +224,13 @@ def gather_once(
 #: just gets more no-ops, and a no-op is one freshness read plus one pool scan.
 _TICK_SECONDS = float(os.environ.get("LABPILOT_GATHER_TICK_S", "300"))
 
+#: Floor under the tick. `Event.wait(0)` returns immediately, so a zero or
+#: negative interval turns the loop into a spin that globs the hypothesis
+#: directory and opens two SQLite connections as fast as it can — burning a
+#: core next to a training job, with the re-sweep floor hiding the symptom by
+#: making every tick a no-op.
+_MIN_TICK_SECONDS = 1.0
+
 #: Fraction of the LLM budget the producer leaves alone. Hypothesis generation
 #: is a `reasoning` call and a sweep makes many of them; a background worker
 #: running hot exhausts the free tier the campaign needs to plan.
@@ -255,7 +280,14 @@ class EvidenceProducer:
         self.session_id = session_id
         self.llm_client = llm_client
         self.plan = plan or default_gather_plan(workspace)
-        self.tick_seconds = _TICK_SECONDS if tick_seconds is None else tick_seconds
+        requested = _TICK_SECONDS if tick_seconds is None else tick_seconds
+        self.tick_seconds = max(_MIN_TICK_SECONDS, requested)
+        if requested < _MIN_TICK_SECONDS:
+            logger.warning(
+                "Evidence producer tick %.3fs is below the %.0fs floor; using the floor",
+                requested,
+                _MIN_TICK_SECONDS,
+            )
         self.reserve = _RESERVE if reserve is None else reserve
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -308,6 +340,11 @@ class EvidenceProducer:
             logger.exception("Evidence producer tick failed")
             with self._lock:
                 self._ticks += 1
+                # Cleared, not kept: leaving the previous outcome in place made
+                # `status()` report `last_decision="gathered"` beside a fresh
+                # `last_error`, describing a sweep that did not happen on the
+                # tick being reported — into the observe bundle the policy reads.
+                self._last = None
                 self._last_error = str(exc)
             return None
         with self._lock:
@@ -345,11 +382,28 @@ class EvidenceProducer:
     # -- lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
+        """Start ticking. A no-op while a previous thread is still alive.
+
+        Refused rather than stacked: `self._stop.clear()` below would un-stop a
+        loop that was told to finish, so a second `start()` would leave two
+        threads sweeping the same workspace — the double-gathering this design
+        exists to prevent.
+        """
         if self.is_running():
+            logger.debug("Evidence producer already running; not starting a second")
             return
         self._stop.clear()
+        # The provenance sink lives in a `ContextVar`, and a fresh thread gets a
+        # fresh empty context — so without copying, every micro-agent call the
+        # sweep makes records nothing in `agent_invocations`. That table is what
+        # M14 2b/3 are blocked on, and this is the fourth time in this codebase
+        # that thread-crossing has silently emptied an instrument (see
+        # `SqliteInvocationSink`, which names the first three).
+        context = contextvars.copy_context()
         self._thread = threading.Thread(
-            target=self._loop, name="labpilot-evidence-producer", daemon=True
+            target=lambda: context.run(self._loop),
+            name="labpilot-evidence-producer",
+            daemon=True,
         )
         self._thread.start()
         logger.info(
@@ -364,18 +418,26 @@ class EvidenceProducer:
             if self._stop.wait(self.tick_seconds):
                 return
 
-    def stop(self, timeout: float | None = None) -> None:
-        """Signal the thread and wait, bounded. Returns whether it finished."""
+    def stop(self, timeout: float | None = None) -> bool:
+        """Signal the thread and wait, bounded. True when it actually finished.
+
+        A thread that outlived the timeout is **kept**, not dropped. Clearing
+        the handle would report `is_running() is False` while a sweep was still
+        writing to the workspace, and would let a later `start()` clear the stop
+        event out from under it and run two producers at once.
+        """
         self._stop.set()
         thread = self._thread
         if thread is None:
-            return
+            return True
         thread.join(_STOP_GRACE_S if timeout is None else timeout)
         if thread.is_alive():
             logger.info(
                 "Evidence producer still sweeping at shutdown; leaving it to the process exit"
             )
+            return False
         self._thread = None
+        return True
 
     def __enter__(self) -> EvidenceProducer:
         self.start()

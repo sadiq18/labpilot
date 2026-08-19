@@ -382,3 +382,253 @@ def test_a_client_with_no_router_behind_it_does_not_block_gathering(tmp_path: Pa
 
     assert outcome.gathered is True
     assert len(calls) == 1
+
+
+# --- lifecycle and instrumentation the review caught -------------------------
+
+
+def test_the_producer_thread_inherits_the_provenance_context(tmp_path: Path) -> None:
+    """A fresh thread gets a fresh empty context, so the provenance sink the
+    campaign installed is invisible inside it and every micro-agent call the
+    sweep makes records nothing. Fourth instance of this bug in this codebase
+    — `SqliteInvocationSink` names the first three.
+    """
+    from labpilot.accessor.common import provenance
+    from labpilot.research_engine.conductor.producer import EvidenceProducer
+
+    ws = _ws(tmp_path)  # empty pool, so the gate opens and the tool actually runs
+    seen: list[object] = []
+
+    def handler(workspace: Workspace, **kwargs: object) -> ToolResult:
+        seen.append(provenance._sink.get())  # noqa: SLF001 — the point of the test
+        return ToolResult(refs=[], data={})
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDescriptor(name="gather_stub", handler=handler, capability_status="fixed")
+    )
+    producer = EvidenceProducer(
+        ws, registry, plan=GatherPlan(tool="gather_stub"), tick_seconds=1.0
+    )
+
+    sentinel = object()
+    token = provenance.set_sink(sentinel)  # type: ignore[arg-type]
+    try:
+        producer.start()
+        deadline = __import__("time").monotonic() + 5.0
+        while producer.status()["ticks"] < 1 and __import__("time").monotonic() < deadline:
+            __import__("time").sleep(0.01)
+        producer.stop(timeout=5.0)
+    finally:
+        provenance.reset_sink(token)
+
+    # The gate is open on a fresh workspace, so the tool ran and recorded what
+    # the sink looked like from inside the producer thread.
+    assert seen == [sentinel]
+
+
+def test_a_second_start_is_refused_while_the_first_thread_lives(tmp_path: Path) -> None:
+    """`start()` clears the stop event, so stacking one on a live thread would
+    un-stop the loop that was told to finish and leave two sweeping at once.
+    """
+    import threading as _threading
+
+    from labpilot.research_engine.conductor.producer import EvidenceProducer
+
+    entered = _threading.Event()
+    release = _threading.Event()
+
+    def handler(workspace: Workspace, **kwargs: object) -> ToolResult:
+        entered.set()
+        release.wait(5.0)
+        return ToolResult(refs=[], data={})
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDescriptor(name="gather_stub", handler=handler, capability_status="fixed")
+    )
+    # An empty pool, so the gate opens and the tick blocks inside the handler.
+    ws_open = _ws(tmp_path, slug="open")
+    producer = EvidenceProducer(
+        ws_open, registry, plan=GatherPlan(tool="gather_stub"), tick_seconds=1.0
+    )
+
+    producer.start()
+    assert entered.wait(5.0)
+    first = producer._thread  # noqa: SLF001 — identity is the assertion
+
+    producer.start()
+    assert producer._thread is first  # noqa: SLF001
+
+    release.set()
+    producer.stop(timeout=5.0)
+
+
+def test_a_thread_that_outlives_the_timeout_is_kept_not_dropped(tmp_path: Path) -> None:
+    """Dropping the handle reported `is_running() is False` while a sweep was
+    still writing, and let a later `start()` resurrect the old loop.
+    """
+    import threading as _threading
+
+    from labpilot.research_engine.conductor.producer import EvidenceProducer
+
+    entered = _threading.Event()
+    release = _threading.Event()
+
+    def handler(workspace: Workspace, **kwargs: object) -> ToolResult:
+        entered.set()
+        release.wait(10.0)
+        return ToolResult(refs=[], data={})
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDescriptor(name="gather_stub", handler=handler, capability_status="fixed")
+    )
+    producer = EvidenceProducer(
+        _ws(tmp_path), registry, plan=GatherPlan(tool="gather_stub"), tick_seconds=1.0
+    )
+
+    producer.start()
+    assert entered.wait(5.0)
+
+    assert producer.stop(timeout=0.1) is False
+    assert producer.is_running() is True  # still sweeping, and still says so
+
+    release.set()
+    assert producer.stop(timeout=5.0) is True
+    assert producer.is_running() is False
+
+
+def test_a_tick_interval_below_the_floor_is_raised_to_it(tmp_path: Path) -> None:
+    """`Event.wait(0)` returns immediately: a zero interval is a spin that
+    globs the hypothesis directory as fast as it can, hidden by the re-sweep
+    floor making every tick a no-op.
+    """
+    from labpilot.research_engine.conductor.producer import (
+        _MIN_TICK_SECONDS,
+        EvidenceProducer,
+    )
+
+    ws = _quiet_workspace(tmp_path)
+    calls: list[dict] = []
+
+    assert EvidenceProducer(ws, _registry(calls), tick_seconds=0).tick_seconds == _MIN_TICK_SECONDS
+    assert EvidenceProducer(ws, _registry(calls), tick_seconds=-5).tick_seconds == _MIN_TICK_SECONDS
+    assert EvidenceProducer(ws, _registry(calls), tick_seconds=30).tick_seconds == 30
+
+
+def test_a_failed_tick_does_not_leave_the_previous_decision_showing(tmp_path: Path) -> None:
+    """`status()` reported `last_decision="gathered"` beside a fresh
+    `last_error`, describing a sweep that did not happen on the tick reported.
+    """
+    from labpilot.research_engine.conductor.producer import EvidenceProducer
+
+    ws = _ws(tmp_path)
+    outcomes = [ToolResult(refs=[], data={}), RuntimeError("network died")]
+
+    def handler(workspace: Workspace, **kwargs: object) -> ToolResult:
+        nxt = outcomes.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDescriptor(name="gather_stub", handler=handler, capability_status="fixed")
+    )
+    producer = EvidenceProducer(ws, registry, plan=GatherPlan(tool="gather_stub"))
+
+    producer.tick_once()
+    assert producer.status()["last_decision"] == "gathered"
+
+    producer.tick_once()
+    status = producer.status()
+    assert status["last_decision"] is None
+    assert "network died" in status["last_error"]
+
+
+def test_the_default_plan_does_not_share_its_nested_lists(tmp_path: Path) -> None:
+    """A shallow copy left `args["exclude"]` pointing at the module constant,
+    so one handler mutating it in place edits every later tick and step.
+    """
+    from labpilot.research_engine.conductor.actions import ANALYZE_ARGS
+
+    plan = default_gather_plan(_ws(tmp_path))
+    plan.args["exclude"].append("dataset")
+
+    assert ANALYZE_ARGS["exclude"] == ["papers"]
+
+
+def test_a_client_whose_preview_keeps_raising_is_only_reported_once(tmp_path: Path) -> None:
+    """A signature mismatch does not heal; a traceback every tick for twelve
+    hours buries the campaign's own log.
+    """
+    ws = _ws(tmp_path)
+    calls: list[dict] = []
+    attempts: list[int] = []
+
+    class _Broken:
+        def preview(self, role: str, **kw: object):
+            attempts.append(1)
+            raise TypeError("preview() got an unexpected keyword argument 'reserve'")
+
+    client = _Broken()
+    for _ in range(3):
+        outcome = gather_once(
+            ws, _registry(calls), GatherPlan(tool="gather_stub"), llm_client=client, reserve=0.2
+        )
+        assert outcome.gathered is True
+
+    assert len(attempts) == 1
+
+
+def test_the_env_switch_only_accepts_boolean_words(monkeypatch) -> None:
+    """A denylist turned every value it did not recognise into *on*, so an
+    operator writing `disabled` switched the feature on and moved gathering to
+    a different component without being told.
+    """
+    from labpilot.cli.conduct import _gather_background_enabled
+
+    for value in ("1", "true", "TRUE", "yes", "on"):
+        monkeypatch.setenv("LABPILOT_GATHER_BACKGROUND", value)
+        assert _gather_background_enabled(False) is True, value
+
+    for value in ("", "0", "false", "no", "off", "disabled", "none", "n", "2"):
+        monkeypatch.setenv("LABPILOT_GATHER_BACKGROUND", value)
+        assert _gather_background_enabled(False) is False, value
+
+    monkeypatch.setenv("LABPILOT_GATHER_BACKGROUND", "off")
+    assert _gather_background_enabled(True) is True  # the flag still wins
+
+
+def test_the_campaign_starts_the_producer_only_after_repairing_memory() -> None:
+    """Its first tick fires immediately and mints from beliefs and overlays —
+    the things the repair chain at the top of the loop has just corrected.
+    Started before it, the first sweep reads the pre-repair compass.
+    """
+    import inspect
+
+    from labpilot.research_engine.conductor import loop as loop_mod
+
+    source = inspect.getsource(loop_mod._run_until_stop_inner)
+    repair = source.index("revalidate_outcome_claims(")
+    start = source.index("producer.start()")
+
+    assert start > repair, "producer starts before the belief/overlay repair chain"
+
+
+def test_gathering_returns_to_the_campaign_if_the_producer_is_not_running() -> None:
+    """The allowlist handover has to follow the thread, not the object: keyed
+    on existence, a producer that never started would take the tool away for
+    the whole run with nothing gathering in its place.
+    """
+    import inspect
+
+    from labpilot.research_engine.conductor import loop as loop_mod
+
+    source = inspect.getsource(loop_mod._run_until_stop_inner)
+    owns = source.index("def _producer_owns_gathering()")
+    body = source[owns : owns + 900]
+
+    assert "producer.is_running()" in body
+    assert "external_gathering=_producer_owns_gathering()" in source

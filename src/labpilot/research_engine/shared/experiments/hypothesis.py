@@ -25,6 +25,23 @@ _ID_PATTERN = re.compile(r"^H-(\d+)$")
 BASELINE_HYPOTHESIS_ID = "H-BASELINE"
 
 
+def derive_technique(technique: str | None, combo_techniques: Iterable[str] = ()) -> str | None:
+    """The technique a hypothesis is *stored* under, given what was passed in.
+
+    A combination proposal usually arrives with an empty `technique` and its
+    members in `combo_techniques`; the store fills the first from the second.
+    Anything comparing a not-yet-created proposal against stored rows has to
+    apply the same rule or it compares "" against "a+b" and concludes they are
+    different ideas — which is exactly how combination cards slipped past the
+    M16 duplicate check while every other kind was caught.
+    """
+    combo = [str(item).strip() for item in combo_techniques if str(item).strip()]
+    tech = (technique or "").strip() or None
+    if combo and not tech:
+        tech = "+".join(combo)
+    return tech
+
+
 def _now() -> datetime:
     """UTC, and aware — every other store in the system already is.
 
@@ -205,27 +222,46 @@ class HypothesisStore:
 
         `**fields` is forwarded to `_prepare` verbatim, so this accepts exactly
         what `create()` does and a typo raises `TypeError` there.
+
+        The pool is read twice, and only the second read is under the lock.
+        Reading it whole inside would hold the cross-process allocation lock
+        across a full directory parse on every mint — a batch of ten cards
+        against a few hundred hypotheses is ten full scans, all of them
+        serialising the fan-out branches queued behind the same lock. The
+        window this method closes can only be filled by a row *created* during
+        it, and a created row is a file that was not there before, so the
+        in-lock read only has to cover ids the first read did not see.
         """
         prepared = self._prepare(**fields)
+        seen = self._proposed_snapshot()
+        if covered_by(seen):
+            return None
+        seen_ids = {hypothesis.id for hypothesis in seen}
         with locked(self._alloc_lock_path()):
-            if covered_by(self._proposed_snapshot()):
+            arrived = self._proposed_snapshot(skip_ids=seen_ids)
+            if arrived and covered_by([*seen, *arrived]):
                 return None
             hypothesis = self._write_new(prepared)
         self._mirror_to_db(hypothesis)
         return hypothesis
 
-    def _proposed_snapshot(self) -> list[Hypothesis]:
+    def _proposed_snapshot(self, *, skip_ids: set[str] | None = None) -> list[Hypothesis]:
         """Proposed hypotheses, read straight from disk.
 
         Not `list(status=PROPOSED)`: that backfills `knowledge.db` as a side
-        effect, and this runs inside `.alloc.lock`. A cache refresh unrelated
-        to the decision being made has no business lengthening the critical
-        section every other writer is queued behind.
+        effect, and one caller runs inside `.alloc.lock`. A cache refresh
+        unrelated to the decision being made has no business lengthening the
+        critical section every other writer is queued behind.
+
+        ``skip_ids`` names hypotheses the caller has already read, so the
+        in-lock pass parses only what arrived since.
         """
         if not self.hypotheses_dir.is_dir():
             return []
         found: list[Hypothesis] = []
         for path in sorted(self.hypotheses_dir.glob("H-*.json")):
+            if skip_ids and path.stem in skip_ids:
+                continue
             try:
                 hypothesis = Hypothesis.model_validate_json(path.read_text())
             except (OSError, ValueError) as exc:
@@ -283,8 +319,7 @@ class HypothesisStore:
         for member in combo:
             if member not in stack:
                 stack.append(member)
-        if combo and not tech:
-            tech = "+".join(combo)
+        tech = derive_technique(tech, combo)
         return {
             "competition": self.competition,
             "observation": observation,

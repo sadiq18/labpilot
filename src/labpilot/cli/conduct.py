@@ -36,17 +36,32 @@ conduct_app = typer.Typer(
 console = Console()
 
 
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_FALSEY = frozenset({"0", "false", "no", "off"})
+
+
 def _gather_background_enabled(flag: bool) -> bool:
     """The flag, or `LABPILOT_GATHER_BACKGROUND` for callers that cannot pass one.
 
     Read here rather than in `EvidenceProducer` so the environment reaches one
     decision point: a producer that could switch itself on from a variable the
     CLI never saw is a campaign whose behaviour is not in its own command line.
+
+    An allowlist, not "anything that is not a known false". The denylist form
+    turned `LABPILOT_GATHER_BACKGROUND=disabled` — and `none`, and `n`, and a
+    stray `2` — into *on*, so an operator trying to switch the feature off
+    switched it on and moved gathering to a different component without being
+    told.
     """
     if flag:
         return True
     raw = os.environ.get("LABPILOT_GATHER_BACKGROUND", "").strip().lower()
-    return raw not in {"", "0", "false", "no", "off"}
+    if raw and raw not in _TRUTHY and raw not in _FALSEY:
+        console.print(
+            f"[yellow]LABPILOT_GATHER_BACKGROUND={raw!r} is not a boolean; "
+            "treating it as off.[/yellow]"
+        )
+    return raw in _TRUTHY
 
 
 def _apply_deterministic_env(offline: bool) -> None:

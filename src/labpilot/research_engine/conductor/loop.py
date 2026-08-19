@@ -988,12 +988,12 @@ def run_until_stop(
     with recording_provenance(
         workspace.knowledge_dir, workspace.competition, session_id=session_id
     ):
-        # Started and stopped out here rather than inside the loop body: the
-        # producer has to be shut down on *every* exit — stop condition,
-        # budget, exception, Ctrl-C — and one try/finally around the call is
-        # the version of that which cannot be forgotten in a new branch.
-        if producer is not None:
-            producer.start()
+        # Stopped out here, started inside: shutdown has to happen on *every*
+        # exit — stop condition, budget, exception, Ctrl-C — and one
+        # try/finally around the call is the version of that which cannot be
+        # forgotten in a new branch. Starting is the opposite problem; it has
+        # to wait for the memory repair the loop opens with (see
+        # `_run_until_stop_inner`), so it happens there.
         try:
             return _run_until_stop_inner(
                 store,
@@ -1063,13 +1063,23 @@ def _run_until_stop_inner(
         "prefer_offline": prefer_offline,
         "auto_offline_fallback": auto_approve,
         "offline_fallback_prompt": offline_fallback_prompt,
-        # M16: with a producer running, gathering is not the consumer's to do.
-        "external_gathering": producer is not None,
     }
 
     def _producer_status() -> dict[str, Any] | None:
         """Read per decision, not once: the point is that it changes mid-run."""
         return None if producer is None else producer.status()
+
+    def _producer_owns_gathering() -> bool:
+        """Whether the sweep is somebody else's job *right now*.
+
+        Liveness, not existence. Keyed on the object alone, a producer whose
+        thread never started or has since stopped would still take
+        `analyze_competition` off the consumer's allowlist for the rest of the
+        run — leaving a campaign that cannot gather and nothing gathering for
+        it. Asked per decision so the tool comes back the moment it is nobody
+        else's.
+        """
+        return producer is not None and producer.is_running()
 
     # Repair research memory before acting on it. A claim no measurement
     # supports steers every decision this loop is about to make, and the repair
@@ -1147,6 +1157,16 @@ def _run_until_stop_inner(
             _progress(f"Contested {len(contested)} claim(s) no measurement supports")
     except Exception as exc:  # noqa: BLE001 — never block a campaign on repair
         logger.warning("Claim revalidation at session start failed: %s", exc)
+
+    # Only now (M16). The producer's first tick fires immediately, and its
+    # sweep mints hypotheses from beliefs and skill overlays — the very things
+    # the block above has just finished repairing. Started before it, the first
+    # sweep reads the pre-repair compass, which is the failure that chain
+    # exists to prevent: a full campaign once ran with 45 false `vit` claims
+    # intact, and every rogii overlay said `Avoid: SWA` about the only
+    # technique that had ever improved the metric.
+    if producer is not None:
+        producer.start()
 
     for step in range(max_steps):
         # Refresh each iteration so mid-session registration is visible.
@@ -1232,6 +1252,7 @@ def _run_until_stop_inner(
                     # built, so the series has to arrive with the decision.
                     budgets=(budget_cfg, budget_state),
                     producer_status=_producer_status(),
+                    external_gathering=_producer_owns_gathering(),
                     **policy_kw,
                 )
                 _progress(
@@ -1495,6 +1516,7 @@ def _run_until_stop_inner(
             llm_client=llm_client,
             budgets=(budget_cfg, budget_state),
             producer_status=_producer_status(),
+            external_gathering=_producer_owns_gathering(),
             **policy_kw,
         )
         decision_id = store.new_decision_id()

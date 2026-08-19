@@ -35,6 +35,11 @@ _MINUTE = 60.0
 _DAY = 86_400.0
 
 
+def _held(reserve: float) -> str:
+    """Say so when a caller was refused early, rather than misquoting the limit."""
+    return f" (holding {reserve:.0%} in reserve)" if reserve > 0.0 else ""
+
+
 @dataclass(frozen=True)
 class Availability:
     """Whether a provider can be called now, and if not, how long until it can."""
@@ -152,9 +157,15 @@ class BudgetLedger:
                 return limit
             return max(1, int(limit * (1.0 - keep)))
 
-        rpm = _effective(rpm)
-        rpd = _effective(rpd)
-        tpm = _effective(tpm)
+        # The *effective* values are what this caller may reach; the originals
+        # stay for the messages. Rebinding the names put the reduced number in
+        # the reason string — "daily limit 800 reached" against a published
+        # limit of 1000 — which reaches `RouteDecision.reason`, the producer's
+        # skip reason and `research doctor`, where an operator reads it as the
+        # provider's real quota and cannot reconcile it with the dashboard.
+        rpm_allowed = _effective(rpm)
+        rpd_allowed = _effective(rpd)
+        tpm_allowed = _effective(tpm)
         with self._lock:
             row = self._conn.execute(
                 "SELECT until_ts, reason FROM llm_cooldowns WHERE provider = ?", (provider,)
@@ -164,25 +175,31 @@ class BudgetLedger:
                     False, float(row["until_ts"]) - now, f"cooling down ({row['reason']})"
                 )
 
-            if rpd is not None:
+            if rpd_allowed is not None:
                 used, _ = self._count(provider, _DAY, now)
-                if used >= rpd:
+                if used >= rpd_allowed:
                     oldest = self._oldest_in_window(provider, _DAY, now)
                     wait = (oldest + _DAY) - now if oldest else _DAY
-                    return Availability(False, max(wait, 0.0), f"daily limit {rpd} reached")
+                    return Availability(
+                        False, max(wait, 0.0), f"daily limit {rpd} reached{_held(keep)}"
+                    )
 
-            if rpm is not None:
+            if rpm_allowed is not None:
                 used, _ = self._count(provider, _MINUTE, now)
-                if used >= rpm:
+                if used >= rpm_allowed:
                     oldest = self._oldest_in_window(provider, _MINUTE, now)
                     wait = (oldest + _MINUTE) - now if oldest else _MINUTE
-                    return Availability(False, max(wait, 0.0), f"rate limit {rpm}/min reached")
+                    return Availability(
+                        False, max(wait, 0.0), f"rate limit {rpm}/min reached{_held(keep)}"
+                    )
 
-            if tpm is not None:
+            if tpm_allowed is not None:
                 _, tokens = self._count(provider, _MINUTE, now)
-                if tokens >= tpm:
+                if tokens >= tpm_allowed:
                     oldest = self._oldest_in_window(provider, _MINUTE, now)
                     wait = (oldest + _MINUTE) - now if oldest else _MINUTE
-                    return Availability(False, max(wait, 0.0), f"token limit {tpm}/min reached")
+                    return Availability(
+                        False, max(wait, 0.0), f"token limit {tpm}/min reached{_held(keep)}"
+                    )
 
             return Availability(True)

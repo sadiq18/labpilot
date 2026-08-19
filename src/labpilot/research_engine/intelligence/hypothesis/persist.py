@@ -37,14 +37,23 @@ def _mint_identity(hyp_or_card: Any) -> tuple[str, str, str, str]:
     that window, which is why the `proposed` snapshot
     `create_unless_covered` passes is the right pool to search.
 
+    Compared on the *stored* technique, via `derive_technique`, not the one
+    the card arrived with. A combination proposal carries its members in
+    `combo_techniques` and an empty `technique`, which the store fills in on
+    write — so comparing the raw fields put `("", "alpha+beta", …)` next to
+    `("alphabeta", "alpha+beta", …)` and called them different ideas. Every
+    combination card duplicated freely while every other kind was caught.
+
     Narrow on purpose: a false positive here loses an idea, while a false
     negative leaves one duplicate for the upstream filter to catch next pass.
     """
     from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_label
+    from labpilot.research_engine.shared.experiments.hypothesis import derive_technique
 
     combo = [str(t).strip() for t in (getattr(hyp_or_card, "combo_techniques", None) or [])]
+    stored_technique = derive_technique(getattr(hyp_or_card, "technique", "") or "", combo)
     return (
-        normalize_label(str(getattr(hyp_or_card, "technique", "") or "")),
+        normalize_label(stored_technique or ""),
         "+".join(sorted(normalize_label(t) for t in combo)),
         str(getattr(hyp_or_card, "parent_hypothesis_id", "") or ""),
         " ".join(str(getattr(hyp_or_card, "prediction", "") or "").split()),
