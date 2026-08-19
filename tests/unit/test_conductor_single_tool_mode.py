@@ -53,6 +53,7 @@ def _registry() -> ToolRegistry:
             summary="echo inputs to an artifact",
             handler=echo,
             gated=False,
+            capability_status="fixed",
         )
     )
     return reg

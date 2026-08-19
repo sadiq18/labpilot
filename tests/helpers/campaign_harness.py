@@ -227,7 +227,7 @@ class CampaignHarness:
         seq = [outcomes] if isinstance(outcomes, Outcome) else list(outcomes)
         tool = _ScriptedTool(name, seq)
         self.tools[name] = tool
-        self.registry.register(ToolDescriptor(name=name, handler=tool))
+        self.registry.register(ToolDescriptor(name=name, handler=tool, capability_status="fixed"))
 
     # -- seeding ------------------------------------------------------------
 

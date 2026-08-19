@@ -73,11 +73,11 @@ def _campaign_registry(*, with_submit: bool = True) -> ToolRegistry:
         "run_plan",
         "reflect",
     ):
-        reg.register(ToolDescriptor(name=name, handler=_echo))
-    reg.register(ToolDescriptor(name="search_papers", handler=papers))
+        reg.register(ToolDescriptor(name=name, handler=_echo, capability_status="fixed"))
+    reg.register(ToolDescriptor(name="search_papers", handler=papers, capability_status="fixed"))
     if with_submit:
-        reg.register(ToolDescriptor(name="submit", handler=_echo))
-        reg.register(ToolDescriptor(name="submit_learn", handler=_echo))
+        reg.register(ToolDescriptor(name="submit", handler=_echo, capability_status="fixed"))
+        reg.register(ToolDescriptor(name="submit_learn", handler=_echo, capability_status="fixed"))
     return reg
 
 
@@ -327,9 +327,7 @@ def test_metrics_and_suggestions(tmp_path: Path) -> None:
             store,
             session_id=session.id,
             tool_name="submit",
-            prompt=lambda t: ApprovalResult(
-                decision="reject", comment="no", gated_tool=t
-            ),
+            prompt=lambda t: ApprovalResult(decision="reject", comment="no", gated_tool=t),
             autonomy=1,
         )
         m2 = store.get_metrics(session.id)
@@ -367,9 +365,7 @@ def test_loop_records_unmapped_suggestion(tmp_path: Path) -> None:
             )
         assert store.get_metrics(session.id).no_capability >= 1
         assert store.list_suggestions(session.id)
-        assert any(
-            (d.observe or {}).get("unmapped") for d in decisions if d.observe
-        )
+        assert any((d.observe or {}).get("unmapped") for d in decisions if d.observe)
     finally:
         store.close()
 

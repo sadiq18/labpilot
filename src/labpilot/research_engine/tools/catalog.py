@@ -41,6 +41,8 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["competition_analysis"],
             handler=analyze_competition,
+            capability_status="real",
+            varies_by=["only"],
         ),
         ToolDescriptor(
             name="search_papers",
@@ -55,6 +57,10 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["paper_search"],
             handler=search_papers,
+            # Real when authenticated; degrades to an empty hit list
+            # (source="offline" / source="error:<Type>") under offline=True
+            # or any network failure — honestly, not disguised as success.
+            capability_status="partial",
         ),
         ToolDescriptor(
             name="generate_plan",
@@ -69,6 +75,8 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["research_plan"],
             handler=generate_plan,
+            capability_status="real",
+            varies_by=["hypothesis_id"],
         ),
         ToolDescriptor(
             name="implement",
@@ -86,6 +94,27 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["code"],
             handler=implement,
+            # partial, not real, for two independent reasons — see
+            # docs/research-os/autonomy-roadmap/10-capability-audit.md
+            # §"implement: a second hollow path":
+            #
+            # 1. ImplementationSpecialist's prefer_patch shortcut skips the
+            #    M19-fixed codegen path by default whenever the workspace
+            #    already has code, and reports success without touching
+            #    train.py. Only reaches the real path on a fresh workspace or
+            #    with force_rewrite=True explicitly passed.
+            # 2. `varies_by` is `description`, NOT `technique`. The
+            #    `technique` kwarg never reaches the codegen prompt on this
+            #    path: `build_v1_task_context` puts the agent task's metadata
+            #    on the synthetic *ResearchTask*, while
+            #    `CodeEngineeringCapability._write` reads `plan.metadata` —
+            #    written to one object, read from another, so the prompt
+            #    renders `Technique: —` however the caller sets it. Only
+            #    `description` (via `goal`/`task_description`) actually
+            #    conditions the output. Declaring `technique` here would be
+            #    exactly the unverified capability claim M15 exists to catch.
+            capability_status="partial",
+            varies_by=["description"],
         ),
         ToolDescriptor(
             name="run_plan",
@@ -101,6 +130,8 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["execution"],
             handler=run_plan,
+            capability_status="real",
+            varies_by=["plan_id"],
         ),
         ToolDescriptor(
             name="run_experiment",
@@ -119,6 +150,11 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["execution", "experiment", "metrics"],
             handler=run_experiment,
+            # Independent handler from run_plan (routes to CodeEngineeringCapability
+            # directly, not through ImplementationSpecialist) — the prefer_patch
+            # finding on `implement` does not apply here.
+            capability_status="real",
+            varies_by=["plan_id"],
         ),
         ToolDescriptor(
             name="reflect",
@@ -132,6 +168,10 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["reflection"],
             handler=reflect,
+            # Real but inert: produces genuinely different beliefs/evidence per
+            # execution; nothing downstream reads them yet — see M8.
+            capability_status="real",
+            varies_by=["execution_id"],
         ),
         ToolDescriptor(
             name="submit",
@@ -143,6 +183,10 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["submission"],
             handler=submit,
+            # package_execution_submission copies submission.csv verbatim;
+            # execution_id only relabels the destination filename. Content
+            # never depends on input — an honest fixed step, not a hollow one.
+            capability_status="fixed",
         ),
         ToolDescriptor(
             name="submit_learn",
@@ -157,6 +201,11 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=["submission"],
             handler=submit_learn,
+            # Real even under dry_run=True: build_execution_outcome /
+            # load_execution_outcome still return real per-execution metrics,
+            # not a canned dry-run stub.
+            capability_status="real",
+            varies_by=["execution_id"],
         ),
         ToolDescriptor(
             name="query_memory",
@@ -170,5 +219,7 @@ def default_tool_descriptors() -> list[ToolDescriptor]:
             },
             output_artifacts=[],
             handler=query_memory,
+            capability_status="real",
+            varies_by=["query"],
         ),
     ]

@@ -66,16 +66,43 @@ def _require_maintainer() -> None:
         raise typer.Exit(1)
 
 
+#: How each status reads to an operator deciding whether to trust a tool.
+_STATUS_STYLE = {
+    "real": "green",
+    "partial": "yellow",
+    "fixed": "dim",
+}
+
+
 @tools_app.command("list")
 def tools_list() -> None:
-    """List tools in the default Conductor catalog."""
+    """List tools in the default Conductor catalog, with capability status.
+
+    M15 exit criterion 2: an operator can see which tools can actually change
+    an outcome without reading source. `varies_by` names the inputs proven —
+    by `tests/unit/test_tool_contracts.py`, not by assertion — to change what
+    the tool produces.
+    """
     registry = default_tools()
     table = Table(title="Registered tools")
     table.add_column("name")
+    table.add_column("status")
+    table.add_column("varies by")
     table.add_column("description")
     for desc in registry.list_tools():
-        table.add_row(desc.name, (desc.description or "")[:80])
+        status = desc.capability_status
+        table.add_row(
+            desc.name,
+            f"[{_STATUS_STYLE.get(status, 'white')}]{status}[/]",
+            ", ".join(desc.varies_by) or "[dim]—[/dim]",
+            (desc.description or "")[:60],
+        )
     console.print(table)
+    console.print(
+        "[dim]real = a declared input provably changes the output · "
+        "partial = degrades honestly when unavailable · "
+        "fixed = same output regardless of input[/dim]"
+    )
 
 
 @tools_app.command("gaps")
@@ -222,8 +249,6 @@ def tools_export_gaps(
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        console.print(
-            f"[green]Wrote[/green] {len(payload['gaps'])} gaps → [cyan]{output}[/cyan]"
-        )
+        console.print(f"[green]Wrote[/green] {len(payload['gaps'])} gaps → [cyan]{output}[/cyan]")
     finally:
         store.close()

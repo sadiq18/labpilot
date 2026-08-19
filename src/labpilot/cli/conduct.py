@@ -72,6 +72,7 @@ def _test_registry_subset() -> object:
             name="analyze_competition",
             description="stub",
             handler=echo_analyze,
+            capability_status="fixed",
         )
     )
     reg.register(
@@ -79,6 +80,7 @@ def _test_registry_subset() -> object:
             name="search_papers",
             description="search papers",
             handler=lambda ws, **kw: search_papers(ws, offline=True, **kw),
+            capability_status="fixed",
         )
     )
     reg.register(
@@ -86,6 +88,12 @@ def _test_registry_subset() -> object:
             name="query_memory",
             description="query memory",
             handler=query_memory,
+            # The real catalog handler, unwrapped — unlike the two above
+            # (a local stub, and search_papers pinned to offline=True), this
+            # one genuinely varies by query, so `fixed` would be a false
+            # declaration in the field that exists to prevent them.
+            capability_status="real",
+            varies_by=["query"],
         )
     )
     return reg
@@ -552,7 +560,9 @@ def _continue_session(
 
 @conduct_app.command("continue")
 def conduct_continue(
-    session: str | None = typer.Option(None, "--session", help="Session id (default: latest active)"),
+    session: str | None = typer.Option(
+        None, "--session", help="Session id (default: latest active)"
+    ),
     competition: str | None = typer.Option(None, "--competition", "-c"),
     max_steps: int = typer.Option(8, "--max-steps"),
     branches: int = typer.Option(
@@ -721,8 +731,7 @@ def conduct_status(
                 console.print(f"    by kind: {rate.by_kind}")
         if cp:
             console.print(
-                f"  checkpoint: tools={cp.get('completed_tools')} "
-                f"last={cp.get('last_decision_id')}"
+                f"  checkpoint: tools={cp.get('completed_tools')} last={cp.get('last_decision_id')}"
             )
         console.print(
             f"  budgets: max_submissions={cfg.max_submissions} "

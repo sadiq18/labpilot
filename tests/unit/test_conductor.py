@@ -51,9 +51,11 @@ def _echo_registry() -> ToolRegistry:
     def papers(workspace: Workspace, **kwargs: object) -> ToolResult:
         return search_papers(workspace, offline=True, query="demo")
 
-    reg.register(ToolDescriptor(name="analyze_competition", handler=echo))
-    reg.register(ToolDescriptor(name="search_papers", handler=papers))
-    reg.register(ToolDescriptor(name="query_memory", handler=echo))
+    reg.register(
+        ToolDescriptor(name="analyze_competition", handler=echo, capability_status="fixed")
+    )
+    reg.register(ToolDescriptor(name="search_papers", handler=papers, capability_status="fixed"))
+    reg.register(ToolDescriptor(name="query_memory", handler=echo, capability_status="fixed"))
     return reg
 
 
@@ -1289,3 +1291,33 @@ def test_a_matching_metric_pair_says_nothing(caplog):
         _objective_unmet(_Cfg(), _Measured(4.2, "cv_mse"))
 
     assert not [r for r in caplog.records if "can never be reported met" in r.message]
+
+
+def test_every_template_step_names_a_registered_tool() -> None:
+    """`_TEMPLATES` may only dispatch tools the catalog actually has.
+
+    The templates hardcode tool names as plain strings, so a rename or a typo
+    is invisible until a campaign reaches that step and `ToolRegistry.require`
+    raises `KeyError: no tool registered: ...`. That is a runtime failure in
+    the main research loop for something a set comparison catches at build
+    time.
+
+    M15 exit criterion 3 makes this concrete: renaming a tool that reads as an
+    action is an explicitly sanctioned outcome, and `implement` alone is
+    dispatched from two separate templates (its own, and `experiment`). This
+    asserts over every template step rather than any one tool, so the guard
+    holds for whichever name moves.
+    """
+    from labpilot.research_engine.conductor.actions import _TEMPLATES
+    from labpilot.research_engine.tools.catalog import build_default_tool_registry
+
+    referenced = {step.tool for _keywords, steps in _TEMPLATES for step in steps}
+    assert referenced, "no template steps found — did _TEMPLATES move?"
+
+    registered = set(build_default_tool_registry().names())
+    dangling = sorted(referenced - registered)
+    assert not dangling, (
+        f"_TEMPLATES dispatches tools missing from the catalog: {dangling}. "
+        "A rename must update every ToolStep, not just the intent keyword — "
+        "see docs/research-os/design/12-capability-audit.md §6.4"
+    )
