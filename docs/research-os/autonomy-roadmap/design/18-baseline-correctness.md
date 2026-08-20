@@ -66,7 +66,7 @@ is step 2.
 | 5 | Infer feature types | M22 ✅ `feature_columns` + typed exclusions |
 | 6 | Identify evaluation metric | `resolve_objective` — exists, needs wiring |
 | 7 ✅ | Build trivial baseline | **this milestone** |
-| 8 | Build ML baseline | **this milestone** |
+| 8 ✅ | Build ML baseline | **this milestone** |
 | 9 | Compare against trivial | **this milestone** |
 
 Checks 1–5 do not need building. They need *reading* — which is the difference

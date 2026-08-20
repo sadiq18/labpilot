@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
@@ -14,13 +15,34 @@ from labpilot.research_engine.shared.experiments.models import (
 from labpilot.research_engine.intelligence.hypothesis.models import HypothesisRecommendation
 
 
+logger = logging.getLogger(__name__)
+
+
 def persist_recommendations(
     recommendations: list[HypothesisRecommendation],
     *,
     knowledge_dir: Path,
     competition: str,
+    workspace_root: Path | None = None,
 ) -> list[HypothesisRecommendation]:
-    """Create Suggested (proposed) M2 hypotheses; fill hypothesis_id on cards."""
+    """Create Suggested (proposed) M2 hypotheses; fill hypothesis_id on cards.
+
+    M23 step 8 gates here because this is the **only durable write** — the point
+    past which a belief outlives the run. Blocking further upstream would stop a
+    campaign doing the very work that opens the gate; blocking at submission
+    would be far too late, since rogii wrote 19 child hypotheses and drove eight
+    techniques to 0.0 confidence without ever submitting anything.
+
+    `workspace_root=None` is not a refusal: a caller with no workspace is one
+    this gate cannot see, not one that skipped its baseline.
+    """
+    from labpilot.research_engine.execution.baseline.gate import refuse_hypothesis_minting
+
+    refusal = refuse_hypothesis_minting(workspace_root)
+    if refusal:
+        logger.warning("Refusing to mint %d hypothesis(es): %s", len(recommendations), refusal)
+        return []
+
     store = HypothesisStore(knowledge_dir, competition)
     updated: list[HypothesisRecommendation] = []
     for card in recommendations:

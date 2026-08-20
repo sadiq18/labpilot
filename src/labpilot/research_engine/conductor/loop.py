@@ -925,8 +925,44 @@ def _next_hypothesis_id(workspace: Workspace) -> str | None:
     return ranked[0].id if ranked else None
 
 
+def _baseline_is_done(workspace: Workspace) -> bool:
+    """Whether the campaign may stop asking for a baseline and start iterating.
+
+    M23 step 8. `_baseline_plan_exists` answered *"was a plan object compiled?"*
+    to a caller asking *"has the baseline been done?"* — so a campaign flipped to
+    research mode on the strength of a file existing, whatever the pipeline it
+    described actually scored. That is how rogii spent two weeks minting
+    hypotheses over a pipeline 91x worse than one line of code.
+
+    Under enforcement the answer is the gate's: `passed` or `waived`. Otherwise
+    it is the old one, because the rollout's whole shape is that step 8 is a
+    config flip and observe-only must not change what a campaign does.
+    """
+    root = getattr(workspace, "root", None)
+    if root is not None:
+        try:
+            from labpilot.research_engine.execution.baseline.gate import (
+                _enforcement_enabled,
+                evaluate_gate,
+            )
+
+            if _enforcement_enabled():
+                # `blocks_research` and not `state == "passed"`: a waived gate is
+                # a decision someone recorded, and the campaign proceeds.
+                return not evaluate_gate(Path(root), enforced=True).blocks_research
+        except Exception as exc:  # noqa: BLE001 — a gate that cannot run must
+            # not force a baseline recompile over the top of existing work.
+            logger.warning("Baseline gate unavailable, falling back to plan lookup: %s", exc)
+    return _baseline_plan_exists(workspace)
+
+
 def _baseline_plan_exists(workspace: Workspace) -> bool:
-    """True when a baseline plan has already been compiled for this competition."""
+    """True when a baseline plan has already been compiled for this competition.
+
+    Retained only as `_baseline_is_done`'s observe-only fallback. It answers a
+    different question from the one its caller asks, which is the defect step 8
+    exists to fix.
+    """
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
     from labpilot.research_engine.intelligence.paths import store_is_absent
 
@@ -1557,7 +1593,7 @@ def _run_until_stop_inner(
                     latest_plan_id=_latest_plan_id(workspace),
                     latest_execution_id=_latest_execution_id(workspace),
                     next_hypothesis_id=_next_hypothesis_id(workspace),
-                    baseline_plan_exists=_baseline_plan_exists(workspace),
+                    baseline_plan_exists=_baseline_is_done(workspace),
                 )
                 task = store.enqueue(
                     session_id,
@@ -1730,7 +1766,7 @@ def _run_until_stop_inner(
             latest_plan_id=_latest_plan_id(workspace),
             latest_execution_id=_latest_execution_id(workspace),
             next_hypothesis_id=_next_hypothesis_id(workspace),
-            baseline_plan_exists=_baseline_plan_exists(workspace),
+            baseline_plan_exists=_baseline_is_done(workspace),
         )
         record.args = action_args
         task = store.enqueue(

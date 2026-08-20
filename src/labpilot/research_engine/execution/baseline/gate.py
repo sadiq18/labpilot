@@ -63,6 +63,7 @@ __all__ = [
     "GateVerdict",
     "Waiver",
     "evaluate_gate",
+    "refuse_hypothesis_minting",
     "load_waiver",
     "reading_fingerprint",
     "write_waiver",
@@ -352,6 +353,60 @@ def _direction_for(metric_name: str) -> str:
     from labpilot.research_engine.intelligence.competition.metric_vocabulary import direction_of
 
     return direction_of(metric_name) or ""
+
+
+def refuse_hypothesis_minting(workspace_root: Path | None, *, enforced: bool | None = None) -> str:
+    """Why hypothesis minting must not proceed here, or empty when it may.
+
+    M23 step 8. **Enforcement is at hypothesis generation, not at submission.**
+    A campaign whose pipeline loses to a constant may still run plans, implement
+    and reflect — those are how the gate gets *opened* — but it may not mint
+    hypotheses, because that is where a false belief enters the store and
+    outlives the run. rogii's cost was 19 child hypotheses and eight techniques
+    driven to 0.0 confidence, all written down while the pipeline was 91x worse
+    than one line of code. None of it was a submission.
+
+    Returns a reason rather than a bool: a refusal an operator cannot act on is
+    a wall, and every one of the nine states has a different next step.
+
+    `enforced=None` reads the config, so the flip is one setting rather than a
+    code change — and `False` is still the default until a campaign's worth of
+    recorded verdicts turns "the gate is right" into a false-positive rate.
+    """
+    if workspace_root is None:
+        # Nothing to judge. A caller with no workspace is not a campaign that has
+        # skipped its baseline; it is one this gate cannot see, and refusing on
+        # absence would block every path that never had a root to begin with.
+        return ""
+    if enforced is None:
+        enforced = _enforcement_enabled()
+    if not enforced:
+        return ""
+    try:
+        verdict = evaluate_gate(Path(workspace_root), enforced=True)
+    except Exception as exc:  # noqa: BLE001 — a gate that cannot run must not
+        # block a campaign. A fault here would read as "baseline not passed",
+        # which is the failure mode `H-BASELINE.status` was rejected for.
+        logger.warning("Baseline gate could not be evaluated: %s", exc)
+        return ""
+    if not verdict.withholds_anything:
+        return ""
+    return f"baseline gate is {verdict.state}: {verdict.reason}"
+
+
+def _enforcement_enabled() -> bool:
+    """Whether the rollout has moved past observe-only.
+
+    Read from config on every call rather than captured at import, so flipping it
+    does not require a restart — and so a test can flip it without reaching into
+    module state.
+    """
+    try:
+        from labpilot.config import load_config
+
+        return bool(getattr(load_config().baseline_gate, "enforced", False))
+    except Exception:  # noqa: BLE001 — no config is not enforcement
+        return False
 
 
 def write_waiver(root: Path, waiver: Waiver) -> Path:
