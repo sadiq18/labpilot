@@ -50,6 +50,10 @@ SUPPORTED_METRICS_BY_PROBLEM_TYPE: dict[str, set[str]] = {
 # Requiring at least one repeated value (`unique_count < row_count`) keeps
 # small regression datasets where every row happens to have a unique target
 # (common with only a handful of rows) from being misread as classification.
+#: Retired in favour of `DatasetProfile.target_type`, which draws the same line
+#: at 30. Kept as a name for readers of older `baseline_choice.json` files and
+#: read by nothing here — two thresholds for one question is how a 25-label
+#: target came to be classification or regression depending on which path ran.
 MAX_CLASSIFICATION_CARDINALITY = 20
 
 
@@ -189,6 +193,9 @@ class BaselineSelector:
         evidence, and two more chances to answer them differently.
         """
         problem_type = self._infer_problem_type(competition, profile, objective)
+        task_from_objective = bool(
+            objective is not None and objective.task and objective.task == problem_type
+        )
         template_name = self._resolve_template_name(problem_type, competition)
         # A partitioned predict-forward dataset cannot be served by the plain
         # single-train-file template: it would read one partition and validate
@@ -231,7 +238,16 @@ class BaselineSelector:
             validation=derive_validation_plan(profile),
             partitioned=profile.partitioned,
             partition_kinds=profile.partition_kinds,
-            objective_source="objective" if objective is not None else "derived",
+            # What the objective actually supplied, not merely that one was
+            # passed. An unresolved objective — no task, no metric — reported
+            # `objective` while both values came from the older derivation,
+            # which is the wrong answer to the one question this field exists
+            # to answer.
+            objective_source=(
+                "objective"
+                if task_from_objective or (objective is not None and objective.metric_name)
+                else "derived"
+            ),
             objective_metric=objective.metric_name if objective is not None else None,
             metric_substituted_from=substituted_from,
         )
@@ -289,16 +305,25 @@ class BaselineSelector:
         if profile.modality == "text":
             return ProblemType.TEXT_CLASSIFICATION.value
 
-        if profile.target_column and profile.row_count > 0:
-            target = next((c for c in profile.columns if c.name == profile.target_column), None)
-            if target:
-                looks_like_discrete_labels = (
-                    target.unique_count <= MAX_CLASSIFICATION_CARDINALITY
-                    and target.unique_count < profile.row_count
-                )
-                if not target.is_numeric or looks_like_discrete_labels:
-                    return ProblemType.TABULAR_CLASSIFICATION.value
-                return ProblemType.TABULAR_REGRESSION.value
+        # `profile.target_type`, not a second cardinality rule. This file kept
+        # its own — `MAX_CLASSIFICATION_CARDINALITY = 20` against the profiler's
+        # 30 — so a target with 25 labels was classification if `objective.json`
+        # existed and regression if it did not. Two implementations of one
+        # question is what step 2 exists to remove, and leaving the copy here
+        # with a different number was the worst of both.
+        #
+        # `target_type` is a derived field, so it is available on every profile
+        # including ones written before it existed; there is nothing to fall
+        # back to a local rule *for*.
+        by_shape = {
+            "binary": ProblemType.TABULAR_CLASSIFICATION.value,
+            "multiclass": ProblemType.TABULAR_CLASSIFICATION.value,
+            "multilabel": ProblemType.TABULAR_CLASSIFICATION.value,
+            "continuous": ProblemType.TABULAR_REGRESSION.value,
+            "count": ProblemType.TABULAR_REGRESSION.value,
+        }.get(profile.target_type)
+        if by_shape is not None:
+            return by_shape
 
         if from_meta is not ProblemType.UNKNOWN:
             return from_meta.value

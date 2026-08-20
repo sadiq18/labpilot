@@ -935,11 +935,17 @@ class CodeEngineeringCapability(BaseCapability):
         objective = None
         try:
             from labpilot.research_engine.intelligence.competition.objective_stage import (
-                load_objective,
+                ensure_objective,
             )
 
-            stored = load_objective(root)
-            objective = stored.spec if stored is not None else None
+            # `ensure_objective`, not `load_objective`: the file on disk can be
+            # stale by its own recorded inputs, and reading it anyway would pick
+            # the task and metric for a target the profile has since stopped
+            # naming — after `research schema answer`, say. Step 0 built the
+            # staleness check for exactly this consumer; every other one goes
+            # through it, and this was the exception.
+            stored, _how = ensure_objective(root, context.competition)
+            objective = stored.spec
         except Exception as exc:  # noqa: BLE001 — a missing objective must not
             # stop a baseline being chosen; it only means this falls back to the
             # older derivation, which is what happened on every run until now.
