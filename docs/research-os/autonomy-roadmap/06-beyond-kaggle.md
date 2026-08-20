@@ -1,6 +1,6 @@
 # M12 — Beyond Kaggle
 
-**Status:** design 2026-08-19 ([design/06-beyond-kaggle.md](design/06-beyond-kaggle.md)) · **Blocker cleared:** M7, M8 both shipped
+**Status:** phases 0–3 shipped 2026-08-20 ([design](design/06-beyond-kaggle.md)) · all three exit criteria met
 
 ---
 

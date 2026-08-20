@@ -262,7 +262,16 @@ def _stated_objective(
     target = _stated_target(Path(root))
     path = Path(root) / "competition.json"
     if not path.is_file():
-        return None, None, None, target
+        # A workspace with no competition contract is not necessarily a workspace
+        # with no objective. A benchmark states its own, and the gate used to
+        # refuse it with advice from another domain — "set evaluation_metric in
+        # competition.json", a file it will never have. That refusal *was* exit
+        # criterion 3 failing: the same `research conduct` phrasing has to work
+        # in both domains, and it could not start a campaign in one of them.
+        from labpilot.research_engine.validation import harness
+
+        metric, direction = harness.stated_objective(Path(root))
+        return metric, direction, None, target
     try:
         spec = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -299,11 +308,15 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
     from labpilot.research_engine.intelligence.competition.objective import resolve_objective
 
     metric_raw, declared, problem_type, target = _stated_objective(ws, competition)
+    from labpilot.research_engine.validation import harness
+
+    root = getattr(ws, "root", None)
     objective = resolve_objective(
         metric_raw=metric_raw,
         declared_direction=declared,  # type: ignore[arg-type]
         task=problem_type,
         target=target,
+        externally_scored=bool(root) and harness.handles(Path(root)),
     )
     if not objective.blocks_launch:
         console.print(
@@ -327,10 +340,21 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
         console.print(
             f"  [dim]candidates:[/dim] {', '.join(objective.alternatives)}"
         )
-    console.print(
-        "\n  Set it in the workspace contract and re-run, e.g. competition.json:\n"
-        '    [cyan]"evaluation_metric": {"name": "rmse", "direction": "minimize"}[/cyan]'
-    )
+    # Advice from the operator's own domain. Telling a benchmark operator to
+    # "set evaluation_metric in competition.json" names a file their workspace
+    # will never have, which is the same leak as the gate refusing them outright
+    # — a refusal nobody can act on is a wall, and this gate exists to ask rather
+    # than to wall.
+    if bool(root) and harness.handles(Path(root)):
+        console.print(
+            f"\n  Set it in {harness.OBJECTIVE_FILE} and re-run:\n"
+            '    [cyan]{"metric": "pass_rate", "direction": "maximize"}[/cyan]'
+        )
+    else:
+        console.print(
+            "\n  Set it in the workspace contract and re-run, e.g. competition.json:\n"
+            '    [cyan]"evaluation_metric": {"name": "rmse", "direction": "minimize"}[/cyan]'
+        )
 
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
     if not assume_yes and interactive:

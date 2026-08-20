@@ -45,23 +45,51 @@ logger = logging.getLogger(__name__)
 
 SOURCE = "harness"
 
-#: The file a harness writes. Chosen to be distinct from `metrics.json` so the
-#: two validators can be told apart by what the workspace contains, with no flag
-#: to set and nothing to keep in sync.
+#: What a harness *produced*. Distinct from `metrics.json` so a workspace can be
+#: read without a flag to set or anything to keep in sync.
 RESULT_FILE = "result.json"
+
+#: What a harness *promises*, declared before anything runs. Two files rather
+#: than one because they answer at different times: a campaign has to know its
+#: objective at launch, and `result.json` does not exist until a run has already
+#: happened. Selecting on the result alone meant a fresh harness workspace was
+#: read as a Kaggle one until its first comparison.
+OBJECTIVE_FILE = "harness.json"
 
 
 def handles(workspace_root: Path) -> bool:
     """Whether this workspace is a harness workspace.
 
-    Presence-based and deliberately exclusive: a `result.json` *and* no
-    `metrics.json`. A workspace holding both is ambiguous, and guessing which
-    objective a campaign is being judged on is the failure this milestone exists
-    to remove — so the established path wins and the ambiguity is visible in the
-    provenance rather than silently resolved here.
+    Keyed on the *declaration*, not the result, so the answer is the same before
+    and after a run. Deliberately exclusive of `metrics.json`: a workspace
+    holding both is ambiguous, and guessing which objective a campaign is judged
+    on is the failure this milestone exists to remove — so the established path
+    wins rather than the newer one.
     """
     root = Path(workspace_root)
-    return (root / RESULT_FILE).is_file() and not (root / "metrics.json").is_file()
+    return (root / OBJECTIVE_FILE).is_file() and not (root / "metrics.json").is_file()
+
+
+def stated_objective(workspace_root: Path) -> tuple[str | None, str | None]:
+    """`(metric, direction)` a harness promises, for the launch preflight.
+
+    The campaign gate refuses to start when it cannot justify the objective, and
+    it could only ever read a `competition.json` — so a benchmark workspace was
+    told to *"set evaluation_metric in competition.json"*, which is advice from
+    another domain for a file it will never have. That is exit criterion 3
+    failing: the same `research conduct` phrasing did not work across domains.
+
+    Returned raw. `resolve_objective` decides what a stated direction is worth,
+    and it is the same layer that catches a harness whose declaration and result
+    disagree — the contradiction case, which blocks rather than picking a side.
+    """
+    path = Path(workspace_root) / OBJECTIVE_FILE
+    body = _load(path)
+    if not isinstance(body, dict):
+        return None, None
+    metric = str(body.get("metric") or "") or None
+    direction = normalize_direction(body.get("direction"))
+    return metric, None if direction == "unknown" else direction
 
 
 def result_from_payload(

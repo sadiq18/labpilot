@@ -31,6 +31,7 @@ from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.planner.schemas.models import ResearchPlan, ResearchTask
 from labpilot.research_engine.planner.schemas.task_types import PlanStatus, TaskType
 from labpilot.research_engine.validation.harness import (
+    OBJECTIVE_FILE,
     RESULT_FILE,
     HarnessValidator,
     handles,
@@ -39,10 +40,20 @@ from labpilot.research_engine.validation.harness import (
 from labpilot.research_engine.validation.models import HypothesisValidator
 
 
-def _harness_workspace(root: Path, **result) -> Path:
-    """A workspace with a harness result and nothing Kaggle-shaped in it."""
+def _harness_workspace(root: Path, *, declare: bool = True, **result) -> Path:
+    """A workspace with a harness declaration, its result, and nothing Kaggle.
+
+    Two files, because they answer at different times: `harness.json` is what the
+    workspace promises and is what the launch preflight reads, `result.json` is
+    what a run produced and is what the validator reads.
+    """
     root.mkdir(parents=True, exist_ok=True)
     (root / RESULT_FILE).write_text(json.dumps(result), encoding="utf-8")
+    if declare:
+        (root / OBJECTIVE_FILE).write_text(
+            json.dumps({k: result[k] for k in ("metric", "direction") if k in result}),
+            encoding="utf-8",
+        )
     return root
 
 
@@ -368,3 +379,123 @@ def test_the_evidence_card_is_built_by_the_same_funnel(tmp_path) -> None:
 
     assert card.decision.value == "accepted"
     assert card.observed.cv_gain == pytest.approx(0.2)
+
+
+# --- exit criterion 3: the same command works in both domains ---------------
+
+
+def _preflight(root: Path):
+    """The launch gate, as `research conduct` calls it."""
+    import typer
+
+    from labpilot.cli.conduct import _preflight_objective
+
+    class _Workspace:
+        def __init__(self, path: Path) -> None:
+            self.root = path
+
+    try:
+        return _preflight_objective(_Workspace(root), "bench", assume_yes=True)
+    except typer.Exit as exit_:
+        assert exit_.exit_code == 2
+        return None
+
+
+def test_a_benchmark_campaign_can_start_at_all(tmp_path) -> None:
+    """Exit criterion 3, and it did not hold before this phase.
+
+    `research conduct` refuses to launch when it cannot justify the objective,
+    and it could only read a `competition.json` — so every harness workspace was
+    refused, with advice to *"set evaluation_metric in competition.json"*: a file
+    it will never have. The same phrasing has to work in both domains, and it
+    could not start a campaign in one of them.
+    """
+    root = _harness_workspace(
+        tmp_path / "ws", score=0.82, metric="pass_rate", direction="maximize"
+    )
+
+    meta = _preflight(root)
+
+    assert meta is not None, "the benchmark campaign was refused at launch"
+    assert meta["objective_metric"] == "pass_rate"
+    assert meta["objective_direction"] == "maximize"
+
+
+def test_the_objective_is_read_before_any_run_has_happened(tmp_path) -> None:
+    """The launch gate runs before anything is executed, so `result.json` does
+    not exist yet. Selecting on the result alone read a fresh harness workspace
+    as a Kaggle one, which is why the promise and the product are two files."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / OBJECTIVE_FILE).write_text(
+        json.dumps({"metric": "pass_rate", "direction": "maximize"}), encoding="utf-8"
+    )
+
+    assert not (root / RESULT_FILE).exists()
+    assert handles(root), "a workspace that has not run yet is still a harness workspace"
+    assert _preflight(root) is not None
+
+
+def test_a_harness_metric_this_repo_cannot_compute_is_not_a_blocker(tmp_path) -> None:
+    """`pass_rate` is not in the metric registry and `compute_metric` cannot
+    produce it — both true, and both irrelevant. The harness reports its own
+    number, so there is no proxy to fall back to and no silent substitution to
+    prevent. That check exists for cross-validation choosing a stand-in metric,
+    which never happens here."""
+    from labpilot.research_engine.intelligence.competition.metric_vocabulary import is_scorable
+
+    assert not is_scorable("pass_rate")
+    root = _harness_workspace(
+        tmp_path / "ws", score=0.82, metric="pass_rate", direction="maximize"
+    )
+
+    assert _preflight(root) is not None
+
+
+def test_a_harness_that_declares_no_objective_is_still_refused(tmp_path) -> None:
+    """The gate must not become a rubber stamp in the new domain. An unjustified
+    objective blocks a benchmark campaign exactly as it blocks a competition."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / OBJECTIVE_FILE).write_text(json.dumps({}), encoding="utf-8")
+
+    assert _preflight(root) is None
+
+
+def test_a_harness_declaring_no_direction_is_refused(tmp_path) -> None:
+    """A score with no direction is a number whose sign is a coin flip, whatever
+    domain produced it."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / OBJECTIVE_FILE).write_text(json.dumps({"metric": "pass_rate"}), encoding="utf-8")
+
+    assert _preflight(root) is None
+
+
+def test_the_refusal_names_the_file_this_workspace_actually_has(tmp_path, capsys) -> None:
+    """A refusal nobody can act on is a wall, and this gate exists to ask rather
+    than to wall. Telling a benchmark operator to edit `competition.json` is the
+    same domain leak as refusing them outright."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / OBJECTIVE_FILE).write_text(json.dumps({}), encoding="utf-8")
+
+    _preflight(root)
+    out = capsys.readouterr().out
+
+    assert OBJECTIVE_FILE in out
+    assert "competition.json" not in out
+
+
+def test_a_competition_workspace_still_gets_competition_advice(tmp_path, capsys) -> None:
+    """The other half. Making the message domain-aware must not cost the domain
+    it already served."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "competition.json").write_text(json.dumps({"slug": "d"}), encoding="utf-8")
+
+    _preflight(root)
+    out = capsys.readouterr().out
+
+    assert "competition.json" in out
+    assert OBJECTIVE_FILE not in out
