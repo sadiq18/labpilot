@@ -228,7 +228,7 @@ Each phase is separately mergeable and leaves the suite green.
 |---|---|---|
 | 0 | `ValidationResult` + `HypothesisValidator`, with the Kaggle path wrapped in `KaggleCvValidator`. `build_evidence_card` gains a `result=` path beside its current arguments. | none — the wrapper produces byte-identical cards |
 | 1 | ~~`direction` sourced from the result~~ — landed inside phase 0. Phase 1 instead **routes the production caller through the validator**, so the seam is used rather than merely available. | none — same sources, same order |
-| 2 | `HarnessValidator` + `result.json` contract + a fixture harness. | new capability |
+| 2 | `HarnessValidator` + `result.json` contract, selected by a conditional. Reads the result rather than running the harness — same split as the Kaggle validator, which does not train either. | new capability |
 | 3 | An end-to-end campaign against the harness, in CI. | exit criteria 1–3 |
 
 Phase 0 is the one that carries risk, and it is deliberately a no-op: the test
