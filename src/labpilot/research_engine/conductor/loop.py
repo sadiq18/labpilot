@@ -19,11 +19,13 @@ import os
 import socket
 import time
 from collections.abc import Callable
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
 from labpilot.accessor.common.micro_agents import LLMDegradedError
 from labpilot.accessor.profiler.questions import (
+    ANSWERS_FILENAME,
     SchemaQuestion,
     open_questions,
     record_answer,
@@ -301,9 +303,7 @@ def _fan_out_experiment(
             workspace=workspace,
             execution_id=outcome.execution_id,
         )
-        progress(
-            f"Branch {outcome.hypothesis_id}: {'ok' if outcome.ok else outcome.error}"
-        )
+        progress(f"Branch {outcome.hypothesis_id}: {'ok' if outcome.ok else outcome.error}")
     return decisions
 
 
@@ -329,9 +329,7 @@ def _reconcile_stale_worktrees(store, workspace: Workspace) -> None:
     from labpilot.research_engine.agents.git_worktree import reconcile_worktrees
 
     try:
-        result = reconcile_worktrees(
-            workspace.root, live_branches=_live_branches(store, workspace)
-        )
+        result = reconcile_worktrees(workspace.root, live_branches=_live_branches(store, workspace))
     except Exception:  # noqa: BLE001 — startup tidying must not stop a campaign
         logger.exception("worktree reconciliation failed; continuing")
         return
@@ -446,9 +444,8 @@ def _live_branches(store, workspace: Workspace) -> set[str]:
         if session is None:
             preserve.add(branch)
             continue
-        if (
-            str(session.status).strip().lower() in _LIVE_SESSION_STATUSES
-            and not _owner_is_gone(session)
+        if str(session.status).strip().lower() in _LIVE_SESSION_STATUSES and not _owner_is_gone(
+            session
         ):
             preserve.add(branch)
     return preserve
@@ -618,9 +615,7 @@ def _branch_context(workspace: Workspace) -> Any:
     from labpilot.research_engine.context.models import ContextBundle, ContextRequest
 
     return ContextBundle(
-        request=ContextRequest(
-            competition=workspace.competition, goal=workspace.goal or ""
-        )
+        request=ContextRequest(competition=workspace.competition, goal=workspace.goal or "")
     )
 
 
@@ -989,17 +984,40 @@ def _latest_execution_id(workspace: Workspace) -> str | None:
 SchemaPrompt = Callable[[SchemaQuestion], str | None]
 
 
+def _schema_stamp(root: Path) -> tuple[int, int, int, int]:
+    """A cheap signature of the two files a schema question is derived from.
+
+    `open_questions` parses `profile.json` — on rogii that is 14 KB carrying
+    every column, the evidence plane and up to 200 paths — and this loop can run
+    unbounded since M17. Neither file changes *within* a step, so two `stat`
+    calls answer "is the previous result still good?" for a fraction of the cost.
+    """
+    stamps: list[int] = []
+    for name in ("profile.json", ANSWERS_FILENAME):
+        try:
+            info = (root / name).stat()
+            stamps.extend((info.st_mtime_ns, info.st_size))
+        except OSError:
+            stamps.extend((0, 0))
+    return (stamps[0], stamps[1], stamps[2], stamps[3])
+
+
 def _answer_schema_questions(
     questions: list[SchemaQuestion],
-    root: Any,
+    root: Path,
     prompt: SchemaPrompt | None,
     progress: Callable[[str], None],
 ) -> bool:
-    """Ask, record, and report whether every question is now settled.
+    """Ask and record. True when every question is now settled.
 
     Recording writes `schema_answers.json`, which changes the answers
-    fingerprint the profile was built with — so the next `prepare_workspace`
-    re-derives rather than serving the description that could not decide.
+    fingerprint the profile was built with, so the profile it superseded reads
+    stale and `prepare_workspace` re-derives it on the next run.
+
+    A failed write is a blocked campaign, not a crashed one: a read-only
+    workspace or a full disk used to let `OSError` escape `run_until_stop`
+    entirely, ending the run with a traceback and no decision record — where
+    every other operator-facing prompt in this loop ends in one.
     """
     if prompt is None:
         return False
@@ -1008,7 +1026,11 @@ def _answer_schema_questions(
         if not answer:
             progress(f"{question.field} left unanswered")
             return False
-        record_answer(root, question.field, answer)
+        try:
+            record_answer(root, question.field, answer)
+        except (OSError, ValueError) as exc:
+            progress(f"{question.field} could not be recorded: {exc}")
+            return False
         progress(f"{question.field} answered: {answer}")
     return True
 
@@ -1095,6 +1117,10 @@ def _run_until_stop_inner(
 ) -> list[DecisionRecord]:
     scheduler = Scheduler(store, registry, workspace, llm_client=llm_client)
     decisions: list[DecisionRecord] = []
+    #: Cached across iterations: neither file changes within a step, and parsing
+    #: the profile every time is real work in an unbounded loop.
+    schema_stamp: tuple[int, int, int, int] | None = None
+    schema_questions: list[SchemaQuestion] = []
     session = store.get_session(session_id)
     if session is None:
         raise ValueError(f"unknown session: {session_id}")
@@ -1241,20 +1267,41 @@ def _run_until_stop_inner(
         # does not know what it is optimising. Asked where there is someone to
         # ask, and otherwise a stop — never a default, because a guess is frozen
         # into `profile.json` for every later run of this workspace.
-        questions = open_questions(workspace.root)
-        if questions and not _answer_schema_questions(
-            questions, workspace.root, schema_prompt, _progress
-        ):
+        stamp = _schema_stamp(workspace.root)
+        if stamp != schema_stamp:
+            schema_stamp, schema_questions = stamp, open_questions(workspace.root)
+        if schema_questions:
+            answered = _answer_schema_questions(
+                schema_questions, workspace.root, schema_prompt, _progress
+            )
+            # Stopping either way, and the reasons are different.
+            #
+            # Unanswered is the campaign waiting for a person. **Answered is the
+            # campaign holding a description that has just been superseded**:
+            # the answer changed the fingerprint, so `profile.json` now reads
+            # stale, and `prepare_workspace` — a *plan task*, not a tool this
+            # loop can dispatch — is what re-derives it. Continuing here would
+            # run the rest of the campaign against the column the operator had
+            # just rejected, with the question closed so nothing would ask
+            # again. That is the silent-wrong-target failure this milestone
+            # exists to remove, and it is worth one re-run to avoid.
+            field = schema_questions[0].field
+            if answered:
+                rationale = (
+                    f"stop:schema_question — answer recorded for {field}; the profile it "
+                    "supersedes is now stale. Re-run to rebuild it and continue."
+                )
+            else:
+                rationale = (
+                    f"stop:schema_question — {field} is uncertain "
+                    f"({schema_questions[0].context}); answer with "
+                    f"`research schema answer {field} <value>`"
+                )
             # `waiting`, not `failed`: the campaign is resumable the moment a
             # person answers, and `checkpoint.py` already counts `waiting` among
             # the active sessions. Nothing wrote it until now.
             store.update_session_status(session_id, "waiting")
             store.increment_metric(session_id, "unmet_goal")
-            rationale = (
-                f"stop:schema_question — {questions[0].field} is uncertain "
-                f"({questions[0].context}); answer with "
-                f"`research schema answer {questions[0].field} <value>`"
-            )
             _progress(f"Stop condition: {rationale}")
             decisions.append(
                 DecisionRecord(
@@ -1265,7 +1312,8 @@ def _run_until_stop_inner(
                     stop=True,
                     observe={
                         "stop_reason": "schema_question",
-                        "questions": [{"id": q.id, "field": q.field} for q in questions],
+                        "answered": answered,
+                        "questions": [{"id": q.id, "field": q.field} for q in schema_questions],
                     },
                 )
             )
@@ -1557,9 +1605,7 @@ def _run_until_stop_inner(
                         rationale=research.rationale or research.intent,
                         llm_client=llm_client,
                         dry_run=bool(
-                            step_args.get(
-                                "dry_run", _DRY_RUN_DEFAULTS.get(tool_step.tool, True)
-                            )
+                            step_args.get("dry_run", _DRY_RUN_DEFAULTS.get(tool_step.tool, True))
                         ),
                         submit=bool(step_args.get("submit", False)),
                         agent=branch_agent,

@@ -96,10 +96,17 @@ def show(
 @schema_app.command("answer")
 def answer(
     field: str = typer.Argument(..., help=f"One of: {', '.join(BLOCKING_FIELDS)}"),
-    value: str = typer.Argument(..., help="The column name that is correct"),
+    value: str = typer.Argument(
+        ..., help="The column that is correct; comma-separated for a composite key"
+    ),
     workspace: Path = typer.Option(Path("."), "--workspace", "-w", help="Competition workspace"),
 ) -> None:
     """Settle a question. The answer outlives the profile it was asked about."""
+    # Load first, so answering the wrong directory fails here rather than
+    # writing an orphan `schema_answers.json` next to whatever the operator
+    # happened to be standing in and reporting success while the campaign keeps
+    # blocking. `--workspace` defaults to `.`, which makes that easy to do.
+    _load(workspace)
     try:
         answers = record_answer(workspace, field, value)
     except ValueError as exc:
@@ -107,4 +114,7 @@ def answer(
         raise typer.Exit(code=1) from exc
     console.print(f"[green]Recorded[/green] {field} = {value!r}")
     console.print(f"Answers on file: {json.dumps(answers, sort_keys=True)}")
-    console.print("The next profile rebuild will use it; run `research schema show` to confirm.")
+    console.print(
+        "The profile it supersedes is now stale — the next run rebuilds it. "
+        "Confirm with `research schema show`."
+    )

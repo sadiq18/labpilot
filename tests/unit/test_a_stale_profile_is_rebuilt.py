@@ -34,20 +34,20 @@ def test_a_profile_from_this_profiler_is_reused(tmp_path: Path) -> None:
     """The behaviour being preserved: profiling every partition is not free."""
     path = _profile(tmp_path, {"competition": "demo", "schema_version": PROFILE_SCHEMA_VERSION})
 
-    assert _profile_is_current(path) is True
+    assert _profile_is_current(path, tmp_path) is True
 
 
 def test_a_profile_from_an_older_profiler_is_rebuilt(tmp_path: Path) -> None:
     path = _profile(tmp_path, {"competition": "demo", "schema_version": PROFILE_SCHEMA_VERSION - 1})
 
-    assert _profile_is_current(path) is False
+    assert _profile_is_current(path, tmp_path) is False
 
 
 def test_an_unstamped_profile_is_rebuilt(tmp_path: Path) -> None:
     """Every profile written before this change, rogii's included."""
     path = _profile(tmp_path, {"competition": "demo", "target_column": "TVT"})
 
-    assert _profile_is_current(path) is False
+    assert _profile_is_current(path, tmp_path) is False
 
 
 @pytest.mark.parametrize("body", ["{ not json", '"a string"', "[1, 2]"])
@@ -56,11 +56,11 @@ def test_a_profile_that_cannot_be_read_is_rebuilt(tmp_path: Path, body: str) -> 
     path = tmp_path / "profile.json"
     path.write_text(body, encoding="utf-8")
 
-    assert _profile_is_current(path) is False
+    assert _profile_is_current(path, tmp_path) is False
 
 
 def test_a_missing_profile_is_not_current(tmp_path: Path) -> None:
-    assert _profile_is_current(tmp_path / "nothing.json") is False
+    assert _profile_is_current(tmp_path / "nothing.json", tmp_path) is False
 
 
 def _demo_dataset(tmp_path: Path) -> None:
@@ -93,7 +93,7 @@ def test_the_profiler_stamps_what_it_writes(tmp_path: Path) -> None:
     written, _ = write_profile(tmp_path, profile)
 
     assert json.loads(written.read_text())["schema_version"] == PROFILE_SCHEMA_VERSION
-    assert _profile_is_current(written) is True
+    assert _profile_is_current(written, tmp_path) is True
 
 
 def test_a_profile_read_back_through_the_model_knows_it_is_stale(tmp_path: Path) -> None:
@@ -236,8 +236,39 @@ def test_the_three_profile_states_are_distinguished(tmp_path: Path) -> None:
         _profile_state,
     )
 
-    assert _profile_state(_profile(tmp_path, {"schema_version": PROFILE_SCHEMA_VERSION})) == "current"
-    assert _profile_state(_profile(tmp_path, {"competition": "demo"})) == "stale"
+    current = _profile(tmp_path, {"schema_version": PROFILE_SCHEMA_VERSION})
+    assert _profile_state(current, tmp_path) == "current"
+    assert _profile_state(_profile(tmp_path, {"competition": "demo"}), tmp_path) == "stale"
     bad = tmp_path / "profile.json"
     bad.write_text("{ not json", encoding="utf-8")
-    assert _profile_state(bad) == "unusable"
+    assert _profile_state(bad, tmp_path) == "unusable"
+
+
+def test_an_inventory_profile_stamps_its_answers_too(tmp_path: Path) -> None:
+    """Otherwise a workspace with any answer on file reads stale forever.
+
+    `_write_inventory_profile` left `answers_fingerprint` empty, which never
+    matches a real one — so every `prepare_workspace` would re-attempt the
+    profile that had already failed, fail again, and land back on the inventory.
+    """
+    from labpilot.accessor.profiler.questions import record_answer
+    from labpilot.research_engine.execution.capabilities.workspace.capability import (
+        _profile_state,
+    )
+
+    raw = tmp_path / "data" / "raw"
+    raw.mkdir(parents=True)
+    # Two unmatched files, so the tabular profiler refuses and the inventory
+    # path runs. One would now be read as the training table.
+    (raw / "well_logs.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    (raw / "core_samples.csv").write_text("a,b\n3,4\n", encoding="utf-8")
+    # No profile yet, so the inventory path writes one — and an answer already
+    # on file, which is the combination that used to stick at `stale`.
+    record_answer(tmp_path, "target_column", "a")
+
+    result, metadata, checks = _ensure_profile(tmp_path)
+
+    assert result is True
+    written = json.loads((tmp_path / "profile.json").read_text())
+    assert written["answers_fingerprint"], "an inventory profile records its answers"
+    assert _profile_state(tmp_path / "profile.json", tmp_path) == "current"

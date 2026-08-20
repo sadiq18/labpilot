@@ -457,13 +457,30 @@ campaign still runs. A wrong target or key corrupts everything downstream and
 does it silently, which is the whole argument for stopping.
 
 **An answer has to invalidate the profile, or it changes nothing.**
-`_profile_is_current` matches on `schema_version`, so the profile built from the
+`_profile_state` matches on `schema_version` alone, so the profile built from the
 *old* answers would be served forever and `research schema answer` would be one
 more advertised escape that does not exist — this milestone's own defect, re-made
-inside its own mechanism. The profile stamps an `answers_fingerprint`, and
-`_profile_state` calls a profile built from different answers **stale**. Found
-by asking what happens *after* the operator answers, which the first draft of
-this section did not ask.
+inside its own mechanism. The profile stamps an `answers_fingerprint`, and a
+mismatch reads **stale**. Found by asking what happens *after* the operator
+answers, which the first draft of this section did not ask.
+
+**And the campaign has to stop when it is answered.** Invalidating is not
+enough: `prepare_workspace` is a *plan task*, not a tool the loop can dispatch,
+so a campaign that continued would spend the rest of its steps on the profile it
+was holding — the column the operator had just rejected — with the question now
+closed so nothing would ask again. Both outcomes therefore stop, with different
+rationales: *uncertain, answer it* and *answered, re-run to rebuild*. One re-run
+is the price of never running on a rejected answer.
+
+**An answer is checked before it is believed.** `operator_answer` is 1.00, the
+top of the scale, so a value naming no column would assert a target that is not
+in the dataset — and take the `equals_target` exclusion with it, because nothing
+equals a column that does not exist, putting the leak back among the features.
+The CLI refuses it with the column list; `_answered` refuses it again for every
+other route a `DeclaredFacts` can arrive by, and records it in
+`Inference.rejected` rather than dropping it. A field whose answer may name
+several columns (`id_columns`, for a composite key) parses comma-separated;
+`target_column` refuses more than one.
 
 ```python
 def pending_schema_questions(schema, answers) -> list[SchemaQuestion]:

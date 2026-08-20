@@ -14,9 +14,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from helpers.campaign_harness import CampaignHarness, ok
 from helpers.dataset_shapes import build_partitioned_without_template, build_strong_signals
+from helpers.dataset_sources import DictSource
 
 from labpilot.accessor.profiler.questions import (
     ANSWERS_FILENAME,
@@ -52,10 +54,15 @@ def test_an_uncertain_target_raises_a_question(tmp_path: Path) -> None:
     assert [q.field for q in questions] == ["target_column"]
     question = questions[0]
     assert question.provisional == "Zone_Depth"
-    assert [c.candidate for c in question.candidates] == ["Depth"]
-    # Every candidate, with what it fired — the operator is answering from the
-    # same evidence the profiler had.
-    assert question.candidates[0].confidence == profile.inferences["target_column"].confidence
+    # Both candidates, each with its own score and signals — including the one
+    # the profiler would have used. Listing the provisional by name alone left
+    # the operator comparing a number against a bare string, and *are these two
+    # equally supported* is the entire question on a tie.
+    assert [c.candidate for c in question.candidates] == ["Zone_Depth", "Depth"]
+    assert question.candidates[0].confidence == question.candidates[1].confidence
+    assert {s.id for s in question.candidates[0].signals} == {
+        s.id for s in question.candidates[1].signals
+    }
 
 
 def test_a_confident_answer_raises_nothing(tmp_path: Path) -> None:
@@ -148,8 +155,8 @@ def test_an_unparseable_answer_file_asks_again(tmp_path: Path) -> None:
 def test_answering_makes_the_profile_stale(tmp_path: Path) -> None:
     """Otherwise the escape is fiction.
 
-    `_profile_is_current` matches on `schema_version`, so a profile built before
-    the answer would be reused forever and `research schema answer` would change
+    `_profile_state` matches on `schema_version` alone, so a profile built before
+    the answer would be served forever and `research schema answer` would change
     nothing — the exact defect this milestone is named after, re-made inside its
     own mechanism.
     """
@@ -190,10 +197,28 @@ def test_an_unanswerable_campaign_stops(tmp_path: Path) -> None:
     assert session.status == "waiting", "resumable the moment someone answers"
 
 
-def test_an_answered_campaign_runs(tmp_path: Path) -> None:
-    """The other half: with a channel to ask on, the campaign asks and continues."""
+def test_an_answered_campaign_stops_until_the_profile_is_rebuilt(tmp_path: Path) -> None:
+    """An answer must reach the *value*, not only the answers file.
+
+    The first version of this test asserted the campaign continued, and passed
+    while `profile.json` still named the column the operator had just rejected —
+    with the question now closed, so nothing would ever ask again. Recording an
+    answer supersedes the description the campaign is holding, and
+    `prepare_workspace` is a plan task this loop cannot dispatch, so the honest
+    move is to stop and let the next run re-derive.
+
+    The last two assertions are the ones that would have caught it: the profile
+    is stale, and re-deriving with the answers on file produces the answered
+    target.
+    """
+    from labpilot.accessor.profiler.tabular import PROFILE_SCHEMA_VERSION
+    from labpilot.research_engine.execution.capabilities.workspace.capability import (
+        _profile_state,
+    )
+
     harness = CampaignHarness(tmp_path, tools={"generate_plan": [ok()]})
     harness.seed_profile(_tie_profile(tmp_path / "data"))
+    root = harness.workspace.root
     asked: list[str] = []
 
     def prompt(question):
@@ -203,10 +228,21 @@ def test_an_answered_campaign_runs(tmp_path: Path) -> None:
     trace = harness.run(policy=["generate_plan", None], max_steps=2, schema_prompt=prompt)
 
     assert asked == ["target_column"]
-    assert "schema_question" not in trace.stop_reason
-    assert trace.calls("generate_plan") >= 1
-    assert load_answers(harness.workspace.root) == {"target_column": "Depth"}
-    assert open_questions(harness.workspace.root) == []
+    assert trace.decisions[-1].observe["answered"] is True
+    assert "answer recorded" in trace.stop_reason
+    assert trace.calls("generate_plan") == 0, "not one step on the rejected column"
+    assert load_answers(root) == {"target_column": "Depth"}
+    assert open_questions(root) == []
+
+    # The description the campaign held is superseded, and re-deriving with the
+    # answer on file gives the column the operator chose.
+    assert json.loads((root / "profile.json").read_text())["schema_version"] == (
+        PROFILE_SCHEMA_VERSION
+    )
+    assert _profile_state(root / "profile.json", root) == "stale"
+    rebuilt = _tie_profile(tmp_path / "rebuild", answers=load_answers(root))
+    assert rebuilt.target_column == "Depth"
+    assert rebuilt.inferences["target_column"].band == "asserted"
 
 
 def test_a_refused_answer_still_stops(tmp_path: Path) -> None:
@@ -219,3 +255,117 @@ def test_a_refused_answer_still_stops(tmp_path: Path) -> None:
     assert trace.decisions[-1].observe["stop_reason"] == "schema_question"
     assert trace.calls("generate_plan") == 0
     assert load_answers(harness.workspace.root) == {}
+
+
+def test_an_answer_that_names_no_column_is_refused(tmp_path: Path) -> None:
+    """`operator_answer` is worth 1.00, so an unchecked value is a confident lie.
+
+    Before the check, `answers={"target_column": "Dpeth"}` produced
+    `target_column: "Dpeth"` at confidence **1.0**, `asserted`, for a name in no
+    table — and took the `equals_target` exclusion with it, because nothing
+    equals a target that does not exist, so the leak column returned to
+    `feature_columns`.
+    """
+    data_dir = build_partitioned_without_template(tmp_path)
+    source = LocalFileSource(data_dir, DeclaredFacts(answers={"target_column": "Dpeth"}))
+
+    profile = TabularProfiler(ProfilerConfig()).profile_dataset(source, "typo")
+    target = profile.inferences["target_column"]
+
+    assert profile.target_column != "Dpeth"
+    assert target.band == "uncertain", "the question stays open, so it is asked again"
+    assert [claim.claim for claim in target.rejected] == ["Dpeth"]
+    assert any(note.code == "answer_refused" for note in profile.notes)
+
+
+def test_the_cli_refuses_a_column_that_does_not_exist(tmp_path: Path) -> None:
+    """The same check where the operator meets it, with the columns listed."""
+    from labpilot.accessor.profiler.report import write_profile
+
+    write_profile(tmp_path, _tie_profile(tmp_path / "data"))
+
+    with pytest.raises(ValueError, match="names no column"):
+        record_answer(tmp_path, "target_column", "Dpeth")
+    assert load_answers(tmp_path) == {}, "a refused answer is not written"
+
+
+def test_a_composite_key_can_be_answered(tmp_path: Path) -> None:
+    """`(store_id, date)` is an ordinary key outside Kaggle.
+
+    A scalar answer would settle a two-column key as half of itself and close
+    the question, which is worse than leaving it open.
+    """
+    from labpilot.accessor.profiler.questions import parse_answer
+
+    assert parse_answer("id_columns", "store_id, date") == ["store_id", "date"]
+    with pytest.raises(ValueError, match="takes one column"):
+        parse_answer("target_column", "a,b")
+
+    frame = pd.DataFrame({"store_id": [1, 2, 3], "date": ["a", "b", "c"], "sales": [1.0, 2.0, 3.0]})
+    source = DictSource(
+        {
+            "train.csv": frame,
+            "test.csv": frame[["store_id", "date"]],
+            "sample_submission.csv": frame[["store_id", "sales"]],
+        },
+        DeclaredFacts(answers={"id_columns": "store_id,date"}),
+    )
+
+    profile = TabularProfiler(ProfilerConfig()).profile_dataset(source, "composite")
+
+    assert profile.id_columns == ["store_id", "date"]
+    assert profile.id_column == "store_id", "the singular view is the first of them"
+    assert profile.inferences["id_columns"].band == "asserted"
+
+
+def test_a_write_failure_blocks_rather_than_crashes(tmp_path: Path, monkeypatch) -> None:
+    """A read-only workspace stops the campaign; it does not end the process.
+
+    `record_answer` used to let `OSError` escape `run_until_stop` entirely — no
+    decision record, no session status, just a traceback — where every other
+    operator-facing prompt in that loop ends in a stop.
+    """
+    from labpilot.research_engine.conductor import loop as loop_module
+
+    harness = CampaignHarness(tmp_path, tools={"generate_plan": [ok()]})
+    harness.seed_profile(_tie_profile(tmp_path / "data"))
+
+    def refuse(*args, **kwargs):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(loop_module, "record_answer", refuse)
+    trace = harness.run(
+        policy=["generate_plan"], max_steps=2, schema_prompt=lambda question: "Depth"
+    )
+
+    assert trace.decisions[-1].observe["stop_reason"] == "schema_question"
+    assert trace.decisions[-1].observe["answered"] is False
+    assert trace.calls("generate_plan") == 0
+
+
+def test_the_profile_is_not_reparsed_every_step(tmp_path: Path, monkeypatch) -> None:
+    """Two `stat` calls a step, not a parse of a 14 KB profile.
+
+    `open_questions` validates the whole profile — every column, the evidence
+    plane, up to 200 paths — and M17 lets this loop run unbounded.
+    """
+    from labpilot.research_engine.conductor import loop as loop_module
+
+    harness = CampaignHarness(tmp_path, tools={"generate_plan": [ok(), ok(), ok()]})
+    harness.seed_profile(
+        TabularProfiler(ProfilerConfig()).profile_directory(
+            build_strong_signals(tmp_path / "data"), "strong"
+        )
+    )
+    reads: list[Path] = []
+    real = loop_module.open_questions
+
+    def counted(root):
+        reads.append(root)
+        return real(root)
+
+    monkeypatch.setattr(loop_module, "open_questions", counted)
+    trace = harness.run(policy=["generate_plan"] * 3, max_steps=3)
+
+    assert trace.calls("generate_plan") == 3, "the campaign ran three steps"
+    assert len(reads) == 1, f"profile parsed {len(reads)} times for 3 steps"

@@ -3,8 +3,8 @@
 M22 step 4. Two of the five answers are ones where **there is no safe default**:
 which column is the label, and which is the key. Everything a campaign does
 afterwards is a statement about whichever column was picked, and
-``_profile_is_current`` reuses ``profile.json``, so a guess made once is frozen
-into every later run of that workspace.
+``_profile_state`` serves an existing ``profile.json`` unchanged, so a guess
+made once is frozen into every later run of that workspace.
 
 So below the acting threshold the profiler stops answering and asks. Interactive,
 it asks; unattended, it **blocks** — and there is deliberately no third option.
@@ -40,10 +40,13 @@ if TYPE_CHECKING:
 __all__ = [
     "ANSWERS_FILENAME",
     "BLOCKING_FIELDS",
+    "MULTI_VALUE_FIELDS",
     "SchemaQuestion",
     "answers_fingerprint",
+    "known_columns",
     "load_answers",
     "open_questions",
+    "parse_answer",
     "pending_schema_questions",
     "record_answer",
 ]
@@ -80,6 +83,43 @@ class SchemaQuestion(BaseModel):
     context: str = ""
 
 
+#: Fields whose answer may name more than one column. A composite key is
+#: ordinary off Kaggle — `(store_id, date)`, `(patient, visit)` — and an answer
+#: that could only ever name one would settle the question wrongly and close it.
+MULTI_VALUE_FIELDS = ("id_columns",)
+
+
+def parse_answer(field: str, value: str) -> list[str]:
+    """The columns an answer names, in order.
+
+    Comma-separated for the fields that can take several; a single name
+    everywhere else, so `target_column` cannot be answered with two.
+    """
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    if not parts:
+        raise ValueError(f"an empty answer settles nothing for {field!r}")
+    if field not in MULTI_VALUE_FIELDS and len(parts) > 1:
+        raise ValueError(f"{field!r} takes one column, not {len(parts)}: {parts}")
+    return parts
+
+
+def known_columns(root: Path) -> set[str]:
+    """Column names the profile at `root` describes, or an empty set.
+
+    Empty means *unknown*, never *none*: a workspace with no readable profile
+    cannot check an answer, and refusing every answer there would leave an
+    operator with no way to unblock a campaign.
+    """
+    from labpilot.accessor.profiler.tabular import DatasetProfile
+
+    try:
+        stored = json.loads((Path(root) / "profile.json").read_text(encoding="utf-8"))
+        profile = DatasetProfile.model_validate(stored)
+    except (OSError, ValueError):
+        return set()
+    return {column.name for column in profile.columns}
+
+
 def question_id(dataset: str, field: str, candidates: list[str]) -> str:
     payload = "|".join([dataset, field, *sorted(candidates)])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
@@ -106,10 +146,21 @@ def pending_schema_questions(
             if field == "target_column"
             else (profile.id_columns[0] if profile.id_columns else None)
         )
+        # The provisional answer is a candidate like the rest, with its own
+        # evidence. Listing it only by name left the operator comparing a score
+        # against a bare string — and *are these two equally supported* is the
+        # whole question on a tie.
         candidates = list(inference.alternatives)
-        names = [alternative.candidate for alternative in candidates]
         if provisional is not None:
-            names.append(provisional)
+            candidates.insert(
+                0,
+                Alternative(
+                    candidate=provisional,
+                    confidence=inference.confidence,
+                    signals=list(inference.signals),
+                ),
+            )
+        names = [alternative.candidate for alternative in candidates]
         questions.append(
             SchemaQuestion(
                 id=question_id(profile.competition, field, names),
@@ -134,9 +185,9 @@ def _context_for(profile: DatasetProfile, field: str, confidence: float) -> str:
 def answers_fingerprint(answers: dict[str, str]) -> str:
     """A stamp for the answers a profile was built with.
 
-    Without it, answering a question changes nothing: `_profile_is_current`
-    matches on `schema_version`, so the profile built from the *old* answers is
-    reused forever and the escape the operator was offered is fiction — the
+    Without it, answering a question changes nothing: `_profile_state` matches on
+    `schema_version` alone, so the profile built from the *old* answers is served
+    forever and the escape the operator was offered is fiction — the
     defect this milestone is named after, re-made in its own mechanism.
     """
     if not answers:
@@ -195,7 +246,20 @@ def record_answer(root: Path, field: str, value: str) -> dict[str, str]:
     """
     if field not in BLOCKING_FIELDS:
         raise ValueError(f"{field!r} is not a schema question; expected one of {BLOCKING_FIELDS}")
+    named = parse_answer(field, value)
+    # A typo must not become an asserted answer. `operator_answer` is worth 1.00
+    # — the top of the scale — so an unchecked value produces a confident schema
+    # for a column that is not in the dataset, and takes the `equals_target`
+    # exclusion with it: the leak column reappears among the features because
+    # nothing equals a target that does not exist.
+    columns = known_columns(root)
+    unknown = [name for name in named if name not in columns]
+    if columns and unknown:
+        raise ValueError(
+            f"{unknown} names no column in this dataset; "
+            f"known columns: {sorted(columns)[:12]}{'…' if len(columns) > 12 else ''}"
+        )
     answers = load_answers(root)
-    answers[field] = value
+    answers[field] = ",".join(named)
     atomic_write_text(answers_path(root), json.dumps(answers, indent=2, sort_keys=True) + "\n")
     return answers

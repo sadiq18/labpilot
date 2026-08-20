@@ -40,8 +40,19 @@ def _cache_may_serve(kaggle: object, context: TaskContext) -> bool:
     return cached.is_dir() and any(cached.rglob("*"))
 
 
-def _profile_is_current(path: Path, *, root: Path | None = None) -> bool:
-    """Whether an existing `profile.json` was written by today's profiler.
+def _profile_is_current(path: Path, root: Path) -> bool:
+    """Whether an existing `profile.json` can be served as it stands.
+
+    ``root`` is required, here and on :func:`_profile_state`: it is where the
+    answers are read from, and an optional one would let a caller skip that
+    check by omission — the profile would then read "current" while describing a
+    question a person has since settled.
+    """
+    return _profile_state(path, root) == "current"
+
+
+def _profile_state(path: Path, root: Path) -> str:
+    """``current``, ``stale``, or ``unusable`` for an existing ``profile.json``.
 
     Reuse is right — profiling samples every partition and costs real time — but
     reuse *forever* means a workspace keeps whatever description it was first
@@ -49,17 +60,8 @@ def _profile_is_current(path: Path, *, root: Path | None = None) -> bool:
     since, so the partition warnings and the anchor column added later never
     reached the codegen that needed them.
 
-    An unreadable or unstamped profile re-derives: the cost is one profiling
-    pass, and the alternative is running on a description nothing can vouch for.
-    """
-    return _profile_state(path, root=root) == "current"
-
-
-def _profile_state(path: Path, *, root: Path | None = None) -> str:
-    """``current``, ``stale``, or ``unusable`` for an existing ``profile.json``.
-
-    `_profile_is_current` only needs the first; the rebuild paths need the other
-    two kept apart. A profile we merely failed to *refresh* is worth keeping —
+    The rebuild paths need ``stale`` and ``unusable`` kept apart. A profile we
+    merely failed to *refresh* is worth keeping —
     an old description beats none. One nothing can parse is not: keeping it
     leaves `metadata["profile"]` pointing at bytes no reader can use, on a step
     that reported success, and skips the inventory write that would have put a
@@ -76,15 +78,14 @@ def _profile_state(path: Path, *, root: Path | None = None) -> str:
         return "unusable"
     if stored.get("schema_version") != PROFILE_SCHEMA_VERSION:
         return "stale"
-    if root is not None:
-        # Answered since this was built? Then it describes a question that is no
-        # longer open, and reusing it would make `research schema answer` change
-        # nothing — the escape being fiction is the defect this milestone is
-        # named after.
-        from labpilot.accessor.profiler.questions import answers_fingerprint, load_answers
+    # Answered since this was built? Then it describes a question that is no
+    # longer open, and reusing it would make `research schema answer` change
+    # nothing — the escape being fiction is the defect this milestone is named
+    # after.
+    from labpilot.accessor.profiler.questions import answers_fingerprint, load_answers
 
-        if stored.get("answers_fingerprint", "") != answers_fingerprint(load_answers(root)):
-            return "stale"
+    if stored.get("answers_fingerprint", "") != answers_fingerprint(load_answers(root)):
+        return "stale"
     return "current"
 
 
@@ -409,10 +410,10 @@ class WorkspaceCapability(BaseCapability):
     ) -> bool | None:
         profile_path = root / "profile.json"
         # Parsed once. `_profile_is_current` is a wrapper over `_profile_state`,
-        # so asking both read and `json.loads` the same file twice — and for a
+        # so asking both would read and `json.loads` the same file twice — and for a
         # partitioned dataset that file carries every column profile and up to
         # 200 paths.
-        state = _profile_state(profile_path, root=root) if profile_path.is_file() else None
+        state = _profile_state(profile_path, root) if profile_path.is_file() else None
         if state == "current":
             metadata["profile_reused"] = True
             metadata["profile"] = str(profile_path)
@@ -563,6 +564,7 @@ class WorkspaceCapability(BaseCapability):
         try:
             from labpilot.accessor.profiler.evidence import Note
             from labpilot.accessor.profiler.modality import IMAGE_EXTENSIONS, ModalityDetector
+            from labpilot.accessor.profiler.questions import answers_fingerprint, load_answers
             from labpilot.accessor.profiler.report import write_profile
             from labpilot.accessor.profiler.tabular import DatasetProfile
             from labpilot.research_engine.intelligence.competition.infer_problem_type import (
@@ -590,6 +592,11 @@ class WorkspaceCapability(BaseCapability):
             profile = DatasetProfile(
                 competition=context.competition,
                 files=files,
+                # Stamped here as well, or a workspace with any answer on file
+                # reads `stale` forever: `""` never matches a real fingerprint,
+                # so every `prepare_workspace` would re-attempt the profile that
+                # already failed and land back here.
+                answers_fingerprint=answers_fingerprint(load_answers(root)),
                 notes=[
                     Note(
                         code="profiler_failed",

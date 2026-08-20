@@ -11,6 +11,7 @@ from labpilot.accessor.profiler.evidence import (
     Alternative,
     Inference,
     Note,
+    RejectedClaim,
     Signal,
     combine,
 )
@@ -197,23 +198,71 @@ class DatasetProfile(BaseModel):
 REQUIRED_FIELDS = ("target_column", "id_columns", "train_test_relationship", "metric")
 
 
-def _answered(candidates: dict[str, list[Signal]], answer: str | None) -> dict[str, list[Signal]]:
-    """Fold an operator's answer into the candidate set.
+def _answered(
+    candidates: dict[str, list[Signal]],
+    answer: str | None,
+    *,
+    known: set[str],
+    field: str = "target_column",
+) -> tuple[dict[str, list[Signal]], list[RejectedClaim]]:
+    """Fold an operator's answer into the candidate set, if it names a column.
 
     The answer becomes a candidate carrying `operator_answer` (1.00), so it wins
-    by evidence rather than by bypassing the resolver — and its other signals
-    are kept, so the profile still shows what the data said about the column a
-    person chose. A named column the profiler never considered is added rather
-    than rejected: not being able to see something is why the question was asked.
+    by evidence rather than by bypassing the resolver — and its other signals are
+    kept, so the profile still shows what the data said about the column a person
+    chose. A column the profiler never *considered* is added, because not seeing
+    something is why the question was asked.
+
+    A column that does not **exist** is refused and recorded in `rejected`.
+    `operator_answer` is the top of the scale, so an unchecked value would assert
+    a target that is not in the dataset — and silently re-admit the
+    `equals_target` leak, since nothing equals a column that is not there. The
+    CLI checks too; this is the guard for every other way a `DeclaredFacts`
+    reaches the profiler.
     """
     if not answer:
-        return candidates
+        return candidates, []
+    from labpilot.accessor.profiler.questions import parse_answer
+
+    try:
+        named = parse_answer(field, answer)
+    except ValueError as exc:
+        return candidates, [RejectedClaim(claim=answer, source="operator", refuted_by=str(exc))]
+    unknown = [name for name in named if known and name not in known]
+    if unknown:
+        return candidates, [
+            RejectedClaim(
+                claim=answer,
+                source="operator",
+                refuted_by=f"{unknown} names no column in this dataset",
+            )
+        ]
     settled = dict(candidates)
-    settled[answer] = [
-        Signal(id="operator_answer", detail=f"answered: {answer!r}"),
-        *candidates.get(answer, []),
-    ]
-    return settled
+    for name in named:
+        settled[name] = [
+            Signal(id="operator_answer", detail=f"answered: {name!r}"),
+            *candidates.get(name, []),
+        ]
+    return settled, []
+
+
+def _key_columns(
+    answer: str | None, refused: list[RejectedClaim], resolved: str | None
+) -> list[str]:
+    """The key, which an answer may state as several columns.
+
+    `_resolve` picks one winner, which is right when the profiler is inferring
+    and wrong when a person has answered `store_id,date`: taking the first of
+    those would settle a composite key as half of itself and close the question.
+    """
+    from labpilot.accessor.profiler.questions import parse_answer
+
+    if answer and not refused:
+        try:
+            return parse_answer("id_columns", answer)
+        except ValueError:
+            pass
+    return [resolved] if resolved else []
 
 
 def _resolve(candidates: dict[str, list[Signal]]) -> tuple[str | None, Inference]:
@@ -757,11 +806,21 @@ class TabularProfiler:
 
         answers = source.declared().answers
         profile.answers_fingerprint = answers_fingerprint(answers)
-        target_column, target_inference = _resolve(
-            _answered(target_candidates, answers.get("target_column"))
-        )
+        known = {column.name for column in profile.columns}
+        settled, refused = _answered(target_candidates, answers.get("target_column"), known=known)
+        target_column, target_inference = _resolve(settled)
         profile.target_column = target_column
-        profile.inferences["target_column"] = target_inference
+        profile.inferences["target_column"] = target_inference.model_copy(
+            update={"rejected": refused}
+        )
+        for claim in refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="target_column",
+                severity="blocking",
+            )
 
         # --- which columns could be the key --------------------------------
         id_candidates: dict[str, list[Signal]] = {}
@@ -776,9 +835,20 @@ class TabularProfiler:
                 first_in_template=candidate == submission_columns[0],
                 on_both_sides=candidate in train_columns and candidate in test_columns,
             )
-        id_column, id_inference = _resolve(_answered(id_candidates, answers.get("id_columns")))
-        profile.id_columns = [id_column] if id_column else []
-        profile.inferences["id_columns"] = id_inference
+        id_settled, id_refused = _answered(
+            id_candidates, answers.get("id_columns"), known=known, field="id_columns"
+        )
+        id_column, id_inference = _resolve(id_settled)
+        profile.id_columns = _key_columns(answers.get("id_columns"), id_refused, id_column)
+        profile.inferences["id_columns"] = id_inference.model_copy(update={"rejected": id_refused})
+        for claim in id_refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="id_columns",
+                severity="blocking",
+            )
 
         # A contract, not an inference: a template whose columns are not the id
         # and the target describes a submission this profile cannot produce, and
@@ -1170,13 +1240,23 @@ class TabularProfiler:
         # while the old procedure is still in place.
         answers = source.declared().answers
         profile.answers_fingerprint = answers_fingerprint(answers)
-        scored_target, target_inference = _resolve(
-            _answered(
-                {str(c): target_signals_for(str(c)) for c in train_only},
-                answers.get("target_column"),
-            )
+        known = {column.name for column in profile.columns}
+        settled, refused = _answered(
+            {str(c): target_signals_for(str(c)) for c in train_only},
+            answers.get("target_column"),
+            known=known,
         )
-        if answers.get("target_column"):
+        scored_target, target_inference = _resolve(settled)
+        target_inference = target_inference.model_copy(update={"rejected": refused})
+        for claim in refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="target_column",
+                severity="blocking",
+            )
+        if answers.get("target_column") and not refused:
             # An answer is not a hint. Where a person has settled the question,
             # the value follows the answer rather than the procedure that could
             # not settle it — and `profile.target_column` is assigned above, so
@@ -1198,29 +1278,39 @@ class TabularProfiler:
                     severity="blocking",
                 )
 
-        id_column, id_inference = _resolve(
-            _answered(
-                {
-                    candidate: _identity_signals(
-                        profile,
-                        candidate,
-                        unit_count=len(sample_df),
-                        # Named, but not *chosen* for being named: this path
-                        # takes the template's first column without checking
-                        # anything about it, so the evidence has to say position.
-                        in_template=False,
-                        first_in_template=candidate == submission_columns[0],
-                        on_both_sides=candidate in set(sample_df.columns)
-                        and candidate in test_columns,
-                    )
-                    for candidate in submission_columns[:1]
-                },
-                answers.get("id_columns"),
-            )
+        id_settled, id_refused = _answered(
+            {
+                candidate: _identity_signals(
+                    profile,
+                    candidate,
+                    unit_count=len(sample_df),
+                    # Named, but not *chosen* for being named: this path takes
+                    # the template's first column without checking anything
+                    # about it, so the evidence has to say position.
+                    in_template=False,
+                    first_in_template=candidate == submission_columns[0],
+                    on_both_sides=candidate in set(sample_df.columns) and candidate in test_columns,
+                )
+                for candidate in submission_columns[:1]
+            },
+            answers.get("id_columns"),
+            known=known,
+            field="id_columns",
         )
-        profile.id_columns = [id_column] if id_column else []
+        id_column, id_inference = _resolve(id_settled)
+        profile.id_columns = _key_columns(answers.get("id_columns"), id_refused, id_column)
         if id_column is not None:
-            profile.inferences["id_columns"] = id_inference
+            profile.inferences["id_columns"] = id_inference.model_copy(
+                update={"rejected": id_refused}
+            )
+        for claim in id_refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="id_columns",
+                severity="blocking",
+            )
         self._detect_suffix_scoring(profile, source, sample_table, test_kind_tables)
         # Once, not twice: it reads every sampled partition to answer, and both
         # the exclusion below and `anchor_column` further down want the same
