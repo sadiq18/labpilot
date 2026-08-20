@@ -105,6 +105,12 @@ class FloorReading(BaseModel):
     #: a changed answer moves it, which is how a stale floor is spotted.
     fingerprint: str = ""
     computed_at: str = ""
+    #: The gate's fingerprint at the moment this was taken — validation
+    #: scheme, target, metric, `profile.schema_version` and the M22 answers
+    #: fingerprint. Empty means "not recorded", which the gate reports as
+    #: unknowable rather than as current: an answer changing the target must
+    #: invalidate a reading of the old one, and only this can say that it did.
+    workspace_fingerprint: str = ""
     #: Why there is no floor, when there is none. An empty `strategies` with no
     #: reason cannot be told apart from a computation that was never attempted,
     #: and the gate's `floor_undefined` state needs the difference.
@@ -469,7 +475,7 @@ def floor_for_workspace(root: Path) -> FloorReading:
     except (OSError, ValueError) as exc:
         return undefined(f"could not read {path.name}: {exc}")
 
-    return compute_floor(
+    reading = compute_floor(
         frame,
         target=target,
         plan=plan,
@@ -479,6 +485,13 @@ def floor_for_workspace(root: Path) -> FloorReading:
         num_classes=len((profile.get("target_distribution") or {}).get("class_counts") or {})
         or None,
     )
+    # Stamped here rather than inside `compute_floor`, which is handed a frame
+    # and knows nothing about a workspace. Imported late: the gate reads floor
+    # readings, so importing it at module scope would be a cycle.
+    from labpilot.research_engine.execution.baseline.gate import reading_fingerprint
+
+    reading.workspace_fingerprint = reading_fingerprint(root)
+    return reading
 
 
 def write_floor(root: Path, reading: FloorReading) -> Path:

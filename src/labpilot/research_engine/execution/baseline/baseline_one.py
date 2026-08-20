@@ -102,6 +102,12 @@ class ModelReading(BaseModel):
     feature_columns: list[str] = Field(default_factory=list)
     fingerprint: str = ""
     computed_at: str = ""
+    #: The gate's fingerprint at the moment this was taken — validation
+    #: scheme, target, metric, `profile.schema_version` and the M22 answers
+    #: fingerprint. Empty means "not recorded", which the gate reports as
+    #: unknowable rather than as current: an answer changing the target must
+    #: invalidate a reading of the old one, and only this can say that it did.
+    workspace_fingerprint: str = ""
     #: Why there is no reading. `awaiting_ml` in the gate reads this — an
     #: unaffordable dataset is a different situation from a failed fit, and both
     #: are different from never having tried.
@@ -120,8 +126,11 @@ class BaselineComparison(BaseModel):
     cost this repo. Recompute it from the two readings, which are measurements.
     """
 
-    metric_name: str
-    direction: str
+    # Defaulted so an empty comparison is constructible: "nothing has been
+    # compared yet" is a real state, and the gate carries one on every verdict
+    # including the eight that never reach a comparison at all.
+    metric_name: str = ""
+    direction: str = ""
     floor_score: float | None = None
     floor_strategy: str = ""
     model_score: float | None = None

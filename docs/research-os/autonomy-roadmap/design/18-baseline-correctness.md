@@ -491,8 +491,8 @@ Real-data validation is a **sandbox copy**, never the live workspace
 | 2 ✅ | **Validation Strategy reads the objective**, not the profile alone | One spine, no re-derivation |
 | 3 ✅ | `floor.py`: strategies, per-fold fitting, `compute_metric`; `baseline_floor.json` | Checks 1–3 |
 | 4 ✅ | `baseline_one.py`: LightGBM, minimal preprocessing, same plan; the comparison | The gate's own output exists |
-| 5 | `gate.py`: nine states, fingerprint, waiver — **observe-only** | Checks 5–8; nothing is refused yet |
-| 6 | The report and its detectors | Checks 4, 6 |
+| 5 ✅ | `gate.py`: nine states, fingerprint, waiver — **observe-only** | Checks 5–8; nothing is refused yet |
+| 6 ✅ | The report and its detectors | Checks 4, 6 |
 | 7 | `COMPARE` on the baseline plan; floor as control through `_decide` | Goal 2 |
 | 8 | Enforcement: no hypothesis minting until the gate passes; `_baseline_plan_exists` retired | Goal 3 |
 
