@@ -477,15 +477,21 @@ def build_evidence_card(
     # Where the caller says nothing, the result does. A validator that measured
     # its own direction outranks a competition file that never saw the number,
     # which is the inversion M12 exists to make possible.
-    # One rule for all four: an explicitly-passed argument wins, and the result
-    # fills what the caller left out. `treatment_metrics` used to be overwritten
-    # unconditionally while its three neighbours deferred, so a caller passing
-    # both got an explicit direction stapled to the result's blob — and the
-    # comment here claimed "the result wins where it speaks", which was true of
-    # exactly one of the four fields it sat above.
+    # `raw` is not treated like the three fields below it, and that asymmetry is
+    # deliberate. The blob is *where the score came from*, so it travels with the
+    # score as one unit: `_found` takes the primary metric off the result
+    # unconditionally, and every statistic the card reads around that number —
+    # `cv_std`, `train_time_s`, `peak_memory_mb` — has to come from the same
+    # measurement or the card describes two different runs at once.
+    #
+    # A round of review called this an inconsistency and made `raw` defer to an
+    # explicit argument like `maximize` does. That produced a card reporting a
+    # score of 1.0 beside a fold spread of 1.1 belonging to a run that scored
+    # 500.0, with `_stability` comparing a spread that never accompanied the
+    # score. `maximize` is an independent scalar a caller may legitimately know
+    # better than the validator; `raw` is not.
     if result is not None:
-        if not treatment_metrics:
-            treatment_metrics = result.raw
+        treatment_metrics = result.raw
         if maximize is None:
             maximize = result.maximize
         if lb_gain is None:

@@ -613,10 +613,23 @@ def test_the_production_comparison_produces_the_pre_wiring_card(tmp_path) -> Non
     )
 
     context = _production_context(tmp_path)
+
+    # Priors are read once, before anything runs. `run_compare_and_build_card`
+    # persists its card and calls `apply_card_to_beliefs`, so reading them
+    # afterwards for the reference would hand the two calls different inputs,
+    # and `belief_priors` feeds `attribute_techniques`, whose output is a card
+    # field this equality compares.
+    #
+    # Defensive, and honestly so: no failing case reproduces today, including
+    # with a technique-bearing hypothesis in the store — the apply path writes
+    # nothing this reads back. Ordering it correctly costs one line and removes
+    # a dependency on that staying true, which is worth more than the line.
+    priors = _belief_priors(context.paths.base_dir, context.competition)
+    control_exec, control_metrics, control_hyp = resolve_control(context)
+
     wired = run_compare_and_build_card(context)
 
     # The pre-wiring call, reproduced argument for argument.
-    control_exec, control_metrics, control_hyp = resolve_control(context)
     reference = build_evidence_card(
         knowledge_dir=context.paths.base_dir,
         competition=context.competition,
@@ -628,7 +641,7 @@ def test_the_production_comparison_produces_the_pre_wiring_card(tmp_path) -> Non
         control_metrics=control_metrics,
         control_hypothesis_id=control_hyp,
         plan_metadata=dict(context.plan.metadata or {}),
-        belief_priors=_belief_priors(context.paths.base_dir, context.competition),
+        belief_priors=priors,
         workspace_root=context.workspace_root,
         persist=False,
     )
@@ -663,47 +676,32 @@ def test_the_production_comparison_still_refuses_an_unresolvable_direction(tmp_p
         run_compare_and_build_card(context)
 
 
-def test_an_explicit_treatment_blob_wins_like_every_other_argument(tmp_path) -> None:
-    """Review finding. `treatment_metrics` was overwritten by `result.raw`
-    unconditionally while `maximize`, `lb_gain` and `control_metrics` all
-    deferred to an explicitly-passed argument — so a caller passing both got an
-    explicit direction stapled to the result's blob.
+def test_a_card_never_mixes_two_measurements(tmp_path) -> None:
+    """Review finding, and a regression a previous round of review introduced.
 
-    Every test that touched this passed `treatment_metrics={}`, which is falsy
-    and therefore identical under both rules, so the inconsistency was invisible.
+    `raw` is where the score came from, so it travels with the score. Making it
+    defer to an explicitly-passed blob — for symmetry with `maximize`, which is
+    an independent scalar — produced a card whose score came from one run and
+    whose fold spread and runtime came from another, with `_stability`
+    comparing a spread that never accompanied the reported number.
+
+    Every earlier test passed `treatment_metrics={}`, falsy and therefore
+    identical under both rules, which is why the split was invisible.
     """
     card = _card(
         tmp_path,
-        "demo-precedence-blob",
-        treatment_metrics={"cv_rmse": 500.0, "cv_std": 1.1},
+        "demo-cohesion",
+        treatment_metrics={"cv_rmse": 500.0, "cv_std": 1.1, "train_time_s": 900.0},
         result=ValidationResult(
             score=1.0,
             metric="cv_rmse",
             direction="minimize",
             source="harness",
-            raw={"cv_rmse": 1.0, "cv_std": 9.9},
+            raw={"cv_rmse": 1.0, "cv_std": 9.9, "train_time_s": 5.0},
         ),
         control_metrics=CONTROL,
     )
 
-    assert card.observed.treatment_cv == 1.0, "the score still comes from the result"
-    assert card.observed.treatment_cv_std == 1.1, "but the explicit blob was discarded"
-
-
-def test_an_empty_treatment_blob_still_defers_to_the_result(tmp_path) -> None:
-    """The other half of the rule, and the shape production actually uses."""
-    card = _card(
-        tmp_path,
-        "demo-precedence-empty",
-        treatment_metrics={},
-        result=ValidationResult(
-            score=1.0,
-            metric="cv_rmse",
-            direction="minimize",
-            source="harness",
-            raw={"cv_rmse": 1.0, "cv_std": 9.9},
-        ),
-        control_metrics=CONTROL,
-    )
-
-    assert card.observed.treatment_cv_std == 9.9
+    assert card.observed.treatment_cv == 1.0
+    assert card.observed.treatment_cv_std == 9.9, "spread came from a different run than the score"
+    assert card.observed.train_time_s == 5.0, "runtime came from a different run than the score"
