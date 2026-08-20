@@ -161,9 +161,43 @@
       "band": "uncertain",
       "alternatives": [],
       "rejected": []
+    },
+    "prediction_unit": {
+      "signals": [
+        {
+          "id": "submission_row_per_scoring_row",
+          "detail": "the template has one row per row of the scoring input"
+        }
+      ],
+      "confidence": 0.8,
+      "band": "probable",
+      "alternatives": [],
+      "rejected": []
+    },
+    "modality": {
+      "signals": [
+        {
+          "id": "single_modality_present",
+          "detail": "only 'tabular' is present"
+        }
+      ],
+      "confidence": 0.7,
+      "band": "probable",
+      "alternatives": [],
+      "rejected": []
     }
   },
-  "modality": "tabular",
+  "modalities": [
+    {
+      "modality": "tabular",
+      "role": "primary",
+      "detail": "3 table(s)",
+      "image_dir": null,
+      "image_column": null,
+      "text_column": null
+    }
+  ],
+  "prediction_unit": "row",
   "image_dir": null,
   "image_column": null,
   "text_column": null,
@@ -179,6 +213,7 @@
     "Transported"
   ],
   "anchor_column": null,
+  "modality": "tabular",
   "confidence": 0.0,
   "id_column": "PassengerId",
   "feature_columns": [

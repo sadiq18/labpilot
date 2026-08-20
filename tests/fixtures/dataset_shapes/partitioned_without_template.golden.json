@@ -151,7 +151,7 @@
     },
     {
       "code": "ambiguous_target",
-      "text": "Target inference is ambiguous: ['Depth', 'Zone_Depth'] are equally supported by the training partitions and none is named in a sample submission. Set `target_column` in the competition config to decide it.",
+      "text": "Target inference is ambiguous: ['Depth', 'Zone_Depth'] are equally supported by the training partitions and none is named in a sample submission. Settle it with `research schema answer target_column <column>`.",
       "field": "target_column",
       "severity": "caution"
     },
@@ -221,9 +221,38 @@
       "band": "uncertain",
       "alternatives": [],
       "rejected": []
+    },
+    "modality": {
+      "signals": [
+        {
+          "id": "single_modality_present",
+          "detail": "only 'tabular' is present"
+        }
+      ],
+      "confidence": 0.7,
+      "band": "probable",
+      "alternatives": [],
+      "rejected": []
+    },
+    "prediction_unit": {
+      "signals": [],
+      "confidence": 0.0,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
     }
   },
-  "modality": "tabular",
+  "modalities": [
+    {
+      "modality": "tabular",
+      "role": "primary",
+      "detail": "16 table(s)",
+      "image_dir": null,
+      "image_column": null,
+      "text_column": null
+    }
+  ],
+  "prediction_unit": "unknown",
   "image_dir": null,
   "image_column": null,
   "text_column": null,
@@ -243,6 +272,7 @@
     "Zone_Depth"
   ],
   "anchor_column": null,
+  "modality": "tabular",
   "confidence": 0.0,
   "id_column": null,
   "feature_columns": [
@@ -257,7 +287,7 @@
     "primary kind='horizontal_well'; kinds={'horizontal_well': 5, 'typewell': 3}",
     "row_count estimated from 5 sampled files",
     "rows are NOT iid across partitions \u2014 validation must group by partition",
-    "Target inference is ambiguous: ['Depth', 'Zone_Depth'] are equally supported by the training partitions and none is named in a sample submission. Set `target_column` in the competition config to decide it.",
+    "Target inference is ambiguous: ['Depth', 'Zone_Depth'] are equally supported by the training partitions and none is named in a sample submission. Settle it with `research schema answer target_column <column>`.",
     "train-only columns (unavailable at test): ['Depth', 'Zone_Depth']"
   ]
 }

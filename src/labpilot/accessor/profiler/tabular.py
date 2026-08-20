@@ -16,7 +16,13 @@ from labpilot.accessor.profiler.evidence import (
     combine,
 )
 from labpilot.accessor.profiler.questions import answers_fingerprint
-from labpilot.accessor.profiler.schema import ExclusionReason, MetricRef, SplitRelationship
+from labpilot.accessor.profiler.schema import (
+    ExclusionReason,
+    MetricRef,
+    ModalityPresence,
+    PredictionUnit,
+    SplitRelationship,
+)
 from labpilot.accessor.profiler.source import (
     DatasetSource,
     DeclaredFacts,
@@ -96,7 +102,11 @@ class DatasetProfile(BaseModel):
     #: field nothing has reasoned about yet, which `confidence_in` reports as
     #: 0.0 — "no evidence recorded", not "no evidence exists".
     inferences: dict[str, Inference] = Field(default_factory=dict)
-    modality: str = "tabular"
+    #: Every modality present, primary first. `modality` below is the mirror
+    #: over the primary, so the six modules that read a string keep working.
+    modalities: list[ModalityPresence] = Field(default_factory=list)
+    #: What one prediction is about — a row, a row of a partition, an episode.
+    prediction_unit: PredictionUnit = "unknown"
     image_dir: str | None = None
     image_column: str | None = None
     text_column: str | None = None
@@ -121,6 +131,18 @@ class DatasetProfile(BaseModel):
     # the series actually was, so a forecast should be a residual from its last
     # known value rather than a fit over the other columns.
     anchor_column: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def modality(self) -> str:
+        """The primary modality, as a string. A view over `modalities`.
+
+        Six modules read this name and none of them should have to learn a list
+        to keep working; computed rather than stored so the two cannot drift.
+        Empty list means nothing was detected — `"tabular"` is the same default
+        the field carried before, and the accompanying note says which happened.
+        """
+        return self.modalities[0].modality if self.modalities else "tabular"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -162,6 +184,34 @@ class DatasetProfile(BaseModel):
         substrings against this.
         """
         return [note.text for note in self.notes]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _adopt_legacy_modality(cls, data: Any) -> Any:
+        """A pre-step-5 profile's `modality` string becomes its primary presence.
+
+        The same shape as the `warnings` adoption below, and the same reason:
+        `modality` is computed now, so pydantic would drop the stored value and
+        every legacy profile would read `tabular` — birdclef's says `audio`, and
+        the analyzers that key off it would silently start describing an audio
+        competition as a tabular one.
+        """
+        if not isinstance(data, dict) or data.get("modalities"):
+            return data
+        stored = data.get("modality")
+        if isinstance(stored, str) and stored:
+            data = dict(data)
+            data["modalities"] = [
+                {
+                    "modality": stored,
+                    "role": "primary",
+                    "detail": "adopted from a profile written before modalities were a list",
+                    "image_dir": data.get("image_dir"),
+                    "image_column": data.get("image_column"),
+                    "text_column": data.get("text_column"),
+                }
+            ]
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -326,6 +376,69 @@ def _exclusions(
         elif column.unique_count <= 1:
             reasons[name] = "constant"
     return reasons
+
+
+def _modality_signals(
+    presences: list[ModalityPresence], *, tiebroken: bool = False
+) -> list[Signal]:
+    """What is known about which modality carries the signal.
+
+    One modality present is the strong case: there is nothing to weigh it
+    against. Several means a preference was applied, and a preference is worth
+    less than an absence of alternatives. A model breaking the tie is capped, so
+    a modality chosen that way can be acted on and never asserted.
+    """
+    if not presences:
+        return []
+    if tiebroken:
+        return [
+            Signal(
+                id="llm_modality_tiebreak",
+                detail=f"a model chose {presences[0].modality!r} between the candidates",
+            )
+        ]
+    if len(presences) == 1:
+        return [
+            Signal(
+                id="single_modality_present",
+                detail=f"only {presences[0].modality!r} is present",
+            )
+        ]
+    if presences[0].modality == "tabular":
+        return [
+            Signal(
+                id="csv_majority",
+                detail=f"tables outnumber {presences[1].modality!r}: {presences[0].detail}",
+            )
+        ]
+    return [
+        Signal(
+            id="csv_majority",
+            detail=f"{presences[0].modality!r} outnumbers the rest: {presences[0].detail}",
+        )
+    ]
+
+
+def _prediction_unit_signals(
+    profile: DatasetProfile, *, template_matches_test: bool
+) -> list[Signal]:
+    """What is known about what one prediction is about."""
+    signals: list[Signal] = []
+    if profile.scored_is_partition_suffix:
+        signals.append(
+            Signal(
+                id="scored_rows_are_a_partition_tail",
+                detail="one row of one partition; rows are not exchangeable across them",
+            )
+        )
+    elif template_matches_test:
+        signals.append(
+            Signal(
+                id="submission_row_per_scoring_row",
+                detail="the template has one row per row of the scoring input",
+            )
+        )
+    return signals
 
 
 def _split_signals(*, has_scoring_input: bool, scored_is_partition_suffix: bool) -> list[Signal]:
@@ -691,7 +804,13 @@ class TabularProfiler:
         # portal/API automatically instead of relying on name matching.
         tables = source.tables()
         if not tables:
-            raise FileNotFoundError(f"No CSV files found in {_where(source)}.")
+            # Not an error. A dataset with no tables is an *environment* — a
+            # ConnectX-shaped competition, an interactive harness — and refusing
+            # to describe it sent the workspace to `_write_inventory_profile`,
+            # which wrote a valid-looking profile with a null target and a
+            # modality guessed from file extensions. Describing it honestly and
+            # asking the questions it cannot answer is the whole point.
+            return self._profile_environment(source, competition)
 
         # Partitioned layouts (train/<entity>.csv) match no filename prefix, so
         # try them before the single-file heuristic reports "found 0".
@@ -758,6 +877,15 @@ class TabularProfiler:
             column_count=len(train_sample.columns),
             columns=self.profile_columns(train_sample),
         )
+        if len(train_sample) == self.config.max_rows_sample and train_columns:
+            # The cap bound, so the sample's length is a floor rather than a
+            # count. `playground-series-s6e7/profile.json` records 100,000 rows
+            # for a file of 690,088 and does not say it is a sample. One pass
+            # over one column is what the truth costs.
+            try:
+                profile.row_count = source.exact_unit_count(train_table, train_columns[0])
+            except (OSError, ValueError):
+                profile.row_count_estimated = True
         for text in test_warnings:
             _note(profile, "no_test_file", text, severity="caution")
         from labpilot.accessor.profiler.modality import ModalityDetector
@@ -885,6 +1013,18 @@ class TabularProfiler:
         profile.inferences["train_test_relationship"] = Inference.of(split_signals)
         profile.metric = source.declared().metric
         profile.inferences["metric"] = Inference.of(_metric_signals(profile.metric))
+        template_matches_test = (
+            sample_table is not None
+            and test_table is not None
+            and sample_table != test_table
+            and profile.test_row_count > 0
+            and len(source.sample(sample_table, None)) == profile.test_row_count
+        )
+        unit_signals = _prediction_unit_signals(
+            profile, template_matches_test=template_matches_test
+        )
+        profile.prediction_unit = "row" if unit_signals else "unknown"
+        profile.inferences["prediction_unit"] = Inference.of(unit_signals)
         if profile.target_column is None:
             why = (
                 "no scoring input to compare train against"
@@ -921,10 +1061,13 @@ class TabularProfiler:
                 competition_title=declared.title,
                 competition_description=declared.description,
             )
-            profile.modality = modality.modality
+            profile.modalities = detector.presences(root, profile)
             profile.image_dir = modality.image_dir
             profile.image_column = modality.image_column
             profile.text_column = modality.text_column
+            profile.inferences["modality"] = Inference.of(
+                _modality_signals(profile.modalities, tiebroken=modality.tiebroken)
+            )
             for text in modality.signals:
                 _note(profile, "modality_signal", text, field="modality")
         logger.info(
@@ -979,6 +1122,50 @@ class TabularProfiler:
                 entity, _, kind = stem.partition(sep)
                 return entity, kind
         return stem, ""
+
+    def _profile_environment(self, source: DatasetSource, competition: str) -> DatasetProfile:
+        """A dataset with no tables: say so, and ask what cannot be inferred.
+
+        No columns, so no target and no key — both `uncertain` at 0.0, which
+        raises the questions that stop a campaign rather than letting it act on
+        a description nobody produced. `action_space` is deliberately **not**
+        inferred: no fixture exists and the output would be unfalsifiable.
+        """
+        profile = DatasetProfile(competition=competition)
+        root = _local_root(source)
+        if root is not None:
+            profile.files = [
+                str(path.relative_to(root)) for path in sorted(root.rglob("*")) if path.is_file()
+            ][:200]
+            from labpilot.accessor.profiler.modality import ModalityDetector
+
+            profile.modalities = ModalityDetector().presences(root, profile)
+        else:
+            profile.modalities = [
+                ModalityPresence(
+                    modality="environment", role="primary", detail="source exposes no tables"
+                )
+            ]
+        profile.train_test_relationship = "environment"
+        profile.inferences["train_test_relationship"] = Inference.of(
+            [Signal(id="no_tabular_data", detail="no tables in this dataset")]
+        )
+        profile.inferences["modality"] = Inference.of(_modality_signals(profile.modalities))
+        profile.prediction_unit = "episode"
+        profile.inferences["prediction_unit"] = Inference.of([])
+        profile.metric = source.declared().metric
+        profile.inferences["metric"] = Inference.of(_metric_signals(profile.metric))
+        profile.inferences["target_column"] = Inference.of([])
+        profile.inferences["id_columns"] = Inference.of([])
+        profile.answers_fingerprint = answers_fingerprint(source.declared().answers)
+        _note(
+            profile,
+            "environment_dataset",
+            f"no tables found: {len(profile.files)} file(s), described as an environment. "
+            "Nothing here can name a target or a key.",
+            severity="blocking",
+        )
+        return profile
 
     def _try_profile_partitioned(
         self,
@@ -1171,8 +1358,8 @@ class TabularProfiler:
                 ambiguous_target.append(
                     "Target inference is ambiguous: "
                     f"{sorted(candidates)} are equally supported by the training "
-                    "partitions and none is named in a sample submission. Set "
-                    "`target_column` in the competition config to decide it."
+                    "partitions and none is named in a sample submission. Settle "
+                    "it with `research schema answer target_column <column>`."
                 )
                 candidates = sorted(candidates)
             primary_only = candidates
@@ -1338,6 +1525,29 @@ class TabularProfiler:
         )
         profile.metric = source.declared().metric
         profile.inferences["metric"] = Inference.of(_metric_signals(profile.metric))
+        # Modality was never detected on this path at all: it returns before the
+        # block that does it, so every partitioned profile carried the field's
+        # *default*. rogii reads `modality: tabular` and nothing ever looked —
+        # which is why the PNG previews beside its 1,546 tables were invisible.
+        modality_root = _local_root(source)
+        if modality_root is None:
+            _note(
+                profile,
+                "modality_not_detected",
+                "modality not detected: source exposes no directory",
+                field="modality",
+                severity="caution",
+            )
+        else:
+            from labpilot.accessor.profiler.modality import ModalityDetector
+
+            profile.modalities = ModalityDetector().presences(modality_root, profile)
+            primary = profile.modalities[0] if profile.modalities else None
+            profile.image_dir = primary.image_dir if primary else None
+            profile.inferences["modality"] = Inference.of(_modality_signals(profile.modalities))
+        unit_signals = _prediction_unit_signals(profile, template_matches_test=False)
+        profile.prediction_unit = "partition_row" if unit_signals else "unknown"
+        profile.inferences["prediction_unit"] = Inference.of(unit_signals)
         # Appended, not assigned. `profile.warnings = [...]` here discarded
         # everything recorded earlier in this method — including the note
         # `_detect_suffix_scoring` writes one line above when a source has no

@@ -19,6 +19,8 @@ from pydantic import BaseModel
 __all__ = [
     "ExclusionReason",
     "MetricRef",
+    "ModalityPresence",
+    "PredictionUnit",
     "SplitRelationship",
 ]
 
@@ -34,14 +36,30 @@ __all__ = [
 #:   guess, and the ordinary case for a dataset that is not a competition.
 #: * ``unknown`` — not concluded.
 #:
-#: ``temporal_split``, ``same_entities_new_period`` and ``environment`` arrive
-#: with the detectors that can conclude them.
+#: ``temporal_split`` and ``same_entities_new_period`` arrive with the detectors
+#: that can conclude them; ``environment`` arrived with its own in step 5.
 SplitRelationship = Literal[
     "partition_suffix",
     "disjoint_units",
     "no_test_provided",
+    #: The scoring input is an environment to act in, not units to predict.
+    #: Arrives here with its detector: a dataset with no tables at all.
+    "environment",
     "unknown",
 ]
+
+#: What one prediction is about.
+#:
+#: * ``row`` — one row of the scoring input, the ordinary case.
+#: * ``partition_row`` — one row of one partition, where the scored rows are a
+#:   tail of each: predictions are not exchangeable across partitions.
+#: * ``episode`` — an environment run rather than a row.
+#: * ``unknown`` — not concluded.
+#:
+#: The question that makes `unit_count`, the split and M23's floor mean the same
+#: thing across modalities: a row, an image, a clip and an episode are all "one
+#: unit" and only this says which.
+PredictionUnit = Literal["row", "partition_row", "episode", "unknown"]
 
 #: Why a column is not a feature. Each is a *measurement* — two people with the
 #: same bytes would agree — so exclusions carry a reason rather than a
@@ -65,6 +83,29 @@ ExclusionReason = Literal[
     "equals_target",
     "constant",
 ]
+
+
+class ModalityPresence(BaseModel):
+    """One modality the dataset contains, and whether it is the main one.
+
+    A **list**, because a dataset is often more than one thing: rogii is 1,546
+    per-well tables *and* a directory of PNG previews, and the detector used to
+    count the images, prefer tabular, and throw the images away — so nothing
+    downstream could know they existed. Preferring tabular is still right;
+    discarding the rest was not.
+    """
+
+    #: ``audio`` has no detector and is never *inferred*; it is here because
+    #: profiles on disk carry it — birdclef's says `modality: "audio"` — and
+    #: adopting a legacy string into this list is a real producer. Detecting it
+    #: is a separate piece of work with its own fixture.
+    modality: Literal["tabular", "text", "image", "audio", "environment"]
+    role: Literal["primary", "auxiliary"]
+    #: What was seen, in the terms an operator would use.
+    detail: str = ""
+    image_dir: str | None = None
+    image_column: str | None = None
+    text_column: str | None = None
 
 
 class MetricRef(BaseModel):

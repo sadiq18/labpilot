@@ -253,9 +253,38 @@
       "band": "uncertain",
       "alternatives": [],
       "rejected": []
+    },
+    "modality": {
+      "signals": [
+        {
+          "id": "single_modality_present",
+          "detail": "only 'tabular' is present"
+        }
+      ],
+      "confidence": 0.7,
+      "band": "probable",
+      "alternatives": [],
+      "rejected": []
+    },
+    "prediction_unit": {
+      "signals": [],
+      "confidence": 0.0,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
     }
   },
-  "modality": "tabular",
+  "modalities": [
+    {
+      "modality": "tabular",
+      "role": "primary",
+      "detail": "17 table(s)",
+      "image_dir": null,
+      "image_column": null,
+      "text_column": null
+    }
+  ],
+  "prediction_unit": "unknown",
   "image_dir": null,
   "image_column": null,
   "text_column": null,
@@ -275,6 +304,7 @@
     "Zone_Depth"
   ],
   "anchor_column": "Depth_input",
+  "modality": "tabular",
   "confidence": 0.0,
   "id_column": "id",
   "feature_columns": [

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 from pydantic import BaseModel, Field
 
+from labpilot.accessor.profiler.schema import ModalityPresence
 from labpilot.accessor.profiler.tabular import ColumnProfile, DatasetProfile
 
 if TYPE_CHECKING:
@@ -35,12 +36,116 @@ class ModalityResult(BaseModel):
     modality: str = "tabular"
     confidence: str = "high"  # high | ambiguous
     signals: list[str] = Field(default_factory=list)
+    #: How many image-like files were seen. Recorded so `presences` can weigh
+    #: images against tables without counting the tree a second time.
+    image_count: int = 0
+    #: True only when a model actually chose between candidates. The no-LLM
+    #: fallback is a *default*, not a decision, and the two must not read alike.
+    tiebroken: bool = False
     image_dir: str | None = None
     image_column: str | None = None
     text_column: str | None = None
 
 
 class ModalityDetector:
+    def presences(self, data_dir: Path, profile: DatasetProfile) -> list[ModalityPresence]:
+        """Every modality this dataset contains, primary first.
+
+        The list `detect` could never return. rogii is 1,546 per-well tables
+        *and* a directory of PNG previews; the old decision counted the images,
+        preferred tabular — correctly — and then dropped them, so nothing
+        downstream could know they were there. Preference and presence are
+        different questions, and only one of them has a single answer.
+
+        Order: the primary, then the auxiliaries in a fixed order, so two runs
+        over the same bytes list them the same way.
+        """
+        found: list[ModalityPresence] = []
+
+        images = self._detect_image(data_dir, profile)
+        text = self._detect_text(profile)
+        csv_count = self._count_csvs(data_dir)
+        zarr = self._zarr_store(data_dir)
+
+        if csv_count:
+            found.append(
+                ModalityPresence(
+                    modality="tabular", role="auxiliary", detail=f"{csv_count} table(s)"
+                )
+            )
+        if images.image_dir is not None or zarr is not None:
+            found.append(
+                ModalityPresence(
+                    modality="image",
+                    role="auxiliary",
+                    # A zarr store is reachable here for the first time: the CSV
+                    # preference used to return before the branch that looked
+                    # for one, and every zarr competition ships a
+                    # `sample_submission.csv`.
+                    detail=(
+                        f"zarr store {zarr}"
+                        if zarr
+                        else f"{images.image_count} image file(s) in {images.image_dir or '.'}"
+                    ),
+                    image_dir=zarr or images.image_dir,
+                    image_column=images.image_column,
+                )
+            )
+        if text.text_column is not None:
+            found.append(
+                ModalityPresence(
+                    modality="text",
+                    role="auxiliary",
+                    detail=f"text column {text.text_column!r}",
+                    text_column=text.text_column,
+                )
+            )
+        if not found:
+            return [
+                ModalityPresence(
+                    modality="environment",
+                    role="primary",
+                    detail="no tables, images or text — an environment to act in",
+                )
+            ]
+
+        primary = self._primary_of(found, csv_count=csv_count, images=images)
+        ordered = [presence for presence in found if presence.modality == primary]
+        ordered += [presence for presence in found if presence.modality != primary]
+        return [
+            presence.model_copy(update={"role": "primary" if index == 0 else "auxiliary"})
+            for index, presence in enumerate(ordered)
+        ]
+
+    @staticmethod
+    def _primary_of(
+        found: list[ModalityPresence], *, csv_count: int, images: ModalityResult
+    ) -> str:
+        """Which modality carries the signal. The old rules, stated once.
+
+        Tables win a tie with images because a per-entity layout with previews
+        is a tabular problem; images win when there are more of them than tables,
+        which is what an image competition looks like.
+        """
+        kinds = {presence.modality for presence in found}
+        if "image" in kinds and (not csv_count or images.image_count > csv_count):
+            return "image"
+        if "tabular" in kinds:
+            return "tabular"
+        return next(iter(sorted(kinds)))
+
+    def _count_csvs(self, data_dir: Path) -> int:
+        return sum(
+            1 for path in data_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".csv"
+        )
+
+    def _zarr_store(self, data_dir: Path) -> str | None:
+        """The first zarr store under the root, relative, or None."""
+        for path in sorted(data_dir.rglob("*")):
+            if path.is_dir() and path.name.endswith(".zarr"):
+                return str(path.relative_to(data_dir))
+        return None
+
     def detect(
         self,
         data_dir: Path,
@@ -99,14 +204,17 @@ class ModalityDetector:
         if not dir_counts and not zarr_dirs:
             return ModalityResult(modality="tabular", confidence="high")
 
-        csv_count = sum(
-            1
-            for path in data_dir.rglob("*")
-            if path.is_file() and path.suffix.lower() == ".csv"
-        )
+        best_dir = max(dir_counts, key=dir_counts.get) if dir_counts else ""
         image_count = sum(dir_counts.values())
+
+        csv_count = sum(
+            1 for path in data_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".csv"
+        )
         # Multimodal geology-style layouts: many per-well CSVs plus PNG
-        # previews. Prefer tabular so baselines use the structured logs.
+        # previews. Prefer tabular so baselines use the structured logs — and
+        # still say where the images are. Returning `image_dir=None` here is
+        # what made the previews invisible to everything downstream, which is
+        # not what "prefer tabular" should mean.
         if csv_count > 0 and csv_count >= max(image_count, 1):
             return ModalityResult(
                 modality="tabular",
@@ -116,6 +224,8 @@ class ModalityDetector:
                     f"image_files={image_count}",
                     "prefer_tabular_over_auxiliary_images",
                 ],
+                image_dir=best_dir or None,
+                image_count=image_count,
             )
 
         if zarr_dirs and not dir_counts:
@@ -127,7 +237,6 @@ class ModalityDetector:
                 image_dir=rel,
             )
 
-        best_dir = max(dir_counts, key=dir_counts.get)
         image_dir_path = data_dir / best_dir if best_dir else data_dir
         image_column = self._match_filename_column(data_dir, profile, image_dir_path)
         if image_column is None:
@@ -141,6 +250,7 @@ class ModalityDetector:
                     "no_filename_column",
                 ],
                 image_dir=best_dir or ".",
+                image_count=image_count,
             )
 
         return ModalityResult(
@@ -149,6 +259,7 @@ class ModalityDetector:
             signals=[f"image_dir={best_dir or '.'}", f"image_column={image_column}"],
             image_dir=best_dir or ".",
             image_column=image_column,
+            image_count=image_count,
         )
 
     def _match_filename_column(
@@ -239,13 +350,18 @@ class ModalityDetector:
                 fallback = "text"
             else:
                 fallback = "tabular"
+            # `ambiguous`, not `high`. This branch is the one production always
+            # takes — `_ensure_profile` passes no client — so the certainty this
+            # used to stamp was the *absence* of a tie-breaker reported as the
+            # presence of an answer.
             return ModalityResult(
                 modality=fallback,
-                confidence="high",
+                confidence="ambiguous",
                 signals=result.signals + ["llm_unavailable"],
                 image_dir=result.image_dir,
                 image_column=result.image_column,
                 text_column=result.text_column,
+                image_count=result.image_count,
             )
 
         system = "Pick exactly one modality: tabular, text, or image. Reply with one word only."
@@ -265,4 +381,6 @@ class ModalityDetector:
         if token not in {"tabular", "text", "image"}:
             return ModalityResult(modality="tabular", confidence="high", signals=result.signals)
 
-        return result.model_copy(update={"modality": token, "confidence": "high"})
+        return result.model_copy(
+            update={"modality": token, "confidence": "high", "tiebroken": True}
+        )

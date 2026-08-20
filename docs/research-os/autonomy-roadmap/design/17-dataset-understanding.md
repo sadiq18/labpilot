@@ -552,6 +552,48 @@ Off by default (`profiler.llm_proposals: false`).
 
 ---
 
+### 7.9 Modality is a list, and four answers stop overstating themselves
+
+`modalities: list[ModalityPresence]`, primary first, with `modality` a computed
+mirror over the primary so the six modules that read a string are untouched.
+rogii is **1,553 tables and 773 well previews**; the detector counted the images,
+used the count to prefer tabular — correctly — and discarded them in the same
+expression, so no profile had ever mentioned them.
+
+**Found while building it: modality was never detected on the partitioned path
+at all.** `_try_profile_partitioned` returns before the block that does it, so
+every partitioned profile carried the field's *default*. rogii read
+`modality: tabular` because nothing looked.
+
+Three more answers that were stated more confidently than they were reached:
+
+- **A tie broken by a model is capped** at 0.30/0.50, and the *absence* of a
+  tie-breaker is no longer reported as an answer. `_ensure_profile` passes no
+  LLM client, so the `llm_unavailable` branch is the one production always
+  takes, and it used to stamp `confidence="high"`.
+- **The zarr branch is reachable.** The CSV preference returned before the
+  branch that looked for a store, and every zarr competition ships a
+  `sample_submission.csv` — so no input could reach it.
+- **A bound sample cap is not a row count.** `playground-series-s6e7` records
+  100,000 rows for a file of 690,088 and does not say it is a sample. Where the
+  cap binds, one pass over one column buys the truth.
+
+**An environment is a shape, not an error.** A dataset with no tables used to
+raise, which sent the workspace to `_write_inventory_profile` and its
+metadata-guessed modality with a null target. It is now
+`environment(primary)`, `train_test_relationship: environment`,
+`prediction_unit: episode`, files listed, target and key at 0.0 — so a campaign
+asks. **`action_space` is still not inferred**: no fixture, unfalsifiable output.
+
+**`audio` is in the enum without a detector**, which contradicts §7.4's rule
+until you see its producer. Profiles on disk carry it — birdclef's says
+`modality: "audio"` — and `modality` is computed now, so a legacy string must be
+adopted into the list or every analyzer keying off the field would quietly start
+describing an audio competition as a tabular one. Adoption is the producer;
+detecting audio is separate work with its own fixture.
+
+---
+
 ## 8. Design choices & tradeoffs
 
 | Choice | Rejected | Chosen | Tradeoff |
@@ -619,7 +661,7 @@ show` is Rich output, truncated at 40 columns.
 | 2 ✅ | `evidence.py`, catalogue, `combine`; `inferences` populated from today's decisions; `notes`/`warnings` view | Check 1 passes; **no values change** — the golden diff is two added keys, nothing removed and nothing altered |
 | 3 ✅ | The five answers rewritten as scoring; `id_columns`, `excluded_columns`, `train_test_relationship`, `metric` | Checks 4, 5, 6 |
 | 4 ✅ | Questions, `schema_answers.json`, `schema_prompt`, block path, `research schema` | Check 7 |
-| 5 | Modality list, `prediction_unit`, zarr, tie-break confidence, `row_count`, metric recording; the fiction deleted | Check 8 |
+| 5 ✅ | Modality list, `prediction_unit`, zarr, tie-break confidence, `row_count`, environment; the fiction deleted | Check 8 |
 | 6 | Proposer + verifiers, off by default | Check 3 |
 
 **Migration.** `PROFILE_SCHEMA_VERSION` 2 → 3, so every existing profile is

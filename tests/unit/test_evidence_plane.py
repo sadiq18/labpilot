@@ -18,11 +18,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from helpers.dataset_shapes import (
+    build_environment,
+    build_image_and_text,
     build_no_kaggle_inputs,
     build_partition_suffix,
     build_partitioned_with_template,
     build_partitioned_without_template,
     build_strong_signals,
+    build_tables_with_previews,
     build_template_only,
 )
 from helpers.dataset_sources import DictSource
@@ -42,6 +45,13 @@ from labpilot.accessor.profiler.tabular import DatasetProfile, TabularProfiler
 from labpilot.config import ProfilerConfig
 
 SRC_ROOT = Path(evidence_module.__file__).resolve().parents[3]
+
+
+class _SaysImage:
+    """A tie-breaker that answers, so the capped signal has a producer."""
+
+    def complete(self, system: str, user: str) -> str:
+        return "image"
 
 
 def _profile(data_dir: Path) -> DatasetProfile:
@@ -249,8 +259,18 @@ def test_the_catalogue_carries_no_entry_nothing_can_fire(tmp_path: Path) -> None
             build_no_kaggle_inputs,
             build_partition_suffix,
             build_template_only,
+            build_tables_with_previews,
+            build_environment,
         )
     ]
+    # A modality tie a model breaks: images *and* a text column, so the
+    # rule-based detector cannot choose and asks. The only producer of
+    # `llm_modality_tiebreak`.
+    profiles.append(
+        TabularProfiler(ProfilerConfig()).profile_directory(
+            build_image_and_text(tmp_path), "tiebreak", llm_client=_SaysImage()
+        )
+    )
     frame = pd.DataFrame({"Id": [1, 2, 3], "x": [1.0, 2.0, 3.0], "y": [1.0, 2.0, 3.0]})
     tables = {
         "train.csv": frame,

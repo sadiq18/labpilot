@@ -563,9 +563,10 @@ class WorkspaceCapability(BaseCapability):
     ) -> bool:
         try:
             from labpilot.accessor.profiler.evidence import Note
-            from labpilot.accessor.profiler.modality import IMAGE_EXTENSIONS, ModalityDetector
+            from labpilot.accessor.profiler.modality import ModalityDetector
             from labpilot.accessor.profiler.questions import answers_fingerprint, load_answers
             from labpilot.accessor.profiler.report import write_profile
+            from labpilot.accessor.profiler.schema import ModalityPresence
             from labpilot.accessor.profiler.tabular import DatasetProfile
             from labpilot.research_engine.intelligence.competition.infer_problem_type import (
                 infer_problem_type_from_metadata,
@@ -610,56 +611,44 @@ class WorkspaceCapability(BaseCapability):
                     ),
                 ],
             )
-            modality = ModalityDetector().detect(
+            detector = ModalityDetector()
+            modality = detector.detect(
                 raw_dir,
                 profile,
                 competition_title=competition.title,
                 competition_description=competition.description,
             )
-            if modality.modality == "tabular":
-                # Metadata may still say vision/tracking when files are exotic.
+            # The detector's own list is the answer, and it is the same list the
+            # tabular path produces — this used to be a *second* modality
+            # decision with its own rules, assigning a string that is now
+            # derived. Metadata only speaks where the files say nothing.
+            profile.modalities = detector.presences(raw_dir, profile)
+            if profile.modality == "tabular":
                 inferred = infer_problem_type_from_metadata(
                     title=competition.title,
                     description=competition.description,
                     tags=list(competition.tags),
                 )
-                if inferred is ProblemType.IMAGE_CLASSIFICATION:
-                    profile.modality = "image"
+                declared = {
+                    ProblemType.IMAGE_CLASSIFICATION: "image",
+                    ProblemType.TEXT_CLASSIFICATION: "text",
+                }.get(inferred)
+                if declared is not None:
+                    profile.modalities = [
+                        ModalityPresence(
+                            modality=declared,
+                            role="primary",
+                            detail="from competition metadata, not from the files",
+                        ),
+                        *[m.model_copy(update={"role": "auxiliary"}) for m in profile.modalities],
+                    ]
                     profile.notes.append(
                         Note(
                             code="modality_from_metadata",
-                            text="modality=image from competition metadata",
+                            text=f"modality={declared} from competition metadata",
                             field="modality",
                         )
                     )
-                elif inferred is ProblemType.TEXT_CLASSIFICATION:
-                    profile.modality = "text"
-                    profile.notes.append(
-                        Note(
-                            code="modality_from_metadata",
-                            text="modality=text from competition metadata",
-                            field="modality",
-                        )
-                    )
-                else:
-                    # Presence of image-like files without CSV roles.
-                    has_images = any(Path(f).suffix.lower() in IMAGE_EXTENSIONS for f in files)
-                    has_zarr = any(".zarr" in f for f in files) or any(
-                        p.is_dir() and p.name.endswith(".zarr") for p in raw_dir.rglob("*")
-                    )
-                    if has_images or has_zarr:
-                        profile.modality = "image"
-                        profile.notes.append(
-                            Note(
-                                code="modality_from_extensions",
-                                text="modality=image from file extensions",
-                                field="modality",
-                            )
-                        )
-                    else:
-                        profile.modality = modality.modality
-            else:
-                profile.modality = modality.modality
             profile.image_dir = modality.image_dir
             profile.image_column = modality.image_column
             profile.text_column = modality.text_column
