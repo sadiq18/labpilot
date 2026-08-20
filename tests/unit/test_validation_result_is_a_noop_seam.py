@@ -118,7 +118,6 @@ def test_a_result_with_no_direction_does_not_invent_one(tmp_path) -> None:
 
     assert unresolved.direction is None
     assert unresolved.maximize is None
-    assert not unresolved.is_comparable
 
     with pytest.raises(ValueError):
         _card(
@@ -130,16 +129,19 @@ def test_a_result_with_no_direction_does_not_invent_one(tmp_path) -> None:
         )
 
 
-def test_a_score_without_a_direction_is_not_comparable() -> None:
-    """Both halves are required. `treatment - control` is computable with either
-    one missing, and its sign is a coin flip."""
-    assert not ValidationResult(score=1.0, metric="rmse", direction=None, source="t").is_comparable
-    assert not ValidationResult(
-        score=None, metric="rmse", direction="minimize", source="t"
-    ).is_comparable
-    assert ValidationResult(
-        score=1.0, metric="rmse", direction="minimize", source="t"
-    ).is_comparable
+def test_an_unknown_direction_never_reads_as_maximize() -> None:
+    """`treatment - control` is computable without a direction and its sign is a
+    coin flip, so the boolean a caller reads has to be able to say "I don't know".
+    """
+    assert ValidationResult(score=1.0, metric="rmse", direction=None, source="t").maximize is None
+    assert (
+        ValidationResult(score=1.0, metric="rmse", direction="minimize", source="t").maximize
+        is False
+    )
+    assert (
+        ValidationResult(score=1.0, metric="rmse", direction="maximize", source="t").maximize
+        is True
+    )
 
 
 def test_a_blob_with_no_primary_metric_reports_no_score() -> None:
@@ -148,7 +150,6 @@ def test_a_blob_with_no_primary_metric_reports_no_score() -> None:
     empty = result_from_metrics({"n_features": 12}, maximize=False)
 
     assert empty.score is None and empty.metric == ""
-    assert not empty.is_comparable
 
 
 def test_the_metric_key_travels_with_the_score() -> None:
@@ -376,7 +377,6 @@ def test_a_workspace_with_no_metrics_reports_no_score(tmp_path) -> None:
 
     assert result.score is None
     assert result.direction == "minimize", "direction is independent of the score"
-    assert not result.is_comparable
 
 
 def test_a_control_result_supplies_the_blob_the_card_reads_around_it(tmp_path) -> None:
@@ -414,3 +414,368 @@ def test_a_control_result_supplies_the_blob_the_card_reads_around_it(tmp_path) -
     assert card.observed.parent_cv_std == 1.1, "the control blob never arrived"
     assert card.observed.stability.value == "similar"
     assert card.decision.value == "accepted"
+
+
+# --- phase 1: the production path goes through the seam ---------------------
+
+
+def test_the_validator_consults_every_direction_source_the_builder_does(tmp_path) -> None:
+    """The rogii case, and the one an earlier draft of this validator failed.
+
+    `_resolve_direction` asks `resolve_maximize` with `ResearchPaths.root` *and*
+    `ResearchPaths.extracted_dir`. The first version of `KaggleCvValidator`
+    passed `paths.base_dir` as the knowledge root and omitted the extracted
+    directory, so it consulted strictly fewer sources than the builder it stands
+    in for.
+
+    That gap is not small: the Analyze profile artifact under `extracted_dir` is
+    where rogii's `minimize` actually lived. Routing production through a
+    validator that answers `None` here would have made the campaign refuse to
+    build a card it builds today — a regression dressed as a refactor.
+    """
+    import json
+
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.validation.kaggle import direction_for
+
+    competition = "rogii-shaped"
+    knowledge = tmp_path / "knowledge"
+    paths = ResearchPaths(knowledge, competition)
+    misc = paths.extracted_dir / "misc"
+    misc.mkdir(parents=True, exist_ok=True)
+    # Direction lives *only* here — no competition.json anywhere.
+    (misc / f"competition_{competition}.json").write_text(
+        json.dumps({"metadata": {"profile": {"metric": {"name": "mse", "direction": "minimize"}}}}),
+        encoding="utf-8",
+    )
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    assert direction_for(competition, knowledge_dir=knowledge, workspace_root=workspace) is False
+
+
+def test_the_validator_matches_what_the_builder_would_have_resolved(tmp_path) -> None:
+    """The no-op, at the direction boundary specifically. Two implementations of
+    "which way is better" that disagree would move every baseline."""
+    import json
+
+    from labpilot.research_engine.evidence.builder import _resolve_direction
+    from labpilot.research_engine.validation.kaggle import direction_for
+
+    competition = "demo-agree"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "competition.json").write_text(
+        json.dumps(
+            {
+                "slug": competition,
+                "evaluation_metric": {"name": "rmse", "key": "rmse", "direction": "minimize"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert direction_for(
+        competition, knowledge_dir=tmp_path, workspace_root=workspace
+    ) == _resolve_direction(tmp_path, competition, workspace)
+
+
+def test_an_unresolvable_direction_is_carried_not_raised(tmp_path) -> None:
+    """The validator reports `None`; `build_evidence_card` is the layer that
+    decides refusing is the right response. Splitting it the other way would put
+    the refusal in a place with no idea what the caller can substitute."""
+    from labpilot.research_engine.validation.kaggle import direction_for
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    assert direction_for("nothing-stated", knowledge_dir=tmp_path, workspace_root=workspace) is None
+
+
+def test_the_production_comparison_runs_through_the_validator() -> None:
+    """Phase 1's whole content. Until this, `validate` was available and unused,
+    so the seam could rot without a single test noticing."""
+    import inspect
+
+    from labpilot.research_engine.evidence import compare_service
+
+    source = inspect.getsource(compare_service.run_compare_and_build_card)
+
+    assert "KaggleCvValidator().validate(" in source
+    assert "result=result" in source and "control_result=control_result" in source
+    assert "_load_metrics(root" not in source, "still loading metrics.json around the validator"
+
+
+def test_the_knowledge_root_is_the_research_dir_not_the_knowledge_dir(tmp_path) -> None:
+    """Mutation finding. `ResearchPaths.root` is `<base_dir>/<competition>/research`,
+    not `base_dir` — so passing `base_dir` straight through as `knowledge_root`
+    looks equivalent and searches a directory that holds no contract.
+
+    Every other test placed the contract where both spellings happen to find it
+    (or nowhere), so the two were indistinguishable. Here the knowledge copy of
+    `competition.json` sits only where `_resolve_direction` actually looks.
+    """
+    import json
+
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.validation.kaggle import direction_for
+
+    competition = "demo-knowledge-root"
+    paths = ResearchPaths(tmp_path, competition)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    (paths.root / "competition.json").write_text(
+        json.dumps({"metric": {"name": "rmse", "direction": "minimize"}}), encoding="utf-8"
+    )
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    assert direction_for(competition, knowledge_dir=tmp_path, workspace_root=workspace) is False
+
+
+# --- phase 1, proven rather than grepped ------------------------------------
+
+
+def _production_context(tmp_path: Path, *, competition: str = "demo-prod"):
+    """A real `TaskContext` over a real workspace, so the production path runs.
+
+    The control arrives through `plan.metadata`, which is `resolve_control`'s
+    first and cheapest source, so no knowledge store has to be populated for the
+    comparison to have two sides.
+    """
+    import json
+    from datetime import UTC, datetime
+
+    from labpilot.research_engine.execution.context import TaskContext
+    from labpilot.research_engine.execution.schemas import ResearchExecution
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.planner.schemas.models import ResearchPlan, ResearchTask
+    from labpilot.research_engine.planner.schemas.task_types import PlanStatus, TaskType
+
+    knowledge = tmp_path / "knowledge"
+    paths = ResearchPaths(knowledge, competition).ensure()
+    root = tmp_path / "ws"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "metrics.json").write_text(json.dumps(TREATMENT), encoding="utf-8")
+    (root / "competition.json").write_text(
+        json.dumps(
+            {
+                "slug": competition,
+                "evaluation_metric": {"name": "rmse", "key": "rmse", "direction": "minimize"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    now = datetime.now(UTC)
+    plan = ResearchPlan(
+        id="P-001",
+        competition=competition,
+        hypothesis_id="H-014",
+        goal="t",
+        status=PlanStatus.READY,
+        tasks=[ResearchTask(id="P-001-T01", plan_id="P-001", type=TaskType.COMPARE)],
+        created_at=now,
+        updated_at=now,
+        metadata={
+            "plan_kind": "delta",
+            "parent_execution_id": "E-008",
+            "parent_metrics": CONTROL,
+        },
+    )
+    return TaskContext(
+        plan=plan,
+        task=plan.tasks[0],
+        execution=ResearchExecution(id="E-014", plan_id="P-001", competition=competition),
+        paths=paths,
+        workspace_root=root,
+        competition=competition,
+    )
+
+
+def test_the_production_comparison_produces_the_pre_wiring_card(tmp_path) -> None:
+    """Review finding, and the one that should have existed from the start.
+
+    Phase 1 was asserted by grepping `inspect.getsource` for the validator call.
+    That constrains the *text* of the function, not what it computes: inverting
+    the control's direction there — which flips the sign of every verdict for
+    every real campaign — left all 3100 tests green.
+
+    Phase 0 has exactly this test one layer down, at `build_evidence_card`. This
+    is it extended to the caller that actually runs.
+    """
+    from labpilot.research_engine.evidence.compare_service import (
+        _belief_priors,
+        _load_metrics,
+        resolve_control,
+        run_compare_and_build_card,
+    )
+
+    context = _production_context(tmp_path)
+
+    # Priors are read once, before anything runs. `run_compare_and_build_card`
+    # persists its card and calls `apply_card_to_beliefs`, so reading them
+    # afterwards for the reference would hand the two calls different inputs,
+    # and `belief_priors` feeds `attribute_techniques`, whose output is a card
+    # field this equality compares.
+    #
+    # Defensive, and honestly so: no failing case reproduces today, including
+    # with a technique-bearing hypothesis in the store — the apply path writes
+    # nothing this reads back. Ordering it correctly costs one line and removes
+    # a dependency on that staying true, which is worth more than the line.
+    priors = _belief_priors(context.paths.base_dir, context.competition)
+    control_exec, control_metrics, control_hyp = resolve_control(context)
+
+    wired = run_compare_and_build_card(context)
+
+    # The pre-wiring call, reproduced argument for argument.
+    reference = build_evidence_card(
+        knowledge_dir=context.paths.base_dir,
+        competition=context.competition,
+        treatment_execution_id=context.execution.id,
+        treatment_metrics=_load_metrics(context.workspace_root / "metrics.json"),
+        plan_id=context.plan.id,
+        hypothesis_id=context.plan.hypothesis_id or None,
+        control_execution_id=control_exec,
+        control_metrics=control_metrics,
+        control_hypothesis_id=control_hyp,
+        plan_metadata=dict(context.plan.metadata or {}),
+        belief_priors=priors,
+        workspace_root=context.workspace_root,
+        persist=False,
+    )
+
+    assert _comparable(wired) == _comparable(reference)
+
+
+def test_the_production_comparison_gets_the_direction_right(tmp_path) -> None:
+    """The property the source-text test could not see. RMSE fell 194.80 ->
+    190.97, so this is an improvement, and a wired-up direction that came out
+    inverted would call it a regression."""
+    from labpilot.research_engine.evidence.compare_service import run_compare_and_build_card
+
+    card = run_compare_and_build_card(_production_context(tmp_path))
+
+    assert card.maximize is False
+    assert card.observed.parent_cv == 194.80
+    assert card.observed.treatment_cv == 190.97
+    assert card.decision.value == "accepted"
+
+
+def test_the_production_comparison_still_refuses_an_unresolvable_direction(tmp_path) -> None:
+    """The refusal must survive the rewire. A card whose sign is a guess is
+    worse than no card, and the validator reporting `None` has to reach the same
+    raise the loose-argument path did."""
+    from labpilot.research_engine.evidence.compare_service import run_compare_and_build_card
+
+    context = _production_context(tmp_path, competition="demo-no-direction")
+    (context.workspace_root / "competition.json").unlink()
+
+    with pytest.raises(ValueError, match="maximises or minimises"):
+        run_compare_and_build_card(context)
+
+
+def test_a_card_never_mixes_two_measurements(tmp_path) -> None:
+    """Review finding, and a regression a previous round of review introduced.
+
+    `raw` is where the score came from, so it travels with the score. Making it
+    defer to an explicitly-passed blob — for symmetry with `maximize`, which is
+    an independent scalar — produced a card whose score came from one run and
+    whose fold spread and runtime came from another, with `_stability`
+    comparing a spread that never accompanied the reported number.
+
+    Every earlier test passed `treatment_metrics={}`, falsy and therefore
+    identical under both rules, which is why the split was invisible.
+    """
+    card = _card(
+        tmp_path,
+        "demo-cohesion",
+        treatment_metrics={"cv_rmse": 500.0, "cv_std": 1.1, "train_time_s": 900.0},
+        result=ValidationResult(
+            score=1.0,
+            metric="cv_rmse",
+            direction="minimize",
+            source="harness",
+            raw={"cv_rmse": 1.0, "cv_std": 9.9, "train_time_s": 5.0},
+        ),
+        control_metrics=CONTROL,
+    )
+
+    assert card.observed.treatment_cv == 1.0
+    assert card.observed.treatment_cv_std == 9.9, "spread came from a different run than the score"
+    assert card.observed.train_time_s == 5.0, "runtime came from a different run than the score"
+
+
+def test_two_unnamed_metrics_are_not_the_same_metric(tmp_path) -> None:
+    """Review finding. `parent_found[1] != treatment_found[1]` read two empty
+    metric names as a match, so a pair of results that both forgot `metric` had
+    0.9 and 100.0 subtracted into a durable `rejected` verdict.
+
+    An unnamed metric is *unknown*, not a name that happens to be empty. This is
+    the rogii failure — six cards recorded a gain of -194.30 by subtracting a
+    stub's `cv_accuracy` from a real `cv_rmse` — reachable again through the
+    seam, because validators build results by hand and `metric=""` is what
+    forgetting the field looks like.
+    """
+    card = _card(
+        tmp_path,
+        "demo-unnamed",
+        treatment_metrics={},
+        result=ValidationResult(score=0.9, metric="", direction="maximize", source="harness"),
+        control_result=ValidationResult(score=100.0, metric="", direction="maximize", source="b"),
+    )
+
+    assert card.observed.cv_gain is None, "two unrelated scores were subtracted"
+    assert card.decision_reason.startswith("metric_key_unknown")
+    assert card.decision.value == "inconclusive"
+
+
+@pytest.mark.parametrize(
+    ("treatment_metric", "control_metric"),
+    [("", "cv_rmse"), ("cv_rmse", ""), ("", "")],
+)
+def test_a_score_missing_its_metric_name_is_never_compared(
+    tmp_path, treatment_metric, control_metric
+) -> None:
+    """All three shapes refuse. The one-sided cases already did — `'' != 'cv_rmse'`
+    fires — which is why the both-empty hole went unnoticed."""
+    card = _card(
+        tmp_path,
+        "demo-unnamed-matrix",
+        treatment_metrics={},
+        result=ValidationResult(
+            score=0.9, metric=treatment_metric, direction="maximize", source="harness"
+        ),
+        control_result=ValidationResult(
+            score=100.0, metric=control_metric, direction="maximize", source="b"
+        ),
+    )
+
+    assert card.observed.cv_gain is None
+
+
+def test_two_named_matching_metrics_still_compare(tmp_path) -> None:
+    """The guard must not cost the comparison it guards."""
+    card = _card(
+        tmp_path,
+        "demo-named",
+        treatment_metrics={},
+        result=ValidationResult(score=0.9, metric="pass_rate", direction="maximize", source="h"),
+        control_result=ValidationResult(
+            score=0.7, metric="pass_rate", direction="maximize", source="h"
+        ),
+    )
+
+    assert card.observed.cv_gain == pytest.approx(0.20)
+    assert card.decision.value == "accepted"
+
+
+def test_the_dead_comparability_property_is_gone() -> None:
+    """Review finding. `is_comparable` had 6 test references and 0 in `src/`, and
+    the builder implements the same guard differently — via `maximize` plus the
+    `_resolve_direction` fallback. Two answers to "can this be compared", neither
+    aware of the other, is how they diverge."""
+    result = ValidationResult(score=1.0, metric="m", direction="maximize", source="t")
+
+    assert not hasattr(result, "is_comparable")
