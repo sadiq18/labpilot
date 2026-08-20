@@ -29,6 +29,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from labpilot.accessor.benchmark.fixture import CompetitionFixture
+from labpilot.accessor.profiler.schema import MetricRef
+from labpilot.accessor.profiler.source import DeclaredFacts
 
 __all__ = ["CRITERIA", "CriterionResult", "Scorecard", "score_fixture"]
 
@@ -114,6 +116,20 @@ def score_fixture(
         if criterion == "abstention":
             results.append(_score_abstention(fixture, open_questions))
             continue
+        # `must_ask` first. A field that is both expected-to-be-asked and
+        # unverifiable reported "the capture cannot say" when the truth is "the
+        # system was supposed to refuse" — the abstention criterion still scored
+        # it, so nothing broke, but the per-criterion table gave the wrong
+        # reason, and the table is the whole point of per-criterion credit.
+        if criterion in fixture.expected.must_ask:
+            results.append(
+                CriterionResult(
+                    criterion=criterion,
+                    verdict="not_applicable",
+                    detail="expected to be asked about, not answered",
+                )
+            )
+            continue
         if criterion in fixture.unverifiable:
             results.append(
                 CriterionResult(
@@ -126,18 +142,6 @@ def score_fixture(
         expected = expectations.get(criterion)
         if expected is None:
             results.append(CriterionResult(criterion=criterion, verdict="not_applicable"))
-            continue
-        # A field the fixture expects the system to *ask* about is scored by the
-        # abstention criterion alone. Demanding a value there is demanding the
-        # guess the question exists to prevent.
-        if criterion in fixture.expected.must_ask:
-            results.append(
-                CriterionResult(
-                    criterion=criterion,
-                    verdict="not_applicable",
-                    detail="expected to be asked about, not answered",
-                )
-            )
             continue
         observed = _observed(profile, criterion)
         passed = _matches(expected, observed)
@@ -185,20 +189,18 @@ def profile_and_score(fixture_dir: Path, workdir: Path) -> Scorecard:
     """
     from labpilot.accessor.benchmark.expand import expand_fixture
     from labpilot.accessor.profiler.questions import pending_schema_questions
-    from labpilot.accessor.profiler.schema import MetricRef
-    from labpilot.accessor.profiler.source import DeclaredFacts, LocalFileSource
+    from labpilot.accessor.profiler.source import LocalFileSource
     from labpilot.accessor.profiler.tabular import TabularProfiler
     from labpilot.config import ProfilerConfig
 
     fixture = expand_fixture(fixture_dir, workdir)
-    declared = _declared_facts(workdir, MetricRef, DeclaredFacts)
-    source = LocalFileSource(workdir, declared)
+    source = LocalFileSource(workdir, _declared_facts(workdir))
     profile = TabularProfiler(ProfilerConfig()).profile_dataset(source, fixture.slug)
     questions = [question.field for question in pending_schema_questions(profile)]
     return score_fixture(fixture, json.loads(profile.model_dump_json()), questions)
 
 
-def _declared_facts(workdir: Path, metric_ref_cls, declared_cls):
+def _declared_facts(workdir: Path) -> DeclaredFacts:
     """What the captured `competition.json` states, if it captured one.
 
     The metric criterion is unscoreable without it, and carrying the file is
@@ -208,20 +210,20 @@ def _declared_facts(workdir: Path, metric_ref_cls, declared_cls):
     """
     path = workdir / "competition.json"
     if not path.is_file():
-        return declared_cls()
+        return DeclaredFacts()
     try:
         spec = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return declared_cls()
+        return DeclaredFacts()
     metric = spec.get("evaluation_metric") or {}
     ref = None
     if metric.get("name"):
         direction = metric.get("direction")
-        ref = metric_ref_cls(
+        ref = MetricRef(
             name=metric["name"],
             key=metric.get("key"),
             direction=direction if direction in ("maximize", "minimize") else None,
         )
-    return declared_cls(
+    return DeclaredFacts(
         title=spec.get("title", ""), description=spec.get("description", ""), metric=ref
     )

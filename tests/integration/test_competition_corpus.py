@@ -48,9 +48,14 @@ def test_a_captured_competition_is_understood(slug: str, tmp_path: Path) -> None
 
     assert not failures, f"{slug}\n" + "\n".join(failures)
     assert any(result.verdict == "pass" for result in card.results), "nothing was scored"
-    # `understood` is stricter: it also counts declared defects, so a fixture
-    # that ships a `known_failure` is *not* understood until the day it is fixed.
-    assert card.understood is not bool(fixture.known_failures)
+    # Two properties, not one derived from the other. Tying `understood` to the
+    # presence of a declared defect made a merely-unscoreable fixture fail a
+    # test about correctness.
+    reds = [r.criterion for r in card.results if r.verdict == "known_failure"]
+    assert sorted(reds) == sorted(fixture.known_failures), (
+        f"{slug}: the fixture and the scorecard disagree about what ships red"
+    )
+    assert card.understood == (not reds)
 
 
 def test_the_corpus_scores_every_criterion(tmp_path: Path) -> None:
@@ -157,6 +162,22 @@ def test_a_truncated_fixture_declares_what_it_cannot_prove(slug: str) -> None:
     assert fixture.unverifiable, f"{slug}: a derived capture that claims to prove everything"
     for criterion, reason in fixture.unverifiable.items():
         assert reason.strip(), f"{slug}: {criterion} unverifiable with no reason"
+
+
+@pytest.mark.parametrize("slug", corpus_slugs())
+def test_a_fixture_honours_the_licence_it_declares(slug: str) -> None:
+    """`redistribution: forbidden` is a constraint on the fixture, not a note.
+
+    Both fixtures in this corpus carry column names and no data rows, which is
+    why headers-only is the default. Left unchecked, the field would be a claim
+    the commit containing it contradicts — and a provenance record that
+    contradicts itself is not one.
+    """
+    fixture = load_fixture(CORPUS / slug)
+
+    assert fixture.honours_its_licence, (
+        f"{slug}: redistribution is {fixture.redistribution} and the fixture carries rows"
+    )
 
 
 def test_the_manifest_names_every_fixture() -> None:

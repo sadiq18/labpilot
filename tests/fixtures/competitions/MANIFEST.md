@@ -46,3 +46,16 @@ fact, it inverts it: `_detect_suffix_scoring` reads absolute row indices.
 Whatever the capture destroys goes in `unverifiable` with a reason, and the
 scorer refuses to score it. A criterion scored against a truncation artifact
 measures the capture, not the profiler.
+
+## Licence
+
+`redistribution` is a **constraint on the fixture**, not a note beside it. Both
+entries here are `forbidden` — one Kaggle-licensed, one a private sponsor
+dataset — and a forbidden fixture may carry column names and no data rows. That
+is checked (`test_a_fixture_honours_the_licence_it_declares`), because a field
+saying "do not redistribute" inside the commit that redistributes it is worse
+than no field at all.
+
+Set it honestly when you capture. `allowed` earns a fixture the right to carry
+rows, which buys dtype, cardinality, anchor equality and suffix contiguity —
+four criteria headers cannot reach.

@@ -13,6 +13,7 @@ is a paraphrase.
 from __future__ import annotations
 
 import hashlib
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -50,16 +51,26 @@ def parse_mode(mode: str) -> tuple[str, int]:
     raise ValueError(f"unknown capture mode {mode!r}")
 
 
-def _digest(path: Path) -> tuple[str, int, int | None]:
-    """sha256, byte count, and line count of the source file."""
+def _digest(path: Path) -> tuple[str, int, int]:
+    """sha256, byte count, and line count of the source file.
+
+    A file whose last line has no terminator still has that line. Counting
+    ``\n`` alone lost it, which made `source_rows` one short — and a capture of
+    such a file recorded more `fixture_rows` than the source it came from, which
+    is the manifest claiming the fixture holds rows the dataset does not.
+    """
     digest = hashlib.sha256()
     size = 0
     lines = 0
+    last = b""
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
             size += len(chunk)
             lines += chunk.count(b"\n")
+            last = chunk[-1:]
+    if size and last != b"\n":
+        lines += 1
     return digest.hexdigest(), size, lines
 
 
@@ -123,30 +134,49 @@ def capture_competition(
 
     captured: list[CapturedFile] = []
     listing: list[str] = []
+    lossy: list[str] = []
     seen_per_directory: dict[str, int] = {}
     sources = sorted(source.rglob("*"))
-    if spec_path is not None and Path(spec_path).is_file():
-        sources.append(Path(spec_path))
+    spec = Path(spec_path).resolve() if spec_path is not None else None
+    # Only when it is not already in the tree. A spec that lives inside the data
+    # directory was walked above, and appending it again put two entries in the
+    # manifest for one file — invisible to a check that compares *sets*, which
+    # is the provenance defect this corpus exists to prevent.
+    if spec is not None and spec.is_file() and spec not in {p.resolve() for p in sources}:
+        sources.append(spec)
     for path in sources:
         if not path.is_file():
             continue
-        relative = (
-            path.name
-            if spec_path is not None and path == Path(spec_path)
-            else str(path.relative_to(source))
-        )
-        parent = str(Path(relative).parent)
-        if max_per_directory is not None:
-            seen_per_directory[parent] = seen_per_directory.get(parent, 0) + 1
-            if seen_per_directory[parent] > max_per_directory:
-                continue
+        is_spec = spec is not None and path.resolve() == spec
+        relative = path.name if is_spec else str(path.relative_to(source))
         sha, size, lines = _digest(path)
         if path.suffix.lower() in _TABULAR_SUFFIXES or path.name in _VERBATIM_NAMES:
+            # The cap counts what is *captured*. Counting every file meant six
+            # images ahead of `train.csv` alphabetically exhausted the budget
+            # and the fixture captured no tables at all — which is the layout of
+            # every image competition in the corpus.
+            parent = str(Path(relative).parent)
+            if max_per_directory is not None and not is_spec:
+                seen_per_directory[parent] = seen_per_directory.get(parent, 0) + 1
+                if seen_per_directory[parent] > max_per_directory:
+                    continue
             file_kind = "verbatim" if path.name in _VERBATIM_NAMES else kind
-            rows = _rows_for(path, file_kind, n)
             target = destination / "data" / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("".join(rows), encoding="utf-8")
+            if file_kind == "verbatim":
+                # Byte for byte. Reading with `errors="replace"` and writing
+                # UTF-8 back turned every latin-1 byte into U+FFFD while the
+                # fixture still claimed `provenance: verbatim` — and the sha256
+                # recorded is of the *source*, so the mismatch would have read
+                # as "the dataset changed" rather than "the capture is lossy".
+                shutil.copyfile(path, target)
+                rows = _rows_for(path, "verbatim", n)
+            else:
+                rows = _rows_for(path, file_kind, n)
+                text = "".join(rows)
+                if "\ufffd" in text:
+                    lossy.append(relative)
+                target.write_text(text, encoding="utf-8")
             captured.append(
                 CapturedFile(
                     path=relative,
@@ -181,6 +211,11 @@ def capture_competition(
     if max_per_directory is not None:
         unverifiable["partition_counts"] = (
             f"at most {max_per_directory} file(s) captured per directory"
+        )
+    if lossy:
+        unverifiable["byte_fidelity"] = (
+            f"{len(lossy)} file(s) held bytes that are not UTF-8 and were captured with "
+            f"replacement characters: {', '.join(sorted(lossy)[:3])}"
         )
     if kind == "headers_only":
         unverifiable["feature_columns"] = (

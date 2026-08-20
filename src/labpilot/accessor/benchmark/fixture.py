@@ -99,7 +99,13 @@ class CompetitionFixture(BaseModel):
     #: ``verbatim`` when every file is; ``derived`` the moment one is not.
     provenance: Literal["verbatim", "derived"] = "derived"
     licence: str = "unknown"
-    #: ``forbidden`` ships headers only and still scores most criteria.
+    #: Whether the source dataset's **rows** may be redistributed.
+    #:
+    #: ``forbidden`` is not a statement about this fixture — it is a constraint
+    #: *on* it, and an enforced one: a forbidden fixture may carry column names
+    #: and no data rows. That is what makes the corpus usable for a sponsored or
+    #: private dataset, and what stopped this field from being a note that
+    #: contradicted the commit containing it.
     redistribution: Literal["allowed", "forbidden", "unknown"] = "unknown"
     files: list[CapturedFile] = Field(default_factory=list)
     expected: Expectations = Field(default_factory=Expectations)
@@ -110,6 +116,16 @@ class CompetitionFixture(BaseModel):
     #: so the day it goes green is visible instead of silent.
     known_failures: dict[str, str] = Field(default_factory=dict)
     notes: str = ""
+
+    @property
+    def carries_rows(self) -> bool:
+        """Whether any captured file holds a data row."""
+        return any((entry.fixture_rows or 0) > 0 for entry in self.files)
+
+    @property
+    def honours_its_licence(self) -> bool:
+        """A fixture forbidden from redistributing rows carries none."""
+        return self.redistribution != "forbidden" or not self.carries_rows
 
 
 FIXTURE_FILENAME = "fixture.json"
