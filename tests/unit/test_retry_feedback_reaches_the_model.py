@@ -75,3 +75,15 @@ def test_a_long_reason_is_bounded() -> None:
 
     assert "x" * 2_000 in prompt
     assert "x" * 2_001 not in prompt
+
+
+def test_the_task_prompt_names_the_entry_point() -> None:
+    """The system prompt states the rule among a dozen others; this is the
+    per-task instruction, next to the description the model is evidently
+    following. Measured 2026-08-20: told the rule in the system prompt only,
+    `gemini-pro-latest` still wrote `pipeline/baseline.py` — matching the task
+    text "Write the baseline training script" beside it."""
+    prompt = CodeEngineerAgent().user_prompt(_context())
+
+    assert "pipeline/train.py" in prompt
+    assert "baseline.py" in prompt, "name the wrong-but-natural choice, not just the right one"
