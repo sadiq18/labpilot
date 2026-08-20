@@ -34,7 +34,17 @@ def _profile(**fields) -> DatasetProfile:
         id_columns=["Id"],
         train_file="train.csv",
         columns=[
-            ColumnProfile(name="y", dtype="float64", unique_count=90, is_numeric=True),
+            # With `stats`, because the profiler always writes them for a numeric
+            # column. Without them `target_type` is `unknown` — a fixture that
+            # omitted them was asserting against a profile this system does not
+            # produce.
+            ColumnProfile(
+                name="y",
+                dtype="float64",
+                unique_count=90,
+                is_numeric=True,
+                stats={"min": 0.0, "max": 999.5, "mean": 500.0, "std": 100.0},
+            ),
         ],
     )
     base.update(fields)
@@ -133,6 +143,49 @@ def test_a_metric_the_pipeline_cannot_compute_is_recorded_not_logged() -> None:
     assert choice.objective_metric == "balanced_accuracy", "and the real one is still named"
 
 
+def test_the_shape_is_read_from_the_profile_not_a_second_threshold() -> None:
+    """Review finding. This file kept its own cardinality rule, set to 20.
+
+    The profiler draws the line at 30, so a target with 25 labels was
+    classification when `objective.json` existed and regression when it did not —
+    two implementations of one question, which is the thing step 2 removes.
+    `target_type` is derived, so it is on every profile including ones written
+    before it existed; there is nothing to keep a local copy *for*.
+    """
+    profile = _profile(
+        columns=[
+            ColumnProfile(
+                name="y",
+                dtype="int64",
+                unique_count=25,
+                is_numeric=True,
+                stats={"min": 0.0, "max": 24.0},
+            )
+        ],
+        submission_columns=["Id", "y"],
+    )
+
+    assert profile.target_type == "multiclass"
+    choice = BaselineSelector().select(_competition(), profile)
+
+    assert choice.problem_type == ProblemType.TABULAR_CLASSIFICATION.value
+
+
+def test_an_unreadable_shape_defers_rather_than_guessing_from_cardinality() -> None:
+    """`unknown` means the target's shape could not be read at all.
+
+    Deferring to metadata and modality is the honest next step; applying a
+    cardinality rule to a column whose own statistics are unreadable would be
+    answering confidently from the one number that survived.
+    """
+    profile = _profile(
+        columns=[ColumnProfile(name="y", dtype="int64", unique_count=90, is_numeric=True)]
+    )
+
+    assert profile.target_type == "unknown", "no stats, so no shape"
+    assert BaselineSelector().select(_competition(), profile).problem_type
+
+
 def test_a_supported_metric_records_no_substitution() -> None:
     """The field means "a proxy is being optimised". It must not cry wolf."""
     choice = BaselineSelector().select(
@@ -145,6 +198,24 @@ def test_a_supported_metric_records_no_substitution() -> None:
 
 
 # --- the production path --------------------------------------------------------
+
+
+def test_an_unresolved_objective_does_not_claim_credit() -> None:
+    """Review finding. `objective_source` was set from `objective is not None`.
+
+    A workspace that states no metric resolves to an objective with no task and
+    no metric — it blocks launch. Recording `objective` for it said the objective
+    drove a decision that came entirely from the older derivation, which is the
+    wrong answer to the one question the field exists to answer.
+    """
+    from labpilot.research_engine.intelligence.competition.objective import resolve_objective
+
+    unresolved = resolve_objective(metric_raw=None)
+    assert unresolved.task is None and unresolved.metric_name is None
+
+    choice = BaselineSelector().select(_competition(), _profile(), unresolved)
+
+    assert choice.objective_source == "derived"
 
 
 def test_the_capability_hands_the_objective_over() -> None:
@@ -160,7 +231,11 @@ def test_the_capability_hands_the_objective_over() -> None:
     source = inspect.getsource(capability)
 
     assert "BaselineSelector().select(competition, profile, objective)" in source
-    assert "load_objective(root)" in source
+    # `ensure_objective`, not `load_objective`. Review finding: the file on disk
+    # can be stale by its own recorded inputs, and this was the one consumer
+    # that read it without asking.
+    assert "ensure_objective(root, context.competition)" in source
+    assert "load_objective(root)" not in source
 
 
 @pytest.mark.parametrize(
