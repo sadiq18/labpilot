@@ -1,0 +1,34 @@
+{
+  "slug": "playground-series-s6e7",
+  "title": "Predicting Student Health Risk",
+  "description": "Playground Series - Season 6 Episode 7",
+  "evaluation_metric": {
+    "name": "balanced_accuracy_score",
+    "direction": "maximize",
+    "description": "Balanced Accuracy Score",
+    "key": "accuracy"
+  },
+  "problem_type": "tabular_classification",
+  "submission_format": "",
+  "submission_columns": [],
+  "rules_url": "",
+  "data_url": "",
+  "deadline": null,
+  "max_daily_submissions": null,
+  "submissions_disabled": false,
+  "is_kernels_submissions_only": false,
+  "submission_mode": "csv",
+  "kernel_output_file": "submission.csv",
+  "submissions_url": "",
+  "tags": [
+    "Playground",
+    "beginner",
+    "tabular",
+    "balanced accuracy score"
+  ],
+  "raw_html": "",
+  "baseline_strategy": "lightweight",
+  "train_file_pattern": "train",
+  "test_file_pattern": "test",
+  "submission_file_pattern": "submission"
+}

@@ -70,3 +70,6 @@ htmlcov/
 # Shared experience store — a local SQLite DB, never committed
 experiences.db
 experiences.db.writelock
+
+# The corpus keeps captured competition data; its bytecode does not belong in it
+tests/integration/__pycache__/
