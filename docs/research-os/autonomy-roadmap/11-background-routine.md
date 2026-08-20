@@ -1,7 +1,7 @@
 # M16 — Evidence routine as a background producer
 
-**Status:** routine shipped behind `--gather-background`; paired campaign run
-2026-08-20 — criterion 3 half met ·
+**Status:** routine shipped behind `--gather-background`; campaign runs
+2026-08-20 — all exit criteria met, two follow-ups open ·
 **Design:** [design/11-background-routine.md](design/11-background-routine.md) ·
 **Blockers cleared:** M11 (concurrency) shipped 2026-08-11/12 and M14 completed
 2026-08-07, so this is unblocked and waiting on a decision, not on other work
@@ -164,12 +164,25 @@ Full mechanism in [design/11-background-routine.md](design/11-background-routine
    concurrently produce **one** row. Claiming was the only race this plan
    named; creating is the other one.
 
-**Measured 2026-08-20** on a sandbox clone of rogii, producer off then on
-(design §3). The consumer never stalled — four steps dispatched, zero
-`analyze_competition` — and evidence went from **158h stale to 0.02h** with
-+18 artifacts, against **+0 and 158h** on the baseline. Criterion 3 is **half
-met**: the evidence store refilled, the hypothesis pool did not, because the
-sweep outlived an eight-step campaign.
+**Measured 2026-08-20** on sandbox clones of rogii (design §3, §3.1). The
+consumer never stalled and evidence went from **158h stale to 0.01h**, against
+**+0 and 158h** on the baseline. A sweep takes **~20 minutes**, so the first two
+attempts ended before it finished; a 51-minute run produced **two complete
+sweeps, 18 hypotheses minted, 18 consumer steps, and zero `analyze_competition`
+dispatched by the campaign**. Criterion 3 met.
+
+**What bounds the campaign is `max_barren_steps`, not `--max-steps`.** Both
+short runs died on *"8 step(s) since the last success"* — on a workspace whose
+experiments fail, that fires long before anything else, and it has no CLI flag.
+
+**And the producer cannot satisfy the gate it gates on.** Ten hypotheses
+minted, and the next tick still read *"only 10 viable hypotheses queued"*:
+`viable_hypothesis_count` excludes rows the selector has passed over twice, and
+every `generate_plan` ages every row it did not pick, so the producer's output
+aged out as fast as it arrived. It swept continuously — ~40 minutes of
+reasoning-role LLM work in a 51-minute campaign — with `_MIN_RESWEEP_HOURS` the
+only brake. Not the M21 ratchet (nothing is held shut) but the same shape
+inverted, and unresolved.
 
 **Criterion 1's premise did not reproduce, and that matters more than the
 result.** The baseline never blocked on gathering. The gate reported

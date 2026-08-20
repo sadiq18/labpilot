@@ -1,7 +1,7 @@
 # Design — M16: the evidence routine as a background producer
 
 **Plan:** [../11-background-routine.md](../11-background-routine.md) ·
-**Status:** built behind `--gather-background`; measured 2026-08-20 (§3), criterion 3 half met ·
+**Status:** built behind `--gather-background`; measured 2026-08-20 (§3, §3.1), all exit criteria met, two follow-ups open (§11) ·
 **Depends on:** M7, M11, M14 (all shipped) ·
 **Ledger priority (§8):** built — `availability(..., reserve=)`
 
@@ -86,13 +86,10 @@ dispatched four steps and `analyze_competition` zero times, while the sweep ran
 beside it. Requirement 6 and exit criterion 1 hold as *observed* behaviour, not
 just as a property of the allowlist.
 
-**Evidence refilled; the hypothesis queue did not.** +18 artifacts and staleness
-collapsing from 158 hours to one minute is the producer doing its job. The pool
-stayed at 10 viable because the sweep was still running when the campaign
-stopped — `apply_side_effects` reached fetch and ingest but not `hypothesize`.
-The stages are individually durable (§7.4), so the work is banked rather than
-lost: the *next* campaign starts from fresh evidence. But **exit criterion 3 is
-only half met**, and the half that is missing is the half named in it.
+**Evidence refilled; the hypothesis queue did not — in the 8-step run.** +18
+artifacts and staleness collapsing from 158 hours to one minute is the producer
+doing its job, but the pool stayed at 10 viable because the sweep was still
+running when the campaign stopped. A third run settles it; see §3.1.
 
 **The premise of criterion 1 did not reproduce.** The baseline never blocked on
 gathering — not because it was prevented, but because it *declined*: the gate
@@ -122,6 +119,75 @@ it dispatched no `analyze_competition`. Before `contextvars.copy_context()` in
 leaving it to the process exit" — the bounded join (§7.4), taken rather than
 made the operator wait out a multi-minute sweep.
 
+### 3.1 The long run — criterion 3, met
+
+A sweep on this workspace takes **~20 minutes**. An 8-step campaign does not
+last that long, so the first two attempts measured the wrong thing. What bounds
+the campaign is not `--max-steps` and not the failure breaker:
+
+```
+stop:failing — 2 consecutive failed execution(s), 8 step(s) since the last success
+```
+
+That is `max_barren_steps=8`. On a workspace whose experiments never succeed, it
+fires long before anything else, and it has no CLI flag — raising `--max-steps`
+and even `max_consecutive_failures` changed nothing across two runs. With
+`max_barren_steps=40` set on the session, the third run gave the producer room:
+
+| | Long producer-on run |
+|---|---|
+| Wall clock | **3083s** (51 min), 19 decisions, 18 dispatches |
+| Consumer work | run_experiment ×10, generate_plan ×4, run_plan ×2, query_memory ×1 |
+| `analyze_competition` dispatched **by the campaign** | **0** |
+| Producer sweeps | **2 complete** (1344.6s, 1043.9s), a third in flight at shutdown |
+| Hypotheses minted | **10 + 10** |
+| Proposed pool | 136 → **153** (18 created during the run) |
+| Research artifacts | 239 → **274** (+35) |
+| Evidence age | 158h → **0.01h** |
+| Provenance rows this run | 274, of which 20 `HypothesisGeneratorAgent` |
+
+**Exit criterion 3 is met.** The queue refilled — 18 new proposals — while the
+consumer dispatched 18 steps and never once waited on a sweep.
+
+**And the run found something the design did not anticipate.** The producer
+swept *continuously*: two full sweeps and a third started, ~40 minutes of
+reasoning-role LLM work inside a 51-minute campaign. The reason is visible in
+its own log —
+
+```
+Evidence producer: analyze_competition finished in 1344.6s, 10 hypothesis(es) added
+Evidence producer: gathering — only 10 viable hypotheses queued
+```
+
+— ten hypotheses added, and the next tick still reads *only 10 viable*. Measured
+at the end: 18 rows created during the run, `proposed` up by 17, and
+`viable_hypothesis_count` **unchanged at 10 throughout**.
+
+`viable_hypothesis_count` excludes rows the selector has passed over
+`STALE_AFTER_SELECTIONS` (2) times, and every `generate_plan` ages every
+row it does not pick. The run made six selections, so the producer's own output
+aged out about as fast as it arrived. **The producer cannot satisfy the gate it
+gates on**, and so it never stops.
+
+That is not the M21 ratchet — the pool is not holding gathering *shut* — but it
+is the same shape inverted, and it is worse for a background worker than for a
+campaign step: a sequential campaign that re-swept would at least be visible as
+a step it chose. Options, none of them free:
+
+1. **Count freshly minted rows as viable for a grace period.** Smallest change;
+   makes "viable" mean "not yet judged" rather than "not yet passed over".
+2. **Give the producer its own signal** — e.g. gate the tick on artifact
+   freshness alone once a sweep has landed, since staleness *is* moved by its
+   own work (158h → 0.01h) while viability is not.
+3. **Leave it, and rely on `_MIN_RESWEEP_HOURS`.** The default 0.5h floor would
+   have allowed one re-sweep per 30 minutes rather than continuous ones; this
+   run deliberately lowered it to 0.02h. That makes the default a load-bearing
+   safety limit rather than the rate limit §5.2 calls it.
+
+(2) is the honest one: the gate's three clauses were written for a consumer
+deciding whether to spend *its own* step, and one of them does not survive being
+asked by a worker whose job is to change the answer.
+
 ### Conditions, so the numbers are readable
 
 * `evaluation_metric` was `null` in the workspace contract and the campaign
@@ -133,8 +199,13 @@ made the operator wait out a multi-minute sweep.
   reads as thin — criterion 3's condition. `LABPILOT_MIN_RESWEEP_HOURS=0.02` so
   a producer could sweep more than once inside a bounded run; it did not get
   the chance to.
-* One pair, one workspace, free-tier providers with one observed failover. This
-  is an existence proof about mechanism, not a performance measurement.
+* One pair, one workspace, free-tier providers with observed 429s and failovers.
+  This is an existence proof about mechanism, not a performance measurement.
+* **The long run is not a healthy campaign.** Its experiments failed throughout
+  ("completed without writing metrics"; `smoke_gate timed out after 120s`), and
+  it was kept alive by raising `max_barren_steps` purely to buy the producer
+  wall clock. That is a fair test of *"does the queue refill while the consumer
+  keeps working"* and a poor one of anything about research quality.
 
 ## 4. Scope
 
@@ -426,25 +497,23 @@ What the tests cover, and what they do not:
 |---|---|
 | 1 — a step never blocks on gathering | **Unit-proven at the allowlist**: with a producer running, `analyze_competition` leaves the consumer's allowlist even when the gate says *gather*. Not yet shown on a campaign log |
 | 2 — full backlog ticks and no-ops with a reason | **Covered** |
-| 3 — a thin backlog refills without the consumer stalling | **Half met, measured 2026-08-20** (§3). The consumer did not stall; the *evidence* store refilled (+18 artifacts, 158h → 0.02h stale); the *hypothesis* pool did not, because the sweep outlived the campaign |
+| 3 — a thin backlog refills without the consumer stalling | **Met, measured 2026-08-20** (§3.1). 18 hypotheses minted across two completed sweeps while the consumer dispatched 18 steps and never waited. Needed `max_barren_steps` raised for the campaign to outlast a ~20-minute sweep |
 | 4 — producer and consumer never claim the same hypothesis | **Covered**, and structurally: the producer proposes and never claims (§7.3) |
 | 5 — one idea, one row, under two writers | **Covered and mutation-checked** — moving the predicate outside `.alloc.lock` makes eight racing writers produce eight rows, and the test catches it |
 | 6 — a tick that raises does not take the campaign with it | **Covered** |
 | 7 — the plan decides what is gathered, not the producer | **Covered** — driven with a stub tool and non-Kaggle args |
 
-The paired campaign run in §3 has now happened. What it leaves open is narrow
-and specific: a rogii sweep outlives an eight-step campaign, so the hypothesis
-pool refills on the *next* run rather than this one. Two ways to close it, and
-they are not equivalent —
+All five exit criteria are now met (§3.1). Two things the runs surfaced are
+**not** fixed and should be booked before this is called done:
 
-1. **Let the producer finish.** Longer campaigns, or a shutdown that waits for
-   `hypothesize` specifically (the one stage whose output the consumer needs)
-   rather than joining on a fixed grace.
-2. **Make the sweep cheaper.** The 22 `RepositoryAnalyzerAgent` calls in one
-   tick are most of its cost, and `ANALYZE_ARGS` already excludes papers for the
-   same reason.
-
-(1) is the smaller change and the one that matches the criterion's wording.
+1. **The producer cannot satisfy its own gate** (§3.1). Its output does not move
+   `viable_hypothesis_count`, so it re-sweeps indefinitely — ~40 minutes of
+   reasoning-role LLM work in a 51-minute campaign. `_MIN_RESWEEP_HOURS` is
+   currently the only thing standing between that and a hot loop, which makes
+   the "rate limit, not a cadence assumption" framing in §5.2 too casual.
+2. **A sweep costs ~20 minutes**, most of it `RepositoryAnalyzerAgent`. Any
+   campaign shorter than that gets fresh evidence and no new hypotheses — a
+   perfectly reasonable outcome the plan never names.
 
 **It does not fix what a campaign is short of.** The plan's first trap stands,
 now aimed at M22–M26: a faster supply of hypotheses tested against a target
