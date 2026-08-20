@@ -10,6 +10,10 @@ gemini-3.5-flash-lite: every generated `train.py` imported pandas/sklearn with
 no block and was rejected, in campaigns that then ended having produced nothing.
 Identical failures from unrelated models is the signature of an undeclared
 requirement rather than weak codegen.
+
+The rule is stated in the runner's own terms — a script, its dependencies, and
+what happens when they disagree — with no assumption that the script trains a
+model. The seam this agent writes for is a validator, not a trainer.
 """
 
 from __future__ import annotations
@@ -40,8 +44,9 @@ def test_the_prompt_states_the_dependency_rule_its_gate_enforces() -> None:
 
 
 def test_the_prompt_names_the_imports_a_model_assumes_are_free() -> None:
-    """`pandas` and `numpy` read as ambient to a model writing ML code, and
-    they are exactly what the rejections named."""
+    """`pandas` and `numpy` read as ambient to a model writing analysis code,
+    and they are exactly what the rejections named — so they belong in the
+    example the model reads, not only in prose about it."""
     prompt = _PROMPT.read_text(encoding="utf-8").lower()
 
     assert "pandas" in prompt and "numpy" in prompt

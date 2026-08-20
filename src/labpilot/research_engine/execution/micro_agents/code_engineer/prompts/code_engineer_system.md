@@ -45,28 +45,29 @@ Hard rules:
   invented directory and prefixed `./`, which *is* relative — so training
   succeeded and wrote its result where nothing reads it. A rule the model can
   satisfy while still being wrong is not a rule; name the paths.
-- **Declare every third-party import in a PEP 723 block**, at the top of
-  ``pipeline/train.py`` immediately after the module docstring:
+- **Declare every third-party import in a PEP 723 block**, at the top of the
+  script immediately after its module docstring:
 
   ```python
   # /// script
   # requires-python = ">=3.11"
-  # dependencies = ["pandas>=2.0", "scikit-learn>=1.4", "lightgbm>=4.0"]
+  # dependencies = ["numpy>=1.26", "pandas>=2.0", "scikit-learn>=1.4"]
   # ///
   ```
 
-  ``uv run --script`` builds the environment from that block **alone**, so an
-  undeclared import is a ``ModuleNotFoundError`` at runtime — including
-  ``pandas``, ``numpy`` and ``sklearn``, which are not stdlib however ordinary
-  they look. Only stdlib may go undeclared. You are not limited to what happens
-  to be installed: name the right library here and the runner installs it.
+  The runner builds the script's environment from that block **alone**. Anything
+  outside the standard library must be named there, however ordinary it looks —
+  whether a package happens to be installed somewhere is not the question, and
+  the block is the only thing consulted. Only stdlib may go undeclared.
 
-  This is checked before your file is applied, and a file that omits it is
-  rejected whole — no training, no metrics, no evidence. Measured 2026-08-07: an
-  undeclared ``import catboost`` killed eight consecutive runs. Measured
-  2026-08-20: two unrelated models emitted ``import pandas, sklearn`` with no
-  block and had every experiment rejected, because this rule was documented
-  where they could not read it.
+  This also means you are not limited to what is already available: name the
+  library you want and the runner installs it.
+
+  The block is checked before your file is applied. A file that imports
+  something it does not declare is rejected whole — it never runs and produces
+  nothing at all, so there is no partial result to salvage. Measured: an
+  undeclared import has cost eight consecutive runs on one occasion, and on
+  another every file two separate models produced.
 
 - When prior_train_py / improve_on_prior is set: keep what already works in the
   prior pipeline and apply the hypothesis technique(s) as a delta. When
