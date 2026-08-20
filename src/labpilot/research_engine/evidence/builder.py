@@ -474,11 +474,18 @@ def build_evidence_card(
     # changes no behaviour: the wrapper reads the same sources in the same order,
     # and a card built either way is identical field for field.
     #
-    # The result wins where it speaks. A validator that measured its own
-    # direction outranks a competition file that never saw the number, which is
-    # the inversion M12 exists to make possible.
+    # Where the caller says nothing, the result does. A validator that measured
+    # its own direction outranks a competition file that never saw the number,
+    # which is the inversion M12 exists to make possible.
+    # One rule for all four: an explicitly-passed argument wins, and the result
+    # fills what the caller left out. `treatment_metrics` used to be overwritten
+    # unconditionally while its three neighbours deferred, so a caller passing
+    # both got an explicit direction stapled to the result's blob — and the
+    # comment here claimed "the result wins where it speaks", which was true of
+    # exactly one of the four fields it sat above.
     if result is not None:
-        treatment_metrics = result.raw
+        if not treatment_metrics:
+            treatment_metrics = result.raw
         if maximize is None:
             maximize = result.maximize
         if lb_gain is None:

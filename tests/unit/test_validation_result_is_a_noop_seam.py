@@ -532,3 +532,178 @@ def test_the_knowledge_root_is_the_research_dir_not_the_knowledge_dir(tmp_path) 
     workspace.mkdir()
 
     assert direction_for(competition, knowledge_dir=tmp_path, workspace_root=workspace) is False
+
+
+# --- phase 1, proven rather than grepped ------------------------------------
+
+
+def _production_context(tmp_path: Path, *, competition: str = "demo-prod"):
+    """A real `TaskContext` over a real workspace, so the production path runs.
+
+    The control arrives through `plan.metadata`, which is `resolve_control`'s
+    first and cheapest source, so no knowledge store has to be populated for the
+    comparison to have two sides.
+    """
+    import json
+    from datetime import UTC, datetime
+
+    from labpilot.research_engine.execution.context import TaskContext
+    from labpilot.research_engine.execution.schemas import ResearchExecution
+    from labpilot.research_engine.intelligence.paths import ResearchPaths
+    from labpilot.research_engine.planner.schemas.models import ResearchPlan, ResearchTask
+    from labpilot.research_engine.planner.schemas.task_types import PlanStatus, TaskType
+
+    knowledge = tmp_path / "knowledge"
+    paths = ResearchPaths(knowledge, competition).ensure()
+    root = tmp_path / "ws"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "metrics.json").write_text(json.dumps(TREATMENT), encoding="utf-8")
+    (root / "competition.json").write_text(
+        json.dumps(
+            {
+                "slug": competition,
+                "evaluation_metric": {"name": "rmse", "key": "rmse", "direction": "minimize"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    now = datetime.now(UTC)
+    plan = ResearchPlan(
+        id="P-001",
+        competition=competition,
+        hypothesis_id="H-014",
+        goal="t",
+        status=PlanStatus.READY,
+        tasks=[ResearchTask(id="P-001-T01", plan_id="P-001", type=TaskType.COMPARE)],
+        created_at=now,
+        updated_at=now,
+        metadata={
+            "plan_kind": "delta",
+            "parent_execution_id": "E-008",
+            "parent_metrics": CONTROL,
+        },
+    )
+    return TaskContext(
+        plan=plan,
+        task=plan.tasks[0],
+        execution=ResearchExecution(id="E-014", plan_id="P-001", competition=competition),
+        paths=paths,
+        workspace_root=root,
+        competition=competition,
+    )
+
+
+def test_the_production_comparison_produces_the_pre_wiring_card(tmp_path) -> None:
+    """Review finding, and the one that should have existed from the start.
+
+    Phase 1 was asserted by grepping `inspect.getsource` for the validator call.
+    That constrains the *text* of the function, not what it computes: inverting
+    the control's direction there — which flips the sign of every verdict for
+    every real campaign — left all 3100 tests green.
+
+    Phase 0 has exactly this test one layer down, at `build_evidence_card`. This
+    is it extended to the caller that actually runs.
+    """
+    from labpilot.research_engine.evidence.compare_service import (
+        _belief_priors,
+        _load_metrics,
+        resolve_control,
+        run_compare_and_build_card,
+    )
+
+    context = _production_context(tmp_path)
+    wired = run_compare_and_build_card(context)
+
+    # The pre-wiring call, reproduced argument for argument.
+    control_exec, control_metrics, control_hyp = resolve_control(context)
+    reference = build_evidence_card(
+        knowledge_dir=context.paths.base_dir,
+        competition=context.competition,
+        treatment_execution_id=context.execution.id,
+        treatment_metrics=_load_metrics(context.workspace_root / "metrics.json"),
+        plan_id=context.plan.id,
+        hypothesis_id=context.plan.hypothesis_id or None,
+        control_execution_id=control_exec,
+        control_metrics=control_metrics,
+        control_hypothesis_id=control_hyp,
+        plan_metadata=dict(context.plan.metadata or {}),
+        belief_priors=_belief_priors(context.paths.base_dir, context.competition),
+        workspace_root=context.workspace_root,
+        persist=False,
+    )
+
+    assert _comparable(wired) == _comparable(reference)
+
+
+def test_the_production_comparison_gets_the_direction_right(tmp_path) -> None:
+    """The property the source-text test could not see. RMSE fell 194.80 ->
+    190.97, so this is an improvement, and a wired-up direction that came out
+    inverted would call it a regression."""
+    from labpilot.research_engine.evidence.compare_service import run_compare_and_build_card
+
+    card = run_compare_and_build_card(_production_context(tmp_path))
+
+    assert card.maximize is False
+    assert card.observed.parent_cv == 194.80
+    assert card.observed.treatment_cv == 190.97
+    assert card.decision.value == "accepted"
+
+
+def test_the_production_comparison_still_refuses_an_unresolvable_direction(tmp_path) -> None:
+    """The refusal must survive the rewire. A card whose sign is a guess is
+    worse than no card, and the validator reporting `None` has to reach the same
+    raise the loose-argument path did."""
+    from labpilot.research_engine.evidence.compare_service import run_compare_and_build_card
+
+    context = _production_context(tmp_path, competition="demo-no-direction")
+    (context.workspace_root / "competition.json").unlink()
+
+    with pytest.raises(ValueError, match="maximises or minimises"):
+        run_compare_and_build_card(context)
+
+
+def test_an_explicit_treatment_blob_wins_like_every_other_argument(tmp_path) -> None:
+    """Review finding. `treatment_metrics` was overwritten by `result.raw`
+    unconditionally while `maximize`, `lb_gain` and `control_metrics` all
+    deferred to an explicitly-passed argument — so a caller passing both got an
+    explicit direction stapled to the result's blob.
+
+    Every test that touched this passed `treatment_metrics={}`, which is falsy
+    and therefore identical under both rules, so the inconsistency was invisible.
+    """
+    card = _card(
+        tmp_path,
+        "demo-precedence-blob",
+        treatment_metrics={"cv_rmse": 500.0, "cv_std": 1.1},
+        result=ValidationResult(
+            score=1.0,
+            metric="cv_rmse",
+            direction="minimize",
+            source="harness",
+            raw={"cv_rmse": 1.0, "cv_std": 9.9},
+        ),
+        control_metrics=CONTROL,
+    )
+
+    assert card.observed.treatment_cv == 1.0, "the score still comes from the result"
+    assert card.observed.treatment_cv_std == 1.1, "but the explicit blob was discarded"
+
+
+def test_an_empty_treatment_blob_still_defers_to_the_result(tmp_path) -> None:
+    """The other half of the rule, and the shape production actually uses."""
+    card = _card(
+        tmp_path,
+        "demo-precedence-empty",
+        treatment_metrics={},
+        result=ValidationResult(
+            score=1.0,
+            metric="cv_rmse",
+            direction="minimize",
+            source="harness",
+            raw={"cv_rmse": 1.0, "cv_std": 9.9},
+        ),
+        control_metrics=CONTROL,
+    )
+
+    assert card.observed.treatment_cv_std == 9.9

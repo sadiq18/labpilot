@@ -91,6 +91,22 @@ class ValidationResult:
 class HypothesisValidator(Protocol):
     """Turns a hypothesis into a comparable result."""
 
-    def validate(self, hypothesis: Any, workspace: Any, context: Any) -> ValidationResult:
-        """Run whatever this domain means by "try it", and report what it scored."""
+    def validate(
+        self, hypothesis_id: str | None, workspace: Any, context: Any
+    ) -> ValidationResult:
+        """Run whatever this domain means by "try it", and report what it scored.
+
+        `hypothesis_id`, not `hypothesis`: the plan calls this parameter
+        `hypothesis`, and the only production call site passes
+        `context.plan.hypothesis_id` — a `str | None`. The Kaggle validator
+        ignores the argument, so the mismatch would have stayed invisible until
+        an implementation that *needs* the hypothesis read the parameter the
+        protocol told it held one, got `"H-014"` or `None`, and either raised on
+        attribute access or validated the wrong thing.
+
+        A validator needing more than the id resolves it from `HypothesisStore`
+        with `context.competition` and `context.paths.base_dir`. Passing the
+        resolved object here instead would put a store read on every comparison
+        for a value nothing currently uses.
+        """
         ...

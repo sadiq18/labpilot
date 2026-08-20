@@ -94,7 +94,9 @@ class KaggleCvValidator:
 
     source = SOURCE
 
-    def validate(self, hypothesis: Any, workspace: Any, context: Any) -> ValidationResult:
+    def validate(
+        self, hypothesis_id: str | None, workspace: Any, context: Any
+    ) -> ValidationResult:
         from labpilot.research_engine.evidence.compare_service import _load_metrics
 
         root = _workspace_root(workspace)
