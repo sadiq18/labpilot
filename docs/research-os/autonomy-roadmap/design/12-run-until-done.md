@@ -646,18 +646,49 @@ series it cannot append to. This is precisely the gap `steps_since_new_score`
 was added for (§8.2), and it is worth noting the counter did not get to prove it
 here: `failing` bound the run first, at three consecutive failed executions.
 
-Which of the two experiment tools a campaign picks is a policy choice, and
-nothing today tells the policy that one of them is invisible to the objective.
-That belongs to M13, not to these stops.
+**Fixed.** Two causes, both small because the pieces existed already. The
+handler never surfaced the execution id it had *already stamped on its own
+refs* (`experiment:E-007`, `metrics:E-007`), so the conductor passed `None` and
+skipped scoring outright; `_execution_id_from` reads it back off those refs.
+And the score writer looked only for `execution_outcome.json`, which this path
+does not write — it writes an experiment record, keyed by the same execution id,
+carrying the same `metrics`, with `find_experiment_record` already there to read
+it.
 
-**This is why criteria 1 and 2 remain undemonstrated even with the drift fixed.**
-The fix is verified against the live payload by test — `evaluate_stops` returns
-`metric_target` for the exact `{"cv_score": 1.65, "metric": "rmse"}` that could
-not fire before — but a campaign has to reach `run_plan` to exercise it, and two
-consecutive attempts did not. The third attempt rephrased the goal to name the
-plan path (*"reach rmse 2.0 by generating and running a training plan"*), which
-is steering and is recorded as such; it changed nothing. Re-rolling until the
+Both properties the original design insisted on still hold, which is what makes
+this a repair rather than a loosening. *Attribution*: the record is indexed by
+execution id — and an explicit guard was needed, because
+`find_experiment_record` falls back to the **latest** record when an id is not
+indexed, which would have scored one execution from another run's numbers.
+*Freshness*: `run_experiment` already raises unless *this* run wrote the metrics,
+so anything reaching the writer has proved the readings are its own.
+
+Not recovered: the specialist record carries no `hypothesis_id`, so scores from
+this path reach the series without technique attribution. The stagnation mint
+sees the reading and not what produced it.
+
+**Criteria 1 and 2 are still undemonstrated, now for a fourth reason.**
+Each fix is verified by test against the artifact that defeated it —
+`evaluate_stops` returns `metric_target` for the exact
+`{"cv_score": 1.65, "metric": "rmse"}` that could not fire before, and a
+specialist record now produces a `ScoreEvent`. What a campaign still cannot do
+is *succeed at an experiment on this path*: `write_code` leaves no
+`pipeline/train.py`, the plan's task fails with `train.py missing`, and the
+record is written with `status: "failed", metrics: {}` — which the writer
+correctly declines to score.
+
+So the series is now reachable from both experiment tools, and the run that
+would fill it fails earlier, for a reason none of these milestones own. One
+attempt rephrased the goal to name the plan path
+(*"reach rmse 2.0 by generating and running a training plan"*), which is
+steering and is recorded as such; it changed nothing. Re-rolling until the
 policy cooperates would produce a demonstration worth less than this note.
+
+**The open blocker, stated for whoever picks it up:** on the `run_experiment`
+path the code engineer runs and no `train.py` appears, so every execution fails
+before producing metrics. The one campaign in this session that did score
+reached `run_plan` instead. That is a codegen/plan-execution defect, and it is
+the last thing standing between this milestone and criteria 1 and 2.
 
 ### 13.6 Also observed
 

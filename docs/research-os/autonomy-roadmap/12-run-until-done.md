@@ -4,9 +4,10 @@
 plateau this plan did not ask for and could not have fired without ·
 **exit criteria 3, 4, 5 demonstrated** over seven campaigns on 2026-08-20, and
 **`max_steps` ended none of them**, which is what this milestone is for ·
-**1 and 2 undemonstrated** — both blockers fixed, but the policy must choose
-`run_plan` to exercise them and kept choosing the specialist path, which feeds
-the series nothing ([design §13](design/12-run-until-done.md)) ·
+**1 and 2 undemonstrated** — three blockers found and fixed on the way; what
+remains is a codegen defect that leaves no `train.py` on the `run_experiment`
+path, so every execution there fails before it can score
+([design §13](design/12-run-until-done.md)) ·
 **Blocker cleared:** [M7](01-technique-to-model.md) done 2026-08-07; step 1
 landed with M8's score writer (PR #125) ·
 **Design:** [design/12-run-until-done.md](design/12-run-until-done.md)
