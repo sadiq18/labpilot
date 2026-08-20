@@ -1,0 +1,35 @@
+{
+  "slug": "spaceship-titanic",
+  "title": "Spaceship Titanic",
+  "description": "Predict which passengers are transported to an alternate dimension",
+  "evaluation_metric": {
+    "name": "categorization_accuracy",
+    "direction": "maximize",
+    "description": "Categorization Accuracy",
+    "key": "accuracy"
+  },
+  "problem_type": "tabular_classification",
+  "submission_format": "",
+  "submission_columns": [],
+  "rules_url": "https://www.kaggle.com/competitions/spaceship-titanic/rules",
+  "data_url": "https://www.kaggle.com/competitions/spaceship-titanic/data",
+  "deadline": "2030-01-01T00:00:00",
+  "max_daily_submissions": 10,
+  "submissions_disabled": false,
+  "is_kernels_submissions_only": false,
+  "submission_mode": "csv",
+  "kernel_output_file": "submission.csv",
+  "submissions_url": "https://www.kaggle.com/competitions/spaceship-titanic/submissions",
+  "tags": [
+    "Getting Started",
+    "beginner",
+    "tabular",
+    "binary classification",
+    "categorizationaccuracy"
+  ],
+  "raw_html": "Spaceship Titanic | Kaggle",
+  "baseline_strategy": "lightweight",
+  "train_file_pattern": "train",
+  "test_file_pattern": "test",
+  "submission_file_pattern": "submission"
+}

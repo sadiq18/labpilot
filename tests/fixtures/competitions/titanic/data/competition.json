@@ -1,0 +1,35 @@
+{
+  "slug": "titanic",
+  "title": "Titanic - Machine Learning from Disaster",
+  "description": "Start here! Predict survival on the Titanic and get familiar with ML basics",
+  "evaluation_metric": {
+    "name": "categorization_accuracy",
+    "direction": "maximize",
+    "description": "Categorization Accuracy",
+    "key": "accuracy"
+  },
+  "problem_type": "tabular_classification",
+  "submission_format": "",
+  "submission_columns": [],
+  "rules_url": "https://www.kaggle.com/competitions/titanic/rules",
+  "data_url": "https://www.kaggle.com/competitions/titanic/data",
+  "deadline": "2030-01-01T00:00:00",
+  "max_daily_submissions": 10,
+  "submissions_disabled": false,
+  "is_kernels_submissions_only": false,
+  "submission_mode": "csv",
+  "kernel_output_file": "submission.csv",
+  "submissions_url": "https://www.kaggle.com/competitions/titanic/submissions",
+  "tags": [
+    "Getting Started",
+    "beginner",
+    "tabular",
+    "binary classification",
+    "categorizationaccuracy"
+  ],
+  "raw_html": "Titanic - Machine Learning from Disaster | Kaggle",
+  "baseline_strategy": "lightweight",
+  "train_file_pattern": "train",
+  "test_file_pattern": "test",
+  "submission_file_pattern": "submission"
+}

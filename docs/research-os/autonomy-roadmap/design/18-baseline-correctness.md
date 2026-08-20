@@ -37,7 +37,7 @@ Read on `main` at `e6712c6`, the stages exist and the *pipeline* does not:
 | Dataset understanding | M22 `DatasetSchema` | ✅ with evidence per field |
 | Task understanding | `infer_problem_type_from_metadata` + `target_type` | ⚠️ metadata keywords; `target_type` was deferred **to here** |
 | Objective Resolver | `resolve_objective` (#145) | ⚠️ exists, six ranked sources, probe, contradictions — called **once, from `cli/conduct.py:299`** |
-| `ObjectiveSpec` | the resolver's return value | ❌ **never persisted**; flattened to five strings on session metadata |
+| `ObjectiveSpec` | `objective.json` (step 0) | ✅ persisted beside `profile.json`, resolved from the schema, reused while its inputs hold |
 | Validation Strategy | `ValidationPlan` in `baseline_choice.json` | ⚠️ derived from the *profile*, not from the objective |
 | Baseline 0 / 1 / compare | — | ❌ this milestone |
 
@@ -46,6 +46,14 @@ The defect is structural, not conceptual: each stage re-derives from
 contradiction detection and its `unresolved` list — which already name *what to
 ask* — reach a console line and nothing else. **`selector.py` and the
 code-engineering capability contain no reference to an objective at all.**
+
+Step 0 closes the first half of that: `objective_stage.py` reads the schema,
+resolves once, and writes `objective.json` from `prepare_workspace` — so every
+entry point has an objective, not just `research conduct`. The stored artifact
+carries the *inputs* it was resolved from rather than a fingerprint of them, so
+staleness is a comparison and a re-resolution can say which input moved. What
+remains is the second half: making the stages after it **read** that file, which
+is step 2.
 
 ## 1.2 The gate, as nine ordered checks
 
@@ -478,7 +486,7 @@ Real-data validation is a **sandbox copy**, never the live workspace
 
 | Step | Content | Ships when |
 |---|---|---|
-| 0 | **`ObjectiveSpec` becomes a stage**: resolved from the schema rather than loose CLI args, persisted as `objective.json` beside `profile.json` | The resolver's contradictions and `unresolved` list reach something other than a console line |
+| 0 ✅ | **`ObjectiveSpec` becomes a stage**: resolved from the schema rather than loose CLI args, persisted as `objective.json` beside `profile.json` | The resolver's contradictions and `unresolved` list reach something other than a console line |
 | 1 | **Task understanding**: `target_type`, `target_distribution` on the schema, feeding the resolver's `task` instead of metadata keywords | M22's deferred measurements land |
 | 2 | **Validation Strategy reads the objective**, not the profile alone | One spine, no re-derivation |
 | 3 | `floor.py`: strategies, per-fold fitting, `compute_metric`; `baseline_floor.json` | Checks 1–3 |

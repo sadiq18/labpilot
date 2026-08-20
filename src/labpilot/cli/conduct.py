@@ -230,65 +230,6 @@ def _resolve_campaign_direction(ws: Any, competition: str) -> bool | None:
         return None
 
 
-def _stated_target(root: Path) -> str | None:
-    """The target column, from the profile that already inferred it.
-
-    `competition.json` does not carry one; `profile.json` does. Without this the
-    `target` field on every ObjectiveSpec was None in the shipped path while
-    reading as though it were populated.
-    """
-    import json
-
-    path = root / "profile.json"
-    if not path.is_file():
-        return None
-    try:
-        profile = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    target = profile.get("target_column") if isinstance(profile, dict) else None
-    return str(target) if target else None
-
-
-def _stated_objective(
-    ws: Any, competition: str
-) -> tuple[str | None, str | None, str | None, str | None]:
-    """(metric_raw, declared_direction, problem_type, target) from the workspace."""
-    import json
-
-    root = getattr(ws, "root", None)
-    if root is None:
-        return None, None, None, None
-    target = _stated_target(Path(root))
-    path = Path(root) / "competition.json"
-    if not path.is_file():
-        # A workspace with no competition contract is not necessarily a workspace
-        # with no objective. A benchmark states its own, and the gate used to
-        # refuse it with advice from another domain — "set evaluation_metric in
-        # competition.json", a file it will never have. That refusal *was* exit
-        # criterion 3 failing: the same `research conduct` phrasing has to work
-        # in both domains, and it could not start a campaign in one of them.
-        from labpilot.research_engine.validation import harness
-
-        metric, direction = harness.stated_objective(Path(root))
-        return metric, direction, None, target
-    try:
-        spec = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None, None, None, target
-    metric = spec.get("evaluation_metric") or spec.get("metric") or {}
-    if not isinstance(metric, dict):
-        metric = {}
-    raw = metric.get("name") or metric.get("key")
-    declared = metric.get("direction")
-    return (
-        str(raw) if raw else None,
-        str(declared) if declared in ("maximize", "minimize") else None,
-        str(spec.get("problem_type") or "") or None,
-        target,
-    )
-
-
 def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict[str, Any]:
     """Refuse to start a campaign whose objective cannot be justified.
 
@@ -306,18 +247,26 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
     stay distinguishable from a resolved one long after the console line is gone.
     """
     from labpilot.research_engine.intelligence.competition.objective import resolve_objective
-
-    metric_raw, declared, problem_type, target = _stated_objective(ws, competition)
-    from labpilot.research_engine.validation import harness
+    from labpilot.research_engine.intelligence.competition.objective_stage import (
+        OBJECTIVE_FILENAME,
+        ensure_objective,
+    )
 
     root = getattr(ws, "root", None)
-    objective = resolve_objective(
-        metric_raw=metric_raw,
-        declared_direction=declared,  # type: ignore[arg-type]
-        task=problem_type,
-        target=target,
-        externally_scored=bool(root) and harness.handles(Path(root)),
-    )
+    objective_path: Path | None = None
+    if root is None:
+        # No workspace, nothing to persist to. The preflight still has to answer,
+        # and an objective resolved from nothing says so rather than defaulting.
+        objective = resolve_objective(metric_raw=None)
+    else:
+        stored, how = ensure_objective(Path(root), competition)
+        objective = stored.spec
+        # Only when it was actually written. This gate is a *read* of a workspace
+        # that a campaign is about to run in, and a read-only or absent workspace
+        # must still get its verdict rather than a traceback.
+        if how != "unpersisted":
+            objective_path = Path(root) / OBJECTIVE_FILENAME
+
     if not objective.blocks_launch:
         console.print(
             f"[dim]objective:[/dim] {objective.metric_name} "
@@ -331,7 +280,14 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
             "objective_direction": objective.direction,
             "objective_source": objective.source,
             "objective_confidence": objective.confidence,
+            # The file is the record; these five strings are the index into it.
+            # They stay because sessions are queried by them, and a session that
+            # named its metric only by a path would have to open the workspace to
+            # answer "what was this campaign optimising?".
+            **({} if objective_path is None else {"objective_path": str(objective_path)}),
         }
+
+    from labpilot.research_engine.validation import harness
 
     console.print(f"[red]Objective not resolved[/red] - {objective.why_blocked()}")
     for line in objective.evidence:
