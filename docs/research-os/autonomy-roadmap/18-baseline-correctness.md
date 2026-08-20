@@ -1,6 +1,9 @@
 # M23 — A model that loses to a constant is not a baseline
 
-**Status:** not started · **Blocked by:** [M22](17-dataset-understanding.md) (the schema must be trustworthy first)
+**Status:** design · **Design:**
+[design/18-baseline-correctness.md](design/18-baseline-correctness.md) ·
+**Blocked by:** ~~[M22](17-dataset-understanding.md)~~ — **cleared 2026-08-20**,
+all seven steps shipped
 
 ---
 

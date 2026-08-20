@@ -1,0 +1,126 @@
+{
+  "slug": "rogii-wellbore-geology-prediction",
+  "captured_at": "2026-08-20",
+  "source": "/Users/sadik/workspace/rogii-wellbore-geology-prediction/data/raw",
+  "provenance": "derived",
+  "licence": "unknown",
+  "redistribution": "forbidden",
+  "files": [
+    {
+      "path": "sample_submission.csv",
+      "mode": "headers_only",
+      "source_sha256": "7498f19ba1be281328c31a39044d4ba5f84e71c8f4115c613b5531f42aaff85a",
+      "source_bytes": 254725,
+      "source_rows": 14151,
+      "fixture_rows": 0
+    },
+    {
+      "path": "test/000d7d20__horizontal_well.csv",
+      "mode": "headers_only",
+      "source_sha256": "706bcbbc4c44aa96e6d1e0f9c0bf4d18fa340d6bbe82008b7edd2d7707e4e595",
+      "source_bytes": 278656,
+      "source_rows": 5278,
+      "fixture_rows": 0
+    },
+    {
+      "path": "test/000d7d20__typewell.csv",
+      "mode": "headers_only",
+      "source_sha256": "87dfaba4569d96cde1e427a27077f5b1e70038f61170eb785d52da5485a73e3f",
+      "source_bytes": 23141,
+      "source_rows": 1296,
+      "fixture_rows": 0
+    },
+    {
+      "path": "test/00bbac68__horizontal_well.csv",
+      "mode": "headers_only",
+      "source_sha256": "e2ba824ee1fb578f503dff93ea33bd89b12d4941bf4e40c7cfc1cc983e9affa1",
+      "source_bytes": 440311,
+      "source_rows": 7559,
+      "fixture_rows": 0
+    },
+    {
+      "path": "test/00bbac68__typewell.csv",
+      "mode": "headers_only",
+      "source_sha256": "cbc9c7aa3880e0ab3e707c7bf78dfc091a0c5b1c7c2dad27ec5eb8fa68517f52",
+      "source_bytes": 35317,
+      "source_rows": 1946,
+      "fixture_rows": 0
+    },
+    {
+      "path": "test/00e12e8b__horizontal_well.csv",
+      "mode": "headers_only",
+      "source_sha256": "dba74df5aa634408a7ddd15ef9e408b5fd2d3086152a73d9a8a9ee12b678821c",
+      "source_bytes": 378010,
+      "source_rows": 6384,
+      "fixture_rows": 0
+    },
+    {
+      "path": "test/00e12e8b__typewell.csv",
+      "mode": "headers_only",
+      "source_sha256": "2477a23ec6e7a9057b1363af438f2996d82d3809af252cbe31c08a939627c5b1",
+      "source_bytes": 45861,
+      "source_rows": 2556,
+      "fixture_rows": 0
+    },
+    {
+      "path": "train/000d7d20__horizontal_well.csv",
+      "mode": "headers_only",
+      "source_sha256": "e12ba2553834d15d349520c2bd50744c8b31c04c4b06c63f3d110283db486005",
+      "source_bytes": 611678,
+      "source_rows": 5278,
+      "fixture_rows": 0
+    },
+    {
+      "path": "train/000d7d20__typewell.csv",
+      "mode": "headers_only",
+      "source_sha256": "b29a0d99d70794fb1e2431641ffc8459647f3a08bf74fa1896529d8f7eca2ecf",
+      "source_bytes": 28826,
+      "source_rows": 1296,
+      "fixture_rows": 0
+    },
+    {
+      "path": "train/00bbac68__horizontal_well.csv",
+      "mode": "headers_only",
+      "source_sha256": "70e4da0984223d959eaf1e0d63e20cea59ef0dc216d52246f18a1788252dd042",
+      "source_bytes": 937510,
+      "source_rows": 7559,
+      "fixture_rows": 0
+    },
+    {
+      "path": "train/00bbac68__typewell.csv",
+      "mode": "headers_only",
+      "source_sha256": "b01e75a7091063e67e9d92a4ae612ec04fb8b0ee0e35bb00edf801b6eca2d6c3",
+      "source_bytes": 42011,
+      "source_rows": 1946,
+      "fixture_rows": 0
+    },
+    {
+      "path": "competition.json",
+      "mode": "verbatim",
+      "source_sha256": "490819dc2b5e675f728f630b6ef7d1624420c164ffd321c208a19321e15a6d98",
+      "source_bytes": 667,
+      "source_rows": null,
+      "fixture_rows": null
+    }
+  ],
+  "expected": {
+    "target_column": "TVT",
+    "id_columns": null,
+    "train_test_relationship": null,
+    "modality": "tabular",
+    "feature_columns": null,
+    "metric_name": null,
+    "must_ask": [
+      "id_columns"
+    ]
+  },
+  "unverifiable": {
+    "row_count": "headers_only capture keeps a subset of rows",
+    "cardinality": "headers_only capture keeps a subset of rows",
+    "partition_counts": "at most 6 file(s) captured per directory",
+    "feature_columns": "no rows, so constant and equals-target exclusions cannot fire",
+    "train_test_relationship": "headers-only capture retains no rows, so suffix contiguity cannot be observed; the real dataset is partition_suffix and a stride: capture would score it"
+  },
+  "known_failures": {},
+  "notes": "The highest-value fixture: partitioned, two kinds, per-kind withholding, and the id column that names no column in any table \u2014 which the system is expected to ask about rather than answer."
+}

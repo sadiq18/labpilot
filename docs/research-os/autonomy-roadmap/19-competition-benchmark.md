@@ -1,6 +1,10 @@
 # M24 — Understanding is measured, not asserted
 
-**Status:** not started · **Blocked by:** [M22](17-dataset-understanding.md), [M23](18-baseline-correctness.md) (there must be something to score)
+**Status:** in progress — capture, expander, scorer and tier 1 shipped
+2026-08-20 with two real fixtures · **Blocked by:** ~~[M22](17-dataset-understanding.md)~~
+**cleared**; [M23](18-baseline-correctness.md) blocks only the *baseline*
+criteria, so the four schema stages are scoreable now — and are, at
+`research bench score`
 
 ---
 
