@@ -131,6 +131,11 @@ def test_a_zarr_store_is_found_beside_a_submission_file(tmp_path: Path) -> None:
     The CSV preference returned before the branch that looked for a store, so
     the branch could not fire on any real dataset — an unreachable declaration,
     which is the defect class this milestone removes.
+
+    And the store **decides**: making it merely visible while the template still
+    won would have left the outcome the unreachable branch produced exactly as
+    it was — `modality: tabular` for a volume competition. The volume is the
+    dataset; the CSV beside it is the submission format.
     """
     data_dir = tmp_path / "zarr-comp"
     (data_dir / "cube.zarr").mkdir(parents=True)
@@ -142,9 +147,10 @@ def test_a_zarr_store_is_found_beside_a_submission_file(tmp_path: Path) -> None:
 
     profile = _profile(data_dir)
 
-    assert [m.modality for m in profile.modalities] == ["tabular", "image"]
-    assert profile.modalities[1].image_dir == "cube.zarr"
-    assert "zarr store" in profile.modalities[1].detail
+    assert [m.modality for m in profile.modalities] == ["image", "tabular"]
+    assert profile.modality == "image", "the store decides, not the template beside it"
+    assert profile.modalities[0].image_dir == "cube.zarr"
+    assert "zarr store" in profile.modalities[0].detail
 
 
 # --- an environment is a shape, not an error --------------------------------
@@ -165,3 +171,145 @@ def test_an_environment_is_described_and_asks(tmp_path: Path) -> None:
     assert profile.files, "the files are what there is to describe"
     assert profile.target_column is None
     assert profile.confidence == 0.0, "a campaign must ask before acting on this"
+
+
+def test_nothing_detected_stays_nothing_detected() -> None:
+    """An empty list is a recorded absence, not a legacy profile.
+
+    `modality` is computed, so a profile with `modalities: []` still serializes
+    the mirror `"tabular"`. Reading it back used to hit the legacy adoption and
+    fabricate a `tabular` presence whose detail claimed it came from an older
+    profile — both halves false, and the file then contradicted its own
+    `modality_not_detected` note.
+    """
+    import json
+
+    recorded = DatasetProfile(competition="no-root")
+    assert recorded.modalities == []
+
+    round_tripped = DatasetProfile.model_validate(json.loads(recorded.model_dump_json()))
+
+    assert round_tripped.modalities == [], "an absence must survive a round trip"
+    assert round_tripped.modality == "tabular", "the mirror's default is unchanged"
+
+
+def test_the_majority_signal_names_whichever_modality_won(tmp_path: Path) -> None:
+    """One id for both cases, and a detail that agrees with it.
+
+    Two branches shared `csv_majority`, so an image-primary dataset fired a
+    signal whose catalogue entry reads "tables outnumber the other modality's
+    files" — the id saying the opposite of what happened to anything keying off
+    ids rather than prose.
+    """
+    tables_primary = _profile(build_tables_with_previews(tmp_path))
+    images_primary = _profile(_image_primary(tmp_path))
+
+    for profile, winner in ((tables_primary, "tabular"), (images_primary, "image")):
+        signals = profile.inferences["modality"].signals
+        assert [s.id for s in signals] == ["modality_majority"]
+        assert signals[0].detail.startswith(f"{winner!r}")
+
+
+def _image_primary(root: Path) -> Path:
+    """More images than tables, and a column naming them."""
+    data_dir = root / "image-primary"
+    (data_dir / "images").mkdir(parents=True)
+    rows = []
+    for index in range(1, 13):
+        (data_dir / "images" / f"pic{index}.jpg").write_bytes(b"")
+        rows.append({"id": index, "file": f"pic{index}.jpg", "label": index % 2})
+    test_rows = []
+    for index in range(13, 17):
+        (data_dir / "images" / f"pic{index}.jpg").write_bytes(b"")
+        test_rows.append({"id": index, "file": f"pic{index}.jpg"})
+    pd.DataFrame(rows).to_csv(data_dir / "train.csv", index=False)
+    pd.DataFrame(test_rows).to_csv(data_dir / "test.csv", index=False)
+    pd.DataFrame({"id": [r["id"] for r in test_rows], "label": [0] * 4}).to_csv(
+        data_dir / "sample_submission.csv", index=False
+    )
+    return data_dir
+
+
+def test_an_image_dataset_names_its_directory_and_column(tmp_path: Path) -> None:
+    """The image-primary path: find the directory, and the column naming it.
+
+    Nothing covered this branch — `conftest.image_data_dir` builds real JPEGs
+    and no test uses it — so the restructure went in untested. Written against
+    zero-byte files rather than that fixture on purpose: the detector reads
+    extensions and filenames and never opens an image, so requiring `PIL` would
+    make this skip in every job that matters, which is how a gap stays open
+    while looking closed.
+    """
+    profile = _profile(_image_primary(tmp_path))
+    primary = profile.modalities[0]
+
+    assert profile.modality == "image"
+    assert primary.role == "primary"
+    assert primary.image_dir == "images"
+    assert primary.image_column == "file", "the column whose values are filenames"
+    assert profile.image_column == "file"
+    assert [p.modality for p in profile.modalities] == ["image", "tabular"]
+
+
+def test_the_environments_unit_carries_the_evidence_it_has(tmp_path: Path) -> None:
+    """`episode` was stated with an empty signal list — a value with no evidence.
+
+    One line from `train_test_relationship`, which fires `no_tabular_data` at
+    0.90 for the same observation. A profile asserting an unsupported value is
+    the shape this milestone removes.
+    """
+    profile = _profile(build_environment(tmp_path))
+    inference = profile.inferences["prediction_unit"]
+
+    assert profile.prediction_unit == "episode"
+    assert [signal.id for signal in inference.signals] == ["no_tabular_data"]
+    assert inference.band == "asserted"
+
+
+def test_a_capped_profile_says_what_its_column_stats_describe(tmp_path: Path) -> None:
+    """`row_count` is the file's; the column statistics are the sample's.
+
+    Making the row count honest put the two out of step, and a reader computing
+    a null *fraction* as `null_count / row_count` would be wrong by the sampling
+    ratio with nothing in the profile to warn them.
+    """
+    from helpers.dataset_shapes import SAMPLED_BEYOND_CAP_ROWS, build_sampled_beyond_cap
+
+    data_dir = build_sampled_beyond_cap(tmp_path)
+    profile = TabularProfiler(ProfilerConfig(max_rows_sample=10)).profile_directory(
+        data_dir, "capped"
+    )
+
+    assert profile.row_count == SAMPLED_BEYOND_CAP_ROWS
+    assert profile.column_stats_rows == 10
+    assert any(note.code == "columns_sampled" for note in profile.notes)
+    # And the fractions a reader would compute are against the sampled rows.
+    column = next(c for c in profile.columns if c.name == "feature")
+    assert column.null_count <= profile.column_stats_rows
+
+
+def test_an_unusable_tie_break_reply_is_not_certainty(tmp_path: Path) -> None:
+    """A model that answers unusably has resolved nothing.
+
+    The no-client branch was fixed; the invalid-token and exception branches
+    kept returning `confidence="high"` for tabular — the same laundering, one
+    branch over.
+    """
+
+    class _Waffles:
+        def complete(self, system: str, user: str) -> str:
+            return "probably images, though the tables look useful"
+
+    class _Explodes:
+        def complete(self, system: str, user: str) -> str:
+            raise RuntimeError("provider down")
+
+    data_dir = build_image_and_text(tmp_path)
+    profile = _profile(data_dir)
+    detector = ModalityDetector()
+
+    for client, marker in ((_Waffles(), "unusable"), (_Explodes(), "failed")):
+        result = detector.detect(data_dir, profile, llm_client=client)
+        assert result.confidence == "ambiguous"
+        assert any(marker in signal for signal in result.signals)
+        assert result.tiebroken is False

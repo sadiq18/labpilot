@@ -571,12 +571,19 @@ Three more answers that were stated more confidently than they were reached:
   tie-breaker is no longer reported as an answer. `_ensure_profile` passes no
   LLM client, so the `llm_unavailable` branch is the one production always
   takes, and it used to stamp `confidence="high"`.
-- **The zarr branch is reachable.** The CSV preference returned before the
-  branch that looked for a store, and every zarr competition ships a
-  `sample_submission.csv` — so no input could reach it.
+- **A zarr store is found *and* decides.** The CSV preference returned before
+  the branch that looked for one, and every zarr competition ships a
+  `sample_submission.csv` — so no input could reach it. Making the store merely
+  *visible* would have left the outcome that produced (`modality: tabular` for a
+  volume competition) exactly as it was: the volume is the dataset and the CSV
+  beside it is the submission format, so the store wins the primary slot.
 - **A bound sample cap is not a row count.** `playground-series-s6e7` records
   100,000 rows for a file of 690,088 and does not say it is a sample. Where the
-  cap binds, one pass over one column buys the truth.
+  cap binds, one pass over one column buys the truth — and `column_stats_rows`
+  records what the *per-column* statistics describe, because making `row_count`
+  honest put it out of step with them: on rogii the profile now reads
+  `row_count: 6,393,792` beside `column_stats_rows: 206,785`, and a reader
+  computing a null fraction against the wrong one is out by 31×.
 
 **An environment is a shape, not an error.** A dataset with no tables used to
 raise, which sent the workspace to `_write_inventory_profile` and its
@@ -584,6 +591,13 @@ metadata-guessed modality with a null target. It is now
 `environment(primary)`, `train_test_relationship: environment`,
 `prediction_unit: episode`, files listed, target and key at 0.0 — so a campaign
 asks. **`action_space` is still not inferred**: no fixture, unfalsifiable output.
+
+**An empty `modalities` is an absence, not a legacy profile.** The adoption
+above keys on the *key* being missing, not on the list being falsy: a profile
+that recorded "nothing detected" — the no-root branch writes exactly that,
+beside its note — otherwise came back from disk claiming `tabular` had been
+detected, with a provenance line saying it came from an older profile. Both
+halves false, and the file then contradicted its own note.
 
 **`audio` is in the enum without a detector**, which contradicts §7.4's rule
 until you see its producer. Profiles on disk carry it — birdclef's says

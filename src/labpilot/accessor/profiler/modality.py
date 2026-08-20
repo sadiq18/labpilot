@@ -2,6 +2,7 @@
 
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -47,8 +48,53 @@ class ModalityResult(BaseModel):
     text_column: str | None = None
 
 
+@dataclass(frozen=True)
+class _Scan:
+    """What one walk of the tree found. Computed once, read by everything.
+
+    `detect` and `presences` each used to walk it — `_detect_image` twice on its
+    own, then `_count_csvs` and `_zarr_store` again — so a single profile made
+    about five complete passes over a tree that on rogii holds thousands of
+    paths, and sorted all of them to find one directory.
+    """
+
+    image_dirs: dict[str, int]
+    csv_count: int
+    zarr_store: str | None
+
+    @property
+    def image_count(self) -> int:
+        return sum(self.image_dirs.values())
+
+    @property
+    def best_image_dir(self) -> str:
+        return max(self.image_dirs, key=self.image_dirs.get) if self.image_dirs else ""
+
+
 class ModalityDetector:
-    def presences(self, data_dir: Path, profile: DatasetProfile) -> list[ModalityPresence]:
+    def scan(self, data_dir: Path) -> _Scan:
+        """One pass: image files by directory, table count, first zarr store."""
+        image_dirs: dict[str, int] = {}
+        csv_count = 0
+        zarr_store: str | None = None
+        for path in data_dir.rglob("*"):
+            if path.is_dir():
+                if zarr_store is None and path.name.endswith(".zarr"):
+                    zarr_store = str(path.relative_to(data_dir))
+                continue
+            suffix = path.suffix.lower()
+            if suffix == ".csv":
+                csv_count += 1
+            elif suffix in IMAGE_EXTENSIONS:
+                rel_dir = str(path.parent.relative_to(data_dir))
+                image_dirs[rel_dir if rel_dir != "." else ""] = (
+                    image_dirs.get(rel_dir if rel_dir != "." else "", 0) + 1
+                )
+        return _Scan(image_dirs=image_dirs, csv_count=csv_count, zarr_store=zarr_store)
+
+    def presences(
+        self, data_dir: Path, profile: DatasetProfile, scan: _Scan | None = None
+    ) -> list[ModalityPresence]:
         """Every modality this dataset contains, primary first.
 
         The list `detect` could never return. rogii is 1,546 per-well tables
@@ -62,10 +108,11 @@ class ModalityDetector:
         """
         found: list[ModalityPresence] = []
 
-        images = self._detect_image(data_dir, profile)
+        scan = scan or self.scan(data_dir)
+        images = self._detect_image(data_dir, profile, scan)
         text = self._detect_text(profile)
-        csv_count = self._count_csvs(data_dir)
-        zarr = self._zarr_store(data_dir)
+        csv_count = scan.csv_count
+        zarr = scan.zarr_store
 
         if csv_count:
             found.append(
@@ -109,7 +156,7 @@ class ModalityDetector:
                 )
             ]
 
-        primary = self._primary_of(found, csv_count=csv_count, images=images)
+        primary = self._primary_of(found, scan=scan)
         ordered = [presence for presence in found if presence.modality == primary]
         ordered += [presence for presence in found if presence.modality != primary]
         return [
@@ -118,33 +165,27 @@ class ModalityDetector:
         ]
 
     @staticmethod
-    def _primary_of(
-        found: list[ModalityPresence], *, csv_count: int, images: ModalityResult
-    ) -> str:
+    def _primary_of(found: list[ModalityPresence], *, scan: _Scan) -> str:
         """Which modality carries the signal. The old rules, stated once.
 
         Tables win a tie with images because a per-entity layout with previews
         is a tabular problem; images win when there are more of them than tables,
         which is what an image competition looks like.
+
+        **A zarr store wins outright.** The volume *is* the dataset and the CSVs
+        beside it are the submission template — the CSV preference used to fire
+        first, so a zarr competition came out `tabular` and the branch that would
+        have said otherwise was unreachable. Making the store visible without
+        letting it decide would have left that outcome exactly as it was.
         """
         kinds = {presence.modality for presence in found}
-        if "image" in kinds and (not csv_count or images.image_count > csv_count):
+        if "image" in kinds and (
+            scan.zarr_store is not None or not scan.csv_count or scan.image_count > scan.csv_count
+        ):
             return "image"
         if "tabular" in kinds:
             return "tabular"
         return next(iter(sorted(kinds)))
-
-    def _count_csvs(self, data_dir: Path) -> int:
-        return sum(
-            1 for path in data_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".csv"
-        )
-
-    def _zarr_store(self, data_dir: Path) -> str | None:
-        """The first zarr store under the root, relative, or None."""
-        for path in sorted(data_dir.rglob("*")):
-            if path.is_dir() and path.name.endswith(".zarr"):
-                return str(path.relative_to(data_dir))
-        return None
 
     def detect(
         self,
@@ -186,30 +227,18 @@ class ModalityDetector:
 
         return ModalityResult(modality="tabular", confidence="high", signals=["default_tabular"])
 
-    def _detect_image(self, data_dir: Path, profile: DatasetProfile) -> ModalityResult:
-        dir_counts: dict[str, int] = {}
-        for path in data_dir.rglob("*"):
-            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
-                rel_dir = str(path.parent.relative_to(data_dir))
-                if rel_dir == ".":
-                    rel_dir = ""
-                dir_counts[rel_dir] = dir_counts.get(rel_dir, 0) + 1
+    def _detect_image(
+        self, data_dir: Path, profile: DatasetProfile, scan: _Scan | None = None
+    ) -> ModalityResult:
+        scan = scan or self.scan(data_dir)
+        dir_counts = scan.image_dirs
 
-        zarr_dirs = [
-            p
-            for p in data_dir.rglob("*")
-            if p.is_dir() and (p.suffix.lower() == ".zarr" or p.name.endswith(".zarr"))
-        ]
-
-        if not dir_counts and not zarr_dirs:
+        if not dir_counts and scan.zarr_store is None:
             return ModalityResult(modality="tabular", confidence="high")
 
-        best_dir = max(dir_counts, key=dir_counts.get) if dir_counts else ""
-        image_count = sum(dir_counts.values())
-
-        csv_count = sum(
-            1 for path in data_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".csv"
-        )
+        best_dir = scan.best_image_dir
+        image_count = scan.image_count
+        csv_count = scan.csv_count
         # Multimodal geology-style layouts: many per-well CSVs plus PNG
         # previews. Prefer tabular so baselines use the structured logs — and
         # still say where the images are. Returning `image_dir=None` here is
@@ -228,13 +257,12 @@ class ModalityDetector:
                 image_count=image_count,
             )
 
-        if zarr_dirs and not dir_counts:
-            rel = str(zarr_dirs[0].relative_to(data_dir))
+        if scan.zarr_store is not None and not dir_counts:
             return ModalityResult(
                 modality="image",
                 confidence="high",
-                signals=[f"zarr_store={rel}"],
-                image_dir=rel,
+                signals=[f"zarr_store={scan.zarr_store}"],
+                image_dir=scan.zarr_store,
             )
 
         image_dir_path = data_dir / best_dir if best_dir else data_dir
@@ -375,11 +403,21 @@ class ModalityDetector:
             response = llm_client.complete(system, user).strip().lower()
         except Exception:
             logger.warning("LLM modality tie-breaker failed; using tabular.", exc_info=True)
-            return ModalityResult(modality="tabular", confidence="high", signals=result.signals)
+            return ModalityResult(
+                modality="tabular",
+                confidence="ambiguous",
+                signals=result.signals + ["llm_tiebreak_failed"],
+            )
 
         token = re.split(r"[\s,.]+", response)[0] if response else ""
         if token not in {"tabular", "text", "image"}:
-            return ModalityResult(modality="tabular", confidence="high", signals=result.signals)
+            # An unusable reply is a tie nothing resolved. Reporting `high` here
+            # was the same laundering the no-client branch above used to do.
+            return ModalityResult(
+                modality="tabular",
+                confidence="ambiguous",
+                signals=result.signals + ["llm_tiebreak_unusable"],
+            )
 
         return result.model_copy(
             update={"modality": token, "confidence": "high", "tiebroken": True}

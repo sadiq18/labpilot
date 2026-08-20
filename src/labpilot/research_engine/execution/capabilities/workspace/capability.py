@@ -634,13 +634,21 @@ class WorkspaceCapability(BaseCapability):
                     ProblemType.TEXT_CLASSIFICATION: "text",
                 }.get(inferred)
                 if declared is not None:
+                    # Replacing, not prepending: a workspace whose files already
+                    # show images and whose metadata says image classification
+                    # listed `image` twice, with two roles and two details, and
+                    # left every consumer to guess which was authoritative.
                     profile.modalities = [
                         ModalityPresence(
                             modality=declared,
                             role="primary",
                             detail="from competition metadata, not from the files",
                         ),
-                        *[m.model_copy(update={"role": "auxiliary"}) for m in profile.modalities],
+                        *[
+                            presence.model_copy(update={"role": "auxiliary"})
+                            for presence in profile.modalities
+                            if presence.modality != declared
+                        ],
                     ]
                     profile.notes.append(
                         Note(

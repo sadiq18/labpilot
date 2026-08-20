@@ -72,6 +72,12 @@
   ],
   "notes": [
     {
+      "code": "columns_sampled",
+      "text": "column statistics describe 10 sampled rows of 25 \u2014 read null and unique counts against `column_stats_rows`, not `row_count`",
+      "field": "columns",
+      "severity": "caution"
+    },
+    {
       "code": "modality_signal",
       "text": "default_tabular",
       "field": "modality",
@@ -192,6 +198,7 @@
   "train_partition_count": 0,
   "test_partition_count": 0,
   "row_count_estimated": false,
+  "column_stats_rows": 10,
   "scored_is_partition_suffix": false,
   "scored_fraction": 0.0,
   "train_only_columns": [
@@ -205,6 +212,7 @@
     "feature"
   ],
   "warnings": [
+    "column statistics describe 10 sampled rows of 25 \u2014 read null and unique counts against `column_stats_rows`, not `row_count`",
     "default_tabular"
   ]
 }

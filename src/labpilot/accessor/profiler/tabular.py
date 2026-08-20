@@ -119,6 +119,13 @@ class DatasetProfile(BaseModel):
     train_partition_count: int = 0
     test_partition_count: int = 0
     row_count_estimated: bool = False
+    #: How many rows the per-column statistics were computed over.
+    #:
+    #: `row_count` is the file's; these are the sample's, and once the cap binds
+    #: the two differ. Without this a reader computing a null *fraction* as
+    #: `null_count / row_count` is wrong by the sampling ratio — 6.9× on
+    #: `playground-series-s6e7` — and nothing in the profile says so.
+    column_stats_rows: int = 0
     # True when the scored rows form a contiguous *suffix* of each test
     # partition (predict-forward / forecast tasks). Validation must then hold
     # out the tail of each training partition, not random rows.
@@ -196,7 +203,13 @@ class DatasetProfile(BaseModel):
         the analyzers that key off it would silently start describing an audio
         competition as a tabular one.
         """
-        if not isinstance(data, dict) or data.get("modalities"):
+        # `not in`, not falsy. An *empty* list is a profile that recorded
+        # "nothing detected" — the non-local-source branch writes exactly that,
+        # beside a `modality_not_detected` note — and treating it as legacy made
+        # every later read fabricate a `tabular` presence with a provenance line
+        # claiming it came from an older profile. Both halves false, and the
+        # file then contradicted its own note.
+        if not isinstance(data, dict) or "modalities" in data:
             return data
         stored = data.get("modality")
         if isinstance(stored, str) and stored:
@@ -404,19 +417,33 @@ def _modality_signals(
                 detail=f"only {presences[0].modality!r} is present",
             )
         ]
-    if presences[0].modality == "tabular":
-        return [
-            Signal(
-                id="csv_majority",
-                detail=f"tables outnumber {presences[1].modality!r}: {presences[0].detail}",
-            )
-        ]
+    # One id for both cases. Two branches sharing `csv_majority` meant an
+    # image-primary dataset fired a signal whose catalogue entry said "tables
+    # outnumber the other modality's files" — the id reading as the opposite of
+    # what happened, to anything keying off ids rather than prose.
+    others = ", ".join(sorted({p.modality for p in presences[1:]}))
     return [
         Signal(
-            id="csv_majority",
-            detail=f"{presences[0].modality!r} outnumbers the rest: {presences[0].detail}",
+            id="modality_majority",
+            detail=f"{presences[0].modality!r} ({presences[0].detail}) over {others}",
         )
     ]
+
+
+def _unit_from(signals: list[Signal]) -> PredictionUnit:
+    """The unit the evidence names, rather than the one the call site expected.
+
+    Both call sites used to map "any signal" onto a fixed value — `row` on the
+    flat path, `partition_row` on the partitioned one — so the day a flat-path
+    suffix detector lands, the profile would read `prediction_unit: row` while
+    its own evidence said the scored rows are a partition tail.
+    """
+    fired = {signal.id for signal in signals}
+    if "scored_rows_are_a_partition_tail" in fired:
+        return "partition_row"
+    if "submission_row_per_scoring_row" in fired:
+        return "row"
+    return "unknown"
 
 
 def _prediction_unit_signals(
@@ -876,6 +903,7 @@ class TabularProfiler:
             row_count=len(train_sample),
             column_count=len(train_sample.columns),
             columns=self.profile_columns(train_sample),
+            column_stats_rows=len(train_sample),
         )
         if len(train_sample) == self.config.max_rows_sample and train_columns:
             # The cap bound, so the sample's length is a floor rather than a
@@ -884,6 +912,15 @@ class TabularProfiler:
             # over one column is what the truth costs.
             try:
                 profile.row_count = source.exact_unit_count(train_table, train_columns[0])
+                _note(
+                    profile,
+                    "columns_sampled",
+                    f"column statistics describe {profile.column_stats_rows:,} sampled rows of "
+                    f"{profile.row_count:,} — read null and unique counts against "
+                    "`column_stats_rows`, not `row_count`",
+                    field="columns",
+                    severity="caution",
+                )
             except (OSError, ValueError):
                 profile.row_count_estimated = True
         for text in test_warnings:
@@ -1013,17 +1050,25 @@ class TabularProfiler:
         profile.inferences["train_test_relationship"] = Inference.of(split_signals)
         profile.metric = source.declared().metric
         profile.inferences["metric"] = Inference.of(_metric_signals(profile.metric))
+        # Counted over one column rather than parsed whole: the template has a
+        # row per scored row, so on a large competition this read 690,000 rows
+        # into a frame and threw it away to learn one integer.
+        template_rows = (
+            source.exact_unit_count(sample_table, submission_columns[0])
+            if sample_table is not None and submission_columns
+            else 0
+        )
         template_matches_test = (
             sample_table is not None
             and test_table is not None
             and sample_table != test_table
             and profile.test_row_count > 0
-            and len(source.sample(sample_table, None)) == profile.test_row_count
+            and template_rows == profile.test_row_count
         )
         unit_signals = _prediction_unit_signals(
             profile, template_matches_test=template_matches_test
         )
-        profile.prediction_unit = "row" if unit_signals else "unknown"
+        profile.prediction_unit = _unit_from(unit_signals)
         profile.inferences["prediction_unit"] = Inference.of(unit_signals)
         if profile.target_column is None:
             why = (
@@ -1152,7 +1197,9 @@ class TabularProfiler:
         )
         profile.inferences["modality"] = Inference.of(_modality_signals(profile.modalities))
         profile.prediction_unit = "episode"
-        profile.inferences["prediction_unit"] = Inference.of([])
+        profile.inferences["prediction_unit"] = Inference.of(
+            [Signal(id="no_tabular_data", detail="no units to predict, only an environment")]
+        )
         profile.metric = source.declared().metric
         profile.inferences["metric"] = Inference.of(_metric_signals(profile.metric))
         profile.inferences["target_column"] = Inference.of([])
@@ -1374,6 +1421,7 @@ class TabularProfiler:
         profile = DatasetProfile(
             competition=competition,
             columns=self.profile_columns(sample_df),
+            column_stats_rows=len(sample_df),
         )
         profile.files = [table.uri for table in tables[:200]]
         profile.train_file = sampled[0].uri
@@ -1546,7 +1594,7 @@ class TabularProfiler:
             profile.image_dir = primary.image_dir if primary else None
             profile.inferences["modality"] = Inference.of(_modality_signals(profile.modalities))
         unit_signals = _prediction_unit_signals(profile, template_matches_test=False)
-        profile.prediction_unit = "partition_row" if unit_signals else "unknown"
+        profile.prediction_unit = _unit_from(unit_signals)
         profile.inferences["prediction_unit"] = Inference.of(unit_signals)
         # Appended, not assigned. `profile.warnings = [...]` here discarded
         # everything recorded earlier in this method — including the note

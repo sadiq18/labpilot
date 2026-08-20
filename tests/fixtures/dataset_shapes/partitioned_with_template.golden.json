@@ -297,6 +297,7 @@
   "train_partition_count": 5,
   "test_partition_count": 5,
   "row_count_estimated": true,
+  "column_stats_rows": 68,
   "scored_is_partition_suffix": false,
   "scored_fraction": 0.0,
   "train_only_columns": [

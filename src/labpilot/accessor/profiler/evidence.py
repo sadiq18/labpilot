@@ -197,10 +197,10 @@ CATALOGUE: dict[str, SignalSpec] = {
             means="no tables at all — an environment to act in, not units to predict",
         ),
         _spec(
-            "csv_majority",
+            "modality_majority",
             0.40,
             "distributional",
-            means="tables outnumber the other modality's files, so they carry the signal",
+            means="the primary modality's files outnumber the others', so it carries the signal",
         ),
         _spec(
             "llm_modality_tiebreak",
