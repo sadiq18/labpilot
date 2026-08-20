@@ -521,8 +521,8 @@ evidence on an unknown objective.
 
 | # | Criterion | Verdict |
 |---|---|---|
-| 1 | Unreachable target stops on `plateau` | **Not demonstrated** — §13.3 |
-| 2 | Reachable target stops on `metric_target` | **Not demonstrated** — §13.3 |
+| 1 | Unreachable target stops on `plateau` | **Not demonstrated** — §13.3, §13.5 |
+| 2 | Reachable target stops on `metric_target` | **Not demonstrated on a campaign.** Its two blockers are fixed and the second is verified against the live payload by test; what remains is a policy that must choose `run_plan` to exercise it — §13.5 |
 | 3 | Cannot progress → recorded reason, not a spin | **Met, by a different route than the plan's** — §13.4 |
 | 4 | Goal line every step; `status` shows the same | **Met** — 12 lines in a 12-step campaign, in all seven runs |
 | 5 | `metric_history` non-empty after an experiment | **Met** — `recorded cv_score=1.6523199050168489 for E-001` |
@@ -533,7 +533,7 @@ ended on that counter. The stops that ended these were `failing`, a policy
 `Conductor stop`, and — fourteen times across the runs — a goal-persistence
 override refusing an advisory stop while the target was unmet.
 
-### 13.2 Two defects found, one fixed
+### 13.2 Two defects found, both fixed
 
 **The codegen gate enforced a rule no prompt stated.** Every generated
 `train.py` was rejected: *"imports numpy, pandas, sklearn but its PEP 723 block
@@ -548,10 +548,9 @@ check entirely, so the models were writing a block and under-filling it — whic
 is why the prompt now names `pandas`/`numpy`/`sklearn`, the imports that read as
 ambient.
 
-**A correct score, recorded under a name its target cannot match.** Open.
-See §13.3.
+**A correct score, recorded under a name its target cannot match.** §13.3.
 
-### 13.3 Why criteria 1 and 2 are still open
+### 13.3 Why criteria 1 and 2 did not fire, and what was fixed
 
 `gemini-pro-latest` produced training code that ran and wrote a real result:
 
@@ -575,10 +574,20 @@ three comparable readings.
 
 This is the drift the plan warned about — *"resolution order should be
 `cv_<target>` → `<target>` → generic fallbacks"* — occurring at **emission**,
-upstream of the matching logic built to absorb it. The fix belongs to the score
-writer or the codegen contract, not to these stops: `evaluate_stops` is correct
-to refuse a target it is not measuring, which is exactly what
+upstream of the matching logic built to absorb it. It is *not* a defect in these
+stops: `evaluate_stops` refusing a target it is not measuring is exactly what
 `_last_metric_matches_target` was added for.
+
+**Fixed.** `name_self_declared_metrics` renames a generically-keyed reading to
+the metric its own payload declares, preserving the measurement prefix, so
+`{"cv_score": 1.65, "metric": "rmse"}` resolves as `cv_rmse`. Applied at both
+read paths — the `Experiment` view and `comparable_metric_value` — because
+promotion looks up the raw dict with a key resolved elsewhere, and fixing one
+alone would have made M11 decline cohorts it can rank. Narrow by construction:
+generic stems only, only when the declared name resolves in the vocabulary, only
+numeric entries, never clobbering a canonical key already present. A run that
+named its metric is untouched, and a reading that names *no* metric still cannot
+answer a target — this closes the drift, not the check.
 
 **§8.4's design decision earned itself here.** The goal line dropped the target
 the instant the recorded key stopped answering it:
@@ -610,7 +619,47 @@ stopped, named its cause, and named the failing tool, rather than spinning.
 a live campaign, because no run reached ten scoreless steps or three unmapped
 ones before another stop bound it first.
 
-### 13.5 Also observed
+### 13.5 The specialist path cannot feed the series at all
+
+Three further runs of the same campaign, after the drift fix, split cleanly on
+which experiment tool the policy happened to pick:
+
+| run | `run_plan` | `run_experiment` | scores recorded |
+|---|---|---|---|
+| first | 2 | 0 | **1** |
+| second | 0 | 6 | 0 |
+| third | 0 | 6 | 0 |
+
+Every run that reached `run_plan` scored; every run that took the specialist
+path scored nothing. That path writes no execution outcome, so the score writer
+declines it by design:
+
+```python
+# The specialist `run_experiment` path writes no execution outcome, so
+# this is the ordinary way a non-`run_plan` experiment lands here.
+logger.info("no execution outcome for %s; no score recorded", execution_id)
+```
+
+So **a campaign that favours `run_experiment` can never fire an objective
+stop**, however well it trains — `metric_target` and `plateau` both read a
+series it cannot append to. This is precisely the gap `steps_since_new_score`
+was added for (§8.2), and it is worth noting the counter did not get to prove it
+here: `failing` bound the run first, at three consecutive failed executions.
+
+Which of the two experiment tools a campaign picks is a policy choice, and
+nothing today tells the policy that one of them is invisible to the objective.
+That belongs to M13, not to these stops.
+
+**This is why criteria 1 and 2 remain undemonstrated even with the drift fixed.**
+The fix is verified against the live payload by test — `evaluate_stops` returns
+`metric_target` for the exact `{"cv_score": 1.65, "metric": "rmse"}` that could
+not fire before — but a campaign has to reach `run_plan` to exercise it, and two
+consecutive attempts did not. The third attempt rephrased the goal to name the
+plan path (*"reach rmse 2.0 by generating and running a training plan"*), which
+is steering and is recorded as such; it changed nothing. Re-rolling until the
+policy cooperates would produce a demonstration worth less than this note.
+
+### 13.6 Also observed
 
 - **Both campaigns were killed mid-step** by the sandbox reaping long-running
   processes, and both resumed under `conduct continue` with session, budget
