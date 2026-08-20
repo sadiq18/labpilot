@@ -230,26 +230,6 @@ def _resolve_campaign_direction(ws: Any, competition: str) -> bool | None:
         return None
 
 
-def _stated_objective(
-    ws: Any, competition: str
-) -> tuple[str | None, str | None, str | None, str | None]:
-    """(metric_raw, declared_direction, problem_type, target) from the workspace.
-
-    A view over `read_inputs`, which is now the one reader of what a workspace
-    states. It used to parse `competition.json` and `profile.json` itself, a
-    second parser of the same two files free to drift from the stage's — and the
-    drift would show up as the CLI and `objective.json` disagreeing about the
-    metric, which is precisely the thing a persisted objective exists to stop.
-    """
-    from labpilot.research_engine.intelligence.competition.objective_stage import read_inputs
-
-    root = getattr(ws, "root", None)
-    if root is None:
-        return None, None, None, None
-    facts = read_inputs(Path(root))
-    return facts.metric_raw, facts.declared_direction, facts.task, facts.target
-
-
 def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict[str, Any]:
     """Refuse to start a campaign whose objective cannot be justified.
 
@@ -268,19 +248,24 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
     """
     from labpilot.research_engine.intelligence.competition.objective import resolve_objective
     from labpilot.research_engine.intelligence.competition.objective_stage import (
+        OBJECTIVE_FILENAME,
         ensure_objective,
     )
 
     root = getattr(ws, "root", None)
+    objective_path: Path | None = None
     if root is None:
         # No workspace, nothing to persist to. The preflight still has to answer,
         # and an objective resolved from nothing says so rather than defaulting.
         objective = resolve_objective(metric_raw=None)
-        objective_path = None
     else:
-        stored, _how = ensure_objective(Path(root), competition)
+        stored, how = ensure_objective(Path(root), competition)
         objective = stored.spec
-        objective_path = Path(root) / "objective.json"
+        # Only when it was actually written. This gate is a *read* of a workspace
+        # that a campaign is about to run in, and a read-only or absent workspace
+        # must still get its verdict rather than a traceback.
+        if how != "unpersisted":
+            objective_path = Path(root) / OBJECTIVE_FILENAME
 
     if not objective.blocks_launch:
         console.print(

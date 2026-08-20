@@ -585,6 +585,7 @@ class WorkspaceCapability(BaseCapability):
         """
         try:
             from labpilot.research_engine.intelligence.competition.objective_stage import (
+                OBJECTIVE_FILENAME,
                 ensure_objective,
             )
 
@@ -595,8 +596,14 @@ class WorkspaceCapability(BaseCapability):
             metadata["objective_error"] = str(exc)
             return
 
-        metadata["objective"] = str(root / "objective.json")
-        checks.append("objective_reused" if how == "reused" else "objective_written")
+        if how == "unpersisted":
+            # Resolved, and nowhere to put it. Naming the path anyway would point
+            # a later stage at a file that is not there.
+            metadata["objective_unpersisted"] = True
+            checks.append("objective_unpersisted")
+        else:
+            metadata["objective"] = str(root / OBJECTIVE_FILENAME)
+            checks.append("objective_reused" if how == "reused" else "objective_written")
         if stored.spec.blocks_launch:
             # `why_blocked` and not the raw fields: it is the line the preflight
             # prints, and two renderings of one verdict drift.

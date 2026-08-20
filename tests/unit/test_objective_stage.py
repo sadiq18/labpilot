@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from labpilot.research_engine.intelligence.competition.objective_stage import (
     OBJECTIVE_FILENAME,
     OBJECTIVE_SCHEMA_VERSION,
@@ -91,6 +93,77 @@ def test_the_contract_is_the_fallback_for_a_profile_that_names_none(tmp_path: Pa
     assert facts.metric_raw == "rmse"
     assert facts.metric_from == "competition.json"
     assert facts.declared_direction == "minimize"
+
+
+def test_a_benchmark_keeps_its_objective_after_its_first_run(tmp_path: Path) -> None:
+    """Review finding. The harness metric was gated on `harness.handles()`.
+
+    `handles()` answers *"is this a harness workspace rather than a Kaggle
+    one"*, and it is deliberately false as soon as a `metrics.json` appears
+    beside the declaration. Gating the **metric** on it meant a benchmark
+    workspace launched before its first run and was refused after it — with
+    advice naming a `competition.json` it will never have, which is the domain
+    leak #159 removed. Nothing above it states a metric, so the declaration is
+    read whether or not this workspace is the harness's to claim.
+    """
+    (tmp_path / "harness.json").write_text(
+        json.dumps({"metric": "rmse", "direction": "minimize"}), encoding="utf-8"
+    )
+    (tmp_path / "metrics.json").write_text(json.dumps({"cv_rmse": 0.5}), encoding="utf-8")
+
+    facts = read_inputs(tmp_path)
+
+    assert facts.metric_raw == "rmse"
+    assert facts.metric_from == "harness.json"
+    assert facts.externally_scored is False, "handles() still says this is not a harness workspace"
+    assert not resolve_workspace_objective(tmp_path).spec.blocks_launch
+
+
+def test_a_declared_direction_survives_a_profile_that_names_the_metric(tmp_path: Path) -> None:
+    """Review finding. Identity and direction are resolved down the chain separately.
+
+    The profiler writes `direction: null` for any contract whose direction is
+    absent or invalid, so a profile naming the metric used to shadow the file
+    that oriented it: the campaign was refused for an unknown direction that was
+    stated in the workspace, in the very file the refusal told the operator to go
+    and edit. Worse, it was sticky — both readings gave `declared_direction:
+    null`, so the objective never went stale and re-declaring changed nothing.
+    """
+    (tmp_path / "harness.json").write_text(
+        json.dumps({"metric": "pass_rate", "direction": "maximize"}), encoding="utf-8"
+    )
+    _profile(
+        tmp_path,
+        target_column="y",
+        metric={"name": "pass_rate", "key": None, "direction": None},
+    )
+
+    facts = read_inputs(tmp_path)
+
+    assert facts.metric_raw == "pass_rate", "the profile still wins the identity"
+    assert facts.metric_from == "profile"
+    assert facts.declared_direction == "maximize", "and the harness still orients it"
+    assert resolve_workspace_objective(tmp_path).spec.direction == "maximize"
+
+
+def test_a_direction_does_not_transfer_between_two_different_metrics(tmp_path: Path) -> None:
+    """The limit on the rule above: a later source may only orient what won.
+
+    A contract naming `rmse` must not lend its `minimize` to a profile naming
+    something else — that would be worse than the bug it fixes, because a wrong
+    sign is silent and inverts every conclusion drawn from it.
+    """
+    _contract(tmp_path, name="rmse", direction="minimize")
+    _profile(
+        tmp_path,
+        target_column="y",
+        metric={"name": "wellbore_misfit", "key": None, "direction": None},
+    )
+
+    facts = read_inputs(tmp_path)
+
+    assert facts.metric_raw == "wellbore_misfit"
+    assert facts.declared_direction is None
 
 
 def test_a_benchmark_states_its_own_objective(tmp_path: Path) -> None:
@@ -245,6 +318,71 @@ def test_staleness_is_the_stored_inputs_not_a_second_copy(tmp_path: Path) -> Non
     assert "fingerprint" not in json.dumps(on_disk)
     assert on_disk["inputs"]["target"] == "y"
     assert on_disk["inputs"]["metric_from"] == "competition.json"
+
+
+def test_a_workspace_that_cannot_be_written_still_gets_a_verdict(tmp_path: Path) -> None:
+    """Review finding. The launch preflight used to be a pure read.
+
+    A write that raises turns a campaign that would have started into a
+    `PermissionError` traceback out of the CLI. The objective is still resolved
+    and the caller is told it was not stored, rather than the failure being
+    swallowed into a file nobody can find.
+    """
+    import os
+
+    _contract(tmp_path, name="rmse", direction="minimize")
+    os.chmod(tmp_path, 0o500)
+    try:
+        stored, how = ensure_objective(tmp_path, "demo")
+    finally:
+        os.chmod(tmp_path, 0o700)
+
+    assert how == "unpersisted"
+    assert stored.spec.metric_name == "rmse"
+    assert not (tmp_path / OBJECTIVE_FILENAME).is_file()
+
+
+def test_resolving_an_objective_does_not_create_a_workspace(tmp_path: Path) -> None:
+    """Review finding. `mkdir(parents=True)` made a check with a side effect.
+
+    `research conduct` against a mistyped slug materialised
+    `competitions/<typo>/objective.json` on its way to refusing the campaign, so
+    the next listing showed a workspace nobody asked for.
+    """
+    absent = tmp_path / "competitions" / "never-created"
+
+    stored, how = ensure_objective(absent, "demo")
+
+    assert how == "unpersisted"
+    assert stored.spec.blocks_launch
+    assert not absent.exists(), "a read of a workspace must not create one"
+    # And the writer itself, not only the guard in front of it: `write_objective`
+    # is public, and a second caller must not be able to conjure the tree either.
+    with pytest.raises(OSError):
+        write_objective(absent, stored)
+    assert not absent.exists()
+
+
+def test_the_workspace_is_read_once_per_call(tmp_path: Path) -> None:
+    """`objective_state` then re-resolving parsed the same three files twice.
+
+    `_profile_state` carries a comment about exactly this shape. The resolve path
+    also ran the direction probe against a second reading of inputs it had
+    already taken, which is a second chance for the two to disagree.
+    """
+    from unittest import mock
+
+    import labpilot.research_engine.intelligence.competition.objective_stage as stage
+
+    _contract(tmp_path, name="rmse", direction="minimize")
+    _profile(tmp_path, target_column="y")
+
+    with mock.patch.object(stage, "read_inputs", wraps=stage.read_inputs) as spy:
+        ensure_objective(tmp_path, "demo")  # resolves and writes
+        assert spy.call_count == 1
+        spy.reset_mock()
+        ensure_objective(tmp_path, "demo")  # reuses
+        assert spy.call_count == 1
 
 
 def test_a_corrupt_profile_does_not_stop_the_objective(tmp_path: Path) -> None:
