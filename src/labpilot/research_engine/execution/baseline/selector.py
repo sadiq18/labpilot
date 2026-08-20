@@ -12,6 +12,7 @@ from labpilot.research_engine.intelligence.competition.metric_vocabulary import 
     metrics_for_problem_type,
 )
 from labpilot.research_engine.intelligence.competition.models import CompetitionSpec, ProblemType
+from labpilot.research_engine.intelligence.competition.objective import ObjectiveSpec
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,10 @@ SUPPORTED_METRICS_BY_PROBLEM_TYPE: dict[str, set[str]] = {
 # Requiring at least one repeated value (`unique_count < row_count`) keeps
 # small regression datasets where every row happens to have a unique target
 # (common with only a handful of rows) from being misread as classification.
+#: Retired in favour of `DatasetProfile.target_type`, which draws the same line
+#: at 30. Kept as a name for readers of older `baseline_choice.json` files and
+#: read by nothing here — two thresholds for one question is how a 25-label
+#: target came to be classification or regression depending on which path ran.
 MAX_CLASSIFICATION_CARDINALITY = 20
 
 
@@ -122,8 +127,7 @@ def derive_validation_plan(profile: DatasetProfile, n_splits: int = 5) -> Valida
             anchor_column=anchor,
             rationale=(
                 "rows are not iid across partitions; grouping prevents "
-                "near-duplicate rows from spanning the train/validation boundary."
-                + anchor_note
+                "near-duplicate rows from spanning the train/validation boundary." + anchor_note
             ),
         )
     return ValidationPlan(
@@ -151,6 +155,22 @@ class BaselineChoice(BaseModel):
     image_column: str | None = None
     baseline_strategy: str = "lightweight"
     validation: ValidationPlan = Field(default_factory=ValidationPlan)
+    #: Where `problem_type` and `metric_name` came from: ``objective`` when
+    #: `objective.json` answered, ``derived`` when this file worked it out for
+    #: itself. Recorded because the two disagreeing is a finding, and until now
+    #: there was nothing to compare — the objective was resolved, printed, and
+    #: never reached this decision at all.
+    objective_source: str = "derived"
+    #: The metric the competition is actually scored by, as the objective
+    #: resolved it. Kept beside `metric_name` rather than replacing it, because
+    #: when they differ that difference is the whole finding.
+    objective_metric: str | None = None
+    #: Set when `metric_name` is **not** what the competition is scored by. CV
+    #: then optimises a proxy, and it used to do so behind a `logger.info` — the
+    #: metric-mismatch class this layer exists to remove, arriving one level up.
+    #: playground-series-s6e7 states balanced accuracy and every campaign scored
+    #: plain accuracy.
+    metric_substituted_from: str | None = None
     partitioned: bool = False
     partition_kinds: dict[str, int] = Field(default_factory=dict)
 
@@ -158,8 +178,24 @@ class BaselineChoice(BaseModel):
 class BaselineSelector:
     """Rule-based baseline template selection for P0."""
 
-    def select(self, competition: CompetitionSpec, profile: DatasetProfile) -> BaselineChoice:
-        problem_type = self._infer_problem_type(competition, profile)
+    def select(
+        self,
+        competition: CompetitionSpec,
+        profile: DatasetProfile,
+        objective: ObjectiveSpec | None = None,
+    ) -> BaselineChoice:
+        """Choose a baseline. `objective` is the stage before this one.
+
+        Optional so every existing caller keeps working, and passed on the
+        production path. Without it this file re-derives the task from the
+        target's shape and the metric from the contract — two more
+        implementations of questions `objective.json` has already answered with
+        evidence, and two more chances to answer them differently.
+        """
+        problem_type = self._infer_problem_type(competition, profile, objective)
+        task_from_objective = bool(
+            objective is not None and objective.task and objective.task == problem_type
+        )
         template_name = self._resolve_template_name(problem_type, competition)
         # A partitioned predict-forward dataset cannot be served by the plain
         # single-train-file template: it would read one partition and validate
@@ -175,7 +211,9 @@ class BaselineSelector:
         if template is None:
             raise ValueError(f"No baseline template for problem type: {problem_type}")
 
-        metric_name = self._resolve_metric_name(competition, problem_type)
+        metric_name, substituted_from = self._resolve_metric_name(
+            competition, problem_type, objective
+        )
         logger.info(
             "Selected baseline template '%s' for problem type '%s' (metric key: cv_%s).",
             template.name,
@@ -200,6 +238,18 @@ class BaselineSelector:
             validation=derive_validation_plan(profile),
             partitioned=profile.partitioned,
             partition_kinds=profile.partition_kinds,
+            # What the objective actually supplied, not merely that one was
+            # passed. An unresolved objective — no task, no metric — reported
+            # `objective` while both values came from the older derivation,
+            # which is the wrong answer to the one question this field exists
+            # to answer.
+            objective_source=(
+                "objective"
+                if task_from_objective or (objective is not None and objective.metric_name)
+                else "derived"
+            ),
+            objective_metric=objective.metric_name if objective is not None else None,
+            metric_substituted_from=substituted_from,
         )
 
     def save(self, run_dir: Path, choice: BaselineChoice) -> Path:
@@ -207,7 +257,28 @@ class BaselineSelector:
         output.write_text(choice.model_dump_json(indent=2))
         return output
 
-    def _infer_problem_type(self, competition: CompetitionSpec, profile: DatasetProfile) -> str:
+    def _infer_problem_type(
+        self,
+        competition: CompetitionSpec,
+        profile: DatasetProfile,
+        objective: ObjectiveSpec | None = None,
+    ) -> str:
+        # The objective's task is measured over the resolved target (M23 step 1).
+        # Everything below is the older answer to the same question: a keyword
+        # match on the description, then a cardinality rule this file keeps its
+        # own copy of. They agree on the easy cases, and where they do not, the
+        # one that looked at the column wins.
+        #
+        # Only when it names a type with a template. `image_regression` is a
+        # perfectly honest task string with nothing to build for it, and
+        # returning it here would raise past a caller that reads the exception as
+        # "defer to the LLM" — turning an improvement into a silent loss of
+        # rule-based selection.
+        if objective is not None and objective.task:
+            known = {member.value for member in ProblemType} - {ProblemType.UNKNOWN.value}
+            if objective.task in known:
+                return objective.task
+
         if competition.problem_type not in (ProblemType.UNKNOWN,):
             return competition.problem_type.value
 
@@ -234,16 +305,25 @@ class BaselineSelector:
         if profile.modality == "text":
             return ProblemType.TEXT_CLASSIFICATION.value
 
-        if profile.target_column and profile.row_count > 0:
-            target = next((c for c in profile.columns if c.name == profile.target_column), None)
-            if target:
-                looks_like_discrete_labels = (
-                    target.unique_count <= MAX_CLASSIFICATION_CARDINALITY
-                    and target.unique_count < profile.row_count
-                )
-                if not target.is_numeric or looks_like_discrete_labels:
-                    return ProblemType.TABULAR_CLASSIFICATION.value
-                return ProblemType.TABULAR_REGRESSION.value
+        # `profile.target_type`, not a second cardinality rule. This file kept
+        # its own — `MAX_CLASSIFICATION_CARDINALITY = 20` against the profiler's
+        # 30 — so a target with 25 labels was classification if `objective.json`
+        # existed and regression if it did not. Two implementations of one
+        # question is what step 2 exists to remove, and leaving the copy here
+        # with a different number was the worst of both.
+        #
+        # `target_type` is a derived field, so it is available on every profile
+        # including ones written before it existed; there is nothing to fall
+        # back to a local rule *for*.
+        by_shape = {
+            "binary": ProblemType.TABULAR_CLASSIFICATION.value,
+            "multiclass": ProblemType.TABULAR_CLASSIFICATION.value,
+            "multilabel": ProblemType.TABULAR_CLASSIFICATION.value,
+            "continuous": ProblemType.TABULAR_REGRESSION.value,
+            "count": ProblemType.TABULAR_REGRESSION.value,
+        }.get(profile.target_type)
+        if by_shape is not None:
+            return by_shape
 
         if from_meta is not ProblemType.UNKNOWN:
             return from_meta.value
@@ -259,31 +339,46 @@ class BaselineSelector:
             "profile) or set problem_type in configs/competitions/<slug>.yaml."
         )
 
-    def _resolve_metric_name(self, competition: CompetitionSpec, problem_type: str) -> str:
+    def _resolve_metric_name(
+        self,
+        competition: CompetitionSpec,
+        problem_type: str,
+        objective: ObjectiveSpec | None = None,
+    ) -> tuple[str, str | None]:
+        """`(metric_to_optimise, the_one_it_replaced)`.
+
+        The second element is the point. A metric the pipeline cannot compute
+        used to become a default behind a `logger.info`, so CV optimised a proxy
+        and nothing downstream could tell. Returning what was displaced makes the
+        substitution a field on the artifact, which the evidence layer and the
+        gate can both read.
+        """
         default = DEFAULT_METRIC_BY_PROBLEM_TYPE.get(problem_type, "accuracy")
         supported = SUPPORTED_METRICS_BY_PROBLEM_TYPE.get(problem_type, {default})
-        metric = competition.evaluation_metric
-        if metric is None or metric.key is None:
-            return default
-        if metric.key in supported:
-            return metric.key
+        # The objective resolved this from six ranked sources and a probe, and
+        # the contract is one of those sources. Reading the contract again here
+        # is how the two came to disagree.
+        key = objective.metric_name if objective is not None else None
+        if key is None:
+            metric = competition.evaluation_metric
+            key = metric.key if metric is not None else None
+        if key is None:
+            return default, None
+        if key in supported:
+            return key, None
         logger.info(
             "Competition metric key '%s' is not supported for %s; using default '%s'.",
-            metric.key,
+            key,
             problem_type,
             default,
         )
-        return default
+        return default, key
 
     def _resolve_template_name(self, problem_type: str, competition: CompetitionSpec) -> str | None:
-        if (
-            competition.baseline_strategy == "deep"
-            and problem_type
-            in {
-                ProblemType.TEXT_CLASSIFICATION.value,
-                ProblemType.IMAGE_CLASSIFICATION.value,
-            }
-        ):
+        if competition.baseline_strategy == "deep" and problem_type in {
+            ProblemType.TEXT_CLASSIFICATION.value,
+            ProblemType.IMAGE_CLASSIFICATION.value,
+        }:
             return f"{problem_type}_deep"
         return None
 
