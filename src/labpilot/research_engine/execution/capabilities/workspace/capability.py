@@ -165,6 +165,12 @@ class WorkspaceCapability(BaseCapability):
 
         download_ok = self._ensure_data(context, root, metadata, errors, checks)
         profile_ok = self._ensure_profile(context, root, metadata, errors, checks)
+        # The stage after dataset understanding, and it runs here rather than in
+        # the CLI because that is what makes it a stage. `resolve_objective` has
+        # been correct since #145 and was reached from exactly one preflight, so
+        # its contradictions and its `unresolved` list — which name what to ask —
+        # died on a console line.
+        self._ensure_objective(context, root, metadata, checks)
 
         passed = (
             research_ok
@@ -558,6 +564,45 @@ class WorkspaceCapability(BaseCapability):
                 return True
             checks.append("profile_skipped")
             return None
+
+    def _ensure_objective(
+        self,
+        context: TaskContext,
+        root: Path,
+        metadata: dict[str, Any],
+        checks: list[str],
+    ) -> None:
+        """Resolve and persist `objective.json`. Never fails the step.
+
+        A blocked objective is a *finding*, not an error: the CLI preflight is
+        where a campaign is refused, and it refuses with the operator still at
+        the keyboard. Failing the workspace step here would refuse the same
+        campaign twice, and with the less actionable message of the two.
+
+        Recorded either way, because a workspace whose objective is
+        contradictory should say so on disk rather than only in whichever
+        console scrolled past.
+        """
+        try:
+            from labpilot.research_engine.intelligence.competition.objective_stage import (
+                ensure_objective,
+            )
+
+            stored, how = ensure_objective(root, context.competition)
+        except Exception as exc:  # noqa: BLE001 — an unresolved objective must not
+            # break workspace preparation; the preflight still gates the campaign.
+            logger.warning("Objective resolution failed: %s", exc)
+            metadata["objective_error"] = str(exc)
+            return
+
+        metadata["objective"] = str(root / "objective.json")
+        checks.append("objective_reused" if how == "reused" else "objective_written")
+        if stored.spec.blocks_launch:
+            # `why_blocked` and not the raw fields: it is the line the preflight
+            # prints, and two renderings of one verdict drift.
+            metadata["objective_blocked"] = stored.spec.why_blocked()
+            metadata["objective_unresolved"] = list(stored.spec.unresolved)
+            checks.append("objective_unresolved")
 
     def _write_inventory_profile(
         self,
