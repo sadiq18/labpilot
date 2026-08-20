@@ -22,6 +22,13 @@ from labpilot.research_engine.workspace_facade import Workspace
 logger = logging.getLogger(__name__)
 
 
+#: Statuses that say the run did not work. Refusing a known failure rather
+#: than requiring a known success: the specialist reports "completed",
+#: "succeeded" and "unknown" for runs that did produce metrics, and demanding
+#: one exact spelling would put this path back where it started — invisible.
+_FAILED_STATUSES = frozenset({"failed", "error", "errored", "cancelled", "canceled"})
+
+
 def _specialist_record(workspace: Workspace, execution_id: str) -> dict[str, Any] | None:
     """The experiment record the `run_experiment` specialist writes, or None.
 
@@ -40,6 +47,21 @@ def _specialist_record(workspace: Workspace, execution_id: str) -> dict[str, Any
     # not indexed, which would silently score this execution from another run's
     # numbers. Only an exact match is attribution.
     if str(record.get("execution_id") or "").strip() != execution_id.strip():
+        return None
+    # An `execution_outcome.json` exists only for an execution that completed,
+    # so the path this stands in for could never be handed a failed run's
+    # numbers. This record is written either way, and its `metrics` come from
+    # whatever `metrics.json` is at the workspace root — so a failed run that
+    # left an earlier run's file in place would be credited with that score.
+    # Refuse the statuses that say the run did not work; an unrecognised status
+    # is not read as a failure, because this is the ordinary way a specialist
+    # reports nothing in particular.
+    if str(record.get("status") or "").strip().lower() in _FAILED_STATUSES:
+        logger.info(
+            "experiment record for %s reports status=%r; no score recorded",
+            execution_id,
+            record.get("status"),
+        )
         return None
     return record
 

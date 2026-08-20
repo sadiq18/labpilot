@@ -317,16 +317,31 @@ def name_self_declared_metrics(metrics: Mapping[str, Any]) -> dict[str, Any]:
             renamed[key] = value
             continue
         canonical = _canonical_name(key, declared)
-        renamed[canonical if canonical not in metrics else key] = value
+        # Taken only if free — against the original dict *and* against what has
+        # already been renamed. Checking the original alone let two generic
+        # keys both claim one canonical name, and the second silently replaced
+        # the first: `{"cv_score": 1.0, "cv_result": 2.0}` became a single
+        # `cv_rmse` whose value depended on dict order. Two numbers under one
+        # name is the thing this promises not to do.
+        taken = canonical in metrics or canonical in renamed
+        renamed[key if taken else canonical] = value
     return renamed
 
 
 def _canonical_name(key: str, declared: str) -> str:
-    """`cv_score` + `rmse` -> `cv_rmse`; a specific key is returned unchanged."""
-    stem = strip_measurement_prefix(key.strip().lower())
+    """`cv_score` + `rmse` -> `cv_rmse`; a specific key is returned unchanged.
+
+    The prefix is sliced from the *same* normalised string the stem came from.
+    Slicing the original instead carried its whitespace into the result —
+    `" cv_score"` became `" cv_rmse"`, which no consumer looks up, so the
+    rename appeared to succeed and left the reading exactly as unreachable as
+    before.
+    """
+    normalised = key.strip().lower()
+    stem = strip_measurement_prefix(normalised)
     if stem not in _GENERIC_STEMS:
         return key
-    prefix = key[: len(key) - len(stem)]
+    prefix = normalised[: len(normalised) - len(stem)]
     return f"{prefix}{declared}"
 
 

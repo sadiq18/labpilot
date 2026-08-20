@@ -20,6 +20,8 @@ path does not write.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -46,7 +48,9 @@ def _ref(kind: str, ref_id: str) -> ArtifactRef:
     )
 
 
-def _record(ws: Workspace, execution_id: str, metrics: dict) -> None:
+def _record(
+    ws: Workspace, execution_id: str, metrics: dict, *, status: str = "completed"
+) -> None:
     write_experiment_git_record(
         ws.effective_runs_dir,
         {
@@ -54,7 +58,7 @@ def _record(ws: Workspace, execution_id: str, metrics: dict) -> None:
             "execution_id": execution_id,
             "plan_id": "P-001",
             "competition": ws.competition,
-            "status": "completed",
+            "status": status,
             "metrics": metrics,
         },
     )
@@ -75,6 +79,18 @@ def _competition(ws: Workspace, execution_id: str, key: str, direction: str) -> 
         ),
         encoding="utf-8",
     )
+
+
+
+class _RegistryDouble:
+    """`build_default_specialist_registry(...).candidates(capability=...)`."""
+
+    def candidates(self, **_kw: object) -> list[SimpleNamespace]:
+        return [SimpleNamespace(name="double", agent=object())]
+
+
+def _registry_double() -> _RegistryDouble:
+    return _RegistryDouble()
 
 
 # -- the id the handler already had ----------------------------------------
@@ -134,3 +150,109 @@ def test_no_record_and_no_outcome_is_still_no_score(tmp_path: Path) -> None:
     ws = _ws(tmp_path, "empty")
 
     assert score_event_for(ws, "E-404", fallback_maximize=False) is None
+
+
+# -- what the record does not prove ----------------------------------------
+
+
+@pytest.mark.parametrize("status", ["failed", "error", "cancelled", "ERRORED"])
+def test_a_run_that_reported_failure_is_not_scored(tmp_path: Path, status: str) -> None:
+    """An `execution_outcome.json` exists only for an execution that completed,
+    so the path this record stands in for could never be handed a failed run's
+    numbers. This record is written either way, and its `metrics` are read from
+    whatever `metrics.json` sits at the workspace root — so a failed run that
+    left an earlier run's file in place would be credited with that score."""
+    ws = _ws(tmp_path, f"failed-{status}")
+    _record(ws, "E-001", {"cv_rmse": 1.65}, status=status)
+    _competition(ws, "E-001", "rmse", "minimize")
+
+    assert score_event_for(ws, "E-001", fallback_maximize=False) is None
+
+
+def test_a_status_nobody_recognises_is_not_read_as_failure(tmp_path: Path) -> None:
+    """Refusing known failures, not demanding a known success: the specialist
+    reports several spellings for a run that did produce metrics, and requiring
+    one exact word would put this path back where it started — invisible."""
+    ws = _ws(tmp_path, "unknown-status")
+    _record(ws, "E-001", {"cv_rmse": 1.65}, status="unknown")
+    _competition(ws, "E-001", "rmse", "minimize")
+
+    assert score_event_for(ws, "E-001", fallback_maximize=False) is not None
+
+
+def test_a_dry_run_does_not_name_itself_to_the_score_writer(tmp_path: Path) -> None:
+    """`run_experiment` defaults to `dry_run=True`, and the freshness check that
+    would catch a stale `metrics.json` sits behind `if not dry_run`. Surfacing
+    the execution id anyway let a dry run re-submit the previous run's number as
+    a fresh reading — three of those make `plateau` fire on one measurement
+    counted thrice, and reset the counter watching for exactly that stall.
+    """
+    from labpilot.research_engine.tools.handlers import specialists
+
+    ws = _ws(tmp_path, "dry")
+    refs = [_ref("experiment", "experiment:E-001"), _ref("metrics", "metrics:E-001")]
+
+    with (
+        patch.object(specialists, "execute_agent_sync", return_value=refs),
+        patch.object(specialists, "_metrics_written_since", return_value=False),
+        patch.object(
+            specialists,
+            "build_default_specialist_registry",
+            return_value=_registry_double(),
+        ),
+    ):
+        result = specialists.run_experiment(ws, plan_id="P-001", dry_run=True)
+
+    assert result.data["execution_id"] is None, "a stale reading must not be scorable"
+
+
+def test_a_run_that_wrote_its_own_metrics_does_name_itself(tmp_path: Path) -> None:
+    from labpilot.research_engine.tools.handlers import specialists
+
+    ws = _ws(tmp_path, "fresh")
+    refs = [_ref("experiment", "experiment:E-001"), _ref("metrics", "metrics:E-001")]
+
+    with (
+        patch.object(specialists, "execute_agent_sync", return_value=refs),
+        patch.object(specialists, "_metrics_written_since", return_value=True),
+        patch.object(
+            specialists,
+            "build_default_specialist_registry",
+            return_value=_registry_double(),
+        ),
+    ):
+        result = specialists.run_experiment(ws, plan_id="P-001", dry_run=True)
+
+    assert result.data["execution_id"] == "E-001"
+
+
+def test_two_runs_of_one_plan_do_not_share_a_task_id(tmp_path: Path) -> None:
+    """The agent falls back to `E-agent-{task.id}` when the inner result names
+    no execution. A constant default made every such run share one id — and
+    `ScoreEvent.experiment_id` is what exit criterion 1 and the stagnation mint
+    cite."""
+    from labpilot.research_engine.tools.handlers import specialists
+
+    ws = _ws(tmp_path, "ids")
+    seen: list[str] = []
+
+    def _capture(agent, task, workspace, bundle):  # noqa: ANN001, ARG001
+        seen.append(task.id)
+        return []
+
+    ws_ids = []
+    for stamp in (1_000.0, 1_001.0):
+        with (
+            patch.object(specialists, "execute_agent_sync", _capture),
+            patch.object(specialists, "_metrics_written_since", return_value=True),
+            patch.object(specialists.time, "time", return_value=stamp),
+            patch.object(
+                specialists,
+                "build_default_specialist_registry",
+                return_value=_registry_double(),
+            ),
+        ):
+            specialists.run_experiment(ws, plan_id="P-001", dry_run=True)
+        ws_ids.append(seen[-1])
+
+    assert ws_ids[0] != ws_ids[1]

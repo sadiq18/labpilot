@@ -114,6 +114,26 @@ def test_an_existing_canonical_key_is_never_clobbered() -> None:
     assert name_self_declared_metrics(both)["cv_rmse"] == 2.0
 
 
+def test_two_generic_keys_do_not_collapse_into_one() -> None:
+    """Both are readings. Renaming both to one canonical name lost whichever
+    came first, and which survived depended on dict order — two numbers under
+    one name is precisely what this promises not to do."""
+    both = {"cv_score": 1.0, "cv_result": 2.0, "metric": "rmse"}
+
+    renamed = name_self_declared_metrics(both)
+
+    assert sorted(v for v in renamed.values() if isinstance(v, float)) == [1.0, 2.0]
+    assert renamed["cv_rmse"] == 1.0
+    assert renamed["cv_result"] == 2.0
+
+
+def test_whitespace_in_a_key_does_not_survive_the_rename() -> None:
+    """The prefix used to be sliced from the untrimmed key, so `" cv_score"`
+    became `" cv_rmse"` — a name no consumer looks up, leaving the reading as
+    unreachable as before while appearing to have been fixed."""
+    assert "cv_rmse" in name_self_declared_metrics({" cv_score": 1.0, "metric": "rmse"})
+
+
 def test_an_unknown_declared_name_changes_nothing() -> None:
     payload = {"cv_score": 1.0, "metric": "not a metric anyone catalogued"}
 
