@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 __all__ = [
     "ExclusionReason",
@@ -83,6 +83,69 @@ ExclusionReason = Literal[
     "equals_target",
     "constant",
 ]
+
+
+#: What shape the prediction target is, which is what decides the floor.
+#:
+#: M22 deferred this to M23, and the design's line is the reason it lives here
+#: rather than beside the modality: *"the floor is determined by the shape of the
+#: prediction target, not the modality of the input."* An image competition's
+#: label is still a class column, and its floor is the class prior — identical to
+#: tabular. Modality decides only whether Baseline 1 is affordable.
+#:
+#: ``ordinal`` is never derived. Whether 1–5 stars are ranks or five unrelated
+#: labels is a fact about the world, not about the column, and a detector that
+#: guessed would be asserting semantics from arithmetic. It exists so an operator
+#: answer has somewhere to land.
+TargetType = Literal[
+    "binary",
+    "multiclass",
+    "multilabel",
+    "continuous",
+    "count",
+    "ordinal",
+    "none",
+    "unknown",
+]
+
+
+class TargetDistribution(BaseModel):
+    """What the target looks like, measured — the input to M23's floor.
+
+    Deliberately **not** a second copy of the target column's `stats`: mean, std,
+    min and max are already measured there, and duplicating them would create two
+    numbers for one fact with nothing keeping them equal. What is here is what the
+    floor needs and the column profile does not carry.
+
+    Empty is a real answer. A target that could not be resolved has no
+    distribution, and reporting zeros for one would put a floor under a column
+    nobody identified.
+    """
+
+    #: Label → row count, for a discrete target. The optimal constant prediction
+    #: for accuracy is the argmax of this, and for log-loss it is the whole
+    #: vector — which is why the counts are kept rather than just the winner.
+    class_counts: dict[str, int] = Field(default_factory=dict)
+    #: The pandas dtype `class_counts` keys were rendered from. JSON keys are
+    #: strings; this is what turns them back into labels. Without it a floor
+    #: predicting the majority class of a float64 target writes the string
+    #: "0.0" into a submission whose sample column is an integer.
+    class_dtype: str | None = None
+    #: The optimal constant under absolute error, as mean is under squared error.
+    #: `stats` carries the mean already; a floor that only knew the mean would be
+    #: the wrong constant for every MAE competition.
+    median: float | None = None
+    #: Fraction of rows that are exactly zero. A zero-inflated target makes the
+    #: mean a poor constant and is worth seeing before a model is blamed for it.
+    zero_fraction: float | None = None
+    #: Fisher-Pearson skew. Reported, never acted on here: it is the difference
+    #: between "the model is bad" and "the target needed a log", and M23's
+    #: failure report cites it.
+    skew: float | None = None
+    #: Rows the target was null in. A target with nulls in train is either a
+    #: different competition than it looks or a reading error, and both deserve
+    #: to be visible.
+    null_count: int = 0
 
 
 class ModalityPresence(BaseModel):

@@ -123,6 +123,14 @@
   },
   "train_test_relationship": "disjoint_units",
   "metric": null,
+  "target_distribution": {
+    "class_counts": {},
+    "class_dtype": null,
+    "median": 304.0,
+    "zero_fraction": 0.0,
+    "skew": 0.745223,
+    "null_count": 0
+  },
   "submission_columns": [],
   "notes": [
     {
@@ -275,6 +283,7 @@
   "anchor_column": null,
   "modality": "tabular",
   "confidence": 0.0,
+  "target_type": "continuous",
   "id_column": null,
   "feature_columns": [
     "id",

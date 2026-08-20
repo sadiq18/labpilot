@@ -77,9 +77,18 @@ class ObjectiveInputs(BaseModel):
     #: the target is M22's answer, and the objective now reads it rather than
     #: re-deriving it.
     target: str | None = None
-    #: Today the contract's `problem_type`. Step 1 replaces this with the
-    #: schema's measured `target_type`, and the swap is one line here.
+    #: What kind of task this is. Measured from the schema when the profile can
+    #: say — `target_type` plus modality — and read from the contract's
+    #: `problem_type` only when it cannot. The order is the point: the contract's
+    #: value is inferred from competition *prose* by keyword regex
+    #: (`infer_problem_type.py` matches \bregression\b, \brmse\b, …), and a
+    #: description that says "we ran a regression on last year's data" makes a
+    #: classification competition read as regression. The target column is right
+    #: there and can simply be looked at.
     task: str | None = None
+    #: Which of the two answered. Not a decision input; the first thing anyone
+    #: asks when the schema and the contract disagree about what this is.
+    task_from: str = "none"
     metric_raw: str | None = None
     declared_direction: Direction | None = None
     #: A benchmark reports its own score, so "nothing here can compute it" is
@@ -104,22 +113,51 @@ class StoredObjective(BaseModel):
     spec: ObjectiveSpec = Field(default_factory=ObjectiveSpec)
 
 
-def _profile_facts(root: Path) -> tuple[str | None, dict[str, Any] | None]:
-    """`(target_column, metric)` from `profile.json`, or `(None, None)`.
+def _profile_task(profile: dict[str, Any]) -> str | None:
+    """`<modality>_classification` / `_regression` from the measured target type.
+
+    Returns None for `none`, `unknown` and `ordinal` — a target nobody resolved
+    has no task, and an ordinal one is neither answer. The caller falls back to
+    the contract rather than guessing, because "we do not know" losing to a
+    keyword match would be worse than the keyword match alone.
+    """
+    target_type = profile.get("target_type")
+    kind = {
+        "binary": "classification",
+        "multiclass": "classification",
+        "multilabel": "classification",
+        "continuous": "regression",
+        "count": "regression",
+    }.get(str(target_type or ""))
+    if kind is None:
+        return None
+    modality = str(profile.get("modality") or "tabular")
+    return f"{modality}_{kind}"
+
+
+def _load_profile(root: Path) -> dict[str, Any]:
+    """`profile.json` as a dict, or `{}` when there is nothing readable there.
 
     Unreadable is the same as absent on purpose. A corrupt profile is a problem
     for the profile stage to report; refusing to resolve an objective over it
     would turn one broken file into two.
+
+    Read once and passed around rather than re-read per fact — three callers
+    each opening the same file is the shape the review already caught in
+    `ensure_objective`, and a partitioned profile carries every column.
     """
     path = Path(root) / "profile.json"
     if not path.is_file():
-        return None, None
+        return {}
     try:
         profile = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None, None
-    if not isinstance(profile, dict):
-        return None, None
+        return {}
+    return profile if isinstance(profile, dict) else {}
+
+
+def _profile_facts(profile: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+    """`(target_column, metric)` from an already-loaded profile."""
     target = profile.get("target_column")
     metric = profile.get("metric")
     return (str(target) if target else None), (metric if isinstance(metric, dict) else None)
@@ -219,7 +257,13 @@ def read_inputs(root: Path) -> ObjectiveInputs:
     from labpilot.research_engine.intelligence.competition.metric_vocabulary import _slug
     from labpilot.research_engine.validation import harness
 
-    target, profile_metric = _profile_facts(root)
+    profile = _load_profile(root)
+    target, profile_metric = _profile_facts(profile)
+    task, task_from = _profile_task(profile), "profile"
+    if task is None:
+        task, task_from = _contract_task(root), "competition.json"
+    if task is None:
+        task_from = "none"
     claims: list[tuple[str, str | None, Direction | None]] = [
         ("profile", *_profile_metric(profile_metric)),
         ("competition.json", *_contract_metric(root)),
@@ -245,7 +289,8 @@ def read_inputs(root: Path) -> ObjectiveInputs:
 
     return ObjectiveInputs(
         target=target,
-        task=_contract_task(root),
+        task=task,
+        task_from=task_from,
         metric_raw=metric_raw,
         declared_direction=declared,
         externally_scored=harness.handles(root),
