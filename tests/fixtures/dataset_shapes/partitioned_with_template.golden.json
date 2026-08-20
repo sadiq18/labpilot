@@ -170,6 +170,7 @@
       "severity": "caution"
     }
   ],
+  "answers_fingerprint": "",
   "inferences": {
     "target_column": {
       "signals": [
@@ -214,7 +215,7 @@
       ],
       "rejected": []
     },
-    "id_column": {
+    "id_columns": {
       "signals": [
         {
           "id": "first_template_column",
@@ -274,6 +275,7 @@
     "Zone_Depth"
   ],
   "anchor_column": "Depth_input",
+  "confidence": 0.0,
   "id_column": "id",
   "feature_columns": [
     "md",

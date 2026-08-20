@@ -130,6 +130,24 @@ def _offline_fallback_prompt(yes: bool):
     return _prompt
 
 
+def _schema_prompt(question):
+    """Ask an operator which column is right, showing what the profiler saw.
+
+    Only ever installed for an interactive run. There is no `--yes` variant on
+    purpose: `--yes` means "do not ask me to approve your plan", and it must not
+    come to mean "decide what my label is".
+    """
+    print(f"\nSchema question: {question.field}")
+    print(f"  {question.context}")
+    if question.provisional:
+        print(f"  provisional (not acted on): {question.provisional}")
+    for candidate in question.candidates:
+        fired = ", ".join(signal.id for signal in candidate.signals) or "nothing fired"
+        print(f"  · {candidate.candidate} ({candidate.confidence:.2f}) — {fired}")
+    answer = input(f"Which column is {question.field}? [blank to stop]: ").strip()
+    return answer or None
+
+
 def _approval_prompt(yes: bool):
     def _approve(tool_name: str) -> ApprovalResult:
         if yes:
@@ -480,6 +498,7 @@ def conduct_run(
             max_steps=max_steps,
             auto_approve=yes,
             approval_prompt=None if yes else _approval_prompt(yes),
+            schema_prompt=None if yes else _schema_prompt,
             on_progress=lambda msg: console.print(f"  {msg}"),
             autonomy=autonomy,
             prefer_offline=offline,
@@ -557,6 +576,7 @@ def _continue_session(
             max_steps=max_steps,
             auto_approve=yes,
             approval_prompt=None if yes else _approval_prompt(yes),
+            schema_prompt=None if yes else _schema_prompt,
             on_progress=lambda msg: console.print(f"  {msg}"),
             autonomy=level,
             prefer_offline=offline,

@@ -145,6 +145,12 @@ CATALOGUE: dict[str, SignalSpec] = {
             means="second column of the template's overlap with train — position, not evidence",
         ),
         _spec(
+            "operator_answer",
+            1.00,
+            "stated",
+            means="a person answered the question — the only evidence that settles one",
+        ),
+        _spec(
             "declared_by_source",
             0.90,
             "stated",

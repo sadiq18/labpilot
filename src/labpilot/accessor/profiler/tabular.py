@@ -11,9 +11,11 @@ from labpilot.accessor.profiler.evidence import (
     Alternative,
     Inference,
     Note,
+    RejectedClaim,
     Signal,
     combine,
 )
+from labpilot.accessor.profiler.questions import answers_fingerprint
 from labpilot.accessor.profiler.schema import ExclusionReason, MetricRef, SplitRelationship
 from labpilot.accessor.profiler.source import (
     DatasetSource,
@@ -86,6 +88,10 @@ class DatasetProfile(BaseModel):
     submission_columns: list[str] = Field(default_factory=list)
     #: Structured reasons. `warnings` below is the prose view over these.
     notes: list[Note] = Field(default_factory=list)
+    #: Which answers this profile was built from (`questions.answers_fingerprint`).
+    #: Empty when there were none. A profile built before an answer was given
+    #: describes a different question, so this is part of what makes it stale.
+    answers_fingerprint: str = ""
     #: Why the value plane says what it says, keyed by field name. Absent for a
     #: field nothing has reasoned about yet, which `confidence_in` reports as
     #: 0.0 — "no evidence recorded", not "no evidence exists".
@@ -115,6 +121,17 @@ class DatasetProfile(BaseModel):
     # the series actually was, so a forecast should be a residual from its last
     # known value rather than a fit over the other columns.
     anchor_column: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def confidence(self) -> float:
+        """One number a gate can read: the **weakest** of the required answers.
+
+        Not an average. A schema certain about four things and guessing at the
+        target is a guessing schema, and a mean would let three confident
+        answers hide the one that matters.
+        """
+        return min((self.confidence_in(field) for field in REQUIRED_FIELDS), default=0.0)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -171,6 +188,81 @@ class DatasetProfile(BaseModel):
         """How sure the profiler is about one field, or 0.0 if it never reasoned about it."""
         inference = self.inferences.get(field)
         return inference.confidence if inference else 0.0
+
+
+#: What the schema-level `confidence` summarises. Broader than the fields whose
+#: uncertainty *stops* a campaign (`questions.BLOCKING_FIELDS`): a capped
+#: `disjoint_units` and a missing metric both drag the number down without being
+#: worth stopping for, which is the distinction between "how good is this
+#: description" and "may I proceed on it".
+REQUIRED_FIELDS = ("target_column", "id_columns", "train_test_relationship", "metric")
+
+
+def _answered(
+    candidates: dict[str, list[Signal]],
+    answer: str | None,
+    *,
+    known: set[str],
+    field: str = "target_column",
+) -> tuple[dict[str, list[Signal]], list[RejectedClaim]]:
+    """Fold an operator's answer into the candidate set, if it names a column.
+
+    The answer becomes a candidate carrying `operator_answer` (1.00), so it wins
+    by evidence rather than by bypassing the resolver — and its other signals are
+    kept, so the profile still shows what the data said about the column a person
+    chose. A column the profiler never *considered* is added, because not seeing
+    something is why the question was asked.
+
+    A column that does not **exist** is refused and recorded in `rejected`.
+    `operator_answer` is the top of the scale, so an unchecked value would assert
+    a target that is not in the dataset — and silently re-admit the
+    `equals_target` leak, since nothing equals a column that is not there. The
+    CLI checks too; this is the guard for every other way a `DeclaredFacts`
+    reaches the profiler.
+    """
+    if not answer:
+        return candidates, []
+    from labpilot.accessor.profiler.questions import parse_answer
+
+    try:
+        named = parse_answer(field, answer)
+    except ValueError as exc:
+        return candidates, [RejectedClaim(claim=answer, source="operator", refuted_by=str(exc))]
+    unknown = [name for name in named if known and name not in known]
+    if unknown:
+        return candidates, [
+            RejectedClaim(
+                claim=answer,
+                source="operator",
+                refuted_by=f"{unknown} names no column in this dataset",
+            )
+        ]
+    settled = dict(candidates)
+    for name in named:
+        settled[name] = [
+            Signal(id="operator_answer", detail=f"answered: {name!r}"),
+            *candidates.get(name, []),
+        ]
+    return settled, []
+
+
+def _key_columns(
+    answer: str | None, refused: list[RejectedClaim], resolved: str | None
+) -> list[str]:
+    """The key, which an answer may state as several columns.
+
+    `_resolve` picks one winner, which is right when the profiler is inferring
+    and wrong when a person has answered `store_id,date`: taking the first of
+    those would settle a composite key as half of itself and close the question.
+    """
+    from labpilot.accessor.profiler.questions import parse_answer
+
+    if answer and not refused:
+        try:
+            return parse_answer("id_columns", answer)
+        except ValueError:
+            pass
+    return [resolved] if resolved else []
 
 
 def _resolve(candidates: dict[str, list[Signal]]) -> tuple[str | None, Inference]:
@@ -712,9 +804,23 @@ class TabularProfiler:
                     )
                 ] + _column_signals(profile, overlap[1])
 
-        target_column, target_inference = _resolve(target_candidates)
+        answers = source.declared().answers
+        profile.answers_fingerprint = answers_fingerprint(answers)
+        known = {column.name for column in profile.columns}
+        settled, refused = _answered(target_candidates, answers.get("target_column"), known=known)
+        target_column, target_inference = _resolve(settled)
         profile.target_column = target_column
-        profile.inferences["target_column"] = target_inference
+        profile.inferences["target_column"] = target_inference.model_copy(
+            update={"rejected": refused}
+        )
+        for claim in refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="target_column",
+                severity="blocking",
+            )
 
         # --- which columns could be the key --------------------------------
         id_candidates: dict[str, list[Signal]] = {}
@@ -729,9 +835,20 @@ class TabularProfiler:
                 first_in_template=candidate == submission_columns[0],
                 on_both_sides=candidate in train_columns and candidate in test_columns,
             )
-        id_column, id_inference = _resolve(id_candidates)
-        profile.id_columns = [id_column] if id_column else []
-        profile.inferences["id_column"] = id_inference
+        id_settled, id_refused = _answered(
+            id_candidates, answers.get("id_columns"), known=known, field="id_columns"
+        )
+        id_column, id_inference = _resolve(id_settled)
+        profile.id_columns = _key_columns(answers.get("id_columns"), id_refused, id_column)
+        profile.inferences["id_columns"] = id_inference.model_copy(update={"rejected": id_refused})
+        for claim in id_refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="id_columns",
+                severity="blocking",
+            )
 
         # A contract, not an inference: a template whose columns are not the id
         # and the target describes a submission this profile cannot produce, and
@@ -1121,9 +1238,32 @@ class TabularProfiler:
         # value — this step does not move answers the code already gets right —
         # and the resolver is asserted to agree with it, so the two cannot drift
         # while the old procedure is still in place.
-        scored_target, target_inference = _resolve(
-            {str(c): target_signals_for(str(c)) for c in train_only}
+        answers = source.declared().answers
+        profile.answers_fingerprint = answers_fingerprint(answers)
+        known = {column.name for column in profile.columns}
+        settled, refused = _answered(
+            {str(c): target_signals_for(str(c)) for c in train_only},
+            answers.get("target_column"),
+            known=known,
         )
+        scored_target, target_inference = _resolve(settled)
+        target_inference = target_inference.model_copy(update={"rejected": refused})
+        for claim in refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="target_column",
+                severity="blocking",
+            )
+        if answers.get("target_column") and not refused:
+            # An answer is not a hint. Where a person has settled the question,
+            # the value follows the answer rather than the procedure that could
+            # not settle it — and `profile.target_column` is assigned above, so
+            # updating `target` alone would leave the answer in the evidence and
+            # the guess in the value.
+            target = scored_target
+            profile.target_column = scored_target
         if target is not None:
             profile.inferences["target_column"] = target_inference
             if scored_target != str(target):
@@ -1138,7 +1278,7 @@ class TabularProfiler:
                     severity="blocking",
                 )
 
-        id_column, id_inference = _resolve(
+        id_settled, id_refused = _answered(
             {
                 candidate: _identity_signals(
                     profile,
@@ -1152,11 +1292,25 @@ class TabularProfiler:
                     on_both_sides=candidate in set(sample_df.columns) and candidate in test_columns,
                 )
                 for candidate in submission_columns[:1]
-            }
+            },
+            answers.get("id_columns"),
+            known=known,
+            field="id_columns",
         )
-        profile.id_columns = [id_column] if id_column else []
+        id_column, id_inference = _resolve(id_settled)
+        profile.id_columns = _key_columns(answers.get("id_columns"), id_refused, id_column)
         if id_column is not None:
-            profile.inferences["id_column"] = id_inference
+            profile.inferences["id_columns"] = id_inference.model_copy(
+                update={"rejected": id_refused}
+            )
+        for claim in id_refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="id_columns",
+                severity="blocking",
+            )
         self._detect_suffix_scoring(profile, source, sample_table, test_kind_tables)
         # Once, not twice: it reads every sampled partition to answer, and both
         # the exclusion below and `anchor_column` further down want the same

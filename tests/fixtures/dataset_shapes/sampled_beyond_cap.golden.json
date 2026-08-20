@@ -78,6 +78,7 @@
       "severity": "info"
     }
   ],
+  "answers_fingerprint": "",
   "inferences": {
     "target_column": {
       "signals": [
@@ -103,7 +104,7 @@
       "alternatives": [],
       "rejected": []
     },
-    "id_column": {
+    "id_columns": {
       "signals": [
         {
           "id": "named_in_prediction_template",
@@ -163,6 +164,7 @@
     "label"
   ],
   "anchor_column": null,
+  "confidence": 0.0,
   "id_column": "id",
   "feature_columns": [
     "feature"

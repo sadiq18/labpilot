@@ -20,6 +20,11 @@ StopReason = Literal[
     "metric_target",
     "plateau",
     "operator_pause",
+    #: A schema question is open and there is no channel to ask it on. Distinct
+    #: from `policy_stop` deliberately: M20's finding is that collapsing states
+    #: into one boolean is how eight gates reported `pass` on things that could
+    #: not run, and "waiting for a person" is not "decided to stop".
+    "schema_question",
     "policy_stop",
     "max_steps",
     "failing",

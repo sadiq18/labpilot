@@ -103,6 +103,7 @@
       "severity": "info"
     }
   ],
+  "answers_fingerprint": "",
   "inferences": {
     "target_column": {
       "signals": [
@@ -128,7 +129,7 @@
       "alternatives": [],
       "rejected": []
     },
-    "id_column": {
+    "id_columns": {
       "signals": [
         {
           "id": "named_in_prediction_template",
@@ -188,6 +189,7 @@
     "SalePrice"
   ],
   "anchor_column": null,
+  "confidence": 0.0,
   "id_column": "Id",
   "feature_columns": [
     "LotArea",

@@ -440,6 +440,48 @@ validate rather than produce the answer. With nothing declared, C lands
 
 ### 7.7 Questions: derived, asked or blocking
 
+**Not every uncertain field stops a campaign.** Step 4 splits one idea in two,
+because building it showed they are not the same:
+
+* `REQUIRED_FIELDS` — target, ids, split, metric — is what the schema-level
+  `confidence` takes the weakest of. It answers *how good is this description*.
+* `BLOCKING_FIELDS` — target and ids only — is what raises a question that stops
+  a run. It answers *may I proceed on it*.
+
+That is not a compromise. A capped `disjoint_units` is a documented assumption,
+actionable and never assertable, and it sits at 0.50 on every ordinary
+train/test dataset; asking about it each time would train an operator to dismiss
+the question that matters. A missing metric degrades optimisation without
+corrupting it — rogii's `confidence` is 0.0 for exactly that reason and its
+campaign still runs. A wrong target or key corrupts everything downstream and
+does it silently, which is the whole argument for stopping.
+
+**An answer has to invalidate the profile, or it changes nothing.**
+`_profile_state` matches on `schema_version` alone, so the profile built from the
+*old* answers would be served forever and `research schema answer` would be one
+more advertised escape that does not exist — this milestone's own defect, re-made
+inside its own mechanism. The profile stamps an `answers_fingerprint`, and a
+mismatch reads **stale**. Found by asking what happens *after* the operator
+answers, which the first draft of this section did not ask.
+
+**And the campaign has to stop when it is answered.** Invalidating is not
+enough: `prepare_workspace` is a *plan task*, not a tool the loop can dispatch,
+so a campaign that continued would spend the rest of its steps on the profile it
+was holding — the column the operator had just rejected — with the question now
+closed so nothing would ask again. Both outcomes therefore stop, with different
+rationales: *uncertain, answer it* and *answered, re-run to rebuild*. One re-run
+is the price of never running on a rejected answer.
+
+**An answer is checked before it is believed.** `operator_answer` is 1.00, the
+top of the scale, so a value naming no column would assert a target that is not
+in the dataset — and take the `equals_target` exclusion with it, because nothing
+equals a column that does not exist, putting the leak back among the features.
+The CLI refuses it with the column list; `_answered` refuses it again for every
+other route a `DeclaredFacts` can arrive by, and records it in
+`Inference.rejected` rather than dropping it. A field whose answer may name
+several columns (`id_columns`, for a composite key) parses comma-separated;
+`target_column` refuses more than one.
+
 ```python
 def pending_schema_questions(schema, answers) -> list[SchemaQuestion]:
     return [question_for(schema, f) for f in REQUIRED_FIELDS
@@ -456,7 +498,17 @@ never re-asked and a changed candidate set is genuinely a new question.
 It lives beside `profile.json`, **not inside it**: `profile.json` is rebuilt on
 every `PROFILE_SCHEMA_VERSION` bump, and an operator's answer must survive a
 profiler upgrade. An answer contributes `operator_answer` (1.00) and closes the
-question.
+question — through the same resolver as everything else, so the profile still
+shows what the *data* said about the column a person chose.
+
+**An answer has to invalidate the profile, or it changes nothing.**
+`_profile_is_current` matches on `schema_version`, so the profile built from the
+old answers would be served forever and `research schema answer` would be one
+more advertised escape that does not exist — this milestone's own defect, re-made
+inside its own mechanism. The profile therefore stamps an
+`answers_fingerprint`, and `_profile_state` calls a profile built from different
+answers **stale**. Found by asking what happens after the operator answers,
+which is a question the first draft of this section did not ask.
 
 `run_until_stop` already takes `approval_prompt` and `offline_fallback_prompt`
 as CLI-injected callables (`cli/conduct.py:337,341`), each `None` under `--yes`.
@@ -476,8 +528,12 @@ if pending and schema_prompt is None:
 `StopReason` gains `"schema_question"` — distinct, not folded into
 `policy_stop`. `evaluate_stops` is **not** extended: it takes config and state,
 and giving it a workspace would make a pure function read the disk.
-`prepare_workspace` writes `TaskStatus "blocked"`, declared at `models.py:14`
-and written by nothing today.
+`prepare_workspace` records the open questions in its metadata and adds a
+`schema_question_open` check, so the step that *found* the question says so. The
+**session** goes to `waiting` rather than to a new `blocked` status: `waiting` is
+already declared, `checkpoint.py` already counts it among the active sessions,
+and a campaign waiting for a person is resumable rather than finished. Nothing
+wrote it until now — the same shape as `TaskStatus "blocked"`, one layer up.
 
 ### 7.8 The proposer
 
@@ -562,7 +618,7 @@ show` is Rich output, truncated at 40 columns.
 | 1 ✅ | `source.py` + `LocalFileSource`; `profile_dataset` takes a source | Schemas byte-identical, on fixtures and on rogii's 1,546 tables |
 | 2 ✅ | `evidence.py`, catalogue, `combine`; `inferences` populated from today's decisions; `notes`/`warnings` view | Check 1 passes; **no values change** — the golden diff is two added keys, nothing removed and nothing altered |
 | 3 ✅ | The five answers rewritten as scoring; `id_columns`, `excluded_columns`, `train_test_relationship`, `metric` | Checks 4, 5, 6 |
-| 4 | Questions, `schema_answers.json`, `schema_prompt`, block path, `research schema` | Check 7 |
+| 4 ✅ | Questions, `schema_answers.json`, `schema_prompt`, block path, `research schema` | Check 7 |
 | 5 | Modality list, `prediction_unit`, zarr, tie-break confidence, `row_count`, metric recording; the fiction deleted | Check 8 |
 | 6 | Proposer + verifiers, off by default | Check 3 |
 
