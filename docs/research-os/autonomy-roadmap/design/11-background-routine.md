@@ -173,6 +173,23 @@ minted were already stale**, against 63 recorded selections and a 153-row pool.
 completed sweep leaves the count where it found it, and lifts the latch the
 moment the count rises.
 
+**A follow-up probe refined the diagnosis.** Running the producer against the
+same workspace with **no consumer beside it** — real registry, real LLM, the
+same 145-row pool — one sweep moved the viable count **10 → 20**, and the latch
+correctly did not fire (`thin_clause_unmovable: False`). So the producer is not
+inherently unable to move its own signal. The loop needs *both* halves: the
+producer minting rows and a consumer whose `generate_plan` selections age them
+out faster than they arrive. That is a producer↔consumer interaction, not a
+property of gathering, and it is worth stating precisely because the fix is
+hysteresis on an observation rather than a claim about what the producer can
+ever achieve.
+
+Field-confirmed so far: the branch where a working sweep is **not** latched.
+The branch where an ineffective sweep **is** latched is covered by unit tests
+(§10) and has not been witnessed on a live campaign — three attempts ended
+before a ~25-minute sweep completed, at 847s, 1047s, 1317s and 3083s, on
+stop conditions unrelated to M16.
+
 That is not the M21 ratchet — the pool is not holding gathering *shut* — but it
 is the same shape inverted, and it is worse for a background worker than for a
 campaign step: a sequential campaign that re-swept would at least be visible as
