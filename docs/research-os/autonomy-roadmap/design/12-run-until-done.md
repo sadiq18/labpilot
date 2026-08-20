@@ -684,11 +684,38 @@ attempt rephrased the goal to name the plan path
 steering and is recorded as such; it changed nothing. Re-rolling until the
 policy cooperates would produce a demonstration worth less than this note.
 
-**The open blocker, stated for whoever picks it up:** on the `run_experiment`
-path the code engineer runs and no `train.py` appears, so every execution fails
-before producing metrics. The one campaign in this session that did score
-reached `run_plan` instead. That is a codegen/plan-execution defect, and it is
-the last thing standing between this milestone and criteria 1 and 2.
+**That blocker was two defects, both since fixed, and a third behind them.**
+
+*The entry point had a required name nothing stated.* The runner looks
+`pipeline/train.py` up by name; the system prompt mentioned it only as a
+placeholder inside a JSON example and in a branch assuming prior code, and the
+task prompt not at all. So the model named the script after the work —
+`pipeline/baseline.py`, matching the plan `P-001`, the hypothesis `H-BASELINE`,
+and the `configs/baseline.yaml` beside it. Three consecutive runs, same name.
+Stating the rule in the *system* prompt did not move it; stating the path in the
+**user** prompt beside the task description did, and `train.py` landed on the
+next campaign. Worth keeping: the general instruction lost to the specific one
+sitting next to the task, which is where a per-task requirement belongs.
+
+*Every retry rebuilt blind.* `Engineer._first_failure_reason` computes why an
+attempt failed, the capability threads it into context data as `retry_reason`,
+and `code_engineer_user.j2` has a prominent block for it — and
+`CodeEngineerAgent.user_prompt` never passed it to the template. Jinja renders
+an undefined name as empty, so the block never appeared and every retry re-sent
+the original prompt verbatim. That is why each defect in this session cost
+exactly three attempts: the breaker stops at three, so one unreadable failure
+consumes a campaign's whole allowance. `engineer.py` had already named the
+shape, about a different cause — *"`retry_reason` stayed empty and three
+consecutive retries rebuilt blind while the error sat one field away."*
+
+Also fixed alongside: `"train.py missing after apply"` now names what was
+written instead, which is the whole question once you know the proposal applied.
+
+**Still open.** With `train.py` landing, the next attempt returned *"Code
+generation produced no files"* and the campaign ended on `failing` with no
+metrics. Criteria 1 and 2 remain undemonstrated on a campaign; each fix has
+revealed the next layer, and this is where the session stopped rather than
+keep going.
 
 ### 13.6 Also observed
 
