@@ -161,6 +161,12 @@ def run_compare_and_build_card(context: TaskContext) -> EvidenceCard:
     # control is where that asymmetry hid a bug once already.
     result = KaggleCvValidator().validate(context.plan.hypothesis_id, root, context)
     treatment_metrics = result.raw
+    # The direction here is inherited rather than independently resolved — same
+    # competition, same answer — and `build_evidence_card` reads only `.raw`,
+    # `.score` and `.metric` off a control result, never its direction. Passing
+    # the treatment's is the sensible value for a field nothing consults yet;
+    # a future reader should not take it for a guard against comparing a
+    # maximised run with a minimised one, because no such guard exists.
     control_result = result_from_metrics(control_metrics, maximize=result.maximize)
 
     card = build_evidence_card(
