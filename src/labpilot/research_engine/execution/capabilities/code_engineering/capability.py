@@ -927,8 +927,26 @@ class CodeEngineeringCapability(BaseCapability):
             except Exception:
                 pass
 
+        # The stage before this one. Without it the selector re-derives the task
+        # from the target's shape and the metric from the contract — the design's
+        # "`selector.py` contains no reference to an objective at all", which is
+        # how a campaign came to optimise accuracy where the rules said balanced
+        # accuracy.
+        objective = None
         try:
-            choice = BaselineSelector().select(competition, profile)
+            from labpilot.research_engine.intelligence.competition.objective_stage import (
+                load_objective,
+            )
+
+            stored = load_objective(root)
+            objective = stored.spec if stored is not None else None
+        except Exception as exc:  # noqa: BLE001 — a missing objective must not
+            # stop a baseline being chosen; it only means this falls back to the
+            # older derivation, which is what happened on every run until now.
+            logger.info("No objective to select against: %s", exc)
+
+        try:
+            choice = BaselineSelector().select(competition, profile, objective)
         except Exception as exc:
             logger.info("Baseline selection deferred to LLM: %s", exc)
             return None

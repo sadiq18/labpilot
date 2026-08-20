@@ -38,7 +38,7 @@ Read on `main` at `e6712c6`, the stages exist and the *pipeline* does not:
 | Task understanding | `target_type` + `target_distribution` (step 1) | ✅ measured over the resolved target; the keyword matcher is now the fallback |
 | Objective Resolver | `resolve_objective` (#145) | ⚠️ exists, six ranked sources, probe, contradictions — called **once, from `cli/conduct.py:299`** |
 | `ObjectiveSpec` | `objective.json` (step 0) | ✅ persisted beside `profile.json`, resolved from the schema, reused while its inputs hold |
-| Validation Strategy | `ValidationPlan` in `baseline_choice.json` | ⚠️ derived from the *profile*, not from the objective |
+| Validation Strategy | `ValidationPlan` in `baseline_choice.json` | ✅ task and metric read from `objective.json`; a substituted metric is a field, not a log line |
 | Baseline 0 / 1 / compare | — | ❌ this milestone |
 
 The defect is structural, not conceptual: each stage re-derives from
@@ -488,7 +488,7 @@ Real-data validation is a **sandbox copy**, never the live workspace
 |---|---|---|
 | 0 ✅ | **`ObjectiveSpec` becomes a stage**: resolved from the schema rather than loose CLI args, persisted as `objective.json` beside `profile.json` | The resolver's contradictions and `unresolved` list reach something other than a console line |
 | 1 ✅ | **Task understanding**: `target_type`, `target_distribution` on the schema, feeding the resolver's `task` instead of metadata keywords | M22's deferred measurements land |
-| 2 | **Validation Strategy reads the objective**, not the profile alone | One spine, no re-derivation |
+| 2 ✅ | **Validation Strategy reads the objective**, not the profile alone | One spine, no re-derivation |
 | 3 | `floor.py`: strategies, per-fold fitting, `compute_metric`; `baseline_floor.json` | Checks 1–3 |
 | 4 | `baseline_one.py`: LightGBM, minimal preprocessing, same plan; the comparison | The gate's own output exists |
 | 5 | `gate.py`: nine states, fingerprint, waiver — **observe-only** | Checks 5–8; nothing is refused yet |
