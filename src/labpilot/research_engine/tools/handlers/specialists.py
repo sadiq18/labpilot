@@ -175,8 +175,31 @@ def run_experiment(
             "specialist": candidates[0].name,
             "plan_id": plan_id,
             "dry_run": dry_run,
+            # The id the specialist already stamped on its own artifacts. Without
+            # it the conductor has nothing to record a score against, so every
+            # experiment run through this path was invisible to `metric_target`
+            # and `plateau` however well it trained — measured 2026-08-20, two
+            # campaigns chose this tool six times each and appended nothing to
+            # the series.
+            "execution_id": _execution_id_from(experiment_ref, metrics_ref),
             "experiment_path": experiment_ref.path if experiment_ref else None,
             "metrics_path": metrics_ref.path if metrics_ref else None,
             "submit": False,
         },
     )
+
+
+def _execution_id_from(*refs: Any) -> str | None:
+    """The execution id the specialist encoded in its ref ids.
+
+    `experiment:E-007` / `metrics:E-007` — the agent builds both from one
+    `execution_id`, so either answers. Read from the refs rather than threaded
+    through as a second parameter, because the refs are what the specialist
+    actually returns and a parameter could disagree with them.
+    """
+    for ref in refs:
+        raw = str(getattr(ref, "id", "") or "")
+        _, _, execution_id = raw.partition(":")
+        if execution_id.strip():
+            return execution_id.strip()
+    return None
