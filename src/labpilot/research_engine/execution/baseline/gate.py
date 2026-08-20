@@ -42,7 +42,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "GATE_STATES",
+    "blocks_research",
     "WAIVER_FILENAME",
     "GateVerdict",
     "Waiver",
@@ -67,38 +68,34 @@ __all__ = [
     "write_waiver",
 ]
 
+#: Ordered as the checks run, which is also roughly "least measured" to "most".
 GateState = Literal[
     "unknown",
-    "floor_missing",
-    "floor_undefined",
     "blocked_uncertain",
-    "awaiting_ml",
+    "floor_missing",
     "stale",
+    "floor_undefined",
+    "awaiting_ml",
     "failed",
     "passed",
     "waived",
 ]
 
-#: Ordered as the checks run, which is also roughly "least measured" to "most".
-GATE_STATES: tuple[GateState, ...] = (
-    "unknown",
-    "floor_missing",
-    "blocked_uncertain",
-    "stale",
-    "floor_undefined",
-    "awaiting_ml",
-    "failed",
-    "passed",
-    "waived",
-)
+#: Derived from the type rather than retyped beside it. Two lists of the same
+#: nine strings agreed on the day they were written and nothing kept them in
+#: step — a tenth state added to one would have silently narrowed the
+#: parametrized coverage that iterates the other, so the tests would keep
+#: passing while checking less.
+GATE_STATES: tuple[GateState, ...] = get_args(GateState)
 
 
-#: States in which a campaign has *not* demonstrated a working baseline. Written
-#: as the complement of `passed`/`waived` rather than as a list, so a tenth state
-#: added later defaults to blocking rather than to permitted — the direction that
-#: fails safe.
 def blocks_research(state: GateState) -> bool:
-    """Whether this state should stop hypothesis minting, once step 8 enforces."""
+    """Whether this state should stop hypothesis minting, once step 8 enforces.
+
+    The complement of `passed`/`waived` rather than a list of blocking states, so
+    a tenth state added later defaults to blocking rather than to permitted —
+    the direction that fails safe.
+    """
     return state not in ("passed", "waived")
 
 
@@ -182,11 +179,33 @@ def reading_fingerprint(root: Path) -> str:
         str(choice.get("target_column") or profile.get("target_column") or ""),
         str(choice.get("metric_name", "")),
         str(profile.get("schema_version", "")),
-        str(profile.get("answers_fingerprint", "")),
+        _live_answers_fingerprint(root),
     ):
         digest.update(part.encode("utf-8"))
         digest.update(b"\x00")
     return digest.hexdigest()
+
+
+def _live_answers_fingerprint(root: Path) -> str:
+    """The fingerprint of the answers **on disk now**.
+
+    Not `profile["answers_fingerprint"]`, which is the value the profile was
+    *built with* — it only changes when the profile is rebuilt, so reading it
+    here could never detect an answer. The real sequence writes
+    `schema_answers.json` and leaves `profile.json` untouched until the next
+    `prepare_workspace`, and in that window the gate was reporting `passed` over
+    a measurement of the column the operator had just rejected.
+
+    `_profile_state` compares this value against the stored one; this is the
+    side of that comparison that moves.
+    """
+    try:
+        from labpilot.accessor.profiler.questions import answers_fingerprint, load_answers
+
+        return answers_fingerprint(load_answers(Path(root)))
+    except Exception as exc:  # noqa: BLE001 — unreadable answers are not a change
+        logger.info("Could not read schema answers: %s", exc)
+        return ""
 
 
 def _open_questions(root: Path) -> list[str]:
@@ -242,12 +261,23 @@ def evaluate_gate(
         )
         return verdict
 
-    if floor is None:
-        verdict.state = "floor_missing"
-        verdict.reason = f"no {'baseline_floor.json'} in this workspace; run the baseline"
+    # 2. Is there a plan at all? `floor_missing` says "run the baseline", and
+    #    without a `ValidationPlan` there is nothing to run one *under* — advice
+    #    the operator cannot follow. `unknown` is the state for that, and it was
+    #    unreachable until this check existed.
+    if not (root / "baseline_choice.json").is_file():
+        verdict.state = "unknown"
+        verdict.reason = (
+            "no baseline_choice.json, so there is no validation plan to measure a floor under"
+        )
         return verdict
 
-    # 2. Did the dataset move under the reading? Asked before what it says,
+    if floor is None:
+        verdict.state = "floor_missing"
+        verdict.reason = "no baseline_floor.json in this workspace; run the baseline"
+        return verdict
+
+    # 3. Did the dataset move under the reading? Asked before what it says,
     #    because a stale `passed` is more dangerous than no verdict at all.
     stale_reason = _staleness(floor, model, fingerprint)
     if stale_reason:

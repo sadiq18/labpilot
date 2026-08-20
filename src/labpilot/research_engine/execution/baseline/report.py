@@ -21,8 +21,10 @@ Plan: ``docs/research-os/autonomy-roadmap/design/18-baseline-correctness.md`` §
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -111,6 +113,44 @@ def _training_sources(root: Path) -> list[tuple[str, str]]:
     return found
 
 
+def _names_used(text: str) -> set[str]:
+    """Identifiers and string literals the source actually *uses*.
+
+    Parsed rather than searched, and imports are excluded, because both
+    detectors previously matched a **mention**: an unused
+    `from sklearn.model_selection import GroupKFold` silenced the validation
+    check, and a comment reading `# TVT_input looked useless so I dropped it`
+    silenced the anchor check. The second is the worse of the two — a comment
+    saying the column was dropped is stronger evidence of the failure than
+    silence, and it was suppressing the finding.
+
+    Unparseable source falls back to comment-stripped text: a syntax error in a
+    generated file is a real situation, and reporting nothing about it is worse
+    than reporting on what can still be read.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        stripped = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+        return {token for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", stripped)}
+
+    used: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            # An import is a mention. Using the name is what the detectors are
+            # asking about, and that shows up as a Name or Attribute elsewhere.
+            continue
+        if isinstance(node, ast.Name):
+            used.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            used.add(node.attr)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            used.add(node.value)
+        elif isinstance(node, ast.keyword) and node.arg:
+            used.add(node.arg)
+    return used
+
+
 def _detect_anchor(root: Path) -> Cause | None:
     """The anchor column the profiler named, that the pipeline never mentions.
 
@@ -127,7 +167,7 @@ def _detect_anchor(root: Path) -> Cause | None:
     sources = _training_sources(root)
     if not sources:
         return None
-    if any(str(anchor) in text for _, text in sources):
+    if any(str(anchor) in _names_used(text) for _, text in sources):
         return None
     named = ", ".join(path for path, _ in sources[:3])
     return Cause(
@@ -163,11 +203,10 @@ def _detect_validation_mismatch(root: Path) -> Cause | None:
     from labpilot.research_engine.execution.delta.consistency import _matches_scheme, _word_parts
 
     parts = _word_parts(scheme)
-    for path, text in sources:
-        for line in text.splitlines():
-            for token in line.replace("(", " ").replace(".", " ").split():
-                if _matches_scheme(token, parts):
-                    return None
+    for _path, text in sources:
+        for token in _names_used(text):
+            if _matches_scheme(token, parts):
+                return None
     named = ", ".join(path for path, _ in sources[:3])
     return Cause(
         name="validation mismatch",

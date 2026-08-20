@@ -237,9 +237,17 @@ def test_a_changed_answer_makes_the_readings_stale(tmp_path: Path) -> None:
     _readings(tmp_path, model_better=True)
     assert evaluate_gate(tmp_path).state == "passed"
 
-    profile = json.loads((tmp_path / "profile.json").read_text(encoding="utf-8"))
-    profile["answers_fingerprint"] = "someone-answered-since"
-    (tmp_path / "profile.json").write_text(json.dumps(profile), encoding="utf-8")
+    # What answering actually does: it writes `schema_answers.json` and leaves
+    # `profile.json` alone until the next `prepare_workspace`. The previous
+    # version of this test edited the profile's stored `answers_fingerprint`
+    # directly — a state the system never produces, since that value only moves
+    # when the profile is rebuilt, and a rebuilt profile brings fresh readings
+    # anyway. It asserted the field worked and never the scenario.
+    from labpilot.accessor.profiler.questions import ANSWERS_FILENAME
+
+    (tmp_path / ANSWERS_FILENAME).write_text(
+        json.dumps({"target_column": "Depth"}), encoding="utf-8"
+    )
 
     verdict = evaluate_gate(tmp_path)
 
@@ -257,6 +265,48 @@ def test_an_unstamped_reading_is_not_stale(tmp_path: Path) -> None:
     write_floor(tmp_path, FloorReading(metric_name="rmse", score=1.0, best_strategy="mean"))
 
     assert evaluate_gate(tmp_path).state != "stale"
+
+
+def test_the_unknown_state_is_reachable(tmp_path: Path) -> None:
+    """Review finding. `evaluate_gate` assigned eight of the nine states.
+
+    An empty workspace reported `floor_missing`, whose advice is "run the
+    baseline" — but with no `baseline_choice.json` there is no `ValidationPlan`
+    to run one *under*, so that is advice the operator cannot follow. The state
+    table documented a row nobody would ever see.
+    """
+    verdict = evaluate_gate(tmp_path)
+
+    assert verdict.state == "unknown"
+    assert "no validation plan" in verdict.reason
+    assert verdict.blocks_research
+
+
+def test_every_declared_state_is_produced_by_something() -> None:
+    """A vocabulary entry nothing emits is a row in a table nobody reaches.
+
+    Checked against the source rather than by driving nine fixtures: the point is
+    that no state is declared and then orphaned, and `unknown` was.
+    """
+    import inspect
+
+    from labpilot.research_engine.execution.baseline import gate as gate_module
+
+    source = inspect.getsource(gate_module.evaluate_gate)
+    emitted = {s for s in GATE_STATES if f'"{s}"' in source}
+
+    assert emitted == set(GATE_STATES), f"never emitted: {sorted(set(GATE_STATES) - emitted)}"
+
+
+def test_the_state_list_is_derived_from_the_type() -> None:
+    """Two lists of the same nine strings agreed on the day they were written
+    and nothing kept them in step, so a tenth state added to one would silently
+    narrow the coverage that iterates the other."""
+    import typing
+
+    from labpilot.research_engine.execution.baseline.gate import GateState
+
+    assert GATE_STATES == typing.get_args(GateState)
 
 
 # --- the waiver ---------------------------------------------------------------
@@ -363,6 +413,68 @@ def test_a_report_with_nothing_to_say_says_so(tmp_path: Path) -> None:
     assert report.observed == []
     assert "Every detector ran and none of them fired" in report.render()
     assert set(report.not_ruled_out) == set(CAUSES)
+
+
+def test_a_mention_is_not_a_use(tmp_path: Path) -> None:
+    """Review finding, and the anchor half is the sharper one.
+
+    An unused `from sklearn.model_selection import GroupKFold` silenced the
+    validation check, and a comment reading `# TVT_input looked useless so I
+    dropped it` silenced the anchor check — a comment saying the column was
+    dropped is *stronger* evidence of the rogii failure than silence, and it was
+    suppressing the finding. Both detectors now read parsed identifiers with
+    imports excluded.
+    """
+    _workspace(tmp_path, validation={"scheme": "group_kfold", "group_key": "w", "n_splits": 4})
+    (tmp_path / "profile.json").write_text(
+        json.dumps(
+            {
+                "competition": "r",
+                "schema_version": 4,
+                "target_column": "TVT",
+                "anchor_column": "TVT_input",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text(
+        "from sklearn.model_selection import GroupKFold  # imported, never used\n"
+        "# TVT_input looked useless so I dropped it\n"
+        "for tr, va in KFold(5).split(X):\n    pass\n",
+        encoding="utf-8",
+    )
+    _readings(tmp_path, model_better=False)
+
+    fired = {c.name for c in build_report(tmp_path, evaluate_gate(tmp_path)).observed}
+
+    assert fired == {"leakage/ID handling", "validation mismatch"}
+
+
+def test_unparseable_source_still_gets_read(tmp_path: Path) -> None:
+    """A syntax error in a generated file is a real situation, and reporting
+    nothing about it is worse than reporting on what can still be read."""
+    _workspace(tmp_path)
+    (tmp_path / "profile.json").write_text(
+        json.dumps(
+            {
+                "competition": "r",
+                "schema_version": 4,
+                "target_column": "TVT",
+                "anchor_column": "TVT_input",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline").mkdir()
+    (tmp_path / "pipeline" / "train.py").write_text(
+        "def broken(:\n    resid = df['TVT'] - df['TVT_input']\n", encoding="utf-8"
+    )
+    _readings(tmp_path, model_better=False)
+
+    report = build_report(tmp_path, evaluate_gate(tmp_path))
+
+    assert [c for c in report.observed if c.name == "leakage/ID handling"] == []
 
 
 # --- check 4: rogii's shape ---------------------------------------------------------
