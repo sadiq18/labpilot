@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "FLOOR_FILENAME",
+    "fingerprint_of",
+    "folds_for",
     "FloorReading",
     "compute_floor",
     "floor_for_workspace",
@@ -197,8 +199,12 @@ def _predict(
 # --- the folds ---------------------------------------------------------------
 
 
-def _folds(plan: ValidationPlan, frame: pd.DataFrame) -> list[tuple[np.ndarray, np.ndarray]]:
+def folds_for(plan: ValidationPlan, frame: pd.DataFrame) -> list[tuple[np.ndarray, np.ndarray]]:
     """The model's own splits, or an empty list when the plan cannot be honoured.
+
+    Public because Baseline 1 must split identically — three numbers on three
+    splits compare nothing — and a private name reached across a module boundary
+    is a contract nothing states.
 
     Empty rather than a silent fallback to `KFold`: the plan is the whole point,
     and a floor computed on a split the model will not use is a number in the
@@ -232,10 +238,15 @@ def _folds(plan: ValidationPlan, frame: pd.DataFrame) -> list[tuple[np.ndarray, 
         if not 0.0 < fraction < 1.0:
             return []
         validation: list[int] = []
-        for _, rows in frame.groupby(frame[key].astype(str), sort=True):
-            positions = index[frame.index.get_indexer(rows.index)]
-            cut = max(1, int(round(len(positions) * fraction)))
-            validation.extend(positions[-cut:].tolist())
+        # `.indices` returns *positions*; the previous version round-tripped
+        # through index labels via `get_indexer`, which requires a unique index —
+        # and a frame concatenated from per-partition files keeps each file's own
+        # 0..n, so the one scheme written for rogii raised `InvalidIndexError` on
+        # rogii's own layout.
+        for _, positions in sorted(frame.groupby(frame[key].astype(str)).indices.items()):
+            ordered = np.sort(np.asarray(positions, dtype=int))
+            cut = max(1, int(round(len(ordered) * fraction)))
+            validation.extend(ordered[-cut:].tolist())
         val = np.array(sorted(set(validation)), dtype=int)
         train = np.array([i for i in index if i not in set(val.tolist())], dtype=int)
         if train.size == 0 or val.size == 0:
@@ -249,15 +260,43 @@ def _folds(plan: ValidationPlan, frame: pd.DataFrame) -> list[tuple[np.ndarray, 
     return [(tr, va) for tr, va in KFold(n_splits=n_splits, shuffle=False).split(index)]
 
 
-def _fingerprint(y: pd.Series, plan: ValidationPlan, metric_name: str) -> str:
+def fingerprint_of(y: pd.Series, plan: ValidationPlan, metric_name: str) -> str:
+    """A digest of the target's **values**, the plan, and the metric.
+
+    `hash_pandas_object` and not `to_numpy().tobytes()`: for an object dtype the
+    latter hashes Python object *addresses*, so two processes reading the same
+    CSV produced different digests for the same data. Every string-labelled
+    classification competition would then have reported `stale` on every read —
+    and a staleness state that always fires is one everybody learns to ignore.
+
+    Exported rather than private because Baseline 1 must produce the same digest
+    over the same target; two implementations of one fingerprint is how the floor
+    and the model come to disagree about whether they described the same data.
+    """
     digest = hashlib.sha256()
-    digest.update(np.ascontiguousarray(y.to_numpy()).tobytes())
+    digest.update(pd.util.hash_pandas_object(y, index=False).to_numpy().tobytes())
     digest.update(plan.model_dump_json().encode("utf-8"))
     digest.update(metric_name.encode("utf-8"))
     return digest.hexdigest()
 
 
 # --- the reading -------------------------------------------------------------
+
+
+def _folds_or_none(
+    plan: ValidationPlan, frame: pd.DataFrame
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """`folds_for`, with a failure turned into "no folds".
+
+    Everything else in this module reports an `undefined_reason` rather than
+    raising; splitting was the one step that could still take a caller down with
+    a pandas exception, which is not a state the gate has.
+    """
+    try:
+        return folds_for(plan, frame)
+    except Exception as exc:  # noqa: BLE001 — any split failure is "no folds"
+        logger.info("Validation plan %r could not be applied: %s", plan.scheme, exc)
+        return []
 
 
 def compute_floor(
@@ -299,7 +338,7 @@ def compute_floor(
     reading = FloorReading(
         metric_name=metric_name,
         validation=plan,
-        fingerprint=_fingerprint(y, plan, metric_name),
+        fingerprint=fingerprint_of(y, plan, metric_name),
         computed_at=now,
     )
 
@@ -322,7 +361,7 @@ def compute_floor(
         # The profiler has named it since 2026-08-13 with nothing reading it.
         names.append("anchor_carry_forward")
 
-    folds = _folds(plan, frame)
+    folds = _folds_or_none(plan, frame)
     if not folds:
         reading.undefined_reason = (
             f"the {plan.scheme!r} plan could not be honoured on this table "

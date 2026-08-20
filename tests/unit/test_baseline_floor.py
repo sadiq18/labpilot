@@ -26,9 +26,11 @@ import pytest
 from labpilot.research_engine.execution.baseline.floor import (
     FLOOR_FILENAME,
     FloorReading,
-    _folds,
+    _folds_or_none,
     compute_floor,
+    fingerprint_of,
     floor_for_workspace,
+    folds_for,
     load_floor,
     write_floor,
 )
@@ -236,7 +238,7 @@ def test_the_constant_is_fitted_per_fold_not_on_the_whole_target() -> None:
                     np.full(len(val), whole_target),
                     "rmse",
                 )
-                for _, val in _folds(plan, frame)
+                for _, val in folds_for(plan, frame)
             ]
         )
     )
@@ -256,11 +258,101 @@ def test_a_fold_predicts_only_from_rows_before_it_in_its_train_side() -> None:
     frame = _frame(values)
     plan = ValidationPlan(scheme="kfold", n_splits=4)
 
-    folds = _folds(plan, frame)
+    folds = folds_for(plan, frame)
     train_idx, val_idx = folds[0]
 
     assert set(val_idx.tolist()) == set(range(10))
     assert frame["y"].iloc[train_idx].mean() > frame["y"].iloc[val_idx].mean()
+
+
+def test_a_partitioned_frame_with_a_duplicate_index_still_splits() -> None:
+    """Review finding, and it was rogii's own layout that broke.
+
+    A frame concatenated from per-partition files keeps each file's `0..n`, so
+    the index is not unique. The suffix scheme reached positions through
+    `index.get_indexer`, which requires uniqueness, and raised
+    `InvalidIndexError` — the one branch written for rogii was the one that could
+    not run on rogii. Every fixture in this file had a clean `RangeIndex`, so the
+    branch was exercised without the shape it exists for ever being tried.
+    """
+    parts = [
+        pd.DataFrame({"y": [float(i) for i in range(10)], "w": [f"w{k}"] * 10}) for k in range(4)
+    ]
+    frame = pd.concat(parts)
+    assert not frame.index.is_unique, "the fixture must reproduce the real layout"
+    plan = ValidationPlan(scheme="partition_suffix_holdout", group_key="w", holdout_fraction=0.5)
+
+    folds = folds_for(plan, frame)
+
+    assert [(len(a), len(b)) for a, b in folds] == [(20, 20)], "each partition's tail held out"
+    reading = compute_floor(frame, target="y", plan=plan, metric_name="rmse", direction="minimize")
+    assert reading.is_defined
+
+
+def test_a_split_that_raises_becomes_no_folds_not_a_traceback() -> None:
+    """Everything else here reports a reason; splitting was the one step that
+    could still take a caller down with a pandas exception.
+
+    Driven by making the splitter raise rather than by contriving a frame that
+    happens to break pandas today — the guard is what is under test, not any
+    particular way of tripping it, and "the gate crashed" is not one of the nine
+    states.
+    """
+    from unittest import mock
+
+    import labpilot.research_engine.execution.baseline.floor as floor_module
+
+    frame = _frame(SKEWED)
+    plan = ValidationPlan(scheme="kfold", n_splits=4)
+
+    with mock.patch.object(floor_module, "folds_for", side_effect=RuntimeError("pandas said no")):
+        assert _folds_or_none(plan, frame) == []
+        reading = compute_floor(
+            frame, target="y", plan=plan, metric_name="rmse", direction="minimize"
+        )
+
+    assert not reading.is_defined
+    assert "could not be honoured" in reading.undefined_reason
+
+
+def test_the_fingerprint_is_over_values_not_object_identity() -> None:
+    """Review finding, reproduced across two processes before the fix.
+
+    `to_numpy().tobytes()` on an object dtype hashes Python object *addresses*,
+    so two reads of the same CSV produced different digests. Step 5's gate keys
+    its `stale` state on this, and a staleness state that always fires is one
+    everybody learns to ignore.
+
+    The strings here are built at runtime so CPython does not intern them into
+    the same objects — without that the test passes against the broken version.
+    """
+    literal = pd.Series(["cat", "dog", "cat", "bird"] * 5)
+    pieces = [("c", "a", "t"), ("d", "o", "g"), ("c", "a", "t"), ("b", "i", "r", "d")]
+    built = pd.Series(["".join(chars) for chars in pieces] * 5)
+    assert literal.equals(built)
+    assert [id(v) for v in literal] != [id(v) for v in built], "distinct objects, equal values"
+
+    plan = ValidationPlan(scheme="kfold", n_splits=4)
+
+    assert fingerprint_of(literal, plan, "accuracy") == fingerprint_of(built, plan, "accuracy")
+
+
+def test_a_string_target_reaches_the_floor_at_all() -> None:
+    """Which is why the fingerprint bug mattered: `health_condition` in
+    `playground-series-s6e7` is a string column, and it scores here."""
+    frame = pd.DataFrame({"y": ["low", "high", "low", "mid"] * 10})
+
+    reading = compute_floor(
+        frame,
+        target="y",
+        plan=ValidationPlan(scheme="kfold", n_splits=4),
+        metric_name="accuracy",
+        direction="maximize",
+        num_classes=3,
+    )
+
+    assert reading.best_strategy == "majority_class"
+    assert reading.fingerprint
 
 
 # --- the anchor, which is not a constant at all --------------------------------
