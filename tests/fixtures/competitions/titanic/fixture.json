@@ -29,6 +29,14 @@
       "source_bytes": 61194,
       "source_rows": 891,
       "fixture_rows": 0
+    },
+    {
+      "path": "competition.json",
+      "mode": "verbatim",
+      "source_sha256": "0aad6919b735a326392816469519784879c1215d6c28e2fc7fdb17d0a7e2b711",
+      "source_bytes": 1205,
+      "source_rows": null,
+      "fixture_rows": null
     }
   ],
   "expected": {
@@ -39,15 +47,14 @@
     "train_test_relationship": "disjoint_units",
     "modality": "tabular",
     "feature_columns": null,
-    "metric_name": null,
+    "metric_name": "accuracy",
     "must_ask": []
   },
   "unverifiable": {
     "row_count": "headers_only capture keeps a subset of rows",
     "cardinality": "headers_only capture keeps a subset of rows",
-    "feature_columns": "no rows, so constant and equals-target exclusions cannot fire",
-    "metric_name": "no competition.json was captured, so the competition's stated metric is not in the fixture and scoring it would measure this corpus, not the parser"
+    "feature_columns": "no rows, so constant and equals-target exclusions cannot fire"
   },
   "known_failures": {},
-  "notes": "The submission template is named `gender_submission.csv`, not `sample_submission.csv`. That is the point of this fixture: a profiler that finds the template by filename convention rather than by what the file contains resolves nothing here, and every criterion that leans on the template \u2014 target, id, submission columns \u2014 falls with it. 891 train rows against 418 test rows, 12 columns."
+  "notes": "The submission template is named `gender_submission.csv`, not `sample_submission.csv`. That is the point of this fixture: a profiler that finds the template by filename convention rather than by what the file contains resolves nothing here, and every criterion that leans on the template \u2014 target, id, submission columns \u2014 falls with it. 891 train rows against 418 test rows, 12 columns. Scored on \"Categorization Accuracy\", which is `accuracy`. Kaggle states the metric as \"Categorization Accuracy\"."
 }

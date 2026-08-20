@@ -29,6 +29,14 @@
       "source_bytes": 460676,
       "source_rows": 1460,
       "fixture_rows": 0
+    },
+    {
+      "path": "competition.json",
+      "mode": "verbatim",
+      "source_sha256": "eb9933aa16bf56b3aa4f3dd6d64d564a9863fcdf9cf1aeb13ca8f001b4a97f18",
+      "source_bytes": 1338,
+      "source_rows": null,
+      "fixture_rows": null
     }
   ],
   "expected": {
@@ -39,15 +47,14 @@
     "train_test_relationship": "disjoint_units",
     "modality": "tabular",
     "feature_columns": null,
-    "metric_name": null,
+    "metric_name": "rmsle",
     "must_ask": []
   },
   "unverifiable": {
     "row_count": "headers_only capture keeps a subset of rows",
     "cardinality": "headers_only capture keeps a subset of rows",
-    "feature_columns": "no rows, so constant and equals-target exclusions cannot fire",
-    "metric_name": "no competition.json was captured, so the competition's stated metric is not in the fixture and scoring it would measure this corpus, not the parser"
+    "feature_columns": "no rows, so constant and equals-target exclusions cannot fire"
   },
   "known_failures": {},
-  "notes": "81 columns, the widest tabular schema in the corpus, and a continuous target \u2014 the regression counterpart to two classification fixtures. `Id` is the whole of the id; the remaining 79 are features of every dtype the profiler distinguishes."
+  "notes": "81 columns, the widest tabular schema in the corpus, and a continuous target \u2014 the regression counterpart to two classification fixtures. `Id` is the whole of the id; the remaining 79 are features of every dtype the profiler distinguishes. Scored on \"Root Mean Squared Logarithmic Error\", which is `rmsle` \u2014 not `rmse`, and the difference is the whole competition. Kaggle states the metric as \"Root Mean Squared Logarithmic Error\"."
 }

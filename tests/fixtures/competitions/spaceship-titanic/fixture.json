@@ -29,6 +29,14 @@
       "source_bytes": 805421,
       "source_rows": 8693,
       "fixture_rows": 0
+    },
+    {
+      "path": "competition.json",
+      "mode": "verbatim",
+      "source_sha256": "c9a8d3646c9a3c15efffe86f6ebc629006b25c019c7105ce94ad3cb6ca279501",
+      "source_bytes": 1190,
+      "source_rows": null,
+      "fixture_rows": null
     }
   ],
   "expected": {
@@ -39,15 +47,14 @@
     "train_test_relationship": "disjoint_units",
     "modality": "tabular",
     "feature_columns": null,
-    "metric_name": null,
+    "metric_name": "accuracy",
     "must_ask": []
   },
   "unverifiable": {
     "row_count": "headers_only capture keeps a subset of rows",
     "cardinality": "headers_only capture keeps a subset of rows",
-    "feature_columns": "no rows, so constant and equals-target exclusions cannot fire",
-    "metric_name": "no competition.json was captured, so the competition's stated metric is not in the fixture and scoring it would measure this corpus, not the parser"
+    "feature_columns": "no rows, so constant and equals-target exclusions cannot fire"
   },
   "known_failures": {},
-  "notes": "A boolean target (`True`/`False`, not 0/1) and a non-integer id (`0001_01` \u2014 group and member, so it is neither unique-looking as a number nor a plain sequence). The corpus otherwise scores integer ids and numeric targets, and a rule that only holds for those would pass every other fixture here."
+  "notes": "A boolean target (`True`/`False`, not 0/1) and a non-integer id (`0001_01` \u2014 group and member, so it is neither unique-looking as a number nor a plain sequence). The corpus otherwise scores integer ids and numeric targets, and a rule that only holds for those would pass every other fixture here. Scored on \"Categorization Accuracy\", which is `accuracy`. Kaggle states the metric as \"Categorization Accuracy\"."
 }

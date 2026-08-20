@@ -14,9 +14,9 @@ typed from memory sat in that corpus for a day claiming to be 624 bytes.
 |---|---|---|---|---|
 | `playground-series-s6e7` | `headers_only` | 91 MB, 690,088 train rows | target · id · train/test · modality | **`metric_name`** — see below |
 | `rogii-wellbore-geology-prediction` | `headers_only`, ≤6 files per directory | 1.2 GB, 1,546 tables | target · modality · **abstention** | — |
-| `titanic` | `headers_only` | 891 train rows, 12 columns | target · id · train/test · modality | — |
-| `spaceship-titanic` | `headers_only` | 8,693 train rows, 14 columns | target · id · train/test · modality | — |
-| `house-prices-advanced-regression-techniques` | `headers_only` | 1,460 train rows, 81 columns | target · id · train/test · modality | — |
+| `titanic` | `headers_only` | 891 train rows, 12 columns | target · id · train/test · modality · metric | — |
+| `spaceship-titanic` | `headers_only` | 8,693 train rows, 14 columns | target · id · train/test · modality · metric | — |
+| `house-prices-advanced-regression-techniques` | `headers_only` | 1,460 train rows, 81 columns | target · id · train/test · modality · metric | — |
 
 ## What each one is for
 
@@ -45,11 +45,29 @@ them.
 **`house-prices-advanced-regression-techniques`** is the widest schema here — 81
 columns — and the only continuous target, against three classification fixtures.
 
-These three carry **no `competition.json`**, so `metric_name` is `unverifiable`
-rather than scored: the cached download holds the data and not the rules, and a
-metric typed in from memory would be the paraphrase this corpus exists to
-prevent. Capturing a spec beside them upgrades that criterion from
-`unverifiable` to scored, for all three at once.
+Each carries a `competition.json` resolved from the Kaggle API, so
+`metric_name` is scored rather than `unverifiable`. The **expectation** is
+Kaggle's own words — *"Categorization Accuracy"*, *"Root Mean Squared
+Logarithmic Error"* — mapped to a canonical key by a human reading them, and the
+raw string is quoted in each fixture's `notes` so the mapping is checkable.
+Never the parser's own output: asserting that would prove only that a value
+survived the round trip, which is the tautology `playground-series-s6e7` exists
+to distinguish from a real reading.
+
+## Not in the corpus, and why
+
+**`biohub-cell-tracking-during-development`** would be the zarr fixture — the
+modality M22 step 5 built for and nothing here exercises. It is not captured:
+the cached copy is a truncated download (98,566,144 bytes, no central
+directory, `BadZipFile`), and a fresh pull is the wrong trade today. The file
+listing is 4.5 MB zarr chunks, ≥0.99 GB in the first 200 files alone and still
+paging when the API rate-limited, against a disk with 26 GB free.
+
+The right fix is not a bigger download. `capture` already *lists* non-tabular
+files rather than copying them — names and sizes are what modality detection
+reads — so a listing taken from the Kaggle API instead of a local walk would
+capture this competition, and every media-heavy one after it, without their
+bytes. That is a change to `capture`, deliberately not made in passing.
 
 ## Adding to it
 
