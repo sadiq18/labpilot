@@ -33,8 +33,9 @@ every conclusion drawn from it.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from labpilot.research_engine.intelligence.competition.models import ProblemType
 
@@ -253,6 +254,80 @@ def _resolve_glossed(raw: str) -> str | None:
         if slug in _BY_ALIAS
     }
     return halves.pop() if len(halves) == 1 else None
+
+
+#: Column names that identify a *slot* rather than a metric. A payload using
+#: one of these has not said what it measured — it has said "the score".
+_GENERIC_STEMS = frozenset({"score", "metric", "value", "result"})
+
+#: Sibling fields a payload uses to name its own metric.
+_SELF_DECLARATION_FIELDS = ("metric", "metric_name", "primary_metric")
+
+
+def declared_metric_key(metrics: Mapping[str, Any]) -> str | None:
+    """The canonical metric a payload says it measured, or None.
+
+    A generated `metrics.json` routinely names its column generically and puts
+    the metric's identity in a sibling string field —
+    ``{"cv_score": 1.65, "metric": "rmse"}``. The identity is right there; it
+    is simply not where anything looks.
+    """
+    for field in _SELF_DECLARATION_FIELDS:
+        raw = metrics.get(field)
+        if isinstance(raw, str):
+            key = normalize_metric_key(raw)
+            if key:
+                return key
+    return None
+
+
+def name_self_declared_metrics(metrics: Mapping[str, Any]) -> dict[str, Any]:
+    """Rename generically-keyed readings to the metric the payload declares.
+
+    ``{"cv_score": 1.65, "metric": "rmse"}`` becomes ``{"cv_rmse": 1.65, ...}``,
+    preserving the measurement prefix so a cross-validated reading stays one.
+
+    Without this the key survives as `cv_score`, which is a name no target can
+    match: `metric_names_match('cv_score', 'rmse')` is False, so a campaign that
+    genuinely reached its goal cannot stop on `metric_target` and a cohort
+    cannot be ranked on the metric it was judged by. Measured 2026-08-20 — a
+    real reading of 1.65 against a target of 2.0, recorded as `cv_score`, left
+    the objective stop unable to fire.
+
+    Only *generic* keys are renamed, and only when the declared name resolves
+    to a metric the vocabulary knows. A payload that already names its metric
+    is left exactly as it is: this closes a gap, it does not second-guess a run
+    that was specific.
+
+    Never clobbers. If the canonical name is already present the original key
+    is kept, because two different numbers under one name is worse than one
+    number under a vague one.
+    """
+    declared = declared_metric_key(metrics)
+    if declared is None:
+        return dict(metrics)
+
+    renamed: dict[str, Any] = {}
+    for key, value in metrics.items():
+        # Readings only. The sibling field naming the metric is a string, and
+        # renaming it would turn `{"metric": "rmse"}` into `{"rmse": "rmse"}` —
+        # a non-numeric entry under a metric's name, which every consumer of
+        # this dict would then have to defend against.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            renamed[key] = value
+            continue
+        canonical = _canonical_name(key, declared)
+        renamed[canonical if canonical not in metrics else key] = value
+    return renamed
+
+
+def _canonical_name(key: str, declared: str) -> str:
+    """`cv_score` + `rmse` -> `cv_rmse`; a specific key is returned unchanged."""
+    stem = strip_measurement_prefix(key.strip().lower())
+    if stem not in _GENERIC_STEMS:
+        return key
+    prefix = key[: len(key) - len(stem)]
+    return f"{prefix}{declared}"
 
 
 def normalize_direction(raw: object) -> str:

@@ -25,6 +25,7 @@ from labpilot.research_engine.intelligence.competition.direction import resolve_
 from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
     bare_probe_keys,
     cv_probe_keys,
+    name_self_declared_metrics,
 )
 from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
@@ -780,7 +781,15 @@ def metrics_as_experiment(
     *,
     runtime_seconds: float | None = None,
 ) -> Experiment:
-    """Minimal Experiment view for comparator.compare."""
+    """Minimal Experiment view for comparator.compare.
+
+    Self-declared names are resolved first. A payload that keys its reading
+    generically and names the metric in a sibling field
+    (``{"cv_score": 1.65, "metric": "rmse"}``) loses that field to the numeric
+    filter below — and with it the only statement of what was measured, leaving
+    a `cv_score` no target can match.
+    """
+    metrics = name_self_declared_metrics(metrics)
     numeric = {
         k: float(v)
         for k, v in metrics.items()
