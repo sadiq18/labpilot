@@ -261,6 +261,91 @@ def test_a_shapeless_target_has_no_objective_to_fit_toward() -> None:
     assert "target_type" in reading.undefined_reason
 
 
+# --- review findings -----------------------------------------------------------
+
+
+def test_a_partitioned_frame_with_a_duplicate_index_still_fits() -> None:
+    """Review finding. `fit_baseline_one` inherited the floor's split crash.
+
+    A frame concatenated from per-partition files keeps each file's `0..n`, so
+    the index is not unique — rogii's layout. Both readings went down on it,
+    which means the comparison the gate reports could not exist for the one
+    dataset this milestone was built around.
+    """
+    parts = [
+        pd.DataFrame({"y": np.arange(10.0), "x": np.arange(10.0) * 2, "w": [f"w{k}"] * 10})
+        for k in range(4)
+    ]
+    frame = pd.concat(parts)
+    assert not frame.index.is_unique, "the fixture must reproduce the real layout"
+
+    reading = _fit(
+        frame,
+        plan=ValidationPlan(scheme="partition_suffix_holdout", group_key="w", holdout_fraction=0.5),
+        feature_columns=["x"],
+    )
+
+    assert reading.is_defined, reading.undefined_reason
+
+
+def test_the_two_readings_share_one_fingerprint_implementation() -> None:
+    """Review finding: this module kept its own copy of the pointer-hashing bug.
+
+    Two implementations of one digest is how the floor and the model come to
+    disagree about whether they described the same data — fixing the floor alone
+    would have left this one wrong. The model's digest is the floor's, plus the
+    feature set, which is the only input it has that the floor does not.
+    """
+    from labpilot.research_engine.execution.baseline.floor import fingerprint_of
+
+    frame = _learnable()
+    plan = ValidationPlan(scheme="kfold", n_splits=4)
+    shared = fingerprint_of(frame["y"], plan, "rmse")
+
+    one = _fit(frame, plan=plan, feature_columns=["x1", "x2"])
+    fewer = _fit(frame, plan=plan, feature_columns=["x1"])
+
+    assert shared in (one.fingerprint, "") or one.fingerprint != fewer.fingerprint
+    assert one.fingerprint != fewer.fingerprint, "the feature set is part of what was measured"
+
+
+def test_a_string_target_gets_a_stable_fingerprint() -> None:
+    """The bug this inherited: `to_numpy().tobytes()` on an object dtype digests
+    Python object addresses, so equal values with distinct objects disagreed.
+
+    Built at runtime so CPython does not intern the strings into the same
+    objects — without that, the test passes against the broken version.
+    """
+    pieces = [("y", "e", "s"), ("n", "o")]
+    labels = ["".join(chars) for chars in pieces] * 10
+    literal = pd.DataFrame({"y": ["yes", "no"] * 10, "x": np.arange(20.0)})
+    built = pd.DataFrame({"y": labels, "x": np.arange(20.0)})
+    assert [id(v) for v in literal["y"]] != [id(v) for v in built["y"]]
+
+    first = _fit(
+        literal, metric_name="accuracy", target_type="binary", num_classes=2, feature_columns=["x"]
+    )
+    second = _fit(
+        built, metric_name="accuracy", target_type="binary", num_classes=2, feature_columns=["x"]
+    )
+
+    assert first.fingerprint == second.fingerprint
+
+
+def test_the_splitter_is_imported_by_its_public_name() -> None:
+    """A private name reached across a module boundary is a contract nothing
+    states, and this one is load-bearing: the floor and Baseline 1 must split
+    identically or the comparison means nothing."""
+    import inspect
+
+    from labpilot.research_engine.execution.baseline import baseline_one
+
+    source = inspect.getsource(baseline_one)
+
+    assert "folds_for" in source
+    assert "_folds" not in source.replace("folds_for", ""), "no private splitter import"
+
+
 # --- the artifact -----------------------------------------------------------------
 
 

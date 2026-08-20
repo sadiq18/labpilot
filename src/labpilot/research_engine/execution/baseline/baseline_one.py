@@ -41,7 +41,11 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from labpilot.research_engine.execution.baseline.floor import FloorReading, _folds
+from labpilot.research_engine.execution.baseline.floor import (
+    FloorReading,
+    fingerprint_of,
+    folds_for,
+)
 from labpilot.research_engine.execution.baseline.selector import ValidationPlan
 from labpilot.research_engine.execution.metrics import compute_metric
 
@@ -186,14 +190,20 @@ def _prepare(frame: pd.DataFrame, feature_columns: list[str]) -> pd.DataFrame:
     return features
 
 
-def _fingerprint(
+def _model_fingerprint(
     frame: pd.DataFrame, target: str, features: list[str], plan: ValidationPlan, metric: str
 ) -> str:
+    """The floor's digest, plus the feature set this reading was fitted over.
+
+    `fingerprint_of` rather than a second copy: the previous version repeated
+    `to_numpy().tobytes()`, which hashes object *addresses*, so fixing the floor
+    alone would have left the two readings disagreeing about whether they
+    described the same data. The feature list is the only thing this reading
+    depends on that the floor does not.
+    """
     digest = hashlib.sha256()
-    digest.update(np.ascontiguousarray(frame[target].to_numpy()).tobytes())
+    digest.update(fingerprint_of(frame[target], plan, metric).encode("utf-8"))
     digest.update(",".join(features).encode("utf-8"))
-    digest.update(plan.model_dump_json().encode("utf-8"))
-    digest.update(metric.encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -235,7 +245,7 @@ def fit_baseline_one(
         )
         return reading
 
-    folds = _folds(plan, frame)
+    folds = folds_for(plan, frame)
     if not folds:
         reading.undefined_reason = (
             f"the {plan.scheme!r} plan could not be honoured on this table "
@@ -243,7 +253,7 @@ def fit_baseline_one(
         )
         return reading
 
-    reading.fingerprint = _fingerprint(frame, target, usable, plan, metric_name)
+    reading.fingerprint = _model_fingerprint(frame, target, usable, plan, metric_name)
     features = _prepare(frame, usable)
     y = frame[target]
 
