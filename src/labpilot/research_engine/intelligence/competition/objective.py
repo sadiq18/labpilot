@@ -308,6 +308,7 @@ def resolve_objective(
     probe: bool = True,
     scorer: Scorer | None = None,
     y_true: object | None = None,
+    externally_scored: bool = False,
 ) -> ObjectiveSpec:
     """Resolve an objective from what the competition stated.
 
@@ -369,7 +370,14 @@ def resolve_objective(
     # A supplied scorer *is* an implementation, so the proxy problem below does
     # not arise for it. Asking `is_scorable` alone would block a caller who had
     # just handed us the very thing it says is missing.
-    scorable = is_scorable(key) or scorer is not None
+    #
+    # `externally_scored` is the same argument for a score this system never
+    # computes at all. A benchmark harness reports its own number, so "nothing
+    # here can compute `pass_rate`" is true and irrelevant — there is no proxy to
+    # fall back to and therefore no silent substitution to prevent. Without it
+    # the gate refused every non-competition objective, which is exit criterion 3
+    # failing: the same command could not start a campaign in the other domain.
+    scorable = is_scorable(key) or scorer is not None or externally_scored
     if not scorable:
         unresolved.append("local_scoring")
 
