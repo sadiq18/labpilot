@@ -489,7 +489,7 @@ Real-data validation is a **sandbox copy**, never the live workspace
 | 0 ✅ | **`ObjectiveSpec` becomes a stage**: resolved from the schema rather than loose CLI args, persisted as `objective.json` beside `profile.json` | The resolver's contradictions and `unresolved` list reach something other than a console line |
 | 1 ✅ | **Task understanding**: `target_type`, `target_distribution` on the schema, feeding the resolver's `task` instead of metadata keywords | M22's deferred measurements land |
 | 2 ✅ | **Validation Strategy reads the objective**, not the profile alone | One spine, no re-derivation |
-| 3 | `floor.py`: strategies, per-fold fitting, `compute_metric`; `baseline_floor.json` | Checks 1–3 |
+| 3 ✅ | `floor.py`: strategies, per-fold fitting, `compute_metric`; `baseline_floor.json` | Checks 1–3 |
 | 4 | `baseline_one.py`: LightGBM, minimal preprocessing, same plan; the comparison | The gate's own output exists |
 | 5 | `gate.py`: nine states, fingerprint, waiver — **observe-only** | Checks 5–8; nothing is refused yet |
 | 6 | The report and its detectors | Checks 4, 6 |
