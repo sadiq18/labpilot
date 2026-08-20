@@ -26,7 +26,6 @@ import pytest
 from labpilot.research_engine.execution.baseline.floor import (
     FLOOR_FILENAME,
     FloorReading,
-    _folds_or_none,
     compute_floor,
     fingerprint_of,
     floor_for_workspace,
@@ -305,8 +304,10 @@ def test_a_split_that_raises_becomes_no_folds_not_a_traceback() -> None:
     frame = _frame(SKEWED)
     plan = ValidationPlan(scheme="kfold", n_splits=4)
 
-    with mock.patch.object(floor_module, "folds_for", side_effect=RuntimeError("pandas said no")):
-        assert _folds_or_none(plan, frame) == []
+    with mock.patch.object(
+        floor_module, "_build_folds", side_effect=RuntimeError("pandas said no")
+    ):
+        assert folds_for(plan, frame) == [], "the public entry never raises"
         reading = compute_floor(
             frame, target="y", plan=plan, metric_name="rmse", direction="minimize"
         )

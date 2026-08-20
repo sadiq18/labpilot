@@ -199,7 +199,7 @@ def _predict(
 # --- the folds ---------------------------------------------------------------
 
 
-def folds_for(plan: ValidationPlan, frame: pd.DataFrame) -> list[tuple[np.ndarray, np.ndarray]]:
+def _build_folds(plan: ValidationPlan, frame: pd.DataFrame) -> list[tuple[np.ndarray, np.ndarray]]:
     """The model's own splits, or an empty list when the plan cannot be honoured.
 
     Public because Baseline 1 must split identically — three numbers on three
@@ -283,17 +283,20 @@ def fingerprint_of(y: pd.Series, plan: ValidationPlan, metric_name: str) -> str:
 # --- the reading -------------------------------------------------------------
 
 
-def _folds_or_none(
-    plan: ValidationPlan, frame: pd.DataFrame
-) -> list[tuple[np.ndarray, np.ndarray]]:
-    """`folds_for`, with a failure turned into "no folds".
+def folds_for(plan: ValidationPlan, frame: pd.DataFrame) -> list[tuple[np.ndarray, np.ndarray]]:
+    """The model's own splits. Returns `[]` rather than raising, always.
 
-    Everything else in this module reports an `undefined_reason` rather than
-    raising; splitting was the one step that could still take a caller down with
-    a pandas exception, which is not a state the gate has.
+    One public entry with one contract, used by the floor and by Baseline 1 —
+    three numbers on three splits compare nothing, and a private name reached
+    across a module boundary is a contract nothing states.
+
+    Empty covers both "this plan does not apply here" and "applying it failed":
+    every other step in this module reports an `undefined_reason`, and splitting
+    was the one that could still take a caller down with a pandas exception.
+    "The gate crashed" is not one of the nine states.
     """
     try:
-        return folds_for(plan, frame)
+        return _build_folds(plan, frame)
     except Exception as exc:  # noqa: BLE001 — any split failure is "no folds"
         logger.info("Validation plan %r could not be applied: %s", plan.scheme, exc)
         return []
@@ -361,7 +364,7 @@ def compute_floor(
         # The profiler has named it since 2026-08-13 with nothing reading it.
         names.append("anchor_carry_forward")
 
-    folds = _folds_or_none(plan, frame)
+    folds = folds_for(plan, frame)
     if not folds:
         reading.undefined_reason = (
             f"the {plan.scheme!r} plan could not be honoured on this table "
