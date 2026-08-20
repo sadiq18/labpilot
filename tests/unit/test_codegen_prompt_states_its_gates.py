@@ -24,8 +24,12 @@ from pathlib import Path
 import pytest
 
 from labpilot.research_engine.execution.capabilities.code_engineering.apply import (
+    TRAIN_RELPATH,
     ApplyError,
     _check_dependencies_are_complete,
+)
+from labpilot.research_engine.execution.capabilities.code_engineering.capability import (
+    _missing_entry_point,
 )
 
 _PROMPT = (
@@ -85,3 +89,35 @@ def test_the_gate_accepts_a_complete_block() -> None:
     )
 
     _check_dependencies_are_complete("pipeline/train.py", complete, ast.parse(complete))
+
+
+# -- the entry point the runner looks up by name ---------------------------
+
+
+def test_the_prompt_states_the_entry_point_path() -> None:
+    """`pipeline/train.py` appeared only as a placeholder inside the JSON
+    schema example and in a branch that assumes prior code exists. Nothing said
+    the from-scratch script must have that exact path, and the runner looks it
+    up by name — so a model naming its script after the task produced a file
+    that applied cleanly and was never run.
+
+    Measured 2026-08-20: three consecutive runs emitted `pipeline/baseline.py`,
+    matching the plan's own name and the `configs/baseline.yaml` beside it.
+    """
+    prompt = _PROMPT.read_text(encoding="utf-8")
+
+    assert "The entry point is exactly `pipeline/train.py`" in prompt
+    assert "baseline.py" in prompt, "name the wrong-but-natural choice, not just the right one"
+
+
+def test_the_missing_entry_point_error_names_what_landed() -> None:
+    """`"train.py missing after apply"` is true and unactionable: the proposal
+    applied, so files *were* written, and which ones is the whole question."""
+    message = _missing_entry_point([Path("/ws/pipeline/baseline.py"), Path("/ws/configs/b.yaml")])
+
+    assert "baseline.py" in message
+    assert TRAIN_RELPATH in message
+
+
+def test_the_error_copes_with_a_proposal_that_wrote_nothing() -> None:
+    assert "nothing" in _missing_entry_point([])

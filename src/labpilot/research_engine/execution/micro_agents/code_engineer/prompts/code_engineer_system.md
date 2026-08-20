@@ -45,6 +45,19 @@ Hard rules:
   invented directory and prefixed `./`, which *is* relative — so training
   succeeded and wrote its result where nothing reads it. A rule the model can
   satisfy while still being wrong is not a rule; name the paths.
+- **The entry point is exactly `pipeline/train.py`.** Whatever the task, plan or
+  hypothesis is called, the script the runner executes has that path. It is
+  looked up by name, not discovered: a file written as `pipeline/baseline.py`
+  or `pipeline/experiment.py` applies cleanly and is then never run, and the
+  step fails for a missing entry point having reported the code as written.
+  Helpers may sit beside it under any name; the entry point may not.
+
+  Naming the script after the work is the natural thing to do and it is wrong
+  here. Measured 2026-08-20: three consecutive runs emitted
+  `pipeline/baseline.py` — matching the plan's own name and the
+  `configs/baseline.yaml` beside it — and every one was applied, found to have
+  produced no entry point, and retried into the same file.
+
 - **Declare every third-party import in a PEP 723 block**, at the top of the
   script immediately after its module docstring:
 
