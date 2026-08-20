@@ -183,6 +183,45 @@ CATALOGUE: dict[str, SignalSpec] = {
             cap=0.75,
             means="a scoring input exists and nothing contradicts disjoint units — the residual",
         ),
+        # --- modality -------------------------------------------------------
+        _spec(
+            "single_modality_present",
+            0.70,
+            "structural",
+            means="only one modality is present, so there is nothing to weigh it against",
+        ),
+        _spec(
+            "no_tabular_data",
+            0.90,
+            "structural",
+            means="no tables at all — an environment to act in, not units to predict",
+        ),
+        _spec(
+            "modality_majority",
+            0.40,
+            "distributional",
+            means="the primary modality's files outnumber the others', so it carries the signal",
+        ),
+        _spec(
+            "llm_modality_tiebreak",
+            0.30,
+            "stated",
+            cap=0.60,
+            means="a model broke the tie — never on its own worth acting on as settled",
+        ),
+        # --- prediction unit --------------------------------------------------
+        _spec(
+            "submission_row_per_scoring_row",
+            0.80,
+            "structural",
+            means="the template has one row per row of the scoring input",
+        ),
+        _spec(
+            "scored_rows_are_a_partition_tail",
+            0.60,
+            "structural",
+            means="the scored rows are a tail of each partition, so rows are not exchangeable",
+        ),
         # --- identity -------------------------------------------------------
         _spec(
             "present_in_train_and_scoring",

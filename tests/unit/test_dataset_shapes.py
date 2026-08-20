@@ -175,18 +175,21 @@ def test_the_decoy_wins_when_no_template_names_the_label(
     assert profile.target_column == sorted(profile.train_only_columns)[-1] == "Zone_Depth"
 
 
-def test_the_only_advertised_escape_does_not_exist(
+def test_the_advertised_escape_now_exists(
     partitioned_without_template_data_dir: Path,
 ) -> None:
-    """The ambiguity warning names a config field that was never built.
+    """Flipped at step 5: the advice names a command instead of a fiction.
 
-    Flips at step 4, where the escape becomes a question with an answer file.
+    It used to say *"set `target_column` in the competition config"* — a field
+    `CompetitionSpec` has never had, which is still true and still asserted
+    here, so the replacement cannot quietly become the old lie again.
     """
     profile = _profile(partitioned_without_template_data_dir)
     advice = [w for w in profile.warnings if "Target inference is ambiguous" in w]
 
     assert advice, "the ambiguous fixture produced no ambiguity warning"
-    assert "`target_column` in the competition config" in advice[0]
+    assert "research schema answer target_column" in advice[0]
+    assert "in the competition config" not in advice[0]
     assert "target_column" not in CompetitionSpec.model_fields
 
 
@@ -231,43 +234,60 @@ def test_a_dataset_without_kaggle_inputs_is_profiled(no_kaggle_inputs_data_dir: 
         "occurred_at",
         "churned",
     ]
-    # Uncertain on exactly the three answers that need something declared.
-    uncertain = {f for f, i in profile.inferences.items() if i.band == "uncertain"}
+    # Uncertain on exactly the three *required* answers that need something
+    # declared. `prediction_unit` is uncertain too and is not in that set: a
+    # single table with no scoring input has no defined unit, which degrades
+    # the description without being worth stopping for.
+    from labpilot.accessor.profiler.tabular import REQUIRED_FIELDS
+
+    uncertain = {
+        field
+        for field, inference in profile.inferences.items()
+        if inference.band == "uncertain" and field in REQUIRED_FIELDS
+    }
     assert uncertain == {"target_column", "id_columns", "metric"}
+    assert profile.prediction_unit == "unknown"
     assert any(note.code == "no_target_identified" for note in profile.notes)
 
 
-def test_an_environment_has_no_description_at_all(environment_data_dir: Path) -> None:
-    """No CSVs, so the profiler refuses. Flips at step 5.
+def test_an_environment_is_described_as_one(environment_data_dir: Path) -> None:
+    """Flipped at step 5: no tables is an answer, not an error.
 
-    The workspace layer catches this and writes a filesystem inventory whose
-    modality and null target have nothing behind either
-    (`workspace/capability.py:503-580`).
+    It used to raise, which sent the workspace to `_write_inventory_profile` —
+    a valid-looking profile with a null target and a modality guessed from file
+    extensions. Now the shape is named, the files are listed, and the two things
+    nothing here can know are `uncertain` at 0.0, so a campaign asks instead of
+    proceeding.
     """
-    with pytest.raises(FileNotFoundError, match="No CSV files found"):
-        _profile(environment_data_dir)
+    profile = _profile(environment_data_dir)
+
+    assert profile.modality == "environment"
+    assert profile.train_test_relationship == "environment"
+    assert profile.prediction_unit == "episode"
+    assert profile.files == ["env/spec.json", "main.py"]
+    assert profile.confidence_in("target_column") == 0.0
+    assert profile.confidence_in("id_columns") == 0.0
+    assert any(note.code == "environment_dataset" for note in profile.notes)
 
 
-def test_the_sample_cap_is_reported_as_an_exact_row_count(
+def test_a_bound_sample_cap_does_not_become_a_row_count(
     sampled_beyond_cap_data_dir: Path,
 ) -> None:
-    """The row count is the cap, and the profile says it is exact.
+    """Flipped at step 5: the count is the file's, not the sample's.
 
-    Flips at step 5. On disk today: `playground-series-s6e7/profile.json` says
-    100,000 rows, unstamped, for a file of 690,088.
+    It used to report the cap as an exact count — `playground-series-s6e7`
+    records 100,000 rows, unstamped, for a file of 690,088. One pass over one
+    column is what the truth costs, and it is paid only where the cap bound.
     """
     real_rows = len(pd.read_csv(sampled_beyond_cap_data_dir / "train.csv"))
     profile = _profile(sampled_beyond_cap_data_dir, ProfilerConfig(max_rows_sample=SAMPLE_CAP))
 
-    # Both halves: what the builder says it wrote, and what is on disk. The
-    # constant exists to express this relationship, so it has to be read here or
-    # it is a declaration nothing reaches.
+    # Both halves: what the builder says it wrote, and what is on disk.
     assert SAMPLED_BEYOND_CAP_ROWS > SAMPLE_CAP
     assert real_rows == SAMPLED_BEYOND_CAP_ROWS > SAMPLE_CAP, (
         "the fixture must exceed the cap or it proves nothing"
     )
-    assert profile.row_count == SAMPLE_CAP
-    assert profile.row_count_estimated is False
+    assert profile.row_count == real_rows
 
 
 def test_a_boolean_label_is_not_the_numeric_column(bool_target_data_dir: Path) -> None:
