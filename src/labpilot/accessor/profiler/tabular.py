@@ -58,19 +58,23 @@ class ColumnProfile(BaseModel):
 #: was first given and every later improvement is invisible to it. rogii's was
 #: written 2026-08-02 and reused by every campaign since; the anchor column
 #: added on 08-13 would never have reached it.
+PROFILE_SCHEMA_VERSION = 4
+
 #: Above this many distinct values, a whole-numbered target is no longer read as
 #: a label set. Deliberately generous: a 30-class problem is ordinary and a
 #: 30-value regression target is not, so the cost of the two mistakes is not
 #: symmetric — reading a regression as classification makes the floor a class
 #: prior over hundreds of "classes", which is both wrong and slow.
-_DISCRETE_LABEL_CEILING = 30
+#:
+#: `selector.py` reads `target_type` rather than keeping its own copy of this
+#: number. It had one, set to 20, and the two disagreed about every target with
+#: 21-30 labels.
+DISCRETE_LABEL_CEILING = 30
 
 #: How tightly integer values must crowd their own range to read as counts.
 #: `max < unique_count * 10` holds for 0-50 over 51 distinct values and fails for
 #: SalePrice, whose 663 values span 755,000.
 _COUNT_DENSITY = 10
-
-PROFILE_SCHEMA_VERSION = 4
 
 
 class DatasetProfile(BaseModel):
@@ -204,11 +208,24 @@ class DatasetProfile(BaseModel):
         """
         if self.target_column is None:
             return "none"
-        scored = [c for c in self.submission_columns if c not in set(self.id_columns)]
-        if len(scored) > 1:
-            # The template asks for several numbers per unit. One of them being
-            # `target_column` does not make the task single-output.
-            return "multilabel"
+        # An empty `id_columns` means the key was **not resolved**, not that
+        # there is no key — and it is empty exactly when the profiler decided to
+        # ask, which is the rogii case. Subtracting nothing left `['id','tvt']`
+        # as two scored columns, so the corpus fixture this milestone is built
+        # around read as `multilabel` and its continuous depth target went down
+        # the classification path.
+        if self.id_columns:
+            scored = [c for c in self.submission_columns if c not in set(self.id_columns)]
+            if len(scored) > 1:
+                # The template asks for several numbers per unit. One of them
+                # being `target_column` does not make the task single-output.
+                return "multilabel"
+        elif len(self.submission_columns) > 2:
+            # Ids unknown and more than two columns: "key plus N labels" and
+            # "N+1 labels" are the same shape from here, and guessing either way
+            # is worse than saying so. Two columns are unambiguous whichever the
+            # key turns out to be, so those fall through and get measured.
+            return "unknown"
         column = next((c for c in self.columns if c.name == self.target_column), None)
         if column is None:
             return "unknown"
@@ -220,11 +237,15 @@ class DatasetProfile(BaseModel):
             return "binary"
         if not column.is_numeric:
             return "multiclass"
-        stats = column.stats or {}
-        low, high = stats.get("min"), stats.get("max")
+        stats = column.stats if isinstance(column.stats, dict) else {}
+        low, high = _as_number(stats.get("min")), _as_number(stats.get("max"))
         if low is None or high is None:
+            # Absent, or present and unreadable. Both mean the numeric branch
+            # has nothing to reason with, and this is a `computed_field` — a
+            # raise here does not fail one field, it fails `model_dump_json` for
+            # the whole profile.
             return "unknown"
-        whole = float(low).is_integer() and float(high).is_integer()
+        whole = low.is_integer() and high.is_integer()
         if not whole:
             return "continuous"
         # Labels repeat. Twelve distinct prices over twelve rows cleared the
@@ -234,7 +255,7 @@ class DatasetProfile(BaseModel):
         # that silently used 0 as "no repeats" would send every uncounted
         # dataset down the numeric branch.
         labels_repeat = self.row_count <= 0 or column.unique_count < self.row_count
-        if column.unique_count <= _DISCRETE_LABEL_CEILING and labels_repeat:
+        if column.unique_count <= DISCRETE_LABEL_CEILING and labels_repeat:
             return "multiclass"
         # Dense non-negative integers: the values crowd their own range, which
         # is what a count does and what a price does not.
@@ -792,6 +813,19 @@ def _is_known_prefix_of(frame: "pd.DataFrame", name: str, target: str) -> bool |
     return bool((frame.loc[known, name] == frame.loc[known, target]).all())
 
 
+def _as_number(value: object) -> float | None:
+    """A finite float, or None for anything that is not one.
+
+    `ColumnProfile.stats` is `dict[str, Any]` and profiles are read from disk,
+    so "the writer only ever puts floats there" is a fact about today's writer
+    rather than about the data.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return None if number != number or number in (float("inf"), float("-inf")) else number
+
+
 def _measure_target(profile: DatasetProfile, frame: pd.DataFrame) -> None:
     """Attach the target's distribution, if the frame in hand holds the target.
 
@@ -823,16 +857,22 @@ def _target_distribution(series: pd.Series) -> TargetDistribution:
     distribution = TargetDistribution(null_count=null_count)
     # Counts for anything with few enough distinct values to have labels —
     # including a numeric one, because a 0/1 target is a class prior even when
-    # pandas calls it int64. `_DISCRETE_LABEL_CEILING` is the same line
+    # pandas calls it int64. `DISCRETE_LABEL_CEILING` is the same line
     # `target_type` draws, so the two cannot disagree about what a label is.
     # `< len(values)` and not just the ceiling: a label set has labels that
     # *repeat*. Twelve distinct prices over twelve rows cleared the ceiling and
     # produced a "class prior" of twelve ones, which is not a prior — it is the
     # data, re-listed, under a name that invites a floor to be built on it.
     unique = values.nunique()
-    if unique <= _DISCRETE_LABEL_CEILING and unique < len(values):
+    if unique <= DISCRETE_LABEL_CEILING and unique < len(values):
         counts = values.value_counts()
         distribution.class_counts = {str(k): int(v) for k, v in counts.items()}
+        # The keys are strings because JSON has no other kind. `class_dtype`
+        # is how the label gets back to what it was: a float64 target — which is
+        # any integer column pandas met a NaN in — gives keys "0.0"/"1.0", and a
+        # floor predicting the argmax would otherwise write that string into a
+        # submission whose sample column is an integer.
+        distribution.class_dtype = str(values.dtype)
     if numeric:
         try:
             distribution.median = float(values.median())

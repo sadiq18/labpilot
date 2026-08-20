@@ -130,6 +130,7 @@
   "metric": null,
   "target_distribution": {
     "class_counts": {},
+    "class_dtype": null,
     "median": 303.5,
     "zero_fraction": 0.014706,
     "skew": 0.745223,

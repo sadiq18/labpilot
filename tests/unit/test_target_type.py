@@ -161,6 +161,98 @@ def test_the_profiler_still_refuses_a_wide_template() -> None:
         TabularProfiler(ProfilerConfig()).profile_dataset(DictSource(tables), "wide")
 
 
+def test_an_unresolved_id_does_not_make_a_target_multilabel() -> None:
+    """Review finding, reproduced against the shipped rogii profile.
+
+    An empty `id_columns` means the key was **not resolved**, not that there is
+    no key — and it is empty exactly when the profiler decided to ask, which is
+    rogii. Subtracting nothing left `['id', 'tvt']` as two scored columns, so the
+    fixture this milestone is built around read as `multilabel`, its continuous
+    depth target went down the classification path, and the
+    `partitioned and TABULAR_REGRESSION` guard in `select` — the one that stops a
+    partitioned dataset being validated on shuffled rows — was skipped with it.
+    """
+    profile = DatasetProfile(
+        competition="rogii",
+        row_count=1000,
+        target_column="tvt",
+        id_columns=[],
+        submission_columns=["id", "tvt"],
+        columns=[
+            ColumnProfile(
+                name="tvt",
+                dtype="float64",
+                unique_count=900,
+                is_numeric=True,
+                stats={"min": 0.0, "max": 999.5},
+            )
+        ],
+    )
+
+    assert profile.target_type == "continuous"
+
+
+def test_an_unresolved_id_on_a_wide_template_is_unknown() -> None:
+    """Two columns are unambiguous whichever the key is; four are not.
+
+    "key plus three labels" and "four labels" are the same shape from here, and
+    saying so beats guessing either way.
+    """
+    profile = DatasetProfile(
+        competition="d",
+        row_count=100,
+        target_column="a",
+        id_columns=[],
+        submission_columns=["id", "a", "b", "c"],
+        columns=[ColumnProfile(name="a", dtype="int64", unique_count=2, is_numeric=True)],
+    )
+
+    assert profile.target_type == "unknown"
+
+
+@pytest.mark.parametrize(
+    "stats",
+    [{"min": "0", "max": "10"}, {"min": [1], "max": 5.0}, {"min": True, "max": 5.0}],
+)
+def test_unreadable_stats_do_not_break_the_profile(stats: dict) -> None:
+    """Review finding. `target_type` is a `computed_field`.
+
+    A raise here does not fail one field — it fails `model_dump_json()` for the
+    whole profile with `PydanticSerializationError`, so one bad number in
+    `stats` (typed `dict[str, Any]`, and read from disk) takes down the artifact.
+    A bool is in the list because `isinstance(True, int)` is true and `True >= 0`
+    would have sailed through a numeric check.
+    """
+    profile = DatasetProfile(
+        competition="d",
+        row_count=100,
+        target_column="y",
+        id_columns=["Id"],
+        submission_columns=["Id", "y"],
+        columns=[
+            ColumnProfile(name="y", dtype="int64", unique_count=50, is_numeric=True, stats=stats)
+        ],
+    )
+
+    assert profile.target_type == "unknown"
+    assert profile.model_dump_json(), "the whole profile must still serialize"
+
+
+def test_the_class_labels_carry_their_dtype() -> None:
+    """JSON keys are strings; the floor needs the label back.
+
+    A float64 target — which is any integer column pandas met a NaN in — gives
+    keys "0.0"/"1.0". A floor predicting the argmax without `class_dtype` writes
+    that string into a submission whose sample column is an integer.
+    """
+    import pandas as pd
+
+    distribution = _target_distribution(pd.Series([0.0, 1.0, 1.0, 0.0], dtype="float64"))
+
+    assert set(distribution.class_counts) == {"0.0", "1.0"}
+    assert distribution.class_dtype == "float64"
+
+
 # --- what it refuses to decide -----------------------------------------------
 
 

@@ -126,6 +126,11 @@ class TargetDistribution(BaseModel):
     #: for accuracy is the argmax of this, and for log-loss it is the whole
     #: vector — which is why the counts are kept rather than just the winner.
     class_counts: dict[str, int] = Field(default_factory=dict)
+    #: The pandas dtype `class_counts` keys were rendered from. JSON keys are
+    #: strings; this is what turns them back into labels. Without it a floor
+    #: predicting the majority class of a float64 target writes the string
+    #: "0.0" into a submission whose sample column is an integer.
+    class_dtype: str | None = None
     #: The optimal constant under absolute error, as mean is under squared error.
     #: `stats` carries the mean already; a floor that only knew the mean would be
     #: the wrong constant for every MAE competition.

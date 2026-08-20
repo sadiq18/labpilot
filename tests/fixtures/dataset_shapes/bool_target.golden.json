@@ -90,6 +90,7 @@
       "True": 7,
       "False": 5
     },
+    "class_dtype": "bool",
     "median": null,
     "zero_fraction": null,
     "skew": null,
