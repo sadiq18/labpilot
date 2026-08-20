@@ -89,6 +89,16 @@ def _quiet_workspace(tmp_path: Path, *, hypotheses: int = 6, evidence_age_hours:
     return ws
 
 
+def _stale_workspace(tmp_path: Path):
+    """A pool that is not thin, with evidence old enough to gather on anyway.
+
+    The `stale` clause is what the producer's own work *does* move — 158h to
+    0.01h in the measured run — so it has to keep firing while `thin` is
+    latched.
+    """
+    return _quiet_workspace(tmp_path, hypotheses=40, evidence_age_hours=48.0)
+
+
 def test_an_empty_pool_gathers_and_reports_the_gate_reason(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     calls: list[dict] = []
@@ -518,11 +528,18 @@ def test_a_tick_interval_below_the_floor_is_raised_to_it(tmp_path: Path) -> None
     assert EvidenceProducer(ws, _registry(calls), tick_seconds=30).tick_seconds == 30
 
 
-def test_a_failed_tick_does_not_leave_the_previous_decision_showing(tmp_path: Path) -> None:
+def test_a_failed_tick_does_not_leave_the_previous_decision_showing(
+    tmp_path: Path, monkeypatch
+) -> None:
     """`status()` reported `last_decision="gathered"` beside a fresh
     `last_error`, describing a sweep that did not happen on the tick reported.
     """
+    from labpilot.research_engine.conductor import producer as producer_mod
     from labpilot.research_engine.conductor.producer import EvidenceProducer
+
+    # Unreadable viable count => no hysteresis verdict, so the second tick still
+    # reaches the tool. The latch has its own tests below.
+    monkeypatch.setattr(producer_mod, "_viable", lambda _ws: None)
 
     ws = _ws(tmp_path)
     outcomes = [ToolResult(refs=[], data={}), RuntimeError("network died")]
@@ -771,4 +788,113 @@ def test_a_producer_with_a_session_can_actually_read_its_budgets(tmp_path: Path)
     outcome = producer.tick_once()
     assert outcome is not None, producer.status()["last_error"]
     assert producer.status()["last_error"] is None
+    assert len(calls) == 1
+
+
+# --- hysteresis: the producer must not chase a signal it cannot move ---------
+
+
+def _counting_viable(values: list[int]):
+    """Stand-in for `_viable` that walks a scripted sequence."""
+
+    def read(_workspace) -> int:
+        return values.pop(0) if len(values) > 1 else values[0]
+
+    return read
+
+
+def test_a_sweep_that_does_not_move_the_viable_count_stops_the_producer_sweeping(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Measured on rogii 2026-08-20: two complete sweeps, ten hypotheses each,
+    and the gate still read "only 10 viable hypotheses queued" before the third.
+    `viable_hypothesis_count` ages a row out after two selections that picked
+    something else, so with 153 proposals the producer's own output aged out as
+    fast as it arrived — ~40 minutes of LLM work in a 51-minute campaign.
+    """
+    from labpilot.research_engine.conductor import producer as producer_mod
+    from labpilot.research_engine.conductor.producer import EvidenceProducer
+
+    monkeypatch.setattr(producer_mod, "_viable", lambda _ws: 3)  # never moves
+
+    calls: list[dict] = []
+    producer = EvidenceProducer(
+        _ws(tmp_path), _registry(calls, created=10), plan=GatherPlan(tool="gather_stub")
+    )
+
+    first = producer.tick_once()
+    assert first is not None and first.gathered is True
+    assert first.clause == "thin"
+    assert producer.status()["thin_clause_unmovable"] is True
+
+    second = producer.tick_once()
+    assert second is not None
+    assert second.gathered is False
+    assert "did not change that" in second.reason
+    assert len(calls) == 1, "the second tick must not sweep again"
+
+
+def test_the_latch_lifts_when_the_count_actually_moves(tmp_path: Path, monkeypatch) -> None:
+    """A pool that genuinely drains is the case the clause exists for, and it
+    has to keep working — the latch is hysteresis, not an off switch.
+    """
+    from labpilot.research_engine.conductor import producer as producer_mod
+    from labpilot.research_engine.conductor.producer import EvidenceProducer
+
+    # Reads, in order: tick 1 before=3, after=3 (latches at 3); tick 2's
+    # skip-check sees 5 (> 3, so the latch lifts), then before=5, after=9 —
+    # a sweep that did move the count, so nothing re-latches.
+    monkeypatch.setattr(producer_mod, "_viable", _counting_viable([3, 3, 5, 5, 9]))
+
+    calls: list[dict] = []
+    producer = EvidenceProducer(
+        _ws(tmp_path), _registry(calls, created=10), plan=GatherPlan(tool="gather_stub")
+    )
+
+    producer.tick_once()
+    assert producer.status()["thin_clause_unmovable"] is True
+
+    second = producer.tick_once()
+    assert producer.status()["thin_clause_unmovable"] is False
+    assert second is not None and second.gathered is True
+    assert len(calls) == 2
+
+
+def test_a_sweep_that_does_move_the_count_never_latches(tmp_path: Path, monkeypatch) -> None:
+    from labpilot.research_engine.conductor import producer as producer_mod
+    from labpilot.research_engine.conductor.producer import EvidenceProducer
+
+    monkeypatch.setattr(producer_mod, "_viable", _counting_viable([1, 4]))
+
+    calls: list[dict] = []
+    producer = EvidenceProducer(
+        _ws(tmp_path), _registry(calls, created=10), plan=GatherPlan(tool="gather_stub")
+    )
+
+    outcome = producer.tick_once()
+    assert outcome is not None and outcome.viable_before == 1
+    assert outcome.viable_after == 4
+    assert producer.status()["thin_clause_unmovable"] is False
+
+
+def test_the_latch_only_silences_the_clause_it_was_earned_on(tmp_path: Path, monkeypatch) -> None:
+    """Staleness and stagnation are signals the producer's own work *does*
+    move (158h → 0.01h in the measured run), so they must keep firing.
+    """
+    from labpilot.research_engine.conductor import producer as producer_mod
+    from labpilot.research_engine.conductor.producer import gather_once
+
+    monkeypatch.setattr(producer_mod, "_viable", lambda _ws: 3)
+    calls: list[dict] = []
+
+    # `thin` is latched, but this workspace's gate opens on staleness instead.
+    outcome = gather_once(
+        _stale_workspace(tmp_path),
+        _registry(calls),
+        GatherPlan(tool="gather_stub"),
+        skip_clauses=("thin",),
+    )
+
+    assert outcome.gathered is True
+    assert outcome.clause in {"stale", "first"}
     assert len(calls) == 1

@@ -175,14 +175,22 @@ dispatched by the campaign**. Criterion 3 met.
 short runs died on *"8 step(s) since the last success"* — on a workspace whose
 experiments fail, that fires long before anything else, and it has no CLI flag.
 
-**And the producer cannot satisfy the gate it gates on.** Ten hypotheses
+**The producer could not satisfy the gate it gates on** — now fixed (design §7.5). Ten hypotheses
 minted, and the next tick still read *"only 10 viable hypotheses queued"*:
 `viable_hypothesis_count` excludes rows the selector has passed over twice, and
 every `generate_plan` ages every row it did not pick, so the producer's output
 aged out as fast as it arrived. It swept continuously — ~40 minutes of
 reasoning-role LLM work in a 51-minute campaign — with `_MIN_RESWEEP_HOURS` the
 only brake. Not the M21 ratchet (nothing is held shut) but the same shape
-inverted, and unresolved.
+inverted. The producer now latches that clause when a completed sweep leaves the
+count where it found it, and lifts the latch when the count moves.
+
+**Left open, deliberately:** at a 153-row pool with one pick per selection,
+"passed over twice" is arithmetic, not a quality signal — 8 of 18 fresh rows
+were stale within one campaign. Whether `viable_hypothesis_count` is the right
+gate for *anyone* is a bigger question than M16: it decides the consumer's
+allowlist too, and loosening it is how [M21](16-hypothesis-selection.md)'s
+ratchet re-opens.
 
 **Criterion 1's premise did not reproduce, and that matters more than the
 result.** The baseline never blocked on gathering. The gate reported

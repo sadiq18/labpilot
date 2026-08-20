@@ -1,7 +1,7 @@
 # Design — M16: the evidence routine as a background producer
 
 **Plan:** [../11-background-routine.md](../11-background-routine.md) ·
-**Status:** built behind `--gather-background`; measured 2026-08-20 (§3, §3.1), all exit criteria met, two follow-ups open (§11) ·
+**Status:** built behind `--gather-background`; measured 2026-08-20 (§3, §3.1), all exit criteria met, one follow-up open (§11) ·
 **Depends on:** M7, M11, M14 (all shipped) ·
 **Ledger priority (§8):** built — `availability(..., reserve=)`
 
@@ -165,28 +165,28 @@ at the end: 18 rows created during the run, `proposed` up by 17, and
 
 `viable_hypothesis_count` excludes rows the selector has passed over
 `STALE_AFTER_SELECTIONS` (2) times, and every `generate_plan` ages every
-row it does not pick. The run made six selections, so the producer's own output
-aged out about as fast as it arrived. **The producer cannot satisfy the gate it
-gates on**, and so it never stops.
+row it does not pick. Measured at the end of the run: **8 of the 18 rows it
+minted were already stale**, against 63 recorded selections and a 153-row pool.
+**The producer cannot satisfy the gate it gates on**, and so it never stopped.
+
+**Fixed** — see §7.5. The producer now latches the `thin` clause when a
+completed sweep leaves the count where it found it, and lifts the latch the
+moment the count rises.
 
 That is not the M21 ratchet — the pool is not holding gathering *shut* — but it
 is the same shape inverted, and it is worse for a background worker than for a
 campaign step: a sequential campaign that re-swept would at least be visible as
 a step it chose. Options, none of them free:
 
-1. **Count freshly minted rows as viable for a grace period.** Smallest change;
-   makes "viable" mean "not yet judged" rather than "not yet passed over".
-2. **Give the producer its own signal** — e.g. gate the tick on artifact
-   freshness alone once a sweep has landed, since staleness *is* moved by its
-   own work (158h → 0.01h) while viability is not.
-3. **Leave it, and rely on `_MIN_RESWEEP_HOURS`.** The default 0.5h floor would
-   have allowed one re-sweep per 30 minutes rather than continuous ones; this
-   run deliberately lowered it to 0.02h. That makes the default a load-bearing
-   safety limit rather than the rate limit §5.2 calls it.
-
-(2) is the honest one: the gate's three clauses were written for a consumer
-deciding whether to spend *its own* step, and one of them does not survive being
-asked by a worker whose job is to change the answer.
+1. **Count freshly minted rows as viable for a grace period.** Root-level, and
+   the riskiest: `viable_hypothesis_count` decides the *consumer's* allowlist
+   too, and loosening it is how the M21 ratchet re-opens. Not taken — see the
+   trap recorded in the plan.
+2. **Stop the producer repeating an action that provably changed nothing.**
+   Taken (§7.5).
+3. **Leave it, and rely on `_MIN_RESWEEP_HOURS`.** Not taken: that would make a
+   rate limit into the only thing preventing unbounded spend, which is not what
+   §5.2 says it is for.
 
 ### Conditions, so the numbers are readable
 
@@ -412,6 +412,28 @@ else has it", and that a caller acting on *ownership* wants
 Exit criterion 4 is unchanged and still worth its test — it pins the property,
 not the migration.
 
+### 7.5 Hysteresis: not repeating what changed nothing
+
+A worker that repeats an action on a schedule needs one rule a campaign step
+does not: **do not re-run an action on a signal your own last run failed to
+move.** A step that re-swept was at least a step someone chose; an unattended
+producer doing it is invisible and unbounded.
+
+`gather_verdict` (a thin extension of `should_gather_evidence`, same three
+clauses) now returns *which* clause decided, because a caller that acts on the
+verdict has to branch on it and matching the prose would break the first time it
+is reworded. `gather_once` takes `skip_clauses`; the runner supplies them.
+
+The producer records the viable count either side of a sweep. When a *completed*
+sweep on the `thin` clause leaves that count where it found it, the clause is
+latched and skipped — with a logged reason, not silently — until the count rises
+above where it stuck. Staleness and stagnation are untouched, deliberately: they
+are signals the producer's own work *does* move (158h → 0.01h in the measured
+run), so they keep firing while `thin` is held.
+
+The latch is per-clause and lifts on evidence, so a pool that genuinely drains —
+the case the clause exists for — reopens gathering normally.
+
 ### 7.4 Shutdown
 
 The campaign sets the stop event and joins with a bounded timeout. A tick
@@ -506,11 +528,13 @@ What the tests cover, and what they do not:
 All five exit criteria are now met (§3.1). Two things the runs surfaced are
 **not** fixed and should be booked before this is called done:
 
-1. **The producer cannot satisfy its own gate** (§3.1). Its output does not move
-   `viable_hypothesis_count`, so it re-sweeps indefinitely — ~40 minutes of
-   reasoning-role LLM work in a 51-minute campaign. `_MIN_RESWEEP_HOURS` is
-   currently the only thing standing between that and a hot loop, which makes
-   the "rate limit, not a cadence assumption" framing in §5.2 too casual.
+1. ~~**The producer cannot satisfy its own gate**~~ **fixed** (§7.5) — the
+   `thin` clause is latched when a sweep does not move it. What is *not* fixed
+   is the underlying question: at a 153-row pool with one pick per selection,
+   "passed over twice" is arithmetic rather than a quality signal, and
+   `viable_hypothesis_count` decides the consumer's allowlist too. Left alone
+   deliberately; changing it is how M21's ratchet re-opens, and no measurement
+   here says which way it should move.
 2. **A sweep costs ~20 minutes**, most of it `RepositoryAnalyzerAgent`. Any
    campaign shorter than that gets fresh evidence and no new hypotheses — a
    perfectly reasonable outcome the plan never names.

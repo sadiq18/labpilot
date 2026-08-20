@@ -783,6 +783,22 @@ def should_gather_evidence(
     re-ingests known kernels. The cost of *not* gathering was four campaigns
     that could not improve, so the asymmetry is deliberate.
     """
+    return gather_verdict(workspace, budgets)[:2]
+
+
+#: Which clause opened (or closed) the gate. Returned alongside the human
+#: reason because a caller that *acts* on the verdict needs to branch on it,
+#: and matching the prose would break the first time it is reworded. M16's
+#: producer needs it: a background worker that repeats an action has to know
+#: which signal it is trying to move.
+GATHER_CLAUSES = ("floor", "thin", "stagnant", "stale", "first", "satisfied")
+
+
+def gather_verdict(
+    workspace: Workspace,
+    budgets: tuple[BudgetConfig, BudgetState] | None = None,
+) -> tuple[bool, str, str]:
+    """`should_gather_evidence`, plus the name of the clause that decided it."""
     age_hours = hours_since_last_artifact(workspace)
 
     # A floor under both clauses, not a third gate. Making the conditions
@@ -794,11 +810,11 @@ def should_gather_evidence(
     # Minutes, not hours: long enough that no campaign re-sweeps inside a single
     # loop, short enough that it never becomes the reason evidence goes stale.
     if age_hours is not None and age_hours < _MIN_RESWEEP_HOURS:
-        return False, f"evidence gathered {age_hours * 60:.0f} minutes ago"
+        return False, f"evidence gathered {age_hours * 60:.0f} minutes ago", "floor"
 
     viable = viable_hypothesis_count(workspace.knowledge_dir, workspace.competition)
     if viable < _VIABLE_TARGET:
-        return True, f"only {viable} viable hypotheses queued"
+        return True, f"only {viable} viable hypotheses queued", "thin"
 
     # Shares `plateau_window` so one knob governs "how long is long enough",
     # but the two measure different things and do not fire together: this
@@ -820,16 +836,17 @@ def should_gather_evidence(
         window = max(1, stagnant_config.plateau_window)
         stagnant_for = score_summary(stagnant_state, stagnant_config).steps_since_improvement
         if stagnant_for >= window:
-            return True, f"{stagnant_for} experiments with no improvement"
+            return True, f"{stagnant_for} experiments with no improvement", "stagnant"
 
     if age_hours is None:
-        return True, "no evidence gathered yet"
+        return True, "no evidence gathered yet", "first"
     if age_hours >= _EVIDENCE_COOLDOWN_HOURS:
-        return True, f"evidence is {age_hours:.1f}h old"
+        return True, f"evidence is {age_hours:.1f}h old", "stale"
 
     return (
         False,
         f"{viable} viable hypotheses queued and evidence gathered {age_hours:.1f}h ago",
+        "satisfied",
     )
 
 

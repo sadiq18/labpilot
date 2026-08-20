@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from labpilot.research_engine.conductor.budgets import BudgetConfig, BudgetState
-from labpilot.research_engine.conductor.policy import should_gather_evidence
+from labpilot.research_engine.conductor.policy import gather_verdict
 from labpilot.research_engine.conductor.scheduler import with_llm_client
 from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
@@ -65,6 +65,13 @@ class GatherOutcome:
     reason: str
     hypotheses_created: int = 0
     duration_s: float = 0.0
+    #: Which gate clause decided this tick — see `policy.GATHER_CLAUSES`.
+    clause: str = ""
+    #: Viable-hypothesis count before and after the sweep. `None` when no
+    #: sweep ran. The pair is what tells the producer whether its own work
+    #: moved the signal it is acting on.
+    viable_before: int | None = None
+    viable_after: int | None = None
 
 
 def default_gather_plan(_workspace: Workspace) -> GatherPlan:
@@ -168,6 +175,7 @@ def gather_once(
     llm_client: Any | None = None,
     budgets: tuple[BudgetConfig, BudgetState] | None = None,
     reserve: float = 0.0,
+    skip_clauses: tuple[str, ...] = (),
 ) -> GatherOutcome:
     """Gather evidence if the gate allows, and report what happened either way.
 
@@ -186,20 +194,30 @@ def gather_once(
     so the producer runs out before the campaign does. Default 0.0 keeps a
     direct caller (and every test) on the real limits.
 
+    ``skip_clauses`` names gate clauses this call must not act on — the
+    runner's hysteresis (see `EvidenceProducer._unmovable`). Passed in rather
+    than decided here so the unit stays a pure gate-then-pipeline.
+
     Raises whatever the tool raises. Isolating a bad tick is the runner's job,
     and a unit that swallows its own failures cannot be tested for them.
     """
-    ok, reason = should_gather_evidence(workspace, budgets)
+    ok, reason, clause = gather_verdict(workspace, budgets)
     if not ok:
         logger.info("Evidence producer: skipping — %s", reason)
-        return GatherOutcome(gathered=False, reason=reason)
+        return GatherOutcome(gathered=False, reason=reason, clause=clause)
+
+    if clause in (skip_clauses or ()):
+        held = f"{reason}, and the last sweep did not change that"
+        logger.info("Evidence producer: skipping — %s", held)
+        return GatherOutcome(gathered=False, reason=held, clause=clause)
 
     yielded = _budget_headroom(llm_client, reserve)
     if yielded is not None:
         logger.info("Evidence producer: skipping — %s", yielded)
-        return GatherOutcome(gathered=False, reason=yielded)
+        return GatherOutcome(gathered=False, reason=yielded, clause=clause)
 
     logger.info("Evidence producer: gathering — %s", reason)
+    viable_before = _viable(workspace)
     started = time.monotonic()
     args = with_llm_client(registry, plan.tool, dict(plan.args), llm_client)
     result = registry.invoke(plan.tool, workspace, **args)
@@ -216,7 +234,23 @@ def gather_once(
         reason=reason,
         hypotheses_created=created,
         duration_s=duration,
+        clause=clause,
+        viable_before=viable_before,
+        viable_after=_viable(workspace),
     )
+
+
+def _viable(workspace: Workspace) -> int | None:
+    """The number the `thin` clause reads, or None when it cannot be read."""
+    from labpilot.research_engine.intelligence.hypothesis.viability import (
+        viable_hypothesis_count,
+    )
+
+    try:
+        return viable_hypothesis_count(workspace.knowledge_dir, workspace.competition)
+    except Exception:  # noqa: BLE001 — an observability read, never a blocker
+        logger.exception("Evidence producer could not read the viable count")
+        return None
 
 
 #: Seconds between ticks. A **rate limit, not a cadence assumption**: a domain
@@ -295,6 +329,9 @@ class EvidenceProducer:
         self._ticks = 0
         self._last: GatherOutcome | None = None
         self._last_error: str | None = None
+        #: Viable count at the moment the `thin` clause was found unmovable, or
+        #: None while it is still worth acting on. See `_skip_clauses`.
+        self._thin_latched_at: int | None = None
 
     # -- state the policy can see (design §9) --------------------------------
 
@@ -313,6 +350,7 @@ class EvidenceProducer:
             "last_reason": None if last is None else last.reason,
             "last_hypotheses_created": None if last is None else last.hypotheses_created,
             "last_error": error,
+            "thin_clause_unmovable": self._thin_latched_at is not None,
         }
 
     def is_running(self) -> bool:
@@ -335,6 +373,7 @@ class EvidenceProducer:
                 llm_client=self.llm_client,
                 budgets=self._budgets(),
                 reserve=self.reserve,
+                skip_clauses=self._skip_clauses(),
             )
         except Exception as exc:  # noqa: BLE001 — see docstring
             logger.exception("Evidence producer tick failed")
@@ -351,7 +390,73 @@ class EvidenceProducer:
             self._ticks += 1
             self._last = outcome
             self._last_error = None
+        self._note_whether_it_moved(outcome)
         return outcome
+
+    # -- hysteresis: do not repeat what provably changed nothing --------------
+
+    def _skip_clauses(self) -> tuple[str, ...]:
+        """Gate clauses this tick must not act on.
+
+        Measured 2026-08-20 on rogii: two complete sweeps, ten hypotheses each,
+        and the gate still read *"only 10 viable hypotheses queued"* before the
+        third. `viable_hypothesis_count` excludes rows the selector has passed
+        over twice, and every `generate_plan` ages every row it did not pick —
+        so with 153 proposals and one pick per selection, the producer's own
+        output aged out about as fast as it arrived. Eight of the eighteen it
+        minted were stale before the campaign ended.
+
+        The result was a worker sweeping continuously: ~40 minutes of
+        reasoning-role LLM work inside a 51-minute campaign, with
+        `_MIN_RESWEEP_HOURS` the only thing between that and a hot loop.
+
+        The rule is not specific to this clause and not a patch over one
+        workspace's numbers: **a worker must not repeat an action on a signal
+        its own last run failed to move.** A campaign step that re-swept was at
+        least a step someone chose; an unattended producer doing it is invisible
+        and unbounded.
+
+        The latch lifts the moment the count rises above where it stuck, so a
+        pool that genuinely drains — the case the clause exists for — reopens
+        gathering normally. Whether `viable_hypothesis_count` is the right
+        signal for *anyone* to gate on at this pool size is a separate and
+        larger question; it decides the consumer's allowlist too, and changing
+        it risks re-opening the ratchet M21 closed. Recorded in the plan's
+        traps rather than guessed at here.
+        """
+        if self._thin_latched_at is None:
+            return ()
+        current = _viable(self.workspace)
+        if current is not None and current > self._thin_latched_at:
+            logger.info(
+                "Evidence producer: viable count moved %d → %d; a thin pool is "
+                "worth sweeping for again",
+                self._thin_latched_at,
+                current,
+            )
+            self._thin_latched_at = None
+            return ()
+        return ("thin",)
+
+    def _note_whether_it_moved(self, outcome: GatherOutcome) -> None:
+        """Latch when a completed sweep left its own trigger untouched."""
+        if not outcome.gathered or outcome.clause != "thin":
+            return
+        before, after = outcome.viable_before, outcome.viable_after
+        if before is None or after is None:
+            return
+        if after > before:
+            self._thin_latched_at = None
+            return
+        self._thin_latched_at = after
+        logger.warning(
+            "Evidence producer: a completed sweep added %d hypothesis(es) and left the "
+            "viable count at %d (was %d). This producer cannot satisfy the thin-pool "
+            "clause, so it will stop sweeping on that reason until the count moves.",
+            outcome.hypotheses_created,
+            after,
+            before,
+        )
 
     def _budgets(self) -> tuple[BudgetConfig, BudgetState] | None:
         """This campaign's budget pair, read fresh, or None when unavailable.
