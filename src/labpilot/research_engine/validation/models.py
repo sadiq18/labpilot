@@ -67,17 +67,6 @@ class ValidationResult:
     secondary: float | None = None
 
     @property
-    def is_comparable(self) -> bool:
-        """Whether this can take part in a signed comparison at all.
-
-        A score with no direction is a number with no meaning: `treatment -
-        control` is computable and its *sign* is a coin flip. Both parts are
-        required, which is why this is one property rather than two checks every
-        caller repeats.
-        """
-        return self.score is not None and self.direction is not None
-
-    @property
     def maximize(self) -> bool | None:
         """The legacy boolean, for callers that still speak it.
 

@@ -118,7 +118,6 @@ def test_a_result_with_no_direction_does_not_invent_one(tmp_path) -> None:
 
     assert unresolved.direction is None
     assert unresolved.maximize is None
-    assert not unresolved.is_comparable
 
     with pytest.raises(ValueError):
         _card(
@@ -130,16 +129,19 @@ def test_a_result_with_no_direction_does_not_invent_one(tmp_path) -> None:
         )
 
 
-def test_a_score_without_a_direction_is_not_comparable() -> None:
-    """Both halves are required. `treatment - control` is computable with either
-    one missing, and its sign is a coin flip."""
-    assert not ValidationResult(score=1.0, metric="rmse", direction=None, source="t").is_comparable
-    assert not ValidationResult(
-        score=None, metric="rmse", direction="minimize", source="t"
-    ).is_comparable
-    assert ValidationResult(
-        score=1.0, metric="rmse", direction="minimize", source="t"
-    ).is_comparable
+def test_an_unknown_direction_never_reads_as_maximize() -> None:
+    """`treatment - control` is computable without a direction and its sign is a
+    coin flip, so the boolean a caller reads has to be able to say "I don't know".
+    """
+    assert ValidationResult(score=1.0, metric="rmse", direction=None, source="t").maximize is None
+    assert (
+        ValidationResult(score=1.0, metric="rmse", direction="minimize", source="t").maximize
+        is False
+    )
+    assert (
+        ValidationResult(score=1.0, metric="rmse", direction="maximize", source="t").maximize
+        is True
+    )
 
 
 def test_a_blob_with_no_primary_metric_reports_no_score() -> None:
@@ -148,7 +150,6 @@ def test_a_blob_with_no_primary_metric_reports_no_score() -> None:
     empty = result_from_metrics({"n_features": 12}, maximize=False)
 
     assert empty.score is None and empty.metric == ""
-    assert not empty.is_comparable
 
 
 def test_the_metric_key_travels_with_the_score() -> None:
@@ -376,7 +377,6 @@ def test_a_workspace_with_no_metrics_reports_no_score(tmp_path) -> None:
 
     assert result.score is None
     assert result.direction == "minimize", "direction is independent of the score"
-    assert not result.is_comparable
 
 
 def test_a_control_result_supplies_the_blob_the_card_reads_around_it(tmp_path) -> None:
@@ -705,3 +705,77 @@ def test_a_card_never_mixes_two_measurements(tmp_path) -> None:
     assert card.observed.treatment_cv == 1.0
     assert card.observed.treatment_cv_std == 9.9, "spread came from a different run than the score"
     assert card.observed.train_time_s == 5.0, "runtime came from a different run than the score"
+
+
+def test_two_unnamed_metrics_are_not_the_same_metric(tmp_path) -> None:
+    """Review finding. `parent_found[1] != treatment_found[1]` read two empty
+    metric names as a match, so a pair of results that both forgot `metric` had
+    0.9 and 100.0 subtracted into a durable `rejected` verdict.
+
+    An unnamed metric is *unknown*, not a name that happens to be empty. This is
+    the rogii failure — six cards recorded a gain of -194.30 by subtracting a
+    stub's `cv_accuracy` from a real `cv_rmse` — reachable again through the
+    seam, because validators build results by hand and `metric=""` is what
+    forgetting the field looks like.
+    """
+    card = _card(
+        tmp_path,
+        "demo-unnamed",
+        treatment_metrics={},
+        result=ValidationResult(score=0.9, metric="", direction="maximize", source="harness"),
+        control_result=ValidationResult(score=100.0, metric="", direction="maximize", source="b"),
+    )
+
+    assert card.observed.cv_gain is None, "two unrelated scores were subtracted"
+    assert card.decision_reason.startswith("metric_key_unknown")
+    assert card.decision.value == "inconclusive"
+
+
+@pytest.mark.parametrize(
+    ("treatment_metric", "control_metric"),
+    [("", "cv_rmse"), ("cv_rmse", ""), ("", "")],
+)
+def test_a_score_missing_its_metric_name_is_never_compared(
+    tmp_path, treatment_metric, control_metric
+) -> None:
+    """All three shapes refuse. The one-sided cases already did — `'' != 'cv_rmse'`
+    fires — which is why the both-empty hole went unnoticed."""
+    card = _card(
+        tmp_path,
+        "demo-unnamed-matrix",
+        treatment_metrics={},
+        result=ValidationResult(
+            score=0.9, metric=treatment_metric, direction="maximize", source="harness"
+        ),
+        control_result=ValidationResult(
+            score=100.0, metric=control_metric, direction="maximize", source="b"
+        ),
+    )
+
+    assert card.observed.cv_gain is None
+
+
+def test_two_named_matching_metrics_still_compare(tmp_path) -> None:
+    """The guard must not cost the comparison it guards."""
+    card = _card(
+        tmp_path,
+        "demo-named",
+        treatment_metrics={},
+        result=ValidationResult(score=0.9, metric="pass_rate", direction="maximize", source="h"),
+        control_result=ValidationResult(
+            score=0.7, metric="pass_rate", direction="maximize", source="h"
+        ),
+    )
+
+    assert card.observed.cv_gain == pytest.approx(0.20)
+    assert card.decision.value == "accepted"
+
+
+def test_the_dead_comparability_property_is_gone() -> None:
+    """Review finding. `is_comparable` had 6 test references and 0 in `src/`, and
+    the builder implements the same guard differently — via `maximize` plus the
+    `_resolve_direction` fallback. Two answers to "can this be compared", neither
+    aware of the other, is how they diverge."""
+    result = ValidationResult(score=1.0, metric="m", direction="maximize", source="t")
+
+    assert not hasattr(result, "is_comparable")
