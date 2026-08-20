@@ -1,0 +1,53 @@
+{
+  "slug": "spaceship-titanic",
+  "captured_at": "2026-08-20",
+  "source": "kaggle: spaceship-titanic",
+  "provenance": "derived",
+  "licence": "kaggle-getting-started",
+  "redistribution": "unknown",
+  "files": [
+    {
+      "path": "sample_submission.csv",
+      "mode": "headers_only",
+      "source_sha256": "c77c0a5ed1f3d2728d6add6079266a543d12755aebaf00f230ff1966b364ebed",
+      "source_bytes": 59902,
+      "source_rows": 4277,
+      "fixture_rows": 0
+    },
+    {
+      "path": "test.csv",
+      "mode": "headers_only",
+      "source_sha256": "3c02b0703423d27d51a657a111b15a37b8d03b3c1de325e3a1e6b26f6572fc88",
+      "source_bytes": 372487,
+      "source_rows": 4277,
+      "fixture_rows": 0
+    },
+    {
+      "path": "train.csv",
+      "mode": "headers_only",
+      "source_sha256": "17336d553f49ebdf6ecb266d2b5d3746e5dd308445f7c7864141c4f28d2a88d0",
+      "source_bytes": 805421,
+      "source_rows": 8693,
+      "fixture_rows": 0
+    }
+  ],
+  "expected": {
+    "target_column": "Transported",
+    "id_columns": [
+      "PassengerId"
+    ],
+    "train_test_relationship": "disjoint_units",
+    "modality": "tabular",
+    "feature_columns": null,
+    "metric_name": null,
+    "must_ask": []
+  },
+  "unverifiable": {
+    "row_count": "headers_only capture keeps a subset of rows",
+    "cardinality": "headers_only capture keeps a subset of rows",
+    "feature_columns": "no rows, so constant and equals-target exclusions cannot fire",
+    "metric_name": "no competition.json was captured, so the competition's stated metric is not in the fixture and scoring it would measure this corpus, not the parser"
+  },
+  "known_failures": {},
+  "notes": "A boolean target (`True`/`False`, not 0/1) and a non-integer id (`0001_01` \u2014 group and member, so it is neither unique-looking as a number nor a plain sequence). The corpus otherwise scores integer ids and numeric targets, and a rule that only holds for those would pass every other fixture here."
+}

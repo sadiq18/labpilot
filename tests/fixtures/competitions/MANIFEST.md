@@ -14,6 +14,9 @@ typed from memory sat in that corpus for a day claiming to be 624 bytes.
 |---|---|---|---|---|
 | `playground-series-s6e7` | `headers_only` | 91 MB, 690,088 train rows | target · id · train/test · modality | **`metric_name`** — see below |
 | `rogii-wellbore-geology-prediction` | `headers_only`, ≤6 files per directory | 1.2 GB, 1,546 tables | target · modality · **abstention** | — |
+| `titanic` | `headers_only` | 891 train rows, 12 columns | target · id · train/test · modality | — |
+| `spaceship-titanic` | `headers_only` | 8,693 train rows, 14 columns | target · id · train/test · modality | — |
+| `house-prices-advanced-regression-techniques` | `headers_only` | 1,460 train rows, 81 columns | target · id · train/test · modality | — |
 
 ## What each one is for
 
@@ -28,6 +31,25 @@ ships `known_failure` on that criterion so the day it goes green is visible.
 eleven days. Two table kinds, per-kind withholding, and a submission whose `id`
 column exists in no table — so its expectation is not an answer but a *question*:
 `must_ask: ["id_columns"]`. It scores `abstention`, and passes.
+
+**`titanic`** names its submission template `gender_submission.csv`. A profiler
+that finds the template by filename convention rather than by what the file
+holds resolves nothing here, and target, id and submission columns fall with it.
+It passes today; the fixture is what keeps that true.
+
+**`spaceship-titanic`** is the one with a boolean target (`True`/`False`, not
+0/1) and an id that is not a number (`0001_01`). Every other fixture in the
+corpus has an integer id, so a rule that only holds for integers passes all of
+them.
+
+**`house-prices-advanced-regression-techniques`** is the widest schema here — 81
+columns — and the only continuous target, against three classification fixtures.
+
+These three carry **no `competition.json`**, so `metric_name` is `unverifiable`
+rather than scored: the cached download holds the data and not the rules, and a
+metric typed in from memory would be the paraphrase this corpus exists to
+prevent. Capturing a spec beside them upgrades that criterion from
+`unverifiable` to scored, for all three at once.
 
 ## Adding to it
 
