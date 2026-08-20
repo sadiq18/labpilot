@@ -85,6 +85,16 @@
   },
   "train_test_relationship": "disjoint_units",
   "metric": null,
+  "target_distribution": {
+    "class_counts": {
+      "True": 7,
+      "False": 5
+    },
+    "median": null,
+    "zero_fraction": null,
+    "skew": null,
+    "null_count": 0
+  },
   "submission_columns": [
     "PassengerId",
     "Transported"
@@ -216,6 +226,7 @@
   "anchor_column": null,
   "modality": "tabular",
   "confidence": 0.0,
+  "target_type": "binary",
   "id_column": "PassengerId",
   "feature_columns": [
     "HomePlanet",

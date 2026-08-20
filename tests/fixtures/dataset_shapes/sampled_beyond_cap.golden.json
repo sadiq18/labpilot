@@ -66,6 +66,17 @@
   },
   "train_test_relationship": "disjoint_units",
   "metric": null,
+  "target_distribution": {
+    "class_counts": {
+      "0.0": 4,
+      "1.0": 3,
+      "2.0": 3
+    },
+    "median": 1.0,
+    "zero_fraction": 0.4,
+    "skew": 0.223451,
+    "null_count": 0
+  },
   "submission_columns": [
     "id",
     "label"
@@ -207,6 +218,7 @@
   "anchor_column": null,
   "modality": "tabular",
   "confidence": 0.0,
+  "target_type": "multiclass",
   "id_column": "id",
   "feature_columns": [
     "feature"

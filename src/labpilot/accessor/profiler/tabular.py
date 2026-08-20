@@ -22,6 +22,8 @@ from labpilot.accessor.profiler.schema import (
     ModalityPresence,
     PredictionUnit,
     SplitRelationship,
+    TargetDistribution,
+    TargetType,
 )
 from labpilot.accessor.profiler.source import (
     DatasetSource,
@@ -56,7 +58,19 @@ class ColumnProfile(BaseModel):
 #: was first given and every later improvement is invisible to it. rogii's was
 #: written 2026-08-02 and reused by every campaign since; the anchor column
 #: added on 08-13 would never have reached it.
-PROFILE_SCHEMA_VERSION = 3
+#: Above this many distinct values, a whole-numbered target is no longer read as
+#: a label set. Deliberately generous: a 30-class problem is ordinary and a
+#: 30-value regression target is not, so the cost of the two mistakes is not
+#: symmetric — reading a regression as classification makes the floor a class
+#: prior over hundreds of "classes", which is both wrong and slow.
+_DISCRETE_LABEL_CEILING = 30
+
+#: How tightly integer values must crowd their own range to read as counts.
+#: `max < unique_count * 10` holds for 0-50 over 51 distinct values and fails for
+#: SalePrice, whose 663 values span 755,000.
+_COUNT_DENSITY = 10
+
+PROFILE_SCHEMA_VERSION = 4
 
 
 class DatasetProfile(BaseModel):
@@ -91,6 +105,12 @@ class DatasetProfile(BaseModel):
     train_test_relationship: SplitRelationship = "unknown"
     #: What the dataset is scored by, and how that was reached.
     metric: MetricRef | None = None
+    #: What the target looks like: class counts, median, zero-inflation, skew.
+    #: Measured, so it carries no confidence of its own — it inherits the
+    #: target's, because a distribution over the wrong column is wrong however
+    #: precisely it was computed. `target_type` below is derived from it and the
+    #: target's column profile.
+    target_distribution: TargetDistribution = Field(default_factory=TargetDistribution)
     submission_columns: list[str] = Field(default_factory=list)
     #: Structured reasons. `warnings` below is the prose view over these.
     notes: list[Note] = Field(default_factory=list)
@@ -161,6 +181,66 @@ class DatasetProfile(BaseModel):
         answers hide the one that matters.
         """
         return min((self.confidence_in(field) for field in REQUIRED_FIELDS), default=0.0)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def target_type(self) -> TargetType:
+        """The shape of the prediction target, derived from what was measured.
+
+        Derived rather than stored, and that is the whole design: every input —
+        `unique_count`, `is_numeric`, the numeric `stats`, the submission
+        template — is already in this profile, so a stored copy could only ever
+        be a second answer free to disagree with them. It also means every
+        profile written before this field existed acquires it on load instead of
+        needing a migration.
+
+        What it refuses to decide is as load-bearing as what it decides.
+        `ordinal` is never returned: whether 1-5 stars are ranks or five
+        unrelated labels is a fact about the world. `count` is returned only for
+        dense non-negative integers — `SalePrice` is an integer column with 663
+        distinct values and a maximum of 755,000, and calling that a count, or
+        worse a 663-class problem, is the misreading this milestone's corpus
+        names by name.
+        """
+        if self.target_column is None:
+            return "none"
+        scored = [c for c in self.submission_columns if c not in set(self.id_columns)]
+        if len(scored) > 1:
+            # The template asks for several numbers per unit. One of them being
+            # `target_column` does not make the task single-output.
+            return "multilabel"
+        column = next((c for c in self.columns if c.name == self.target_column), None)
+        if column is None:
+            return "unknown"
+        if column.unique_count <= 1:
+            # Constant, or nothing left after nulls. Not binary, and a floor
+            # built on it would be perfect and meaningless.
+            return "unknown"
+        if column.unique_count == 2:
+            return "binary"
+        if not column.is_numeric:
+            return "multiclass"
+        stats = column.stats or {}
+        low, high = stats.get("min"), stats.get("max")
+        if low is None or high is None:
+            return "unknown"
+        whole = float(low).is_integer() and float(high).is_integer()
+        if not whole:
+            return "continuous"
+        # Labels repeat. Twelve distinct prices over twelve rows cleared the
+        # ceiling and read as a twelve-class problem — the `SalePrice` misreading
+        # again, arriving through the small-fixture door instead of the
+        # large-dataset one. `row_count <= 0` means nobody counted, and a rule
+        # that silently used 0 as "no repeats" would send every uncounted
+        # dataset down the numeric branch.
+        labels_repeat = self.row_count <= 0 or column.unique_count < self.row_count
+        if column.unique_count <= _DISCRETE_LABEL_CEILING and labels_repeat:
+            return "multiclass"
+        # Dense non-negative integers: the values crowd their own range, which
+        # is what a count does and what a price does not.
+        if low >= 0 and high < column.unique_count * _COUNT_DENSITY:
+            return "count"
+        return "continuous"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -712,6 +792,58 @@ def _is_known_prefix_of(frame: "pd.DataFrame", name: str, target: str) -> bool |
     return bool((frame.loc[known, name] == frame.loc[known, target]).all())
 
 
+def _measure_target(profile: DatasetProfile, frame: pd.DataFrame) -> None:
+    """Attach the target's distribution, if the frame in hand holds the target.
+
+    Both profiling paths call this rather than each measuring for itself: the
+    flat one and the partitioned one already resolve the target differently, and
+    two measurements of one field is how they would come to disagree about it.
+    """
+    target = profile.target_column
+    if target and target in frame.columns:
+        profile.target_distribution = _target_distribution(frame[target])
+
+
+def _target_distribution(series: pd.Series) -> TargetDistribution:
+    """Measure the target. Never raises; a column it cannot read stays empty.
+
+    Empty is a real answer and a safe one — M23's floor refuses to build on an
+    empty distribution, which is the right response to a target nobody could
+    measure. An exception here would take down a profile that is otherwise
+    correct about everything else.
+    """
+    import pandas as pd
+
+    null_count = int(series.isna().sum())
+    values = series.dropna()
+    if values.empty:
+        return TargetDistribution(null_count=null_count)
+
+    numeric = pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values)
+    distribution = TargetDistribution(null_count=null_count)
+    # Counts for anything with few enough distinct values to have labels —
+    # including a numeric one, because a 0/1 target is a class prior even when
+    # pandas calls it int64. `_DISCRETE_LABEL_CEILING` is the same line
+    # `target_type` draws, so the two cannot disagree about what a label is.
+    # `< len(values)` and not just the ceiling: a label set has labels that
+    # *repeat*. Twelve distinct prices over twelve rows cleared the ceiling and
+    # produced a "class prior" of twelve ones, which is not a prior — it is the
+    # data, re-listed, under a name that invites a floor to be built on it.
+    unique = values.nunique()
+    if unique <= _DISCRETE_LABEL_CEILING and unique < len(values):
+        counts = values.value_counts()
+        distribution.class_counts = {str(k): int(v) for k, v in counts.items()}
+    if numeric:
+        try:
+            distribution.median = float(values.median())
+            distribution.zero_fraction = round(float((values == 0).mean()), 6)
+            skew = float(values.skew()) if len(values) > 2 else None
+            distribution.skew = None if skew is None or skew != skew else round(skew, 6)
+        except (TypeError, ValueError):
+            pass
+    return distribution
+
+
 class TabularProfiler:
     """Profile tabular competition datasets."""
 
@@ -975,6 +1107,11 @@ class TabularProfiler:
         settled, refused = _answered(target_candidates, answers.get("target_column"), known=known)
         target_column, target_inference = _resolve(settled)
         profile.target_column = target_column
+        # Measured here, where the resolved target and the frame that holds it
+        # are both in scope. Not in `_profile_columns`: that runs before anything
+        # knows which column is the target, and measuring a class prior for every
+        # column would be paying for 80 answers to throw away 79.
+        _measure_target(profile, train_sample)
         profile.inferences["target_column"] = target_inference.model_copy(
             update={"rejected": refused}
         )
@@ -1541,6 +1678,12 @@ class TabularProfiler:
                     field="target_column",
                     severity="blocking",
                 )
+
+        # After the answer, the procedure and their disagreement have all had
+        # their say — measuring before that would describe a column the profile
+        # then stops naming. rogii reaches this path and not the flat one, and it
+        # is the fixture M23's floor most needs a distribution for.
+        _measure_target(profile, sample_df)
 
         id_settled, id_refused = _answered(
             {

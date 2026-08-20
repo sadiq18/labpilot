@@ -91,6 +91,13 @@
   },
   "train_test_relationship": "disjoint_units",
   "metric": null,
+  "target_distribution": {
+    "class_counts": {},
+    "median": 190750.0,
+    "zero_fraction": 0.0,
+    "skew": 0.594247,
+    "null_count": 0
+  },
   "submission_columns": [
     "Id",
     "SalePrice"
@@ -226,6 +233,7 @@
   "anchor_column": null,
   "modality": "tabular",
   "confidence": 0.0,
+  "target_type": "continuous",
   "id_column": "Id",
   "feature_columns": [
     "LotArea",

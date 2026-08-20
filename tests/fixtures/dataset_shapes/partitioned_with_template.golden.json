@@ -128,6 +128,13 @@
   },
   "train_test_relationship": "disjoint_units",
   "metric": null,
+  "target_distribution": {
+    "class_counts": {},
+    "median": 303.5,
+    "zero_fraction": 0.014706,
+    "skew": 0.745223,
+    "null_count": 0
+  },
   "submission_columns": [
     "id",
     "depth"
@@ -307,6 +314,7 @@
   "anchor_column": "Depth_input",
   "modality": "tabular",
   "confidence": 0.0,
+  "target_type": "continuous",
   "id_column": "id",
   "feature_columns": [
     "md",

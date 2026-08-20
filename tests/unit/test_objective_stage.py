@@ -196,6 +196,81 @@ def test_a_workspace_that_states_nothing_resolves_to_saying_so(tmp_path: Path) -
     assert stored.spec.blocks_launch
 
 
+# --- the task is measured, not read off the prose ----------------------------
+
+
+def test_the_task_comes_from_the_measured_target(tmp_path: Path) -> None:
+    """M23 step 1. The contract's `problem_type` is a keyword match on prose.
+
+    `infer_problem_type.py` matches `\\bregression\\b`, `\\brmse\\b` and friends against
+    the competition description, so a write-up that mentions "we ran a
+    regression on last year's data" makes a classification competition read as
+    regression. The target column is right there and can simply be looked at.
+    """
+    _contract(tmp_path, name="accuracy")
+    path = tmp_path / "competition.json"
+    spec = json.loads(path.read_text(encoding="utf-8"))
+    spec["problem_type"] = "tabular_regression"  # the prose got it wrong
+    path.write_text(json.dumps(spec), encoding="utf-8")
+    _profile(tmp_path, target_column="y", target_type="binary", modality="tabular")
+
+    facts = read_inputs(tmp_path)
+
+    assert facts.task == "tabular_classification"
+    assert facts.task_from == "profile"
+
+
+def test_the_modality_rides_along_with_the_task(tmp_path: Path) -> None:
+    """An image competition's label is still a class column.
+
+    The design is explicit that modality does not decide the floor — but it does
+    belong in the task name, because that is the string every existing reader
+    already matches on.
+    """
+    _profile(tmp_path, target_column="label", target_type="multiclass", modality="image")
+
+    assert read_inputs(tmp_path).task == "image_classification"
+
+
+def test_the_contract_answers_when_the_schema_cannot(tmp_path: Path) -> None:
+    """`none`, `unknown` and `ordinal` are not answers, so the fallback stands.
+
+    "We do not know" losing to a keyword match would be worse than the keyword
+    match alone — this is a swap of precedence, not a removal.
+    """
+    _contract(tmp_path, name="rmse", direction="minimize")
+    _profile(tmp_path, target_column=None, target_type="none")
+
+    facts = read_inputs(tmp_path)
+
+    assert facts.task == "tabular_regression", "from competition.json"
+    assert facts.task_from == "competition.json"
+
+
+def test_a_workspace_with_neither_has_no_task(tmp_path: Path) -> None:
+    """Not a default. `tabular_classification` guessed here would put a class
+    prior under a column nobody identified."""
+    facts = read_inputs(tmp_path)
+
+    assert facts.task is None
+    assert facts.task_from == "none"
+
+
+def test_a_changed_task_makes_the_objective_stale(tmp_path: Path) -> None:
+    """The task is an input, so re-measuring it re-resolves the objective.
+
+    A profile rebuilt after an answer can change the target and therefore the
+    task; an objective cached across that would describe the old one.
+    """
+    _contract(tmp_path, name="rmse", direction="minimize")
+    _profile(tmp_path, target_column="y", target_type="continuous", modality="tabular")
+    ensure_objective(tmp_path, "demo")
+
+    _profile(tmp_path, target_column="y", target_type="binary", modality="tabular")
+
+    assert objective_state(tmp_path) == "stale"
+
+
 # --- it is written down ------------------------------------------------------
 
 
