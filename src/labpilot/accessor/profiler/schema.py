@@ -125,4 +125,9 @@ class MetricRef(BaseModel):
     name: str
     key: str | None = None
     direction: Literal["maximize", "minimize"] | None = None
+    #: What the truth must look like, from the metric registry's `target_kind`.
+    #: Carried rather than re-derived: `accessor` may not import the registry,
+    #: and a second list of metric keys here would be the third overlapping
+    #: vocabulary — the defect #145 removed and a test now forbids.
+    target_kind: Literal["continuous", "discrete", "any"] | None = None
     source: Literal["declared", "operator"] = "declared"

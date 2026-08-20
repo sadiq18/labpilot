@@ -314,6 +314,19 @@ def direction_of(key: str | None) -> MetricDirection | None:
     return _BY_KEY[normalized].direction if normalized else None
 
 
+def target_kind_of(key: str | None) -> TargetKind | None:
+    """What the truth must look like for a metric, or None when unknown.
+
+    The registry already stores this per metric; it had no reader. M22's schema
+    proposer needs it to refuse "the label is `neighbourhood`" for an RMSE
+    competition, and `accessor` may not import this module — so the caller asks
+    here and carries the answer on `MetricRef`, rather than keeping a second
+    list of metric keys on the other side of the boundary.
+    """
+    normalized = normalize_metric_key(key)
+    return _BY_KEY[normalized].target_kind if normalized else None
+
+
 def is_scorable(key: str | None) -> bool:
     """Whether `compute_metric` can actually produce this number."""
     normalized = normalize_metric_key(key)

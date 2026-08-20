@@ -68,6 +68,10 @@ class ProfilerConfig(BaseModel):
     # Partitioned datasets can hold thousands of per-entity CSVs; schema and row
     # statistics converge long before reading them all.
     max_files_sample: int = 25
+    #: Ask a model what it thinks the schema is (M22 step 6). Off by default:
+    #: it can add 0.10 to a confidence and can never write a value, but the
+    #: cheapest way to keep that guarantee true is not to run it unless asked.
+    llm_proposals: bool = False
 
 
 class DeepBaselineConfig(BaseModel):

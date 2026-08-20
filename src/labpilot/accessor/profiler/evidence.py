@@ -183,6 +183,12 @@ CATALOGUE: dict[str, SignalSpec] = {
             cap=0.75,
             means="a scoring input exists and nothing contradicts disjoint units — the residual",
         ),
+        _spec(
+            "llm_proposal_confirmed",
+            0.10,
+            "stated",
+            means="a model proposed this independently and every structural verifier passed",
+        ),
         # --- modality -------------------------------------------------------
         _spec(
             "single_modality_present",
