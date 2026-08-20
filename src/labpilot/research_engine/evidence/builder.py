@@ -98,6 +98,29 @@ def _primary_cv_keyed(metrics: dict[str, Any]) -> tuple[float, str] | None:
     return None
 
 
+def _same_metric(left: str, right: str) -> bool:
+    """Whether two scores were measured on the same, *named*, metric.
+
+    Equal **and** named, in that order of importance. An unnamed metric is
+    unknown, not a name that happens to be empty, so two of them do not match: a
+    bare `left != right` let a pair of `metric=""` results through and 0.9 was
+    subtracted from 100.0 into a durable `rejected` verdict. That is the failure
+    this guard exists for — six rogii cards recorded a gain of -194.30 by
+    subtracting a stub's `cv_accuracy` from a real `cv_rmse` — reachable again
+    because validators build results by hand and `metric=""` is what forgetting
+    the field looks like.
+
+    Both operands earn their place: `left == right` alone accepts two unknowns,
+    and `bool(left)` alone accepts two different named metrics. Spelling it as
+    three or-ed clauses instead left one of them unreachable, which a mutation
+    sweep caught.
+
+    `_primary_cv_keyed` never returns an empty name, so this costs the Kaggle
+    path nothing; it is entirely a guard on the seam.
+    """
+    return left == right and bool(left)
+
+
 def _found(
     result: ValidationResult | None, metrics: dict[str, Any]
 ) -> tuple[float, str] | None:
@@ -537,7 +560,7 @@ def build_evidence_card(
     mismatched_metric = (
         parent_found is not None
         and treatment_found is not None
-        and parent_found[1] != treatment_found[1]
+        and not _same_metric(parent_found[1], treatment_found[1])
     )
     # A run that never trained has nothing to compare. Refusing here is the
     # upstream fix that `ClaimPromoter._card_compared_something_real` could only
@@ -621,10 +644,22 @@ def build_evidence_card(
             sides.append(f"control reported {control_metrics.get('status')!r}")
         reason = f"placeholder_metrics: {', '.join(sides)}; no model was trained"
     elif mismatched_metric:
-        reason = (
-            f"metric_key_mismatch: control scored {parent_found[1]!r}, "
-            f"treatment scored {treatment_found[1]!r}"
-        )
+        # `_found` guarantees both are set whenever `mismatched_metric` is True,
+        # so the indexing below is safe; mypy cannot see that through the
+        # conjunction, hence the local names.
+        parent_metric = parent_found[1] if parent_found else ""
+        treatment_metric = treatment_found[1] if treatment_found else ""
+        if not parent_metric or not treatment_metric:
+            reason = (
+                "metric_key_unknown: a score arrived without the name of the "
+                f"metric it was measured on (control {parent_metric!r}, "
+                f"treatment {treatment_metric!r})"
+            )
+        else:
+            reason = (
+                f"metric_key_mismatch: control scored {parent_metric!r}, "
+                f"treatment scored {treatment_metric!r}"
+            )
     elif self_comparison:
         reason = f"self_comparison: {self_comparison}"
 
