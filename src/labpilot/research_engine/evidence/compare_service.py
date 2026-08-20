@@ -23,7 +23,9 @@ from labpilot.research_engine.intelligence.knowledge.store import KnowledgeStore
 from labpilot.research_engine.intelligence.models import ResearchArtifactType
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import HypothesisStatus
+from labpilot.research_engine.validation import harness
 from labpilot.research_engine.validation.kaggle import KaggleCvValidator, result_from_metrics
+from labpilot.research_engine.validation.models import HypothesisValidator, ValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,44 @@ def _metrics_for_hypothesis(
     return None, {}
 
 
+def _validator_for(workspace_root: Path) -> HypothesisValidator:
+    """Which validator this workspace calls for.
+
+    A conditional, not a registry. The plan is explicit — *"One extra validator,
+    hardcoded, will reveal the interface. A registry can come after there are
+    three."* — and with two implementations a registry is indirection around a
+    single `if`.
+
+    Kaggle is the default because it is what every existing workspace is; a
+    harness announces itself by what it wrote.
+    """
+    if harness.handles(workspace_root):
+        return harness.HarnessValidator()
+    return KaggleCvValidator()
+
+
+def _control_result(
+    control_metrics: dict[str, Any], treatment: ValidationResult
+) -> ValidationResult:
+    """Describe the control the same way the treatment was described.
+
+    A control recovered from a stored blob has no result of its own, so one is
+    built from it — by the same reader that produced the treatment. Running
+    `_primary_cv_keyed` over a harness control would find no `cv_` key and
+    quietly report a scoreless control, which reads as `missing_control` and
+    silently discards a real comparison.
+
+    The direction is inherited rather than independently resolved — same
+    objective, same answer — and `build_evidence_card` reads only `.raw`,
+    `.score` and `.metric` off a control result, never its direction. A reader
+    should not take it for a guard against comparing a maximised run with a
+    minimised one; no such guard exists.
+    """
+    if treatment.source == harness.SOURCE:
+        return harness.result_from_payload(control_metrics)
+    return result_from_metrics(control_metrics, maximize=treatment.maximize)
+
+
 def run_compare_and_build_card(context: TaskContext) -> EvidenceCard:
     """COMPARE vs parent control, write comparison.json, persist Evidence Card + graph."""
     root = context.workspace_root
@@ -159,15 +199,10 @@ def run_compare_and_build_card(context: TaskContext) -> EvidenceCard:
     # Both sides are described the same way. A comparison between a result and a
     # loose blob is a comparison between two different kinds of thing, and the
     # control is where that asymmetry hid a bug once already.
-    result = KaggleCvValidator().validate(context.plan.hypothesis_id, root, context)
+    validator = _validator_for(root)
+    result = validator.validate(context.plan.hypothesis_id, root, context)
     treatment_metrics = result.raw
-    # The direction here is inherited rather than independently resolved — same
-    # competition, same answer — and `build_evidence_card` reads only `.raw`,
-    # `.score` and `.metric` off a control result, never its direction. Passing
-    # the treatment's is the sensible value for a field nothing consults yet;
-    # a future reader should not take it for a guard against comparing a
-    # maximised run with a minimised one, because no such guard exists.
-    control_result = result_from_metrics(control_metrics, maximize=result.maximize)
+    control_result = _control_result(control_metrics, result)
 
     card = build_evidence_card(
         knowledge_dir=knowledge_dir,

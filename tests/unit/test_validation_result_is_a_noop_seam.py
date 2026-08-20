@@ -493,18 +493,18 @@ def test_an_unresolvable_direction_is_carried_not_raised(tmp_path) -> None:
     assert direction_for("nothing-stated", knowledge_dir=tmp_path, workspace_root=workspace) is None
 
 
-def test_the_production_comparison_runs_through_the_validator() -> None:
-    """Phase 1's whole content. Until this, `validate` was available and unused,
-    so the seam could rot without a single test noticing."""
-    import inspect
+def test_the_production_comparison_picks_a_validator_rather_than_hardcoding_one() -> None:
+    """Replaces a test that grepped `inspect.getsource` for the validator call.
 
-    from labpilot.research_engine.evidence import compare_service
+    That assertion broke the moment a second validator arrived, for no
+    behavioural reason — which is what a source-text test is worth. The
+    behavioural proof next door (`..._produces_the_pre_wiring_card`) is what
+    actually constrains this path; all this adds is that the choice is made
+    rather than hardcoded.
+    """
+    from labpilot.research_engine.evidence.compare_service import _validator_for
 
-    source = inspect.getsource(compare_service.run_compare_and_build_card)
-
-    assert "KaggleCvValidator().validate(" in source
-    assert "result=result" in source and "control_result=control_result" in source
-    assert "_load_metrics(root" not in source, "still loading metrics.json around the validator"
+    assert _validator_for(Path("/nonexistent")).source == "kaggle_cv"
 
 
 def test_the_knowledge_root_is_the_research_dir_not_the_knowledge_dir(tmp_path) -> None:
