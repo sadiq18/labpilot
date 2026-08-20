@@ -488,6 +488,10 @@ class WorkspaceCapability(BaseCapability):
             # registry, so the caller hands over an already-resolved reference.
             declared_metric = None
             if competition.evaluation_metric is not None:
+                from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+                    target_kind_of,
+                )
+
                 spec = competition.evaluation_metric
                 declared_metric = MetricRef(
                     name=spec.name,
@@ -495,6 +499,9 @@ class WorkspaceCapability(BaseCapability):
                     direction=spec.direction
                     if spec.direction in ("maximize", "minimize")
                     else None,
+                    # The registry's own answer to "what must the truth look
+                    # like", carried across a boundary `accessor` cannot cross.
+                    target_kind=target_kind_of(spec.key),
                 )
             source = LocalFileSource(
                 raw_dir,

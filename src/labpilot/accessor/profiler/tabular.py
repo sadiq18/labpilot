@@ -1085,6 +1085,8 @@ class TabularProfiler:
             )
 
         declared = source.declared()
+        if self.config.llm_proposals and llm_client is not None:
+            self._fold_in_proposal(profile, llm_client, declared)
         root = _local_root(source)
         if root is None:
             # Not a default that reads as a finding: `modality` stays "tabular"
@@ -1167,6 +1169,33 @@ class TabularProfiler:
                 entity, _, kind = stem.partition(sep)
                 return entity, kind
         return stem, ""
+
+    def _fold_in_proposal(self, profile: DatasetProfile, llm_client: Any, declared: Any) -> None:
+        """Ask a model what it thinks, and let the data answer back.
+
+        Called after every deterministic answer is settled, and given none of
+        them: the proposal is worth something only if it was reached
+        independently. It can raise a confidence by 0.10 or add an alternative;
+        it cannot change a value, which `test_the_value_plane_ignores_the_model`
+        checks against a proposer that is wrong about everything.
+        """
+        from labpilot.accessor.profiler.proposer import apply_proposal, propose_schema
+
+        proposal = propose_schema(
+            profile,
+            llm_client=llm_client,
+            title=declared.title,
+            description=declared.description,
+        )
+        if proposal is None:
+            _note(
+                profile,
+                "llm_proposal_unavailable",
+                "the schema proposer was enabled and produced nothing",
+                severity="info",
+            )
+            return
+        apply_proposal(profile, proposal)
 
     def _profile_environment(self, source: DatasetSource, competition: str) -> DatasetProfile:
         """A dataset with no tables: say so, and ask what cannot be inferred.

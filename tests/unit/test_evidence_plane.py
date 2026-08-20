@@ -13,6 +13,7 @@ design, enforced over every fixture rather than reviewed.
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -52,6 +53,15 @@ class _SaysImage:
 
     def complete(self, system: str, user: str) -> str:
         return "image"
+
+
+class _AgreesWithTheData:
+    """A proposer that names what the profiler already found."""
+
+    def complete(self, system: str, user: str, **kwargs: object) -> str:
+        return json.dumps(
+            {"target_column": "SalePrice", "id_columns": ["Id"], "reasoning": "the description"}
+        )
 
 
 def _profile(data_dir: Path) -> DatasetProfile:
@@ -292,6 +302,15 @@ def test_the_catalogue_carries_no_entry_nothing_can_fire(tmp_path: Path) -> None
         TabularProfiler(ProfilerConfig()).profile_dataset(
             DictSource(tables, DeclaredFacts(answers={"target_column": "y"})),
             "answered",
+        )
+    )
+    # And one where a model agreed with the data: the only producer of
+    # `llm_proposal_confirmed`, and off unless the flag asks for it.
+    profiles.append(
+        TabularProfiler(ProfilerConfig(llm_proposals=True)).profile_directory(
+            build_strong_signals(tmp_path / "proposed"),
+            "proposed",
+            llm_client=_AgreesWithTheData(),
         )
     )
 

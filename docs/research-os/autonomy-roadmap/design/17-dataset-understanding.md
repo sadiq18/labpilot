@@ -544,9 +544,25 @@ rather than echo. Every claim faces a structural verifier (`column_exists`,
 
 - **confirmed** → one signal worth 0.10, however many claims agree.
 - **contradicted** → `Inference.rejected`, never near the value.
-- **nominated_and_verified** → only where the deterministic path produced
-  nothing and every verifier passes; capped **0.55**, below the ask threshold,
-  so a nomination always ends in a question.
+- **nominated_and_verified** → where the deterministic path produced nothing
+  and every verifier passes, the claim becomes an **alternative** worth 0.10.
+
+**Stronger than this section first specified.** The plan had a nomination *set*
+the value, capped at 0.55 so the field stayed uncertain and the question was
+asked anyway. Building it made a better contract obvious: the proposer never
+writes a value at all. A nomination is a candidate *in* the question — visible
+to whoever answers it, with its evidence beside the rest — and goal 2 becomes
+absolute rather than qualified: the value plane is byte-identical whether the
+proposer is absent, correct, or wrong about every field, on every shape rather
+than only the ones the deterministic path could resolve. Nothing is lost, since
+the suggestion still reaches the person, which was the point of allowing one.
+
+**`dtype_matches_metric` asks the registry, through the schema.** A list of
+metric keys in the profiler would be the third overlapping vocabulary — the
+defect #145 removed, and the test it left behind is what caught this.
+`MetricRef` carries `target_kind` instead, filled by the caller from
+`metric_vocabulary.target_kind_of`: a fact the registry already stored per
+metric and nothing had ever read.
 
 Off by default (`profiler.llm_proposals: false`).
 
@@ -676,7 +692,7 @@ show` is Rich output, truncated at 40 columns.
 | 3 ✅ | The five answers rewritten as scoring; `id_columns`, `excluded_columns`, `train_test_relationship`, `metric` | Checks 4, 5, 6 |
 | 4 ✅ | Questions, `schema_answers.json`, `schema_prompt`, block path, `research schema` | Check 7 |
 | 5 ✅ | Modality list, `prediction_unit`, zarr, tie-break confidence, `row_count`, environment; the fiction deleted | Check 8 |
-| 6 | Proposer + verifiers, off by default | Check 3 |
+| 6 ✅ | Proposer + verifiers, off by default | Check 3 |
 
 **Migration.** `PROFILE_SCHEMA_VERSION` 2 → 3, so every existing profile is
 stale and `_ensure_profile` re-derives it. **The catalogue is part of the schema
