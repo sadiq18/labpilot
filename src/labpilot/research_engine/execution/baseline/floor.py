@@ -475,7 +475,7 @@ def floor_for_workspace(root: Path) -> FloorReading:
     except (OSError, ValueError) as exc:
         return undefined(f"could not read {path.name}: {exc}")
 
-    reading = compute_floor(
+    return compute_floor(
         frame,
         target=target,
         plan=plan,
@@ -485,13 +485,6 @@ def floor_for_workspace(root: Path) -> FloorReading:
         num_classes=len((profile.get("target_distribution") or {}).get("class_counts") or {})
         or None,
     )
-    # Stamped here rather than inside `compute_floor`, which is handed a frame
-    # and knows nothing about a workspace. Imported late: the gate reads floor
-    # readings, so importing it at module scope would be a cycle.
-    from labpilot.research_engine.execution.baseline.gate import reading_fingerprint
-
-    reading.workspace_fingerprint = reading_fingerprint(root)
-    return reading
 
 
 def write_floor(root: Path, reading: FloorReading) -> Path:

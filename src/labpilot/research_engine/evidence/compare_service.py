@@ -67,9 +67,7 @@ def resolve_control(
 
     # Prefer metrics already on plan; else look up experiment artifact.
     if control_exec and not control_metrics:
-        control_metrics = _metrics_from_artifact(
-            knowledge_dir, competition, str(control_exec)
-        )
+        control_metrics = _metrics_from_artifact(knowledge_dir, competition, str(control_exec))
 
     if not control_metrics and control_hyp:
         control_exec2, metrics2 = _metrics_for_hypothesis(
@@ -96,11 +94,33 @@ def resolve_control(
                 ),
             )
             control_hyp = best.id
-            control_exec2, metrics2 = _metrics_for_hypothesis(
-                knowledge_dir, competition, best.id
-            )
+            control_exec2, metrics2 = _metrics_for_hypothesis(knowledge_dir, competition, best.id)
             control_metrics = metrics2
             control_exec = control_exec or control_exec2
+
+    if not control_metrics and str(plan_meta.get("plan_kind") or "") == "baseline":
+        # M23 step 7. The baseline plan has no parent by construction — it *is*
+        # the first run — so its COMPARE used to find no control, and
+        # `missing_control` meant no evidence card and `H-BASELINE` sitting on
+        # `proposed` forever. The floor is the control it always had and nobody
+        # read: what the dumbest defensible answer scores on the same folds.
+        #
+        # Deliberately arriving as `parent_cv` rather than as a third reading on
+        # `ObservedOutcomes`. `_decide` is the single funnel for every verdict in
+        # this system, so the gain, the sign, the card and the hypothesis status
+        # all work unchanged — and a metric mismatch is caught for free by
+        # `_same_metric`, machinery that already exists and has already been
+        # debugged.
+        from labpilot.research_engine.execution.baseline.runner import floor_as_control
+
+        try:
+            floor_metrics, strategy = floor_as_control(context.workspace_root)
+        except Exception as exc:  # noqa: BLE001 — no control is the status quo
+            logger.info("Could not read a floor to compare against: %s", exc)
+            floor_metrics, strategy = {}, ""
+        if floor_metrics:
+            control_metrics = floor_metrics
+            control_hyp = control_hyp or f"floor:{strategy}"
 
     return (
         str(control_exec) if control_exec else None,
