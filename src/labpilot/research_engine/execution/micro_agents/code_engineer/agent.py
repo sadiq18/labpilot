@@ -67,6 +67,23 @@ class CodeEngineerAgent(BaseMicroAgent):
             prediction=str(data.get("prediction") or ""),
             evidence_json=json.dumps(data.get("evidence") or [], ensure_ascii=False)[:2000],
             prior_train_py=str(data.get("prior_train_py") or "")[:20000],
+            # The template has had a block for this since the retry path was
+            # built, and nothing filled it: Jinja renders an undefined name as
+            # empty, so `{% if retry_reason %}` was always false and every
+            # retry re-sent the original prompt verbatim.
+            #
+            # The engineer computes the reason (`_first_failure_reason`) and the
+            # capability threads it into context data — the whole channel exists
+            # end to end and was severed at the last step. Measured 2026-08-20:
+            # three consecutive attempts wrote `pipeline/baseline.py`, and three
+            # before them omitted the same PEP 723 dependencies, each retry blind
+            # to a message that named its cause exactly.
+            #
+            # Stripped, because the template gates on truthiness: a
+            # whitespace-only reason would render the "previous attempt FAILED"
+            # banner with nothing under it, telling the model it failed and not
+            # why — worse than saying nothing.
+            retry_reason=str(data.get("retry_reason") or "").strip()[:2000],
             parent_metrics_json=json.dumps(
                 data.get("parent_metrics") or {}, ensure_ascii=False
             )[:2000],
