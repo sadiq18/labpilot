@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -33,6 +34,9 @@ from labpilot.research_engine.execution.baseline.report import build_report
 from labpilot.research_engine.execution.baseline.selector import ValidationPlan
 
 WORKSPACE = Path("/Users/sadik/workspace/rogii-wellbore-geology-prediction")
+#: This module, so a test can point `WORKSPACE` somewhere else without the
+#: package-import dance `tests/` does not support.
+rogii_module = sys.modules[__name__]
 
 #: Enough partitions for the suffix scheme to be exercised over a duplicate
 #: index and real column dtypes, few enough to stay under a second.
@@ -43,7 +47,18 @@ def _sandbox(tmp_path: Path) -> Path:
     """A copy of the real workspace's artifacts. Never the workspace itself."""
     missing = [
         str(WORKSPACE / name)
-        for name in ("profile.json", "baseline_choice.json", "pipeline", "data/raw/train")
+        # Every artifact this file reads, `metrics.json` included. It was left
+        # out, so a workspace that had never completed a run raised
+        # `FileNotFoundError` instead of skipping — an environment difference
+        # arriving as a red suite, which is the mirror of the silent pass M24's
+        # exit criterion 7 forbids.
+        for name in (
+            "profile.json",
+            "baseline_choice.json",
+            "metrics.json",
+            "pipeline",
+            "data/raw/train",
+        )
         if not (WORKSPACE / name).exists()
     ]
     if missing:
@@ -186,3 +201,38 @@ def test_the_real_partitioned_split_is_not_quadratic(tmp_path: Path) -> None:
 
     assert folds, "the suffix scheme must produce a split on the real layout"
     assert elapsed < 2.0, f"{len(frame):,} rows took {elapsed:.1f}s — check for a quadratic"
+
+
+@pytest.mark.parametrize(
+    "missing", ["profile.json", "baseline_choice.json", "metrics.json", "data/raw/train"]
+)
+def test_the_guard_skips_loudly_for_every_artifact_this_file_reads(
+    tmp_path: Path, missing: str
+) -> None:
+    """Review finding: `metrics.json` was read here and not guarded.
+
+    A workspace that had never completed a run raised `FileNotFoundError`
+    instead of skipping — an environment difference arriving as a red suite,
+    which is the mirror of the silent pass M24's exit criterion 7 forbids.
+
+    Not marked `slow`, because it needs no real data: it points `WORKSPACE` at a
+    fabricated tree and removes one artifact at a time. The guard only fires when
+    something is *absent*, so a test that runs on a machine where everything is
+    present cannot exercise it — which is exactly why removing `metrics.json`
+    from the list survived a mutation sweep until this existed.
+    """
+    from unittest import mock
+
+    fake = tmp_path / "rogii"
+    (fake / "data/raw/train").mkdir(parents=True)
+    (fake / "pipeline").mkdir()
+    for name in ("profile.json", "baseline_choice.json", "metrics.json"):
+        (fake / name).write_text("{}", encoding="utf-8")
+    target = fake / missing
+    target.rmdir() if target.is_dir() else target.unlink()
+
+    with mock.patch.object(rogii_module, "WORKSPACE", fake):
+        with pytest.raises(pytest.skip.Exception) as raised:
+            _sandbox(tmp_path / "sandbox")
+
+    assert missing in str(raised.value), "the skip must name what is missing"

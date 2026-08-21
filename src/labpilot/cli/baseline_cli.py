@@ -12,12 +12,13 @@ fitted five models to answer "what happened?" would be a different command.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NoReturn
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from labpilot.research_engine.execution.baseline.baseline_one import compare, load_baseline_one
+from labpilot.research_engine.execution.baseline.baseline_one import load_baseline_one
 from labpilot.research_engine.execution.baseline.floor import load_floor
 from labpilot.research_engine.execution.baseline.gate import (
     Waiver,
@@ -60,12 +61,36 @@ _STATE_STYLE = {
 
 
 def _root(workspace: Path | None) -> Path | None:
+    """The workspace to report on, or None when there is not one.
+
+    A path handed in gets the same existence check as one discovered. Without
+    it, `--workspace /tmp/typo` read as a workspace whose campaign had not run
+    yet — every reader below treats absent files as absent *state* — so the
+    command exited 0 and sent the operator to `research conduct`, which would
+    not have helped.
+    """
     if workspace is not None:
-        return workspace
+        return workspace if workspace.is_dir() else None
     from labpilot.workspace import discover_workspace
 
     found = discover_workspace()
-    return Path(found.root) if found is not None and found.root else None
+    if found is None or not found.root:
+        return None
+    root = Path(found.root)
+    return root if root.is_dir() else None
+
+
+def _refuse(workspace: Path | None) -> NoReturn:
+    """Say which of the two situations this is, and stop.
+
+    "No workspace found" is the wrong sentence for a path the operator typed:
+    they know where they meant, and the useful fact is that it is not there.
+    """
+    if workspace is not None:
+        console.print(f"[red]Not a directory:[/red] {workspace}")
+    else:
+        console.print("[red]No workspace found.[/red] Run from inside one, or pass --workspace.")
+    raise typer.Exit(2)
 
 
 @baseline_app.command("show")
@@ -77,8 +102,7 @@ def show(
     """Every strategy tried, the model's number, the verdict, and what to do."""
     root = _root(workspace)
     if root is None:
-        console.print("[red]No workspace found.[/red] Run from inside one, or pass --workspace.")
-        raise typer.Exit(2)
+        _refuse(workspace)
 
     floor, model = load_floor(root), load_baseline_one(root)
     verdict = evaluate_gate(root, enforced=enforcement_enabled())
@@ -104,10 +128,13 @@ def show(
     elif model is not None and model.undefined_reason:
         console.print(f"  [dim]no generic model:[/dim] {model.undefined_reason}")
 
-    if floor is not None and model is not None:
-        comparison = compare(floor, model, verdict.comparison.direction or "")
-        if not comparison.incomparable_reason:
-            console.print("\n" + comparison.render())
+    # The verdict's own comparison, not a second one computed from the same
+    # inputs. Recomputing it also made the *suppression* implicit: `stale` and
+    # `awaiting_ml` never reach the compare step, so `direction` is empty, and
+    # that empty string was the only thing stopping a comparison those states
+    # must not show.
+    if verdict.comparison.metric_name and not verdict.comparison.incomparable_reason:
+        console.print("\n" + verdict.comparison.render())
 
     if verdict.state == "failed":
         console.print("\n" + build_report(root, verdict, competition=root.name).render())
@@ -139,8 +166,7 @@ def waive(
 
     root = _root(workspace)
     if root is None:
-        console.print("[red]No workspace found.[/red] Run from inside one, or pass --workspace.")
-        raise typer.Exit(2)
+        _refuse(workspace)
 
     verdict = evaluate_gate(root)
     if verdict.state not in ("failed", "waived"):

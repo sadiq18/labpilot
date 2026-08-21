@@ -125,6 +125,61 @@ def test_show_says_when_it_is_only_observing(tmp_path: Path) -> None:
     assert "observing only" in result.output
 
 
+def test_a_path_that_is_not_a_directory_is_refused(tmp_path: Path) -> None:
+    """Review finding. `--workspace /tmp/typo` reported a verdict.
+
+    Every reader below `_root` treats absent files as absent *state*, so a path
+    that does not exist read as a workspace whose campaign had not run yet: exit
+    0, state `unknown`, and `Next: run research conduct` — advice that cannot
+    help someone who mistyped a path.
+    """
+    result = runner.invoke(baseline_app, ["show", "--workspace", str(tmp_path / "nope")])
+
+    assert result.exit_code == 2
+    assert "Not a directory" in result.output
+    assert "run `research conduct`" not in result.output
+
+
+def test_the_refusal_says_which_situation_it_is(tmp_path: Path) -> None:
+    """ "No workspace found" is the wrong sentence for a path the operator typed:
+    they know where they meant, and the useful fact is that it is not there."""
+    from unittest import mock
+
+    import labpilot.cli.baseline_cli as module
+
+    typed = runner.invoke(baseline_app, ["show", "--workspace", str(tmp_path / "nope")])
+    with mock.patch.object(module, "discover_workspace", return_value=None, create=True):
+        discovered = runner.invoke(baseline_app, ["show"])
+
+    assert "Not a directory" in typed.output
+    assert "No workspace found" in discovered.output
+
+
+def test_waive_refuses_a_path_that_is_not_a_directory(tmp_path: Path) -> None:
+    """Both commands share `_root`, so both must share the check."""
+    result = runner.invoke(
+        baseline_app, ["waive", "because", "--workspace", str(tmp_path / "nope")]
+    )
+
+    assert result.exit_code == 2
+    assert "Not a directory" in result.output
+
+
+def test_a_non_terminal_state_shows_no_comparison(tmp_path: Path) -> None:
+    """`awaiting_ml` never reaches the compare step, so there is nothing to show.
+
+    Previously suppressed by `direction` happening to be an empty string, which
+    `compare` then refused — an implicit dependency that a default on that field
+    would have silently removed. It reads the verdict's own comparison now.
+    """
+    workspace = _workspace(tmp_path / "ws", learnable=False, modality="image")
+
+    result = runner.invoke(baseline_app, ["show", "--workspace", str(workspace)])
+
+    assert "awaiting_ml" in result.output
+    assert "Improvement" not in result.output, "no comparison was ever computed"
+
+
 def test_show_without_a_workspace_refuses_rather_than_guessing(tmp_path: Path) -> None:
     from unittest import mock
 
