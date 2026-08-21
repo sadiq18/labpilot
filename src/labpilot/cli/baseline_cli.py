@@ -18,9 +18,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from labpilot.research_engine.execution.baseline.baseline_one import load_baseline_one
-from labpilot.research_engine.execution.baseline.floor import load_floor
+from labpilot.research_engine.execution.baseline.baseline_one import (
+    ModelReading,
+    load_baseline_one,
+)
+from labpilot.research_engine.execution.baseline.floor import FloorReading, load_floor
 from labpilot.research_engine.execution.baseline.gate import (
+    GateVerdict,
     Waiver,
     enforcement_enabled,
     evaluate_gate,
@@ -28,6 +32,7 @@ from labpilot.research_engine.execution.baseline.gate import (
     write_waiver,
 )
 from labpilot.research_engine.execution.baseline.report import build_report
+from labpilot.workspace import discover_workspace
 
 baseline_app = typer.Typer(
     help="The floor, the generic model, and the gate's verdict over them.",
@@ -44,7 +49,11 @@ _NEXT_STEP = {
     "floor_missing": "run the baseline; nothing has measured this dataset",
     "floor_undefined": "nothing to do — this target has no defined floor",
     "blocked_uncertain": "answer the schema question with `research schema answer`",
-    "awaiting_ml": "nothing to do — a generic model cannot run on this dataset",
+    # Two situations reach `awaiting_ml` — a model that ran and could not, and
+    # no model reading at all — and they have opposite answers. `_next_step`
+    # tells them apart from the readings it already has; this is the fallback
+    # for when it cannot.
+    "awaiting_ml": "nothing has been compared to the floor",
     "stale": "re-run the baseline; the dataset or the answers have moved",
     "failed": "read the causes below before doing anything else",
     "passed": "proceed",
@@ -68,16 +77,41 @@ def _root(workspace: Path | None) -> Path | None:
     yet — every reader below treats absent files as absent *state* — so the
     command exited 0 and sent the operator to `research conduct`, which would
     not have helped.
+
+    `discover_workspace` is imported at module scope on purpose. A
+    function-local import rebinds the real one on every call, so a test patching
+    this module's attribute patched something nothing read — and passed only
+    because discovery happened to find nothing from the directory the suite ran
+    in.
     """
     if workspace is not None:
         return workspace if workspace.is_dir() else None
-    from labpilot.workspace import discover_workspace
-
     found = discover_workspace()
     if found is None or not found.root:
         return None
     root = Path(found.root)
     return root if root.is_dir() else None
+
+
+def _next_step(verdict: GateVerdict, floor: FloorReading | None, model: ModelReading | None) -> str:
+    """What to do, decided from the readings rather than the state alone.
+
+    `_NEXT_STEP` keys on the state, and two of the nine cover situations with
+    **opposite** answers. `awaiting_ml` is both "a generic model cannot run on
+    this dataset" — where there is nothing to do — and "no Baseline 1 has been
+    taken yet", where running one is exactly the thing to do. A lookup on the
+    state said the first for both, contradicting the verdict's own reason two
+    lines above it in the same output.
+
+    `show` holds the readings, so it can tell them apart instead of hedging.
+    """
+    if verdict.state == "awaiting_ml":
+        if model is None:
+            return "run the baseline — no generic model has been measured here yet"
+        return f"nothing to do — {model.undefined_reason or 'a generic model cannot run here'}"
+    if verdict.state == "floor_undefined" and floor is not None and floor.undefined_reason:
+        return f"nothing to do — {floor.undefined_reason}"
+    return _NEXT_STEP.get(verdict.state, "unknown state")
 
 
 def _refuse(workspace: Path | None) -> NoReturn:
@@ -139,7 +173,7 @@ def show(
     if verdict.state == "failed":
         console.print("\n" + build_report(root, verdict, competition=root.name).render())
 
-    console.print(f"\n[bold]Next:[/bold] {_NEXT_STEP.get(verdict.state, 'unknown state')}")
+    console.print(f"\n[bold]Next:[/bold] {_next_step(verdict, floor, model)}")
     if not enforcement_enabled() and verdict.blocks_research:
         # Observe-only has to say so, or an operator reads a red verdict as a
         # campaign that has been stopped and goes looking for what blocked it.

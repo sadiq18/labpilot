@@ -231,7 +231,7 @@ def test_the_guard_skips_loudly_for_every_artifact_this_file_reads(
     target = fake / missing
     target.rmdir() if target.is_dir() else target.unlink()
 
-    with mock.patch.object(rogii_module, "WORKSPACE", fake):
+    with mock.patch(f"{__name__}.WORKSPACE", fake):
         with pytest.raises(pytest.skip.Exception) as raised:
             _sandbox(tmp_path / "sandbox")
 

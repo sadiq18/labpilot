@@ -113,6 +113,7 @@ def test_show_says_what_to_do_next(tmp_path: Path) -> None:
     assert "awaiting_ml" in result.output
     assert "Next:" in result.output
     assert "nothing to do" in result.output
+    assert "features are not columns" in result.output, "the reason, not a generic sentence"
 
 
 def test_show_says_when_it_is_only_observing(tmp_path: Path) -> None:
@@ -147,12 +148,41 @@ def test_the_refusal_says_which_situation_it_is(tmp_path: Path) -> None:
 
     import labpilot.cli.baseline_cli as module
 
+    # No `create=True`. That flag is how the previous version of this test
+    # passed while asserting nothing: `_root` imported `discover_workspace`
+    # inside its body, so the patch invented a module attribute nothing read,
+    # and the assertion held only because discovery found nothing from the
+    # directory the suite happened to run in. Patching a name that must already
+    # exist is what makes the mock load-bearing.
+    assert hasattr(module, "discover_workspace"), "the name under test must be the one read"
+
     typed = runner.invoke(baseline_app, ["show", "--workspace", str(tmp_path / "nope")])
-    with mock.patch.object(module, "discover_workspace", return_value=None, create=True):
+    with mock.patch.object(module, "discover_workspace", return_value=None):
         discovered = runner.invoke(baseline_app, ["show"])
 
     assert "Not a directory" in typed.output
     assert "No workspace found" in discovered.output
+
+
+def test_discovery_is_read_through_the_name_a_test_can_patch(tmp_path: Path) -> None:
+    """The mock has to reach the code, which a function-local import prevents.
+
+    Asserted by patching discovery to *find* something and checking the command
+    reports on it: if `_root` rebound the real function, this would report on
+    whatever the runner's directory happens to be instead.
+    """
+    from unittest import mock
+
+    import labpilot.cli.baseline_cli as module
+
+    workspace = _workspace(tmp_path / "elsewhere", learnable=True)
+    found = mock.Mock(root=workspace)
+
+    with mock.patch.object(module, "discover_workspace", return_value=found):
+        result = runner.invoke(baseline_app, ["show"])
+
+    assert result.exit_code == 0, result.output
+    assert "elsewhere" in result.output, "the patched discovery decided the workspace"
 
 
 def test_waive_refuses_a_path_that_is_not_a_directory(tmp_path: Path) -> None:
@@ -163,6 +193,37 @@ def test_waive_refuses_a_path_that_is_not_a_directory(tmp_path: Path) -> None:
 
     assert result.exit_code == 2
     assert "Not a directory" in result.output
+
+
+def test_an_unmeasured_baseline_is_told_to_run_not_to_give_up(tmp_path: Path) -> None:
+    """Review finding. Two situations reach `awaiting_ml` with opposite answers.
+
+    A floor on disk and no Baseline 1 means one has not been taken yet, and
+    running it is exactly the thing to do — but a lookup on the state alone said
+    "a generic model cannot run on this dataset", contradicting the verdict's own
+    reason two lines above it in the same output.
+    """
+    import json
+
+    from labpilot.research_engine.execution.baseline.floor import FloorReading, write_floor
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir(parents=True)
+    (workspace / "baseline_choice.json").write_text(
+        json.dumps({"metric_name": "rmse", "target_column": "y", "validation": {"n_splits": 4}}),
+        encoding="utf-8",
+    )
+    (workspace / "profile.json").write_text(
+        DatasetProfile(competition="d", schema_version=4, target_column="y").model_dump_json(),
+        encoding="utf-8",
+    )
+    write_floor(workspace, FloorReading(metric_name="rmse", score=1.5, best_strategy="mean"))
+
+    result = runner.invoke(baseline_app, ["show", "--workspace", str(workspace)])
+
+    assert "awaiting_ml" in result.output
+    assert "run the baseline" in result.output
+    assert "cannot run" not in result.output
 
 
 def test_a_non_terminal_state_shows_no_comparison(tmp_path: Path) -> None:
