@@ -58,11 +58,16 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "GATE_STATES",
+    "UNCHANGEABLE_STATES",
+    "baseline_is_settled",
     "blocks_research",
+    "enforcement_enabled",
+    "refuses_minting",
     "WAIVER_FILENAME",
     "GateVerdict",
     "Waiver",
     "evaluate_gate",
+    "refuse_hypothesis_minting",
     "load_waiver",
     "reading_fingerprint",
     "write_waiver",
@@ -89,14 +94,56 @@ GateState = Literal[
 GATE_STATES: tuple[GateState, ...] = get_args(GateState)
 
 
+#: States that are facts about the *dataset*, not about the campaign's work. No
+#: amount of running plans changes them: Baseline 1 cannot be made to run where
+#: features are not columns, and a metric nobody catalogued does not acquire a
+#: floor because you tried again.
+#:
+#: They are the reason a second predicate exists. `blocks_research` says the gate
+#: is not open; these say there is nothing the campaign can do about that — and
+#: treating the two as one pinned an image competition to recompiling its
+#: baseline forever, which is the trap the design names by name.
+UNCHANGEABLE_STATES: frozenset[str] = frozenset({"floor_undefined", "awaiting_ml"})
+
+
 def blocks_research(state: GateState) -> bool:
-    """Whether this state should stop hypothesis minting, once step 8 enforces.
+    """Whether this state means the gate is not open.
 
     The complement of `passed`/`waived` rather than a list of blocking states, so
     a tenth state added later defaults to blocking rather than to permitted —
     the direction that fails safe.
+
+    Reporting only. What is actually *withheld* is `refuses_minting`, and what
+    lets a campaign move on is `baseline_is_settled`; conflating the three is how
+    a closed gate became a campaign that could never open it.
     """
     return state not in ("passed", "waived")
+
+
+def refuses_minting(state: GateState) -> bool:
+    """Whether a belief written now would outlive a baseline nobody trusts.
+
+    Refuses where the campaign can *act*: `failed` is a pipeline worse than a
+    constant, `blocked_uncertain` is a guessed target, `stale` is a reading that
+    describes a workspace that has moved, and `floor_missing`/`unknown` mean
+    nothing has been measured yet.
+
+    It does **not** refuse the unchangeable states. A gate that refuses forever
+    on a property of the dataset is one an operator switches off, and then it
+    protects nothing at all — which is worse than the wrong beliefs it was
+    built to stop.
+    """
+    return blocks_research(state) and state not in UNCHANGEABLE_STATES
+
+
+def baseline_is_settled(state: GateState) -> bool:
+    """Whether there is anything left for the campaign to do about the baseline.
+
+    `passed` and `waived` because the gate is open; the unchangeable states
+    because re-running cannot move them. Everything else is work still to do,
+    and the campaign keeps asking for a baseline.
+    """
+    return not blocks_research(state) or state in UNCHANGEABLE_STATES
 
 
 WAIVER_FILENAME = "baseline_waiver.json"
@@ -144,8 +191,14 @@ class GateVerdict(BaseModel):
         baseline" and "the system is refusing it something" are different facts,
         and conflating them is how an observe-only rollout would quietly become
         an enforcing one.
+
+        Defined over `refuses_minting`, not `blocks_research`. When the refusal
+        moved to the narrower predicate this did not move with it, so for the
+        two unchangeable states it claimed something was withheld while
+        `refuse_hypothesis_minting` returned nothing — a property whose whole
+        purpose is that distinction, giving the wrong answer about it.
         """
-        return self.enforced and self.blocks_research
+        return self.enforced and refuses_minting(self.state)
 
 
 def reading_fingerprint(root: Path) -> str:
@@ -352,6 +405,65 @@ def _direction_for(metric_name: str) -> str:
     from labpilot.research_engine.intelligence.competition.metric_vocabulary import direction_of
 
     return direction_of(metric_name) or ""
+
+
+def refuse_hypothesis_minting(workspace_root: Path | None, *, enforced: bool | None = None) -> str:
+    """Why hypothesis minting must not proceed here, or empty when it may.
+
+    M23 step 8. **Enforcement is at hypothesis generation, not at submission.**
+    A campaign whose pipeline loses to a constant may still run plans, implement
+    and reflect — those are how the gate gets *opened* — but it may not mint
+    hypotheses, because that is where a false belief enters the store and
+    outlives the run. rogii's cost was 19 child hypotheses and eight techniques
+    driven to 0.0 confidence, all written down while the pipeline was 91x worse
+    than one line of code. None of it was a submission.
+
+    Returns a reason rather than a bool: a refusal an operator cannot act on is
+    a wall, and every one of the nine states has a different next step.
+
+    `enforced=None` reads the config, so the flip is one setting rather than a
+    code change — and `False` is still the default until a campaign's worth of
+    recorded verdicts turns "the gate is right" into a false-positive rate.
+    """
+    if workspace_root is None:
+        # Nothing to judge. A caller with no workspace is not a campaign that has
+        # skipped its baseline; it is one this gate cannot see, and refusing on
+        # absence would block every path that never had a root to begin with.
+        return ""
+    if enforced is None:
+        enforced = enforcement_enabled()
+    if not enforced:
+        return ""
+    try:
+        verdict = evaluate_gate(Path(workspace_root), enforced=True)
+    except Exception as exc:  # noqa: BLE001 — a gate that cannot run must not
+        # block a campaign. A fault here would read as "baseline not passed",
+        # which is the failure mode `H-BASELINE.status` was rejected for.
+        logger.warning("Baseline gate could not be evaluated: %s", exc)
+        return ""
+    # `verdict.withholds_anything`, which is the same question this function
+    # answers. It was spelled out here as `verdict.enforced and refuses_minting(...)`
+    # with `enforced` always true two lines up — a guard that read as though it
+    # were doing something, in the file where two expressions for one condition
+    # have now caused two defects.
+    if not verdict.withholds_anything:
+        return ""
+    return f"baseline gate is {verdict.state}: {verdict.reason}"
+
+
+def enforcement_enabled() -> bool:
+    """Whether the rollout has moved past observe-only.
+
+    Read from config on every call rather than captured at import, so flipping it
+    does not require a restart — and so a test can flip it without reaching into
+    module state.
+    """
+    try:
+        from labpilot.config import load_config
+
+        return bool(getattr(load_config().baseline_gate, "enforced", False))
+    except Exception:  # noqa: BLE001 — no config is not enforcement
+        return False
 
 
 def write_waiver(root: Path, waiver: Waiver) -> Path:

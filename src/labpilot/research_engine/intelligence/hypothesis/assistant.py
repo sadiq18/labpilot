@@ -173,7 +173,14 @@ class HypothesisAssistant:
         persist: bool = True,
         write_report: bool = False,
         progressive: bool = True,
+        workspace_root: Path | None = None,
     ) -> HypothesisAssistantResult:
+        """`workspace_root` is what lets M23's gate see this campaign.
+
+        Optional because not every caller has one, and a caller without a
+        workspace is one the gate cannot judge rather than one that skipped its
+        baseline. The analyze path carries it on `AnalyzeContext` already.
+        """
         notes: list[str] = []
         research_context = context
         technique_statuses: dict[str, str] = {}
@@ -335,6 +342,7 @@ class HypothesisAssistant:
                 recommendations,
                 knowledge_dir=knowledge_dir,
                 competition=competition,
+                workspace_root=workspace_root,
             )
             new_count = len(recommendations)
             notes.append(f"hypothesis: {new_count} new hypothesis generated (status=proposed).")
