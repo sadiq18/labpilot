@@ -153,11 +153,11 @@ The plan's seven exit criteria, plus one this design adds:
 |---|---|---|
 | 1 | A floor exists per defined-shape target, under the model's own `ValidationPlan`, recorded as a dataset reading | No `hypothesis_id`/execution id/`ALLOWED_ROOTS` file in the artifact |
 | 2 | The baseline plan gains a `COMPARE`; `H-BASELINE` finishes with a status other than `proposed` | A campaign transcript |
-| 3 | A model that loses to the floor fails the run | The first failure in this system for being *worse* rather than for crashing |
+| 3 ✅ | A model that loses to the floor fails the run | `stop:baseline_failed`, distinct from `stop:failing`, with the report inline |
 | 4 | With the gate closed, `available_tools` still returns a tool that can open it | The allowlist never empties |
 | 5 | `floor_undefined` never reads as `passed`, for any modality | Parametrized over every `target_type` |
-| 6 | Every failure report cites an artifact per cause | No cause without a citation |
-| 7 | On rogii the gate reports `failed` and names the anchor-column cause | Sandbox copy of the real workspace |
+| 6 ✅ | Every failure report cites an artifact per cause | No cause without a citation — checked against the real rogii artifacts |
+| 7 ✅ | On rogii the gate reports `failed` and names a cause | Sandbox copy of the real workspace. **The anchor cause no longer fires, correctly**: `pipeline/train.py` now references `TVT_input` twenty-three times, including a forward-filled carry, so the detector's rule — named in the profile and used by no training source — is answered. rogii still fails, for feature selection: 1380.38 against a floor of ~655 |
 | **8** | **An uncertain schema is not a failed baseline** | A dataset with an open M22 question reports `blocked_uncertain`, never `failed` |
 
 Goal 8 is new because M22 shipped after this plan was written: the schema can
@@ -453,9 +453,9 @@ was a submission.
 
 | Surface | Shows |
 |---|---|
-| `research baseline show` | Every strategy tried and its score, the winner, the model's number, the verdict and what to do about it |
+| `research baseline show` ✅ | Every strategy tried and its score, the winner, the model's number, the verdict and what to do about it |
 | `baseline_floor.json` | The reading itself — one writer, and the fingerprint that says what it describes |
-| Campaign transcript | `stop:baseline_failed` distinct from `stop:failing`; the report inline |
+| Campaign transcript ✅ | `stop:baseline_failed` distinct from `stop:failing`; the report inline |
 | `H-BASELINE` | A status other than `proposed`, for the first time |
 
 Alert-worthy: a floor that beats the model by any margin; `floor_undefined` on a
