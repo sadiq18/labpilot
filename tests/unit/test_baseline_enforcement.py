@@ -330,6 +330,53 @@ def test_an_unchangeable_state_does_not_refuse_minting(tmp_path: Path) -> None:
     assert refuse_hypothesis_minting(workspace, enforced=True) == ""
 
 
+def test_the_verdict_property_agrees_with_what_is_actually_withheld(tmp_path: Path) -> None:
+    """Review finding. `withholds_anything` did not move when the refusal did.
+
+    Defined over `blocks_research`, it claimed something was withheld on the two
+    unchangeable states while `refuse_hypothesis_minting` returned nothing — a
+    property whose entire purpose is separating "the gate is closed" from "the
+    system is refusing it something", giving the wrong answer about the second.
+
+    Asserted as *agreement* rather than as a fixed value, so the two cannot drift
+    apart again whichever way a future change moves them.
+    """
+    for modality, expected in (("image", False), ("tabular", True)):
+        workspace = _workspace(tmp_path / modality, learnable=False, modality=modality)
+        verdict = evaluate_gate(workspace, enforced=True)
+        actually_withheld = bool(refuse_hypothesis_minting(workspace, enforced=True))
+
+        assert verdict.withholds_anything == actually_withheld, verdict.state
+        assert verdict.withholds_anything is expected, verdict.state
+
+
+def test_a_schema_question_stops_the_loop_before_it_can_spin(tmp_path: Path) -> None:
+    """Recorded because the second review claimed a livelock here and was wrong.
+
+    `blocked_uncertain` cannot be cleared by re-running a baseline — only an
+    operator answering clears it — so pinning the campaign to `generate_plan
+    --baseline` would spin until the budget died. It does not, because
+    `_run_until_stop_inner` checks `open_questions(workspace.root)` at the top of
+    every iteration and stops with `waiting` before any dispatch, and that is the
+    *same* `pending_schema_questions(profile, load_answers(root))` the gate reads
+    for `blocked_uncertain`.
+
+    Pinned so the ordering stays a decision rather than an accident: moving the
+    schema check below the dispatch would reintroduce the spin.
+    """
+    import inspect
+
+    from labpilot.accessor.profiler import questions
+    from labpilot.research_engine.conductor import loop
+
+    source = inspect.getsource(loop._run_until_stop_inner)
+    stop_at = source.index("stop:schema_question")
+    dispatch_at = source.index("baseline_plan_exists=_baseline_is_done(workspace)")
+
+    assert stop_at < dispatch_at, "the schema stop must precede the dispatch"
+    assert "pending_schema_questions" in inspect.getsource(questions.open_questions)
+
+
 def test_the_three_questions_are_answered_separately() -> None:
     """ "The gate is not open", "nothing more can be done", and "a belief written
     now would be unsafe" are three facts, and conflating them is what pinned the

@@ -191,8 +191,14 @@ class GateVerdict(BaseModel):
         baseline" and "the system is refusing it something" are different facts,
         and conflating them is how an observe-only rollout would quietly become
         an enforcing one.
+
+        Defined over `refuses_minting`, not `blocks_research`. When the refusal
+        moved to the narrower predicate this did not move with it, so for the
+        two unchangeable states it claimed something was withheld while
+        `refuse_hypothesis_minting` returned nothing — a property whose whole
+        purpose is that distinction, giving the wrong answer about it.
         """
-        return self.enforced and self.blocks_research
+        return self.enforced and refuses_minting(self.state)
 
 
 def reading_fingerprint(root: Path) -> str:
@@ -435,7 +441,12 @@ def refuse_hypothesis_minting(workspace_root: Path | None, *, enforced: bool | N
         # which is the failure mode `H-BASELINE.status` was rejected for.
         logger.warning("Baseline gate could not be evaluated: %s", exc)
         return ""
-    if not (verdict.enforced and refuses_minting(verdict.state)):
+    # `verdict.withholds_anything`, which is the same question this function
+    # answers. It was spelled out here as `verdict.enforced and refuses_minting(...)`
+    # with `enforced` always true two lines up — a guard that read as though it
+    # were doing something, in the file where two expressions for one condition
+    # have now caused two defects.
+    if not verdict.withholds_anything:
         return ""
     return f"baseline gate is {verdict.state}: {verdict.reason}"
 
