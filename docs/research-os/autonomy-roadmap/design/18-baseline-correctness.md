@@ -493,8 +493,8 @@ Real-data validation is a **sandbox copy**, never the live workspace
 | 4 ✅ | `baseline_one.py`: LightGBM, minimal preprocessing, same plan; the comparison | The gate's own output exists |
 | 5 ✅ | `gate.py`: nine states, fingerprint, waiver — **observe-only** | Checks 5–8; nothing is refused yet |
 | 6 ✅ | The report and its detectors | Checks 4, 6 |
-| 7 | `COMPARE` on the baseline plan; floor as control through `_decide` | Goal 2 |
-| 8 | Enforcement: no hypothesis minting until the gate passes; `_baseline_plan_exists` retired | Goal 3 |
+| 7 ✅ | `COMPARE` on the baseline plan; floor as control through `_decide` | Goal 2 |
+| 8 ✅ | Enforcement: no hypothesis minting until the gate passes; `_baseline_plan_exists` retired | Goal 3 |
 
 **Migration.** `baseline_floor.json` is new; its absence reads as
 `floor_missing`, which is a state rather than an error. Existing workspaces
