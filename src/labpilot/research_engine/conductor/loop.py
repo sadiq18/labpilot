@@ -962,6 +962,45 @@ def _baseline_is_done(workspace: Workspace) -> bool:
     return _baseline_plan_exists(workspace)
 
 
+def _baseline_failure(workspace: Workspace) -> tuple[str, str] | None:
+    """`(rationale, report)` when the gate says the pipeline loses, else None.
+
+    `stop:baseline_failed`, distinct from `stop:failing`. The two describe
+    opposite situations and collapsing them would lose the one this milestone
+    exists for: `failing` is a campaign whose experiments crash, and this is a
+    campaign whose experiments run fine and are worse than predicting a constant.
+
+    Only under enforcement. Observe-only records the verdict and withholds
+    nothing, which includes not ending the run.
+    """
+    root = getattr(workspace, "root", None)
+    if root is None:
+        return None
+    try:
+        from labpilot.research_engine.execution.baseline.gate import (
+            enforcement_enabled,
+            evaluate_gate,
+        )
+        from labpilot.research_engine.execution.baseline.report import build_report
+
+        if not enforcement_enabled():
+            return None
+        verdict = evaluate_gate(Path(root), enforced=True)
+        if verdict.state != "failed":
+            return None
+        report = build_report(Path(root), verdict, competition=workspace.competition)
+    except Exception as exc:  # noqa: BLE001 — a gate that cannot run must not
+        # end a campaign. A fault here would stop a run for a reason that is not
+        # about the run.
+        logger.warning("Baseline gate could not be evaluated for a stop: %s", exc)
+        return None
+    return (
+        f"stop:baseline_failed — {verdict.reason}. "
+        f"Waive with `research baseline waive <reason>` or fix the pipeline.",
+        report.render(),
+    )
+
+
 def _baseline_plan_exists(workspace: Workspace) -> bool:
     """True when a baseline plan has already been compiled for this competition.
 
@@ -1357,6 +1396,39 @@ def _run_until_stop_inner(
                         "answered": answered,
                         "questions": [{"id": q.id, "field": q.field} for q in schema_questions],
                     },
+                )
+            )
+            store.append_decision(decisions[-1])
+            break
+
+        # A pipeline worse than a constant is not a budget condition, so it is
+        # checked here rather than in `evaluate_stops`. It is also **goal 3**:
+        # the first failure in this system for being *worse* rather than for
+        # crashing.
+        #
+        # `failed` cannot occur before work has been done — it needs both
+        # readings — so this never fires on a fresh workspace. And it stops
+        # rather than pinning `generate_plan` to `baseline`: re-compiling an
+        # idempotent plan cannot fix a pipeline, and the operator has causes to
+        # read.
+        baseline_stop = _baseline_failure(workspace)
+        if baseline_stop is not None:
+            rationale, report = baseline_stop
+            store.update_session_status(session_id, "failed")
+            store.increment_metric(session_id, "unmet_goal")
+            _progress(f"Stop condition: {rationale}")
+            # The report inline, which is §9's whole point: until now the gate
+            # reached a verdict nobody could see.
+            for line in report.splitlines():
+                _progress(line)
+            decisions.append(
+                DecisionRecord(
+                    id=store.new_decision_id(),
+                    session_id=session_id,
+                    tool_name=None,
+                    rationale=rationale,
+                    stop=True,
+                    observe={"stop_reason": "baseline_failed", "report": report},
                 )
             )
             store.append_decision(decisions[-1])
