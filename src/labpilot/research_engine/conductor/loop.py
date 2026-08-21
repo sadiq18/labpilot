@@ -942,14 +942,20 @@ def _baseline_is_done(workspace: Workspace) -> bool:
     if root is not None:
         try:
             from labpilot.research_engine.execution.baseline.gate import (
-                _enforcement_enabled,
+                baseline_is_settled,
+                enforcement_enabled,
                 evaluate_gate,
             )
 
-            if _enforcement_enabled():
-                # `blocks_research` and not `state == "passed"`: a waived gate is
-                # a decision someone recorded, and the campaign proceeds.
-                return not evaluate_gate(Path(root), enforced=True).blocks_research
+            if enforcement_enabled():
+                # `baseline_is_settled`, not `not blocks_research`. Seven of the
+                # nine states block, and two of them — `awaiting_ml` on an image
+                # dataset, `floor_undefined` on an uncatalogued metric — are
+                # facts about the data that no re-run changes. Answering "no"
+                # forever left `generate_plan` pinned to `baseline`, and since
+                # baseline compilation is idempotent the campaign recompiled the
+                # same plan and could never run a second experiment.
+                return baseline_is_settled(evaluate_gate(Path(root), enforced=True).state)
         except Exception as exc:  # noqa: BLE001 — a gate that cannot run must
             # not force a baseline recompile over the top of existing work.
             logger.warning("Baseline gate unavailable, falling back to plan lookup: %s", exc)

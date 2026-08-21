@@ -31,7 +31,7 @@ from labpilot.research_engine.execution.baseline.gate import (
 from labpilot.research_engine.execution.baseline.runner import ensure_readings
 
 
-def _workspace(tmp_path: Path, *, learnable: bool) -> Path:
+def _workspace(tmp_path: Path, *, learnable: bool, modality: str = "tabular") -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(0)
     n = 200
@@ -62,6 +62,9 @@ def _workspace(tmp_path: Path, *, learnable: bool) -> Path:
                 "target_column": "y",
                 "row_count": n,
                 "train_file": "train.csv",
+                "modalities": [
+                    {"modality": modality, "present": True, "role": "primary", "confidence": 0.9}
+                ],
                 "columns": [
                     {"name": "x1", "dtype": "float64", "unique_count": n, "is_numeric": True},
                     {"name": "x2", "dtype": "float64", "unique_count": n, "is_numeric": True},
@@ -196,7 +199,7 @@ def test_nothing_reaches_the_store_when_the_gate_refuses(tmp_path: Path) -> None
     workspace = _workspace(tmp_path / "ws", learnable=False)
     knowledge = tmp_path / "knowledge"
 
-    with mock.patch.object(gate_module, "_enforcement_enabled", return_value=True):
+    with mock.patch.object(gate_module, "enforcement_enabled", return_value=True):
         written = persist_recommendations(
             [_recommendation()],
             knowledge_dir=knowledge,
@@ -219,7 +222,7 @@ def test_the_store_write_proceeds_when_the_gate_passes(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path / "ws", learnable=True)
     knowledge = tmp_path / "knowledge"
 
-    with mock.patch.object(gate_module, "_enforcement_enabled", return_value=True):
+    with mock.patch.object(gate_module, "enforcement_enabled", return_value=True):
         written = persist_recommendations(
             [_recommendation()],
             knowledge_dir=knowledge,
@@ -238,6 +241,112 @@ def test_the_analyze_path_hands_over_its_workspace() -> None:
     from labpilot.research_engine.intelligence import orchestrator
 
     assert "workspace_root=context.workspace_root" in inspect.getsource(orchestrator)
+
+
+# --- goal 4, tested against a campaign rather than against a file --------------------
+
+
+def test_an_unchangeable_state_does_not_pin_the_campaign_to_baseline(tmp_path: Path) -> None:
+    """Review finding, and the previous goal-4 test could not have caught it.
+
+    An image dataset reaches `awaiting_ml` — Baseline 1 cannot run where
+    features are not columns, and no re-run changes that. Answering "the
+    baseline is not done" forever left `generate_plan` pinned to `baseline`, and
+    because baseline compilation is idempotent the campaign recompiled the same
+    plan and could never run a second experiment. `actions.py`'s own docstring
+    describes exactly that failure.
+
+    This is the trap the design names — *"a gate demanding something
+    unaffordable gets disabled"* — arriving through the door goal 4 exists to
+    bolt.
+    """
+    from unittest import mock
+
+    import labpilot.research_engine.execution.baseline.gate as gate_module
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+    from labpilot.research_engine.conductor.loop import _baseline_is_done
+
+    workspace = _workspace(tmp_path / "ws", learnable=False, modality="image")
+
+    class _Workspace:
+        root = workspace
+        knowledge_dir = tmp_path / "knowledge"
+        competition = "demo"
+
+    with mock.patch.object(gate_module, "enforcement_enabled", return_value=True):
+        assert evaluate_gate(workspace).state == "awaiting_ml"
+        settled = _baseline_is_done(_Workspace())
+
+    assert settled, "nothing more can be done about the baseline here"
+    args = resolve_step_args(
+        "generate_plan",
+        {"baseline": True},
+        latest_plan_id="P-001",
+        latest_execution_id="E-001",
+        next_hypothesis_id="H-002",
+        baseline_plan_exists=settled,
+    )
+    assert args == {"hypothesis_id": "H-002"}, "the campaign moves on to iterating"
+
+
+def test_a_failing_gate_still_pins_the_campaign_to_baseline(tmp_path: Path) -> None:
+    """The other half. `failed` is fixable by fixing the pipeline, so the
+    campaign keeps being told to produce a baseline that beats a constant."""
+    from unittest import mock
+
+    import labpilot.research_engine.execution.baseline.gate as gate_module
+    from labpilot.research_engine.conductor.actions import resolve_step_args
+    from labpilot.research_engine.conductor.loop import _baseline_is_done
+
+    workspace = _workspace(tmp_path / "ws", learnable=False)
+
+    class _Workspace:
+        root = workspace
+        knowledge_dir = tmp_path / "knowledge"
+        competition = "demo"
+
+    with mock.patch.object(gate_module, "enforcement_enabled", return_value=True):
+        assert evaluate_gate(workspace).state == "failed"
+        settled = _baseline_is_done(_Workspace())
+
+    assert not settled
+    args = resolve_step_args(
+        "generate_plan",
+        {"baseline": True},
+        latest_plan_id="P-001",
+        latest_execution_id="E-001",
+        next_hypothesis_id="H-002",
+        baseline_plan_exists=settled,
+    )
+    assert args == {"baseline": True}, "still asking for a baseline"
+
+
+def test_an_unchangeable_state_does_not_refuse_minting(tmp_path: Path) -> None:
+    """A gate that refuses forever on a property of the dataset is one an
+    operator switches off, and then it protects nothing at all."""
+    workspace = _workspace(tmp_path / "ws", learnable=False, modality="image")
+
+    assert evaluate_gate(workspace).state == "awaiting_ml"
+    assert refuse_hypothesis_minting(workspace, enforced=True) == ""
+
+
+def test_the_three_questions_are_answered_separately() -> None:
+    """ "The gate is not open", "nothing more can be done", and "a belief written
+    now would be unsafe" are three facts, and conflating them is what pinned the
+    campaign."""
+    from labpilot.research_engine.execution.baseline.gate import (
+        baseline_is_settled,
+        blocks_research,
+        refuses_minting,
+    )
+
+    assert blocks_research("awaiting_ml"), "the gate is not open"
+    assert baseline_is_settled("awaiting_ml"), "and there is nothing to do about it"
+    assert not refuses_minting("awaiting_ml"), "so it must not refuse forever"
+
+    assert blocks_research("failed")
+    assert not baseline_is_settled("failed")
+    assert refuses_minting("failed")
 
 
 # --- goal 4: the allowlist never empties -------------------------------------------
@@ -301,7 +410,7 @@ def test_a_compiled_plan_is_not_a_finished_baseline(tmp_path: Path) -> None:
 
     assert "baseline_plan_exists=_baseline_is_done(workspace)" in source
     assert source.count("baseline_plan_exists=_baseline_plan_exists(workspace)") == 0
-    assert "_enforcement_enabled()" in inspect.getsource(loop._baseline_is_done)
+    assert "enforcement_enabled()" in inspect.getsource(loop._baseline_is_done)
 
 
 @pytest.mark.parametrize("enforced", [False, True])
@@ -316,4 +425,4 @@ def test_the_plan_lookup_remains_the_observe_only_answer(tmp_path: Path, enforce
 
     assert "return _baseline_plan_exists(workspace)" in source
     if enforced:
-        assert "blocks_research" in source
+        assert "baseline_is_settled" in source

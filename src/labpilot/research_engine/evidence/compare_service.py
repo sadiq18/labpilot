@@ -111,16 +111,28 @@ def resolve_control(
         # all work unchanged — and a metric mismatch is caught for free by
         # `_same_metric`, machinery that already exists and has already been
         # debugged.
-        from labpilot.research_engine.execution.baseline.runner import floor_as_control
+        from labpilot.research_engine.execution.baseline.runner import (
+            ensure_readings,
+            floor_as_control,
+        )
 
         try:
-            floor_metrics, strategy = floor_as_control(context.workspace_root)
+            # Producing the readings is called out here rather than hidden
+            # inside `floor_as_control`: it fits five LightGBM models, which is
+            # tens of seconds on a large table, and a function that reads like a
+            # dict lookup should not be where that happens.
+            floor, _model = ensure_readings(context.workspace_root)
+            floor_metrics = floor_as_control(floor)
         except Exception as exc:  # noqa: BLE001 — no control is the status quo
             logger.info("Could not read a floor to compare against: %s", exc)
-            floor_metrics, strategy = {}, ""
+            floor_metrics = {}
         if floor_metrics:
             control_metrics = floor_metrics
-            control_hyp = control_hyp or f"floor:{strategy}"
+            # No `control_hypothesis_id`. It used to be set to `floor:<strategy>`,
+            # a value no `HypothesisStore` contains, in a field the lines above
+            # look up by id — the next reader had no way to know that particular
+            # one was synthetic. Which strategy won is in `baseline_floor.json`,
+            # where it is a measurement rather than a fabricated key.
 
     return (
         str(control_exec) if control_exec else None,

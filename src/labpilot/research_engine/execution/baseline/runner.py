@@ -21,6 +21,8 @@ import json
 import logging
 from pathlib import Path
 
+import pandas as pd
+
 from labpilot.research_engine.execution.baseline.baseline_one import (
     ModelReading,
     fit_baseline_one,
@@ -99,8 +101,6 @@ def ensure_readings(root: Path) -> tuple[FloorReading | None, ModelReading | Non
 
 def _fit(root: Path, fingerprint: str) -> ModelReading | None:
     """Baseline 1 over the same table and plan the floor used."""
-    import pandas as pd
-
     choice, profile = _read(root, "baseline_choice.json"), _read(root, "profile.json")
     metric_name = str(choice.get("metric_name") or "")
     target = str(choice.get("target_column") or profile.get("target_column") or "")
@@ -121,32 +121,89 @@ def _fit(root: Path, fingerprint: str) -> ModelReading | None:
         logger.info("Could not read %s for Baseline 1: %s", path, exc)
         return None
 
-    # `feature_columns` is M22's answer, and `target_type` is M23 step 1's.
-    # Recomputing either here would be a fourth implementation of a question the
-    # schema has already settled with evidence.
-    from labpilot.accessor.profiler.tabular import DatasetProfile
-
-    try:
-        described = DatasetProfile.model_validate(profile)
-    except ValueError:
-        return None
+    # `feature_columns`, `target_type` and `modality` are computed fields, so
+    # they are already *in* the file. Read from the dict rather than validating
+    # the whole `DatasetProfile`: a single malformed corner — a legacy
+    # `modalities` entry missing `role` was enough — made validation raise, and
+    # `_fit` then returned None, which the gate reported as `awaiting_ml`.
+    #
+    # That conflation matters now that `awaiting_ml` is one of the states a
+    # campaign is allowed to move past: an unparseable profile would have read
+    # as "Baseline 1 is merely unaffordable here" and waved the campaign
+    # through. Recomputing these would be a fourth implementation of questions
+    # the schema has settled with evidence; reading them from the file is not.
+    target_type, modality, features, class_counts = _schema_answers(profile, frame, target)
 
     reading = fit_baseline_one(
         frame,
         target=target,
         plan=ValidationPlan.model_validate(choice.get("validation") or {}),
         metric_name=metric_name,
-        target_type=described.target_type,
-        feature_columns=described.feature_columns or [c for c in frame.columns if c != target],
-        modality=described.modality,
-        num_classes=len(described.target_distribution.class_counts) or None,
+        target_type=target_type,
+        feature_columns=features or [c for c in frame.columns if c != target],
+        modality=modality,
+        num_classes=len(class_counts) if class_counts else None,
     )
     reading.workspace_fingerprint = fingerprint
     return reading
 
 
-def floor_as_control(root: Path) -> tuple[dict[str, float], str]:
-    """`({"cv_<metric>": score}, strategy)` — the floor shaped as a control.
+def _schema_answers(
+    profile: dict, frame: pd.DataFrame, target: str
+) -> tuple[str, str, list[str], dict]:
+    """`(target_type, modality, feature_columns, class_counts)` from the schema.
+
+    Two readings of one file, in this order for a reason.
+
+    The **model** first, because `target_type`, `modality` and `feature_columns`
+    are computed fields: a profile written by an older profiler does not have
+    them in the JSON at all, and validating is what derives them. Recomputing
+    them here would be a fourth implementation of questions the schema has
+    already settled with evidence.
+
+    The **raw dict** as the fallback, because validation is all-or-nothing: one
+    malformed corner — a legacy `modalities` entry missing `role` was enough —
+    made the whole thing raise, and `_fit` then returned None, which the gate
+    reports as `awaiting_ml`. That conflation matters now that `awaiting_ml` is a
+    state a campaign may move past: an unparseable profile would read as
+    "Baseline 1 is merely unaffordable here" and wave the campaign through.
+    """
+    from labpilot.accessor.profiler.tabular import DatasetProfile
+
+    def _usable(columns: object) -> list[str]:
+        return [
+            c
+            for c in (columns or [])  # type: ignore[union-attr]
+            if isinstance(c, str) and c in frame.columns and c != target
+        ]
+
+    try:
+        described = DatasetProfile.model_validate(profile)
+    except ValueError as exc:
+        logger.info("Profile did not validate, reading its stored fields instead: %s", exc)
+        distribution = profile.get("target_distribution")
+        return (
+            str(profile.get("target_type") or "unknown"),
+            str(profile.get("modality") or "tabular"),
+            _usable(profile.get("feature_columns")),
+            distribution.get("class_counts") or {} if isinstance(distribution, dict) else {},
+        )
+    return (
+        described.target_type,
+        described.modality,
+        _usable(described.feature_columns),
+        described.target_distribution.class_counts,
+    )
+
+
+def floor_as_control(floor: FloorReading | None) -> dict[str, float]:
+    """`{"cv_<metric>": score}` — a reading already taken, shaped as a control.
+
+    Takes the reading rather than a root, so producing it is a separate and
+    visible step. The previous version called `ensure_readings` itself, which
+    meant a name promising a dict lookup ran five LightGBM fits inside
+    `resolve_control` — measured at 1.0s on 5,000x30, against a cell budget
+    permitting 133x that.
 
     This is §7.5's whole design, and the restraint is the point: **no third
     reading on `ObservedOutcomes`**. `_decide` is the single funnel for every
@@ -155,7 +212,6 @@ def floor_as_control(root: Path) -> tuple[dict[str, float], str]:
     unchanged. A metric mismatch is then caught for free by `_same_metric`,
     machinery that already exists and has already been debugged.
     """
-    floor, _model = ensure_readings(root)
     if floor is None or not floor.is_defined or floor.score is None:
-        return {}, ""
-    return {f"cv_{floor.metric_name}": float(floor.score)}, floor.best_strategy
+        return {}
+    return {f"cv_{floor.metric_name}": float(floor.score)}

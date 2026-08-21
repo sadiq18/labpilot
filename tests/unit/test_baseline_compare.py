@@ -47,31 +47,34 @@ def _workspace(tmp_path: Path, *, learnable: bool = True) -> Path:
         ),
         encoding="utf-8",
     )
-    (tmp_path / "profile.json").write_text(
-        json.dumps(
-            {
-                "competition": "demo",
-                "schema_version": 4,
-                "target_column": "y",
-                "id_columns": ["Id"],
-                "row_count": n,
-                "train_file": "train.csv",
-                "columns": [
-                    {"name": "Id", "dtype": "int64", "unique_count": n, "is_numeric": True},
-                    {"name": "x1", "dtype": "float64", "unique_count": n, "is_numeric": True},
-                    {"name": "x2", "dtype": "float64", "unique_count": n, "is_numeric": True},
-                    {
-                        "name": "y",
-                        "dtype": "float64",
-                        "unique_count": n,
-                        "is_numeric": True,
-                        "stats": {"min": -9.0, "max": 9.0},
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+    # A *serialized* `DatasetProfile`, not a hand-built dict. `target_type`,
+    # `modality` and `feature_columns` are computed fields, so a hand-written
+    # profile silently lacks them — and every test here would then be asserting
+    # against an artifact this system never produces.
+    from labpilot.accessor.profiler.tabular import ColumnProfile, DatasetProfile
+
+    profile = DatasetProfile(
+        competition="demo",
+        schema_version=4,
+        target_column="y",
+        id_columns=["Id"],
+        row_count=n,
+        train_file="train.csv",
+        modalities=[{"modality": "tabular", "present": True, "role": "primary"}],
+        columns=[
+            ColumnProfile(name="Id", dtype="int64", unique_count=n, is_numeric=True),
+            ColumnProfile(name="x1", dtype="float64", unique_count=n, is_numeric=True),
+            ColumnProfile(name="x2", dtype="float64", unique_count=n, is_numeric=True),
+            ColumnProfile(
+                name="y",
+                dtype="float64",
+                unique_count=n,
+                is_numeric=True,
+                stats={"min": -9.0, "max": 9.0},
+            ),
+        ],
     )
+    (tmp_path / "profile.json").write_text(profile.model_dump_json(), encoding="utf-8")
     return tmp_path
 
 
@@ -142,6 +145,47 @@ def test_a_workspace_with_no_plan_yields_no_readings(tmp_path: Path) -> None:
     assert model is None or not model.is_defined
 
 
+def test_a_profile_with_one_malformed_corner_still_fits(tmp_path: Path) -> None:
+    """Validation is all-or-nothing, and the gate reads the result as a fact.
+
+    A legacy `modalities` entry missing `role` is enough to make
+    `DatasetProfile.model_validate` raise. `_fit` then returned None, which the
+    gate reports as `awaiting_ml` — and `awaiting_ml` is now one of the states a
+    campaign may move past, so an unparseable profile would have read as
+    "Baseline 1 is merely unaffordable here" and waved the campaign through.
+
+    Found by writing a fixture with exactly that defect while testing something
+    else, which is the only reason it is covered at all.
+    """
+    _workspace(tmp_path)
+    profile = json.loads((tmp_path / "profile.json").read_text(encoding="utf-8"))
+    profile["modalities"] = [{"modality": "tabular", "present": True, "confidence": 0.9}]
+    assert "target_type" in profile, "the stored fields are what the fallback reads"
+    (tmp_path / "profile.json").write_text(json.dumps(profile), encoding="utf-8")
+
+    _floor, model = ensure_readings(tmp_path)
+
+    assert model is not None and model.is_defined, model.undefined_reason if model else "no model"
+
+
+def test_a_profile_that_predates_the_computed_fields_still_fits(tmp_path: Path) -> None:
+    """The other direction: validation is what *derives* those fields.
+
+    A profile written before `target_type` existed does not carry it, so reading
+    the raw dict alone would give `unknown` and refuse to fit. The model is tried
+    first for exactly this reason.
+    """
+    _workspace(tmp_path)
+    profile = json.loads((tmp_path / "profile.json").read_text(encoding="utf-8"))
+    for computed in ("target_type", "modality", "feature_columns"):
+        profile.pop(computed, None)
+    (tmp_path / "profile.json").write_text(json.dumps(profile), encoding="utf-8")
+
+    _floor, model = ensure_readings(tmp_path)
+
+    assert model is not None and model.is_defined, model.undefined_reason if model else "no model"
+
+
 # --- the floor, shaped as a control -------------------------------------------
 
 
@@ -154,11 +198,11 @@ def test_the_floor_arrives_as_a_cv_metric(tmp_path: Path) -> None:
     """
     _workspace(tmp_path)
 
-    metrics, strategy = floor_as_control(tmp_path)
+    floor, _model = ensure_readings(tmp_path)
+    metrics = floor_as_control(floor)
 
     assert list(metrics) == ["cv_rmse"]
     assert metrics["cv_rmse"] > 0
-    assert strategy in ("mean", "median")
 
 
 def test_the_floor_control_carries_the_metric_in_its_key(tmp_path: Path) -> None:
@@ -172,7 +216,8 @@ def test_the_floor_control_carries_the_metric_in_its_key(tmp_path: Path) -> None
     choice["metric_name"] = "mae"
     (tmp_path / "baseline_choice.json").write_text(json.dumps(choice), encoding="utf-8")
 
-    metrics, _ = floor_as_control(tmp_path)
+    floor, _model = ensure_readings(tmp_path)
+    metrics = floor_as_control(floor)
 
     assert list(metrics) == ["cv_mae"]
 
@@ -180,9 +225,10 @@ def test_the_floor_control_carries_the_metric_in_its_key(tmp_path: Path) -> None
 def test_no_floor_means_no_control_rather_than_a_zero(tmp_path: Path) -> None:
     """A control of 0.0 is one every model beats, which would turn the gate into
     a rubber stamp — the opposite of what it is for."""
-    metrics, strategy = floor_as_control(tmp_path)
+    floor, _model = ensure_readings(tmp_path)
 
-    assert metrics == {} and strategy == ""
+    assert floor_as_control(floor) == {}
+    assert floor_as_control(None) == {}, "and an absent reading is not a zero either"
 
 
 # --- the verdict the gate reaches once both exist --------------------------------
