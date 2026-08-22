@@ -98,6 +98,17 @@ class CompetitionFixture(BaseModel):
     source: str = ""
     #: ``verbatim`` when every file is; ``derived`` the moment one is not.
     provenance: Literal["verbatim", "derived"] = "derived"
+    #: Where `listing.tsv` came from, and therefore what it proves.
+    #:
+    #: ``walked`` means a local directory was read and every listed file carries
+    #: a sha256 of bytes this tool saw. ``remote`` means the Kaggle API reported
+    #: names and sizes and nothing else — the counts and ratios modality
+    #: detection needs, and no evidence about content.
+    #:
+    #: Recorded rather than inferred from an empty sha column, because "no
+    #: checksum" and "checksum of an empty file" are one character apart in a
+    #: TSV and worlds apart as provenance.
+    listing_source: Literal["walked", "remote", "none"] = "none"
     licence: str = "unknown"
     #: Whether the source dataset's **rows** may be redistributed.
     #:
