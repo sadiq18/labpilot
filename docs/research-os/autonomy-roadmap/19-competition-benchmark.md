@@ -190,8 +190,11 @@ Two criteria the original brief did not have:
   media probing, undecimated rogii, and **generic-beats-dummy**, defined as
   strictly better in the metric's declared direction *by more than the
   fold-to-fold std*. Not "better by any epsilon" — that is noise.
-- **Tier 3 — the agreement check.** Score both the truncated fixture and the full
-  dataset, and assert they agree on every tier-1 criterion.
+- **Tier 3 — the agreement check.** ✅ Score both the truncated fixture and the
+  full dataset, and assert they agree on every tier-1 criterion.
+  `tests/integration/test_corpus_agrees_with_reality.py`, marked `slow` and
+  skipped loudly with every path it looked in. All five fixtures agree today,
+  over 4–5 claimed criteria each, rogii's 1,546 tables included.
 
 **Tier 3 is the single most important test here.** It is what licenses a hermetic
 corpus to stand in for real data. If the two disagree on a criterion, that
@@ -221,11 +224,13 @@ maximized — recording its single genuine improvement as `rejected`.
 
 ## Exit criteria
 
-1. A scorecard exists, is reproducible across two runs except its timestamp, and
-   is pinned to a corpus hash.
-2. Thresholds are a **ratchet starting at today's measured value**, with 95%
+1. ✅ A scorecard exists, is reproducible across two runs except its timestamp, and
+   is pinned to a corpus hash. `RATCHET.json` carries the digest; `bench score`
+   prints it.
+2. ✅ Thresholds are a **ratchet starting at today's measured value**, with 95%
    recorded as the goal. Asserting 95% on day one makes the suite red and teaches
-   everyone to ignore it.
+   everyone to ignore it. Recorded 2026-08-22; it fails in both directions, so an
+   improvement is raised rather than absorbed.
 3. The ledger is **bidirectional** — CI fails on `pass → fail` *and* on
    `known_fail → pass` (*"this now passes; update the ledger"*). Silently
    absorbing improvements is how a ratchet rots.

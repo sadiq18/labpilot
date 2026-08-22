@@ -32,7 +32,15 @@ from labpilot.accessor.benchmark.fixture import CompetitionFixture
 from labpilot.accessor.profiler.schema import MetricRef
 from labpilot.accessor.profiler.source import DeclaredFacts
 
-__all__ = ["CRITERIA", "CriterionResult", "Scorecard", "score_fixture"]
+__all__ = [
+    "CRITERIA",
+    "CriterionResult",
+    "Scorecard",
+    "disagreements",
+    "profile_and_score",
+    "score_fixture",
+    "score_full_dataset",
+]
 
 Verdict = Literal["pass", "fail", "not_applicable", "unverifiable", "known_failure"]
 
@@ -188,16 +196,66 @@ def profile_and_score(fixture_dir: Path, workdir: Path) -> Scorecard:
     would be measuring this file instead.
     """
     from labpilot.accessor.benchmark.expand import expand_fixture
+
+    fixture = expand_fixture(fixture_dir, workdir)
+    return _score_directory(fixture, workdir, _declared_facts(workdir))
+
+
+def score_full_dataset(
+    fixture: CompetitionFixture, data_dir: Path, declared_from: Path | None = None
+) -> Scorecard:
+    """The same scoring, against the real dataset instead of the fixture.
+
+    Tier 3. The corpus is only allowed to stand in for real data if the two
+    agree, and this is the half that reads the real thing — same profiler, same
+    expectations, same scorer, so a difference in the result is a difference in
+    the *capture* and nothing else.
+
+    `declared_from` is the expanded fixture, whose `competition.json` is carried
+    byte-verbatim. Reading it from there rather than from the dataset directory
+    is deliberate: the spec is not what truncation destroyed, and a full run that
+    scored `metric_name` as unknowable purely because Kaggle ships no
+    `competition.json` would report a disagreement the capture did not cause.
+    """
+    return _score_directory(fixture, Path(data_dir), _declared_facts(declared_from or data_dir))
+
+
+def _score_directory(
+    fixture: CompetitionFixture, directory: Path, declared: DeclaredFacts
+) -> Scorecard:
     from labpilot.accessor.profiler.questions import pending_schema_questions
     from labpilot.accessor.profiler.source import LocalFileSource
     from labpilot.accessor.profiler.tabular import TabularProfiler
     from labpilot.config import ProfilerConfig
 
-    fixture = expand_fixture(fixture_dir, workdir)
-    source = LocalFileSource(workdir, _declared_facts(workdir))
+    source = LocalFileSource(Path(directory), declared)
     profile = TabularProfiler(ProfilerConfig()).profile_dataset(source, fixture.slug)
     questions = [question.field for question in pending_schema_questions(profile)]
     return score_fixture(fixture, json.loads(profile.model_dump_json()), questions)
+
+
+#: Verdicts a fixture is *claiming* it can score. `unverifiable` and
+#: `not_applicable` are the fixture saying it cannot speak to a criterion, so
+#: they are exactly the ones tier 3 must not hold it to.
+_CLAIMED = ("pass", "fail", "known_failure")
+
+
+def disagreements(hermetic: Scorecard, full: Scorecard) -> dict[str, tuple[str, str]]:
+    """Criteria where the fixture and the real dataset reach different verdicts.
+
+    Empty is the licence the hermetic corpus runs on. A non-empty result names
+    criteria whose **capture mode is wrong** — the plan's remedy is to move them
+    to `unverifiable` rather than to argue with the number, because a fixture
+    that quietly answers differently from the dataset it stands for is worse
+    than one that admits it cannot answer.
+    """
+    verdicts = {result.criterion: result.verdict for result in full.results}
+    return {
+        result.criterion: (result.verdict, verdicts.get(result.criterion, "missing"))
+        for result in hermetic.results
+        if result.verdict in _CLAIMED
+        and verdicts.get(result.criterion, "missing") != result.verdict
+    }
 
 
 def _declared_facts(workdir: Path) -> DeclaredFacts:

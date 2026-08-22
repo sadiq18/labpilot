@@ -13,9 +13,12 @@ is a paraphrase.
 from __future__ import annotations
 
 import hashlib
+import logging
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from labpilot.accessor.benchmark.fixture import (
     CapturedFile,
@@ -24,7 +27,12 @@ from labpilot.accessor.benchmark.fixture import (
     save_fixture,
 )
 
-__all__ = ["capture_competition", "parse_mode"]
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from labpilot.accessor.benchmark.remote import RemoteListing
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["capture_competition", "capture_from_listing", "parse_mode"]
 
 #: Files worth carrying whole: they are metadata, not data, and the metric
 #: criterion cannot be scored without them.
@@ -95,6 +103,149 @@ def _rows_for(path: Path, kind: str, n: int) -> list[str]:
         # stride: every nth row, which is what preserves a contiguous prefix and
         # a contiguous suffix through a truncation that `head` would destroy.
         return [header, *[line for index, line in enumerate(handle) if index % n == 0]]
+
+
+def _contained(target: Path, root: Path) -> bool:
+    """Whether `target` really lands under `root`.
+
+    `Path.resolve()` on both sides, because `..` and an absolute name both
+    escape a naive join and neither is visible in the string. `root` is the
+    fixture's `data/` directory: checking against the destination instead lets
+    `../fixture.json` through, which overwrites the manifest.
+    """
+    try:
+        return target.resolve().is_relative_to(root)
+    except (OSError, ValueError):
+        return False
+
+
+def capture_from_listing(
+    listing: RemoteListing,
+    destination: Path,
+    *,
+    slug: str,
+    fetch: Callable[[str, Path], None],
+    expected: Expectations | None = None,
+    licence: str = "unknown",
+    redistribution: str = "unknown",
+) -> CompetitionFixture:
+    """Capture from a file list, downloading only what has to be read.
+
+    The move this makes possible: a media competition becomes a fixture without
+    its bytes. `biohub-cell-tracking` is 4.5 MB zarr chunks and ≥0.99 GB in its
+    first two hundred files; its *listing* is a few hundred kilobytes of text,
+    and the listing is all `_detect_image` needs — it counts by extension and
+    never opens a file.
+
+    Only tabular files are fetched, because a header is the one thing a listing
+    cannot carry and five criteria depend on it. Everything else is recorded at
+    name and size, which is what the expander materialises as placeholders.
+
+    `fetch` is injected rather than imported: this module may not depend on a
+    Kaggle client, and a test must be able to capture without a network.
+    """
+    if not listing.complete:
+        # `fetch_listing` refuses to *return* a partial listing for the reason
+        # its own docstring gives — the counts and ratios are the fixture's
+        # entire content, so half of them describe a dataset that does not
+        # exist. This path built one anyway, twenty lines further down the same
+        # module, until a review put the two side by side.
+        raise ValueError(
+            f"refusing to capture {slug!r} from an incomplete listing: "
+            "a fixture built from one has the wrong ratios, and ratios are what "
+            "modality detection decides on"
+        )
+
+    destination = Path(destination)
+    (destination / "data").mkdir(parents=True, exist_ok=True)
+    # `data/`, not the destination. One `..` escapes only the subdirectory, so a
+    # file named `../fixture.json` lands inside the capture and overwrites the
+    # manifest being written — a listing entry silently replacing the record of
+    # what was listed.
+    data_root = (destination / "data").resolve()
+
+    captured: list[CapturedFile] = []
+    listed: list[str] = []
+    escaped: list[str] = []
+    for entry in listing.files:
+        if not _contained(data_root / entry.name, data_root):
+            # A name the API supplied, joined to a path we chose. `capture` opens
+            # with "read-only by construction", and a tool that writes outside
+            # the directory it was pointed at has broken that whatever the source
+            # of the name. Recorded, not silently dropped.
+            escaped.append(entry.name)
+            continue
+        if Path(entry.name).suffix.lower() not in _TABULAR_SUFFIXES:
+            # No sha: the API returns none, and an empty column is not a hash of
+            # nothing. `listing_source="remote"` on the fixture is what says so.
+            listed.append(f"{entry.name}\t{entry.size}\t")
+            continue
+        target = destination / "data" / entry.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fetch(entry.name, target)
+        except Exception as exc:  # noqa: BLE001 — one unfetchable file is not a
+            # failed capture; it is a file the fixture does not carry, and the
+            # listing still records that it exists.
+            logger.info("Could not fetch %s from %s: %s", entry.name, slug, exc)
+            listed.append(f"{entry.name}\t{entry.size}\t")
+            continue
+        sha, size, lines = _digest(target)
+        header = _rows_for(target, "headers_only", 0)
+        target.write_text("".join(header), encoding="utf-8")
+        captured.append(
+            CapturedFile(
+                path=entry.name,
+                mode="headers_only",
+                # Of the *real* file, so a re-download can be checked against it
+                # even though only its header survives here.
+                source_sha256=sha,
+                source_bytes=size,
+                source_rows=max(lines - 1, 0),
+                fixture_rows=0,
+            )
+        )
+
+    if listed:
+        # Whole, or not at all. The count reported below is `len(listed)`, and a
+        # slice here made that a claim about files the fixture did not record —
+        # a provenance record misreporting its own coverage, which is the shape
+        # `tests/fixtures/real_failures/MANIFEST.md` exists because of.
+        (destination / "listing.tsv").write_text("\n".join(listed) + "\n", encoding="utf-8")
+
+    unverifiable = {
+        "row_count": "headers_only capture keeps a subset of rows",
+        "cardinality": "headers_only capture keeps a subset of rows",
+        "feature_columns": "no rows, so constant and equals-target exclusions cannot fire",
+    }
+    if escaped:
+        # Named, because a file the capture refused is not a file that does not
+        # exist, and a fixture whose listing is quietly short has the wrong
+        # ratios in exactly the way this whole path is built to avoid.
+        unverifiable["listing_completeness"] = (
+            f"{len(escaped)} file(s) were refused for naming a path outside the "
+            f"capture directory: {', '.join(sorted(escaped)[:3])}"
+        )
+    if listed:
+        unverifiable["byte_fidelity"] = (
+            f"{len(listed)} file(s) are recorded by name and size from the Kaggle API, "
+            "which returns no checksum — the listing proves they exist, not what they hold"
+        )
+
+    fixture = CompetitionFixture(
+        slug=slug,
+        captured_at=datetime.now(UTC).date().isoformat(),
+        source=f"kaggle api: {slug}",
+        provenance="derived",
+        licence=licence,
+        redistribution=redistribution,  # type: ignore[arg-type]
+        listing_source="remote" if listed else "none",
+        files=captured,
+        expected=expected or Expectations(),
+        unverifiable=unverifiable,
+    )
+    save_fixture(destination, fixture)
+    return fixture
 
 
 def capture_competition(
@@ -224,6 +375,7 @@ def capture_competition(
 
     fixture = CompetitionFixture(
         slug=slug,
+        listing_source="walked" if listing else "none",
         captured_at=datetime.now(UTC).date().isoformat(),
         source=str(source),
         provenance="verbatim" if kind == "verbatim" else "derived",
