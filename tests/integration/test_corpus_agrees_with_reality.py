@@ -37,7 +37,14 @@ CORPUS = Path(__file__).resolve().parents[1] / "fixtures" / "competitions"
 #: An explicit override first, because a corpus that only works on the machine
 #: that captured it is not a corpus.
 _ENV_ROOT = "LABPILOT_CORPUS_FULL_DATA"
-_CACHE_ENV = "LABPILOT_KAGGLE_CACHE_DIR"
+#: The default Kaggle cache, hardcoded rather than read from
+#: `LABPILOT_KAGGLE_CACHE_DIR`. That variable *cannot* be read here: the autouse
+#: `_no_real_dotenv_in_tests` fixture deletes it from the environment so
+#: `Settings` cannot pick up a developer's real cache, so a test reading it
+#: always saw `None`. The first version of this file read it anyway and printed
+#: it in the skip message, which advertised a knob that silently did nothing —
+#: an operator who set it got skips naming the very path they had overridden.
+#: `_ENV_ROOT` is not on that list and does work, so it is the knob offered.
 _DEFAULT_CACHE = Path.home() / "workspace" / ".labpilot-cache" / "kaggle"
 
 
@@ -51,7 +58,7 @@ def _candidates(fixture: CompetitionFixture) -> list[Path]:
     override = os.environ.get(_ENV_ROOT)
     if override:
         found.append(Path(override) / fixture.slug)
-    cache = Path(os.environ.get(_CACHE_ENV) or _DEFAULT_CACHE)
+    cache = _DEFAULT_CACHE
     found.append(cache / fixture.slug)
     # What the capture recorded. Absolute and machine-specific, so it is the
     # last resort rather than the first — but it is the only pointer for a

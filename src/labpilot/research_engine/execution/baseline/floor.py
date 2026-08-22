@@ -41,7 +41,10 @@ from labpilot.research_engine.execution.metrics import compute_metric
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CONSTANT_STRATEGIES",
     "FLOOR_FILENAME",
+    "LABEL_STRATEGIES",
+    "NON_CONSTANT_STRATEGIES",
     "fingerprint_of",
     "folds_for",
     "FloorReading",
@@ -78,6 +81,31 @@ _STRATEGIES_BY_METRIC: dict[str, tuple[str, ...]] = {
     "roc-auc": (),
 }
 
+#: Strategies that predict one value for every row, and can therefore be written
+#: into a submission column.
+#:
+#: Split out because a caller that needs a constant must be able to ask *before*
+#: asking, and get an explanation rather than an exception when the answer is no.
+#: `_constant_for` raising `unknown floor strategy` at a caller who simply has a
+#: `class_prior` floor turns "this metric's floor is not a point prediction" into
+#: "the baseline could not produce a file", which are different claims.
+CONSTANT_STRATEGIES = ("mean", "median", "log_mean", "majority_class")
+
+#: Of those, the ones whose constant is a **label from the training set** rather
+#: than a number computed from it. The distinction is the metric's to make, not
+#: the target values': an ordinal target scored by RMSE has few repeating values
+#: and a fractional optimal constant, and a rule that read the values alone would
+#: reject that constant as a label nobody has seen.
+LABEL_STRATEGIES = ("majority_class",)
+
+#: And what the rest predict instead, phrased for a reader who has to be told why
+#: no constant is coming.
+NON_CONSTANT_STRATEGIES: dict[str, str] = {
+    "class_prior": "predicts a probability vector, not a point value",
+    "constant_prediction": "is an analytic floor, with no prediction behind it",
+    "anchor_carry_forward": "carries a value per row, so there is no one constant",
+}
+
 #: Metrics whose floor is a theorem rather than a measurement. A constant
 #: prediction carries no ranking information, so its ROC AUC is exactly 0.5 for
 #: every dataset. Computing it invites a fold with one class present to return
@@ -96,6 +124,13 @@ class FloorReading(BaseModel):
     metric_name: str
     #: Every strategy tried, and what it scored. The winner is `best_strategy`.
     strategies: dict[str, float] = Field(default_factory=dict)
+    #: The winning strategy's score on each fold, unaggregated.
+    #:
+    #: Tier 2 asks whether a model beats the floor *by more than the fold-to-fold
+    #: std* — "not better by any epsilon, that is noise" — and a mean alone
+    #: cannot answer it. It also makes one catastrophic fold visible instead of
+    #: averaged into something that merely looks mediocre.
+    fold_scores: list[float] = Field(default_factory=list)
     best_strategy: str = ""
     score: float | None = None
     #: The plan this was computed under, copied rather than referenced — a
@@ -386,6 +421,7 @@ def compute_floor(
         )
         return reading
 
+    per_fold: dict[str, list[float]] = {}
     for name in names:
         scores: list[float] = []
         for train_idx, val_idx in folds:
@@ -417,6 +453,7 @@ def compute_floor(
                 break
         if scores:
             reading.strategies[name] = float(np.mean(scores))
+            per_fold[name] = [float(s) for s in scores]
 
     if not reading.strategies:
         reading.undefined_reason = "no strategy could be scored against this target"
@@ -425,6 +462,10 @@ def compute_floor(
     pick = max if direction == "maximize" else min
     reading.best_strategy = pick(reading.strategies, key=lambda k: reading.strategies[k])
     reading.score = reading.strategies[reading.best_strategy]
+    # The winner's folds, not every strategy's: the comparison tier 2 makes is
+    # against the floor, and the floor is one number with one set of folds behind
+    # it. Carrying all of them would be carrying the losers' noise too.
+    reading.fold_scores = per_fold.get(reading.best_strategy, [])
     return reading
 
 
