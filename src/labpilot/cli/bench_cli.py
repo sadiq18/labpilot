@@ -36,6 +36,69 @@ _VERDICT_STYLE = {
 }
 
 
+@bench_app.command("capture-remote")
+def capture_remote(
+    slug: str = typer.Argument(..., help="Competition slug"),
+    into: Path = typer.Option(CORPUS, "--into", help="Corpus directory"),
+    licence: str = typer.Option("unknown", "--licence"),
+    redistribution: str = typer.Option("unknown", "--redistribution"),
+) -> None:
+    """Capture a competition from its Kaggle file list, without its bytes.
+
+    What this is for: a media competition costs its full download before it can
+    be a fixture, which is why the corpus is five tabular ones.
+    `biohub-cell-tracking` is 4.5 MB zarr chunks and ≥0.99 GB in its first two
+    hundred files; its listing is a few hundred kilobytes, and the listing is
+    what `_detect_image` reads — it counts by extension and never opens a file.
+
+    Only tabular files are downloaded, because a header is the one thing a
+    listing cannot carry.
+    """
+    from labpilot.accessor.benchmark.capture import capture_from_listing
+    from labpilot.accessor.benchmark.remote import ListingUnavailable, fetch_listing
+    from labpilot.accessor.kaggle.client import KaggleClient
+    from labpilot.config import load_config
+
+    client = KaggleClient(load_config().kaggle)
+    try:
+        api = client.authenticate()
+    except Exception as exc:  # noqa: BLE001 — say which half failed
+        console.print(f"[red]Kaggle authentication failed:[/red] {exc}")
+        raise typer.Exit(2) from exc
+
+    try:
+        listing = fetch_listing(slug, api)
+    except ListingUnavailable as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    console.print(
+        f"[dim]{len(listing.files):,} file(s), {listing.total_bytes / 1e9:.2f} GB "
+        f"in the real dataset[/dim]"
+    )
+
+    destination = Path(into) / slug
+    fixture = capture_from_listing(
+        listing,
+        destination,
+        slug=slug,
+        fetch=lambda name, target: api.competition_download_file(
+            slug, name, path=str(target.parent), quiet=True
+        ),
+        licence=licence,
+        redistribution=redistribution,
+    )
+    console.print(
+        f"[green]Captured[/green] {slug} -> {destination}\n"
+        f"  {len(fixture.files)} table(s) by header, "
+        f"{len(listing.files) - len(fixture.files)} file(s) by name and size"
+    )
+    console.print(
+        "\n[dim]Now fill `expected` in fixture.json from the competition's own rules "
+        "page — never from what the profiler produced.[/dim]"
+    )
+
+
 @bench_app.command("capture")
 def capture(
     data: Path = typer.Argument(..., help="The competition's data directory"),

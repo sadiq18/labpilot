@@ -105,6 +105,20 @@ def _rows_for(path: Path, kind: str, n: int) -> list[str]:
         return [header, *[line for index, line in enumerate(handle) if index % n == 0]]
 
 
+def _contained(target: Path, root: Path) -> bool:
+    """Whether `target` really lands under `root`.
+
+    `Path.resolve()` on both sides, because `..` and an absolute name both
+    escape a naive join and neither is visible in the string. `root` is the
+    fixture's `data/` directory: checking against the destination instead lets
+    `../fixture.json` through, which overwrites the manifest.
+    """
+    try:
+        return target.resolve().is_relative_to(root)
+    except (OSError, ValueError):
+        return False
+
+
 def capture_from_listing(
     listing: RemoteListing,
     destination: Path,
@@ -114,7 +128,6 @@ def capture_from_listing(
     expected: Expectations | None = None,
     licence: str = "unknown",
     redistribution: str = "unknown",
-    max_listed: int = 50_000,
 ) -> CompetitionFixture:
     """Capture from a file list, downloading only what has to be read.
 
@@ -131,12 +144,37 @@ def capture_from_listing(
     `fetch` is injected rather than imported: this module may not depend on a
     Kaggle client, and a test must be able to capture without a network.
     """
+    if not listing.complete:
+        # `fetch_listing` refuses to *return* a partial listing for the reason
+        # its own docstring gives — the counts and ratios are the fixture's
+        # entire content, so half of them describe a dataset that does not
+        # exist. This path built one anyway, twenty lines further down the same
+        # module, until a review put the two side by side.
+        raise ValueError(
+            f"refusing to capture {slug!r} from an incomplete listing: "
+            "a fixture built from one has the wrong ratios, and ratios are what "
+            "modality detection decides on"
+        )
+
     destination = Path(destination)
     (destination / "data").mkdir(parents=True, exist_ok=True)
+    # `data/`, not the destination. One `..` escapes only the subdirectory, so a
+    # file named `../fixture.json` lands inside the capture and overwrites the
+    # manifest being written — a listing entry silently replacing the record of
+    # what was listed.
+    data_root = (destination / "data").resolve()
 
     captured: list[CapturedFile] = []
     listed: list[str] = []
+    escaped: list[str] = []
     for entry in listing.files:
+        if not _contained(data_root / entry.name, data_root):
+            # A name the API supplied, joined to a path we chose. `capture` opens
+            # with "read-only by construction", and a tool that writes outside
+            # the directory it was pointed at has broken that whatever the source
+            # of the name. Recorded, not silently dropped.
+            escaped.append(entry.name)
+            continue
         if Path(entry.name).suffix.lower() not in _TABULAR_SUFFIXES:
             # No sha: the API returns none, and an empty column is not a hash of
             # nothing. `listing_source="remote"` on the fixture is what says so.
@@ -169,15 +207,25 @@ def capture_from_listing(
         )
 
     if listed:
-        (destination / "listing.tsv").write_text(
-            "\n".join(listed[:max_listed]) + "\n", encoding="utf-8"
-        )
+        # Whole, or not at all. The count reported below is `len(listed)`, and a
+        # slice here made that a claim about files the fixture did not record —
+        # a provenance record misreporting its own coverage, which is the shape
+        # `tests/fixtures/real_failures/MANIFEST.md` exists because of.
+        (destination / "listing.tsv").write_text("\n".join(listed) + "\n", encoding="utf-8")
 
     unverifiable = {
         "row_count": "headers_only capture keeps a subset of rows",
         "cardinality": "headers_only capture keeps a subset of rows",
         "feature_columns": "no rows, so constant and equals-target exclusions cannot fire",
     }
+    if escaped:
+        # Named, because a file the capture refused is not a file that does not
+        # exist, and a fixture whose listing is quietly short has the wrong
+        # ratios in exactly the way this whole path is built to avoid.
+        unverifiable["listing_completeness"] = (
+            f"{len(escaped)} file(s) were refused for naming a path outside the "
+            f"capture directory: {', '.join(sorted(escaped)[:3])}"
+        )
     if listed:
         unverifiable["byte_fidelity"] = (
             f"{len(listed)} file(s) are recorded by name and size from the Kaggle API, "

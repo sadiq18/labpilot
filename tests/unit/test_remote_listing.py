@@ -145,6 +145,91 @@ def test_a_non_rate_limit_error_is_not_retried() -> None:
 # --- capture from a listing --------------------------------------------------------
 
 
+def test_an_incomplete_listing_is_refused(tmp_path: Path) -> None:
+    """Review finding: the field was declared and never checked.
+
+    `fetch_listing` refuses to *return* a partial listing because its counts and
+    ratios are the fixture's entire content. This path built one anyway, twenty
+    lines further down the same module — the guard and the violation were in one
+    file, written the same afternoon.
+    """
+    partial = RemoteListing(slug="c", files=(RemoteFile("a.png", 1),), complete=False)
+
+    with pytest.raises(ValueError, match="incomplete listing"):
+        capture_from_listing(partial, tmp_path, slug="c", fetch=lambda n, t: None)
+
+
+def test_the_whole_listing_is_written_or_none_of_it(tmp_path: Path) -> None:
+    """Review finding: a cap truncated the listing and the fixture reported the
+    pre-truncation count.
+
+    A provenance record that misstates its own coverage is worse than one that
+    omits it — `tests/fixtures/real_failures/MANIFEST.md` exists because a
+    79-byte fragment once claimed to be 624 bytes. `biohub` is ≥23,800 files, so
+    the old 50,000 default was a cap already measured as reachable.
+    """
+
+    def fetch(name: str, target: Path) -> None:  # pragma: no cover - no tables here
+        raise AssertionError("nothing tabular in this listing")
+
+    names = [f"img_{i:05}.png" for i in range(1200)]
+    fixture = capture_from_listing(_listing(names), tmp_path, slug="c", fetch=fetch)
+
+    rows = (tmp_path / "listing.tsv").read_text(encoding="utf-8").strip().splitlines()
+    assert len(rows) == 1200
+    assert "1200 file(s)" in fixture.unverifiable["byte_fidelity"], "the count must match"
+
+
+def test_a_name_that_escapes_the_destination_is_refused(tmp_path: Path) -> None:
+    """Review finding. `capture` opens with "read-only by construction", and a
+    tool that writes outside the directory it was pointed at has broken that
+    whatever supplied the name.
+
+    Refused and *recorded*: a file the capture would not take is not a file that
+    does not exist, and a quietly short listing has the wrong ratios in exactly
+    the way this path is built to avoid.
+    """
+    destination = tmp_path / "dest"
+    listing = RemoteListing(
+        slug="c",
+        files=(
+            # Out of the capture entirely.
+            RemoteFile("../../escaped.csv", 10),
+            # And the nastier one: only out of `data/`, which lands on the
+            # manifest. Checking containment against the destination rather than
+            # `data/` lets this through, and the fixture's own record of what it
+            # listed is what gets overwritten.
+            RemoteFile("../fixture.json", 10),
+            RemoteFile("ok.png", 10),
+        ),
+        complete=True,
+    )
+
+    fixture = capture_from_listing(
+        listing, destination, slug="c", fetch=lambda n, t: t.write_text("id\n", encoding="utf-8")
+    )
+
+    assert not (tmp_path / "escaped.csv").exists()
+    assert not (tmp_path.parent / "escaped.csv").exists()
+    refused = fixture.unverifiable["listing_completeness"]
+    assert "escaped.csv" in refused and "fixture.json" in refused
+    assert "ok.png" in (destination / "listing.tsv").read_text(encoding="utf-8")
+    assert fixture.slug == "c", "the manifest survived"
+
+
+def test_the_cli_is_the_production_caller() -> None:
+    """Review finding: neither entry point had one, so the feature was reachable
+    only from tests — the same gap #164 and #165 needed noted after review."""
+    import inspect
+
+    from labpilot.cli import bench_cli
+
+    source = inspect.getsource(bench_cli)
+
+    assert "fetch_listing(slug, api)" in source
+    assert "capture_from_listing(" in source
+
+
 def _listing(names: list[str]) -> RemoteListing:
     return RemoteListing(
         slug="comp", files=tuple(RemoteFile(n, 4_500_000) for n in names), complete=True
