@@ -55,6 +55,12 @@ CRITERIA = (
     "feature_columns",
     "metric_name",
     "abstention",
+    # M24 tier 1's "dummy baseline 100%", read honestly: not that the floor
+    # scored well — a floor that scored well is a gate no model can pass — but
+    # that the dumbest defensible answer produces a submission the competition
+    # would accept. Scored by the harness rather than declared per fixture,
+    # because it is a property of the run and not of the capture.
+    "dummy_baseline",
 )
 
 
@@ -110,7 +116,10 @@ def _matches(expected: object, observed: object) -> bool:
 
 
 def score_fixture(
-    fixture: CompetitionFixture, profile: dict, open_questions: list[str]
+    fixture: CompetitionFixture,
+    profile: dict,
+    open_questions: list[str],
+    dummy: object | None = None,
 ) -> Scorecard:
     """Compare a serialized profile against what the fixture says is true.
 
@@ -123,6 +132,9 @@ def score_fixture(
     for criterion in CRITERIA:
         if criterion == "abstention":
             results.append(_score_abstention(fixture, open_questions))
+            continue
+        if criterion == "dummy_baseline":
+            results.append(_score_dummy(dummy))
             continue
         # `must_ask` first. A field that is both expected-to-be-asked and
         # unverifiable reported "the capture cannot say" when the truth is "the
@@ -166,6 +178,31 @@ def score_fixture(
             )
         )
     return Scorecard(slug=fixture.slug, results=results)
+
+
+def _score_dummy(dummy: object | None) -> CriterionResult:
+    """Whether the floor emitted a submission the competition would accept.
+
+    `None` means nobody tried, which is what a headers-only capture leaves: with
+    no rows there is no constant to fit and no sample to shape, so the criterion
+    is `unverifiable` rather than failed. Scoring it as a miss would be measuring
+    the truncation, which is the rule the whole corpus runs on.
+    """
+    if dummy is None:
+        return CriterionResult(
+            criterion="dummy_baseline",
+            verdict="unverifiable",
+            detail="no rows in this capture, so no submission could be emitted",
+        )
+    valid = bool(getattr(dummy, "valid", False))
+    reasons = list(getattr(dummy, "reasons", ()) or [])
+    return CriterionResult(
+        criterion="dummy_baseline",
+        verdict="pass" if valid else "fail",
+        expected=json.dumps("a submission the competition would accept"),
+        observed=json.dumps("valid" if valid else reasons[:3]),
+        detail="" if valid else "; ".join(reasons),
+    )
 
 
 def _score_abstention(fixture: CompetitionFixture, open_questions: list[str]) -> CriterionResult:

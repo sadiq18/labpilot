@@ -182,10 +182,18 @@ Two criteria the original brief did not have:
 
 ## Three tiers
 
-- **Tier 1 — hermetic, every PR.** All schema/metric/validation/modality scoring,
-  plus dummy-baseline **validity**: it runs, emits a submission with exactly the
-  sample's columns and row count, no NaN, only labels seen in training. That is
-  the honest reading of *"dummy 100%"*. Under 60 seconds.
+- **Tier 1 — hermetic, every PR.** ✅ All schema/metric/validation/modality
+  scoring, plus dummy-baseline **validity**: it runs, emits a submission with
+  exactly the sample's columns and row count, no NaN, only labels seen in
+  training. That is the honest reading of *"dummy 100%"*. Under 60 seconds.
+
+  **The criterion is `unverifiable` on every fixture today**, and honestly so:
+  the corpus is headers-only, and with no rows there is no constant to fit and
+  no sample to shape. Scoring that as a miss would measure the truncation. The
+  claim is therefore checked against real data in
+  `tests/integration/test_dummy_baseline_on_real_data.py` — three competitions
+  pass, and making it scoreable in the hermetic tier needs fixtures that carry
+  rows, which is a per-fixture licence decision rather than a code change.
 - **Tier 2 — full data, nightly.** Row counts, cardinality, distributions, real
   media probing, undecimated rogii, and **generic-beats-dummy**, defined as
   strictly better in the metric's declared direction *by more than the
