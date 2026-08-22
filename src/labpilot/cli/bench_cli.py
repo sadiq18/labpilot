@@ -16,6 +16,7 @@ from rich.table import Table
 
 from labpilot.accessor.benchmark.capture import capture_competition
 from labpilot.accessor.benchmark.fixture import load_fixture
+from labpilot.accessor.benchmark.ledger import corpus_hash, load_ledger
 from labpilot.accessor.benchmark.score import CRITERIA, profile_and_score
 
 bench_app = typer.Typer(
@@ -105,12 +106,32 @@ def score(
     console.print(table)
 
     console.print(f"\nUnderstood (every applicable criterion passes): {understood}/{len(slugs)}")
+
+    ledger = load_ledger(corpus)
     for criterion, verdicts in per_criterion.items():
         scored = [v for v in verdicts if v in ("pass", "fail", "known_failure")]
         if not scored:
             continue
         passed = sum(1 for v in scored if v == "pass")
-        console.print(f"  {criterion:26} {passed}/{len(scored)} of the fixtures that can score it")
+        line = f"  {criterion:26} {passed}/{len(scored)} of the fixtures that can score it"
+        # The floor beside the number, because a rate on its own says nothing
+        # about whether it may drop. The gap to the goal is the point of the
+        # ratchet: 0.95 asserted on day one makes the suite red and teaches
+        # everyone to ignore it.
+        floor = (ledger.floors if ledger else {}).get(criterion)
+        if floor is not None:
+            reached = passed / len(scored)
+            mark = "" if reached >= floor else "  [red]below floor[/red]"
+            goal = "" if reached >= (ledger.goal if ledger else 1.0) else "  [dim]< goal[/dim]"
+            line += f"  [dim](floor {floor:.2f})[/dim]{mark}{goal}"
+        console.print(line)
+
+    if ledger is not None:
+        stale = "" if ledger.corpus_hash == corpus_hash(corpus) else "  [yellow](stale)[/yellow]"
+        console.print(
+            f"\n[dim]corpus {corpus_hash(corpus)[:12]} · floors recorded "
+            f"{ledger.recorded_at} · goal {ledger.goal:.2f}[/dim]{stale}"
+        )
 
 
 @bench_app.command("show")

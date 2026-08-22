@@ -224,11 +224,13 @@ maximized — recording its single genuine improvement as `rejected`.
 
 ## Exit criteria
 
-1. A scorecard exists, is reproducible across two runs except its timestamp, and
-   is pinned to a corpus hash.
-2. Thresholds are a **ratchet starting at today's measured value**, with 95%
+1. ✅ A scorecard exists, is reproducible across two runs except its timestamp, and
+   is pinned to a corpus hash. `RATCHET.json` carries the digest; `bench score`
+   prints it.
+2. ✅ Thresholds are a **ratchet starting at today's measured value**, with 95%
    recorded as the goal. Asserting 95% on day one makes the suite red and teaches
-   everyone to ignore it.
+   everyone to ignore it. Recorded 2026-08-22; it fails in both directions, so an
+   improvement is raised rather than absorbed.
 3. The ledger is **bidirectional** — CI fails on `pass → fail` *and* on
    `known_fail → pass` (*"this now passes; update the ledger"*). Silently
    absorbing improvements is how a ratchet rots.
