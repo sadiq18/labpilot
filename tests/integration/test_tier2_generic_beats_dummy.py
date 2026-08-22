@@ -32,7 +32,14 @@ from labpilot.research_engine.execution.baseline.selector import ValidationPlan
 
 CORPUS = Path(__file__).resolve().parents[1] / "fixtures" / "competitions"
 _ENV_ROOT = "LABPILOT_CORPUS_FULL_DATA"
-_CACHE_ENV = "LABPILOT_KAGGLE_CACHE_DIR"
+#: The default Kaggle cache, hardcoded rather than read from
+#: `LABPILOT_KAGGLE_CACHE_DIR`. That variable *cannot* be read here: the autouse
+#: `_no_real_dotenv_in_tests` fixture deletes it from the environment so
+#: `Settings` cannot pick up a developer's real cache, so a test reading it
+#: always saw `None`. The first version of this file read it anyway and printed
+#: it in the skip message, which advertised a knob that silently did nothing —
+#: an operator who set it got skips naming the very path they had overridden.
+#: `_ENV_ROOT` is not on that list and does work, so it is the knob offered.
 _DEFAULT_CACHE = Path.home() / "workspace" / ".labpilot-cache" / "kaggle"
 
 #: `(slug, target_type)`. The shape a generic model can be fitted on today: one
@@ -52,7 +59,7 @@ def _candidates(fixture: CompetitionFixture) -> list[Path]:
     override = os.environ.get(_ENV_ROOT)
     if override:
         found.append(Path(override) / fixture.slug)
-    found.append(Path(os.environ.get(_CACHE_ENV) or _DEFAULT_CACHE) / fixture.slug)
+    found.append(_DEFAULT_CACHE / fixture.slug)
     if fixture.source and not fixture.source.startswith("kaggle"):
         found.append(Path(fixture.source))
     return found
@@ -167,3 +174,20 @@ def test_every_competition_is_accounted_for() -> None:
         f"in the corpus and checked by nothing here: {sorted(unaccounted)}. "
         "Add them to _FITTABLE, or name why they need a different fit."
     )
+
+
+def test_the_knob_the_skip_message_names_actually_works(monkeypatch, tmp_path) -> None:
+    """The skip message tells an operator to set `LABPILOT_CORPUS_FULL_DATA`.
+
+    Review found the sibling variable it also read — `LABPILOT_KAGGLE_CACHE_DIR`
+    — being deleted by an autouse conftest fixture, so setting it did nothing
+    while the message still named the default path. A knob a test advertises has
+    to survive this suite's own environment scrubbing, and only a test that sets
+    it can say whether it does.
+    """
+    fixture = load_fixture(CORPUS / "titanic")
+    monkeypatch.setenv(_ENV_ROOT, str(tmp_path))
+
+    candidates = _candidates(fixture)
+
+    assert candidates[0] == tmp_path / "titanic", f"{_ENV_ROOT} was not honoured: {candidates}"

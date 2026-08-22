@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -117,19 +117,33 @@ def test_every_declared_defect_is_a_claim_someone_still_makes(slug: str) -> None
 
     Failing here is a review, not a fix: re-read the reason, and either delete
     it or move `declared` forward in the commit that re-affirms it.
+
+    **This is a hard gate on every pull request, and it has a date.** With the
+    corpus's one declaration dated 2026-08-20 and a 180-day ceiling, it next
+    fires on 2027-02-16 — on whatever change happens to be open that morning,
+    which will have nothing to do with the corpus. That is the criterion working
+    as written, but it should not arrive as a surprise, so the failure message
+    says what to do and this docstring says when.
     """
     fixture = load_fixture(CORPUS / slug)
     today = date.today()
 
     for criterion, declared in sorted(fixture.known_failures.items()):
-        assert declared.declared <= today, (
-            f"{slug}: {criterion} is declared {declared.declared}, in the future"
+        # A day of grace, because `date.today()` is the *runner's* local date. A
+        # contributor east of UTC declares a failure on their calendar day and
+        # writes that date; a UTC runner an hour later still calls it tomorrow
+        # and would fail a fixture that is entirely correct. One day covers every
+        # real offset, and a date a year out is still caught.
+        assert declared.declared <= today + timedelta(days=1), (
+            f"{slug}: {criterion} is declared {declared.declared}, "
+            f"which is more than a day ahead of {today}"
         )
         assert not declared.is_stale(today), (
             f"{slug}: {criterion} was declared {declared.declared}, "
             f"{declared.age_days(today)} days ago and unreviewed since "
             f"(ceiling {STALE_AFTER_DAYS}). Re-read it: delete it if it is fixed, "
-            f"re-date it if it still holds."
+            f"re-date it if it still holds. This blocks unrelated work until one "
+            f"of those happens, which is the point — but do the review, not a bump."
         )
 
 

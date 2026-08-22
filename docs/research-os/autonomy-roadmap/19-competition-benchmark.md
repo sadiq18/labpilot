@@ -189,11 +189,31 @@ Two criteria the original brief did not have:
 
   **The criterion is `unverifiable` on every fixture today**, and honestly so:
   the corpus is headers-only, and with no rows there is no constant to fit and
-  no sample to shape. Scoring that as a miss would measure the truncation. The
-  claim is therefore checked against real data in
-  `tests/integration/test_dummy_baseline_on_real_data.py` — three competitions
-  pass, and making it scoreable in the hermetic tier needs fixtures that carry
-  rows, which is a per-fixture licence decision rather than a code change.
+  no sample to shape. Scoring that as a miss would measure the truncation. Give a
+  fixture rows and it scores for real — `score_full_dataset` already returns
+  `pass` for titanic, spaceship-titanic and house-prices — so the remaining
+  blocker is a per-fixture licence decision rather than a code change.
+
+  **The first version of this did not run at all.** `score_fixture` took a
+  `dummy` argument, `_score_directory` was its only caller, and it never passed
+  one — so every fixture reported `unverifiable` because nothing had been
+  computed, and tier 3 reported the same thing while reading the real dataset
+  with every row it has. The verdict was right by accident, which is the failure
+  this corpus exists to catch, one level up. `_dummy_reading` now runs it from
+  the profile the scorer already built, and
+  `tests/unit/test_dummy_criterion_is_wired.py` builds a dataset with rows so
+  that an unwired scorer fails rather than agreeing with a wired one.
+
+  **`fail` means the submission was built and would be rejected — nothing else.**
+  A floor that is not a point prediction (AUC's analytic 0.5, logloss's
+  probability vector, rogii's `anchor_carry_forward`) has no constant to write
+  into a column, and reporting that as invalid accuses a working pipeline of
+  being unable to hand in a file. Those are `unverifiable`, carrying the reason.
+  And whether the prediction must be a training label is the **metric's**
+  question, never the target values': an ordinal target scored by RMSE has few
+  repeating values and a fractional optimum, and a value-shape rule rejected the
+  floor's own answer. `SalePrice` escaped that rule on 663 distinct values, not
+  on being right.
 - **Tier 2 — full data, nightly.** ✅ (generic-beats-dummy) Row counts,
   cardinality, distributions, real media probing, undecimated rogii, and
   **generic-beats-dummy**, defined as strictly better in the metric's declared
@@ -264,8 +284,15 @@ maximized — recording its single genuine improvement as `rejected`.
    `declared` forward in the commit that re-affirms it.
 6. Tier 1 and tier 2 agree on every tier-1 criterion for every fixture, or the
    disagreeing criterion is demoted to `unverifiable`.
-7. `pytest.skip` when the full-data cache is absent is **loud** — never a silent
-   pass. `capability.py:333` documents exactly that bug.
+7. ✅ `pytest.skip` when the full-data cache is absent is **loud** — never a silent
+   pass. `capability.py:333` documents exactly that bug. Each skip names every
+   path it looked in *and* the job refuses to go green: `pytest` exits 0 when
+   everything skips, so `-rs` alone left the nightly reporting success over a
+   runner with no datasets — the failure mode described, shipped. `tier2.yml`
+   now reads its own junit report and fails on any skip. A first draft asked
+   only for one non-skipped test and passed a dataset-less run, because
+   `test_every_competition_is_accounted_for` needs no data; "we checked the
+   fixture list" is not the check.
 
 ## Traps
 

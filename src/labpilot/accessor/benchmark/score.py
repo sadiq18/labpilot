@@ -193,17 +193,22 @@ def _declared_defect(fixture: CompetitionFixture, criterion: str) -> str:
 def _score_dummy(dummy: object | None) -> CriterionResult:
     """Whether the floor emitted a submission the competition would accept.
 
-    `None` means nobody tried, which is what a headers-only capture leaves: with
-    no rows there is no constant to fit and no sample to shape, so the criterion
-    is `unverifiable` rather than failed. Scoring it as a miss would be measuring
-    the truncation, which is the rule the whole corpus runs on.
+    Three outcomes, because the check has three. `fail` is reserved for a
+    submission that was actually built and would actually be rejected; anything
+    that stopped the check from being made is `unverifiable`, carrying the reason
+    so nobody has to guess which it was. Collapsing those two is how a
+    headers-only capture, or an AUC competition whose floor is a theorem, comes
+    to read as a baseline that cannot produce a file.
     """
     if dummy is None:
         return CriterionResult(
             criterion="dummy_baseline",
             verdict="unverifiable",
-            detail="no rows in this capture, so no submission could be emitted",
+            detail="nothing ran the dummy baseline for this capture",
         )
+    blocked = str(getattr(dummy, "unverifiable_reason", "") or "")
+    if blocked:
+        return CriterionResult(criterion="dummy_baseline", verdict="unverifiable", detail=blocked)
     valid = bool(getattr(dummy, "valid", False))
     reasons = list(getattr(dummy, "reasons", ()) or [])
     return CriterionResult(
@@ -278,7 +283,77 @@ def _score_directory(
     source = LocalFileSource(Path(directory), declared)
     profile = TabularProfiler(ProfilerConfig()).profile_dataset(source, fixture.slug)
     questions = [question.field for question in pending_schema_questions(profile)]
-    return score_fixture(fixture, json.loads(profile.model_dump_json()), questions)
+    return score_fixture(
+        fixture,
+        json.loads(profile.model_dump_json()),
+        questions,
+        _dummy_reading(profile, Path(directory)),
+    )
+
+
+def _dummy_reading(profile: object, directory: Path) -> object | None:
+    """Run the dummy baseline against this directory, or say why it could not.
+
+    Wired here rather than left to the caller because `_score_directory` is the
+    only path into the scorer, and a `dummy` parameter nobody supplies is a
+    criterion that reports `unverifiable` forever while reading as though it were
+    measured. That is what the first version did: every fixture scored
+    `unverifiable` because nothing computed a check, not because the capture was
+    headers-only — and tier 3, which reads the real dataset with all its rows,
+    scored `unverifiable` for the same non-reason.
+
+    Everything needed is already on the profile: the train table, the sample
+    submission, the target and the metric. Nothing is re-derived here, because a
+    second opinion about which file is the sample submission is a second answer
+    that can disagree with the one being scored.
+    """
+    from labpilot.research_engine.execution.baseline.floor import compute_floor
+    from labpilot.research_engine.execution.baseline.selector import ValidationPlan
+    from labpilot.research_engine.execution.baseline.submission import (
+        SubmissionCheck,
+        dummy_submission_is_valid,
+    )
+
+    target = getattr(profile, "target_column", None)
+    train_file = getattr(profile, "train_file", None)
+    sample_file = getattr(profile, "sample_submission_file", None)
+    metric = getattr(profile, "metric", None)
+
+    if not target:
+        return SubmissionCheck.unverifiable("no target column was resolved")
+    if not train_file or not sample_file:
+        missing = "train table" if not train_file else "sample submission"
+        return SubmissionCheck.unverifiable(f"this capture has no {missing}")
+    metric_key = str(getattr(metric, "key", "") or "")
+    direction = str(getattr(metric, "direction", "") or "")
+    if not metric_key or not direction:
+        return SubmissionCheck.unverifiable("the metric is unresolved, so there is no floor to fit")
+
+    import pandas as pd
+
+    try:
+        train = pd.read_csv(directory / train_file)
+        sample = pd.read_csv(directory / sample_file)
+    except (OSError, ValueError) as exc:
+        return SubmissionCheck.unverifiable(f"could not read the tables: {exc}")
+    if train.empty or sample.empty:
+        return SubmissionCheck.unverifiable(
+            "no rows: a headers-only capture cannot emit a submission, "
+            "and cannot say whether one would be valid"
+        )
+    if target not in train.columns:
+        return SubmissionCheck(False, (f"the training table has no {target!r} column",))
+
+    floor = compute_floor(
+        train,
+        target=target,
+        plan=ValidationPlan(scheme="kfold", n_splits=5),
+        metric_name=metric_key,
+        direction=direction,
+    )
+    if not floor.is_defined:
+        return SubmissionCheck.unverifiable(f"no floor: {floor.undefined_reason}")
+    return dummy_submission_is_valid(floor, train, sample, target_column=target)
 
 
 #: Verdicts a fixture is *claiming* it can score. `unverifiable` and

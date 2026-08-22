@@ -29,9 +29,53 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
       - name: Run tier 2
-        # `-rs` so the skip reasons are printed. A silent skip here is the whole
-        # failure mode: a nightly job that quietly measures nothing looks
-        # identical to one that measures everything and finds no problem.
-        run: uv run pytest -m tier2 -rs
+        # `-rs` so the skip reasons are printed, and `--junitxml` so the next
+        # step can tell "everything passed" from "nothing ran".
+        run: uv run pytest -m tier2 -rs --junitxml=tier2.xml
         env:
           LABPILOT_CORPUS_FULL_DATA: ${{ vars.LABPILOT_CORPUS_FULL_DATA }}
+
+      # Exit criterion 7, enforced rather than described.
+      #
+      # `pytest` exits 0 when every test skips, so the previous version of this
+      # job went green on a runner with no datasets — which is precisely the
+      # failure mode the file claims to prevent: a nightly that quietly measures
+      # nothing looks identical to one that measures everything and finds no
+      # problem. `-rs` prints the reasons into a log nobody opens when the check
+      # is green, so the loudness that matters for a scheduled job is the job's
+      # own status.
+      #
+      # `if: always()` so a job whose tests failed still reports coverage rather
+      # than hiding it behind the earlier failure.
+      - name: Refuse a run that measured nothing
+        if: always()
+        run: |
+          python - <<'EOF'
+          import sys, xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path("tier2.xml")
+          if not report.is_file():
+              sys.exit("tier2 produced no report at all")
+          suite = ET.parse(report).getroot()
+          cases = list(suite.iter("testcase"))
+          skipped = [c for c in cases if c.find("skipped") is not None]
+          print(f"tier2: {len(cases) - len(skipped)} measured, {len(skipped)} skipped")
+          if not cases:
+              sys.exit("tier2 collected no tests at all")
+          # Any skip, not merely a total wipeout. A first draft of this gate
+          # asked for one non-skipped test and passed a dataset-less run, because
+          # `test_every_competition_is_accounted_for` needs no data — so "we
+          # checked the fixture list" satisfied a check meant to prove the
+          # datasets were read. A competition this job could not measure is a
+          # competition tonight did not cover, whichever one it was.
+          if skipped:
+              for case in skipped:
+                  print(f"  skipped: {case.get('name')}")
+              sys.exit(
+                  f"tier2 skipped {len(skipped)} test(s) for want of the full datasets. "
+                  "Set the LABPILOT_CORPUS_FULL_DATA repository variable to a directory "
+                  "holding <slug>/ per competition. A green run here would claim a "
+                  "nightly check that did not happen."
+              )
+          EOF

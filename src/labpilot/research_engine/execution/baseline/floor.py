@@ -41,7 +41,10 @@ from labpilot.research_engine.execution.metrics import compute_metric
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CONSTANT_STRATEGIES",
     "FLOOR_FILENAME",
+    "LABEL_STRATEGIES",
+    "NON_CONSTANT_STRATEGIES",
     "fingerprint_of",
     "folds_for",
     "FloorReading",
@@ -76,6 +79,31 @@ _STRATEGIES_BY_METRIC: dict[str, tuple[str, ...]] = {
     "auc": (),
     "roc_auc": (),
     "roc-auc": (),
+}
+
+#: Strategies that predict one value for every row, and can therefore be written
+#: into a submission column.
+#:
+#: Split out because a caller that needs a constant must be able to ask *before*
+#: asking, and get an explanation rather than an exception when the answer is no.
+#: `_constant_for` raising `unknown floor strategy` at a caller who simply has a
+#: `class_prior` floor turns "this metric's floor is not a point prediction" into
+#: "the baseline could not produce a file", which are different claims.
+CONSTANT_STRATEGIES = ("mean", "median", "log_mean", "majority_class")
+
+#: Of those, the ones whose constant is a **label from the training set** rather
+#: than a number computed from it. The distinction is the metric's to make, not
+#: the target values': an ordinal target scored by RMSE has few repeating values
+#: and a fractional optimal constant, and a rule that read the values alone would
+#: reject that constant as a label nobody has seen.
+LABEL_STRATEGIES = ("majority_class",)
+
+#: And what the rest predict instead, phrased for a reader who has to be told why
+#: no constant is coming.
+NON_CONSTANT_STRATEGIES: dict[str, str] = {
+    "class_prior": "predicts a probability vector, not a point value",
+    "constant_prediction": "is an analytic floor, with no prediction behind it",
+    "anchor_carry_forward": "carries a value per row, so there is no one constant",
 }
 
 #: Metrics whose floor is a theorem rather than a measurement. A constant
