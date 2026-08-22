@@ -1240,8 +1240,40 @@ class TabularProfiler:
         # operator chooses from evidence rather than from a list of names.
         if sample_table is not None:
             scored = [name for name in submission_columns if name not in set(profile.id_columns)]
+            # An answer settles it, and must survive this branch.
+            #
+            # Review of my own first version: the refusal below ran
+            # unconditionally, so an operator who answered the very question it
+            # raises had their answer honoured by `_answered` and then discarded
+            # here. `pending_schema_questions` skips answered fields, so no
+            # question came back either — the profile ended up with no target and
+            # nothing asking for one, and a campaign ran against it. That is
+            # worse than the `ValueError` this replaced, which at least stopped:
+            # it made the question askable but unanswerable, on exactly the
+            # competitions this change exists to unblock.
+            #
+            # `answer and not refused` is `_key_columns`' own test for the same
+            # thing, kept identical so the two cannot drift.
+            target_is_answered = bool(answers.get("target_column")) and not refused
+            # One question about the template's shape, asked once, so the four
+            # outcomes stay mutually exclusive. A first attempt tested
+            # `not target_is_answered` inside the multi-output condition and let
+            # the answered case fall through to the next branch, which then filed
+            # `encoded_target_template` — "none of which train holds" — about
+            # columns train demonstrably holds.
             multi_output = len(scored) > 1 and profile._scored_are_train_columns(scored)
-            if multi_output:
+            if multi_output and target_is_answered:
+                # Still multi-output — `target_type` says so from the template —
+                # but a person has named which column they are predicting, and
+                # that is the one thing the profiler was missing.
+                _note(
+                    profile,
+                    "multi_output_template_answered",
+                    f"the template scores {len(scored)} columns ({', '.join(scored)}); "
+                    f"an operator named {profile.target_column!r} as the target",
+                    field="target_column",
+                )
+            elif multi_output:
                 profile.target_column = None
                 profile.inferences["target_column"] = Inference.of(
                     [],
@@ -1267,6 +1299,24 @@ class TabularProfiler:
                     "encoded_target_template",
                     f"the template scores {len(scored)} columns none of which train holds "
                     f"({', '.join(scored)}); read as one target written out",
+                    field="submission_columns",
+                )
+            elif len(scored) == 1 and profile.target_column and scored[0] != profile.target_column:
+                # The other half of what the removed guard checked.
+                #
+                # `[Id, Prediction]` against a `SalePrice` target used to raise.
+                # Accepting it is right — competitions rename the scored column
+                # all the time — but accepting it *silently* is not: the profile
+                # would record a target and a template that do not correspond,
+                # with nothing to say whether that was checked and allowed or
+                # simply never looked at. Everything else this profiler cannot
+                # confirm gets a note, and so does this.
+                _note(
+                    profile,
+                    "template_column_is_not_the_target",
+                    f"the template scores {scored[0]!r}, which is not the resolved target "
+                    f"{profile.target_column!r}; the submission is written under the "
+                    "template's name",
                     field="submission_columns",
                 )
 
