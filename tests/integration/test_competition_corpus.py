@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from labpilot.accessor.benchmark.fixture import load_fixture
+from labpilot.accessor.benchmark.fixture import STALE_AFTER_DAYS, load_fixture
 from labpilot.accessor.benchmark.score import CRITERIA, profile_and_score
 
 CORPUS = Path(__file__).resolve().parents[1] / "fixtures" / "competitions"
@@ -101,6 +102,35 @@ def test_a_known_failure_is_red_on_purpose(tmp_path: Path) -> None:
     assert card.verdict_for("metric_name") == "known_failure", (
         "metric_name now passes — remove it from the fixture's known_failures"
     )
+
+
+@pytest.mark.parametrize("slug", corpus_slugs())
+def test_every_declared_defect_is_a_claim_someone_still_makes(slug: str) -> None:
+    """M24 exit criterion 5, the half the schema cannot enforce.
+
+    The *goes-green* half is already covered: `test_a_captured_competition_is_
+    understood` requires the scorecard's red cells and the fixture's declared
+    ones to be the same set, so a defect that quietly starts passing fails the
+    corpus. What that cannot catch is a declaration that is still accurate about
+    a codebase from a year ago — it stays red, stays true, and stops being
+    something anybody has thought about.
+
+    Failing here is a review, not a fix: re-read the reason, and either delete
+    it or move `declared` forward in the commit that re-affirms it.
+    """
+    fixture = load_fixture(CORPUS / slug)
+    today = date.today()
+
+    for criterion, declared in sorted(fixture.known_failures.items()):
+        assert declared.declared <= today, (
+            f"{slug}: {criterion} is declared {declared.declared}, in the future"
+        )
+        assert not declared.is_stale(today), (
+            f"{slug}: {criterion} was declared {declared.declared}, "
+            f"{declared.age_days(today)} days ago and unreviewed since "
+            f"(ceiling {STALE_AFTER_DAYS}). Re-read it: delete it if it is fixed, "
+            f"re-date it if it still holds."
+        )
 
 
 # --- the corpus says what it is ---------------------------------------------

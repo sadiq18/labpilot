@@ -251,8 +251,17 @@ maximized — recording its single genuine improvement as `rejected`.
    `known_fail → pass` (*"this now passes; update the ledger"*). Silently
    absorbing improvements is how a ratchet rots.
 4. Adding a competition requires **zero test-file edits**.
-5. Every `known_failure` carries a reason and a date; a stale xfail is a lie about
-   intent.
+5. ✅ Every `known_failure` carries a reason and a date; a stale xfail is a lie about
+   intent. `KnownFailure` requires both and refuses the bare-reason shape by name,
+   rather than coercing it — accepting a string would have been the easy migration
+   and would have left every later fixture undated, which is the state the
+   criterion exists to end. Three things can now go wrong and each is caught: it
+   starts passing (the scorecard's red cells and the fixture's declared ones must
+   be the same set), it is declared in the future, or nobody has re-read it in
+   `STALE_AFTER_DAYS` — a deadline for the *claim*, not for the fix, because a
+   cause nobody has revisited in six months describes code that may no longer
+   exist. Failing the last one is a review, not a repair: delete the entry or move
+   `declared` forward in the commit that re-affirms it.
 6. Tier 1 and tier 2 agree on every tier-1 criterion for every fixture, or the
    disagreeing criterion is demoted to `unverifiable`.
 7. `pytest.skip` when the full-data cache is absent is **loud** — never a silent

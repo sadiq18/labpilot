@@ -174,10 +174,20 @@ def score_fixture(
                 verdict=verdict,
                 expected=json.dumps(expected),
                 observed=json.dumps(observed),
-                detail=fixture.known_failures.get(criterion, "") if not passed else "",
+                detail=_declared_defect(fixture, criterion) if not passed else "",
             )
         )
     return Scorecard(slug=fixture.slug, results=results)
+
+
+def _declared_defect(fixture: CompetitionFixture, criterion: str) -> str:
+    """The reason a red cell is red, with the date it was last stood behind.
+
+    The date rides along because the detail line is where a reader meets this
+    claim, and a reason without one invites them to assume it is current.
+    """
+    declared = fixture.known_failures.get(criterion)
+    return f"{declared.reason} [declared {declared.declared.isoformat()}]" if declared else ""
 
 
 def _score_dummy(dummy: object | None) -> CriterionResult:

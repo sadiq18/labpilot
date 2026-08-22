@@ -56,7 +56,10 @@
     "feature_columns": "no rows, so constant and equals-target exclusions cannot fire"
   },
   "known_failures": {
-    "metric_name": "the captured competition.json says {\"name\": \"balanced_accuracy_score\", \"key\": \"accuracy\"} \u2014 written 2026-07-30 by the substring mapper #145 replaced. Today's parser resolves it correctly, but nothing re-derives a stored spec, so every workspace captured before #145 still carries the wrong key. Goes green when a stale competition.json is re-resolved."
+    "metric_name": {
+      "reason": "the captured competition.json says {\"name\": \"balanced_accuracy_score\", \"key\": \"accuracy\"} \u2014 written 2026-07-30 by the substring mapper #145 replaced. Today's parser resolves it correctly, but nothing re-derives a stored spec, so every workspace captured before #145 still carries the wrong key. Goes green when a stale competition.json is re-resolved.",
+      "declared": "2026-08-20"
+    }
   },
   "notes": "The metric-synonym fixture. Ships red on purpose: balanced accuracy is not accuracy, and the number a campaign optimises here is the wrong one."
 }

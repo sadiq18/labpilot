@@ -265,5 +265,8 @@ def show(
         console.print(f"  {entry.path:44} {entry.mode:14} {rows}")
     for criterion, reason in sorted(fixture.unverifiable.items()):
         console.print(f"  [dim]unverifiable[/dim] {criterion} — {reason}")
-    for criterion, reason in sorted(fixture.known_failures.items()):
-        console.print(f"  [yellow]known failure[/yellow] {criterion} — {reason}")
+    for criterion, declared in sorted(fixture.known_failures.items()):
+        console.print(
+            f"  [yellow]known failure[/yellow] {criterion} "
+            f"[dim](declared {declared.declared.isoformat()})[/dim] — {declared.reason}"
+        )

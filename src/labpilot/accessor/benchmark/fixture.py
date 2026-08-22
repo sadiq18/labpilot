@@ -25,16 +25,19 @@ Plan: ``docs/research-os/autonomy-roadmap/19-competition-benchmark.md``
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 __all__ = [
     "CAPTURE_MODES",
+    "STALE_AFTER_DAYS",
     "CapturedFile",
     "CompetitionFixture",
     "Expectations",
+    "KnownFailure",
     "load_fixture",
     "save_fixture",
 ]
@@ -66,6 +69,57 @@ class CapturedFile(BaseModel):
     source_bytes: int
     source_rows: int | None = None
     fixture_rows: int | None = None
+
+
+#: How long a declared defect may sit unreviewed before the corpus calls it stale.
+#:
+#: Not a deadline for the *fix* — plenty of defects are worth carrying for a
+#: year. A deadline for the *claim*: the reason names a cause, and a cause
+#: nobody has re-read in six months describes code that may no longer exist.
+STALE_AFTER_DAYS = 180
+
+
+class KnownFailure(BaseModel):
+    """A criterion this fixture ships red on purpose, and since when.
+
+    Both fields are load-bearing. The reason is what makes a red cell a decision
+    rather than a defect nobody noticed. The date is what makes that decision
+    reviewable — without one, *"we know about it"* is unfalsifiable, and an
+    xfail that has outlived its cause reads exactly like one that has not.
+
+    M24 exit criterion 5: *"a stale xfail is a lie about intent."*
+    """
+
+    reason: str = Field(min_length=1)
+    #: When the failure was **declared**, not when the defect was introduced.
+    #: The reason may name an older date — s6e7's stale spec was written three
+    #: weeks before anyone recorded that it was wrong — and conflating the two
+    #: would age a claim by the lifetime of the bug it describes.
+    declared: date
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_a_bare_reason(cls, value: object) -> object:
+        """The pre-M24 shape was `criterion → reason`. Say what is missing.
+
+        Accepting a bare string here would be the easy migration and would also
+        defeat the criterion: every fixture written afterwards would carry a
+        reason and no date, which is the state this model exists to end.
+        """
+        if isinstance(value, str):
+            raise ValueError(
+                "a known failure needs a date as well as a reason — "
+                '{"reason": ..., "declared": "YYYY-MM-DD"}. '
+                "A reason nobody can date cannot be reviewed."
+            )
+        return value
+
+    def age_days(self, today: date) -> int:
+        """Days since the claim was made. `today` is passed in, never read."""
+        return (today - self.declared).days
+
+    def is_stale(self, today: date) -> bool:
+        return self.age_days(today) > STALE_AFTER_DAYS
 
 
 class Expectations(BaseModel):
@@ -123,9 +177,9 @@ class CompetitionFixture(BaseModel):
     #: criterion → why the capture cannot speak to it. The scorer reports
     #: `unverifiable`, which is not a pass and not a failure.
     unverifiable: dict[str, str] = Field(default_factory=dict)
-    #: criterion → what is wrong today. A fixture that ships red on purpose,
-    #: so the day it goes green is visible instead of silent.
-    known_failures: dict[str, str] = Field(default_factory=dict)
+    #: criterion → what is wrong today, and since when. A fixture that ships red
+    #: on purpose, so the day it goes green is visible instead of silent.
+    known_failures: dict[str, KnownFailure] = Field(default_factory=dict)
     notes: str = ""
 
     @property
