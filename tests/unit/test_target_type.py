@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 from helpers.dataset_sources import DictSource
 
+from labpilot.accessor.profiler.questions import pending_schema_questions
 from labpilot.accessor.profiler.tabular import (
     ColumnProfile,
     DatasetProfile,
@@ -119,14 +120,12 @@ def test_dense_non_negative_integers_are_counts() -> None:
 
 
 def test_a_wide_template_is_multilabel() -> None:
-    """Several scored columns per unit. One of them being the target does not
-    make the task single-output.
+    """Several scored columns per unit, each of them a column of train. One of
+    them being the target does not make the task single-output.
 
-    Asserted on the model rather than through the profiler, because **the
-    profiler cannot produce such a dataset today** — see the test below. The
-    rule belongs here anyway: `DatasetProfile` is loaded from `profile.json` by
-    readers that never ran the profiler, and `feedback-prize` is in M24's corpus
-    precisely to make this reachable.
+    Still asserted on the model as well as through the profiler below, because
+    `DatasetProfile` is loaded from `profile.json` by readers that never ran the
+    profiler — the rule has to hold for a profile that merely arrives.
     """
     profile = DatasetProfile(
         competition="wide",
@@ -134,19 +133,26 @@ def test_a_wide_template_is_multilabel() -> None:
         row_count=4,
         id_columns=["Id"],
         submission_columns=["Id", "a", "b"],
-        columns=[ColumnProfile(name="a", dtype="int64", unique_count=2, is_numeric=True)],
+        columns=[
+            ColumnProfile(name="a", dtype="int64", unique_count=2, is_numeric=True),
+            ColumnProfile(name="b", dtype="int64", unique_count=2, is_numeric=True),
+        ],
     )
 
     assert profile.target_type == "multilabel", "two scored columns, not one"
 
 
-def test_the_profiler_still_refuses_a_wide_template() -> None:
-    """The limitation above, pinned so it is a decision rather than a surprise.
+def test_the_profiler_refuses_a_wide_template_by_asking() -> None:
+    """It used to raise, which made every multi-target competition unprofileable
+    — and unmeasurable, because the exception escaped the benchmark rather than
+    being scored.
 
-    `tabular.py` raises on any submission that is not exactly `[id, target]`.
-    M24's plan names this as the reason `feedback-prize` (six target columns) is
-    in the corpus. This test fails the day that changes, which is when
-    `multilabel` stops being reachable only through a loaded profile.
+    It still refuses, and the refusal is the point: `[Id, a, b]` has no single
+    target column, so naming one would be picking `b` and never mentioning `a`.
+    What changed is the *mechanism*. `Note.severity` is written and never read,
+    so a note alone would have been a silent wrong run; leaving `target_column`
+    unresolved routes it through `pending_schema_questions`, which is what
+    actually stops a campaign, and is how rogii's unresolvable key already works.
     """
     frame = pd.DataFrame(
         {"Id": [1, 2, 3, 4], "x": [1.0, 2, 3, 4], "a": [0, 1, 0, 1], "b": [1, 0, 1, 0]}
@@ -157,8 +163,40 @@ def test_the_profiler_still_refuses_a_wide_template() -> None:
         "sample_submission.csv": frame[["Id", "a", "b"]],
     }
 
-    with pytest.raises(ValueError, match="does not match the inferred ID and target"):
-        TabularProfiler(ProfilerConfig()).profile_dataset(DictSource(tables), "wide")
+    profile = TabularProfiler(ProfilerConfig()).profile_dataset(DictSource(tables), "wide")
+
+    assert profile.target_column is None, "naming one of two targets is the bug, not the fix"
+    assert profile.target_type == "multilabel"
+    assert [q.field for q in pending_schema_questions(profile)] == ["target_column"]
+    assert {a.candidate for a in profile.inferences["target_column"].alternatives} == {"a", "b"}
+    assert any(note.code == "multi_output_template" for note in profile.notes)
+
+
+def test_a_template_of_class_probabilities_is_not_multi_output() -> None:
+    """`class_0, class_1, class_2` is one target written out, not three targets.
+
+    The discriminator is whether train holds the scored columns. Without it,
+    every multiclass competition scored on probabilities reads as `multilabel`
+    and its single, perfectly resolvable target gets refused — which would trade
+    one uncapturable class of competition for another.
+    """
+    n = 60
+    train = pd.DataFrame(
+        {"Id": range(n), "x": [i % 7 for i in range(n)], "y": [i % 3 for i in range(n)]}
+    )
+    tables = {
+        "train.csv": train,
+        "test.csv": train[["Id", "x"]],
+        "sample_submission.csv": pd.DataFrame(
+            {"Id": range(n), "class_0": [0.3] * n, "class_1": [0.3] * n, "class_2": [0.4] * n}
+        ),
+    }
+
+    profile = TabularProfiler(ProfilerConfig()).profile_dataset(DictSource(tables), "probs")
+
+    assert profile.target_column == "y"
+    assert profile.target_type == "multiclass", "three columns of one answer, not three answers"
+    assert pending_schema_questions(profile) == [], "nothing here is ambiguous"
 
 
 def test_an_unresolved_id_does_not_make_a_target_multilabel() -> None:
