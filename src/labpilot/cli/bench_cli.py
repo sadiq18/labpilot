@@ -14,10 +14,17 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from labpilot.accessor.benchmark.capture import capture_competition
+# Module scope, not inside the command. A function-local import rebinds the real
+# name on every call, so a test patching this module's attribute patches
+# something nothing reads — `create=True` silently makes that look like it
+# worked, which is exactly how it was found here and in `baseline_cli`.
+from labpilot.accessor.benchmark.capture import capture_competition, capture_from_listing
 from labpilot.accessor.benchmark.fixture import load_fixture
 from labpilot.accessor.benchmark.ledger import corpus_hash, load_ledger
+from labpilot.accessor.benchmark.remote import ListingUnavailable, fetch_listing
 from labpilot.accessor.benchmark.score import CRITERIA, profile_and_score
+from labpilot.accessor.kaggle.client import KaggleClient
+from labpilot.config import load_config
 
 bench_app = typer.Typer(
     help="Capture competitions into the corpus, and score understanding against it.",
@@ -25,7 +32,11 @@ bench_app = typer.Typer(
 )
 console = Console()
 
-CORPUS = Path("tests/fixtures/competitions")
+#: Resolved against the repository rather than the working directory. A relative
+#: default silently created `tests/fixtures/competitions/<slug>` under whatever
+#: directory an operator happened to be in — most likely a workspace, where the
+#: fixture would never be found.
+CORPUS = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "competitions"
 
 _VERDICT_STYLE = {
     "pass": "green",
@@ -34,6 +45,48 @@ _VERDICT_STYLE = {
     "unverifiable": "dim",
     "not_applicable": "dim",
 }
+
+
+def _listing_rows(destination: Path) -> int:
+    path = destination / "listing.tsv"
+    if not path.is_file():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def _download_to(api: object, slug: str, name: str, target: Path) -> None:
+    """Fetch one competition file and put it exactly at `target`.
+
+    The library does not use `file_name` to name what it writes —
+    `kaggle_api_extended.py` builds `outfile` from the **redirect URL's last
+    segment**, so a large file arrives zipped and any URL whose basename differs
+    from the entry's lands somewhere else entirely. Passing `target.parent` and
+    hoping was right for `titanic/train.csv` and unfounded in general, and the
+    failure was quiet: the digest raised `FileNotFoundError`, the capture caught
+    it, and a table became a name-and-size row without its header.
+
+    So: download into an empty directory, take whatever appeared, and unwrap it
+    if it came zipped.
+    """
+    import shutil
+    import tempfile
+    import zipfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        api.competition_download_file(slug, name, path=scratch, quiet=True)  # type: ignore[attr-defined]
+        arrived = [p for p in Path(scratch).rglob("*") if p.is_file()]
+        if not arrived:
+            raise FileNotFoundError(f"kaggle wrote nothing for {name!r}")
+        source = arrived[0]
+        if source.suffix.lower() == ".zip":
+            with zipfile.ZipFile(source) as archive:
+                inner = [n for n in archive.namelist() if not n.endswith("/")]
+                if not inner:
+                    raise FileNotFoundError(f"{name!r} arrived as an empty archive")
+                with archive.open(inner[0]) as handle, target.open("wb") as out:
+                    shutil.copyfileobj(handle, out)
+            return
+        shutil.move(str(source), target)
 
 
 @bench_app.command("capture-remote")
@@ -54,11 +107,6 @@ def capture_remote(
     Only tabular files are downloaded, because a header is the one thing a
     listing cannot carry.
     """
-    from labpilot.accessor.benchmark.capture import capture_from_listing
-    from labpilot.accessor.benchmark.remote import ListingUnavailable, fetch_listing
-    from labpilot.accessor.kaggle.client import KaggleClient
-    from labpilot.config import load_config
-
     client = KaggleClient(load_config().kaggle)
     try:
         api = client.authenticate()
@@ -77,22 +125,28 @@ def capture_remote(
         f"in the real dataset[/dim]"
     )
 
-    destination = Path(into) / slug
+    destination = Path(into).resolve() / slug
     fixture = capture_from_listing(
         listing,
         destination,
         slug=slug,
-        fetch=lambda name, target: api.competition_download_file(
-            slug, name, path=str(target.parent), quiet=True
-        ),
+        fetch=lambda name, target: _download_to(api, slug, name, target),
         licence=licence,
         redistribution=redistribution,
     )
-    console.print(
+    listed = _listing_rows(destination)
+    refused = len(listing.files) - len(fixture.files) - listed
+    summary = (
         f"[green]Captured[/green] {slug} -> {destination}\n"
-        f"  {len(fixture.files)} table(s) by header, "
-        f"{len(listing.files) - len(fixture.files)} file(s) by name and size"
+        f"  {len(fixture.files)} table(s) by header, {listed} file(s) by name and size"
     )
+    if refused:
+        # Counted from the rows actually written rather than from a subtraction
+        # over two sets that do not partition the listing. The previous version
+        # folded refused entries into "by name and size", which is the same
+        # miscount the fixture's own record had one commit earlier.
+        summary += f", {refused} refused"
+    console.print(summary)
     console.print(
         "\n[dim]Now fill `expected` in fixture.json from the competition's own rules "
         "page — never from what the profiler produced.[/dim]"

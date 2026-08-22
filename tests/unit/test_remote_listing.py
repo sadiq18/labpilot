@@ -217,6 +217,142 @@ def test_a_name_that_escapes_the_destination_is_refused(tmp_path: Path) -> None:
     assert fixture.slug == "c", "the manifest survived"
 
 
+# --- the CLI's own download and reporting -------------------------------------
+
+
+def test_the_download_takes_whatever_arrived(tmp_path: Path) -> None:
+    """Review finding. The library names the output from the redirect URL.
+
+    `kaggle_api_extended.py` builds `outfile` from `url.split("/")[-1]`, not from
+    `file_name` — so passing `target.parent` and hoping was right for
+    `titanic/train.csv` and unfounded in general. The failure was quiet: the
+    digest raised `FileNotFoundError`, the capture caught it, and a table became
+    a name-and-size row without the header five criteria need.
+    """
+    from labpilot.cli.bench_cli import _download_to
+
+    class _Api:
+        def competition_download_file(self, slug, name, path, quiet):
+            # What the library actually does: a name of its own choosing.
+            Path(path, "something-else-entirely.csv").write_text("id,y\n1,2\n", encoding="utf-8")
+
+    target = tmp_path / "data" / "train.csv"
+    target.parent.mkdir(parents=True)
+
+    _download_to(_Api(), "comp", "train.csv", target)
+
+    assert target.read_text(encoding="utf-8") == "id,y\n1,2\n"
+
+
+def test_a_zipped_download_is_unwrapped(tmp_path: Path) -> None:
+    """Kaggle serves larger competition files zipped, and a zip is not a header."""
+    import zipfile
+
+    from labpilot.cli.bench_cli import _download_to
+
+    class _Api:
+        def competition_download_file(self, slug, name, path, quiet):
+            with zipfile.ZipFile(Path(path, "train.csv.zip"), "w") as archive:
+                archive.writestr("train.csv", "id,y\n1,2\n")
+
+    target = tmp_path / "train.csv"
+
+    _download_to(_Api(), "comp", "train.csv", target)
+
+    assert target.read_text(encoding="utf-8") == "id,y\n1,2\n"
+
+
+def test_a_download_that_wrote_nothing_is_an_error(tmp_path: Path) -> None:
+    """Not a silent demotion to a listing row. `capture_from_listing` records
+    the entry either way, but the reason has to reach a log that says which."""
+    from labpilot.cli.bench_cli import _download_to
+
+    class _Api:
+        def competition_download_file(self, slug, name, path, quiet):
+            return None
+
+    with pytest.raises(FileNotFoundError, match="wrote nothing"):
+        _download_to(_Api(), "comp", "train.csv", tmp_path / "train.csv")
+
+
+def test_the_corpus_default_does_not_depend_on_the_working_directory() -> None:
+    """A relative default silently created a corpus under whatever directory the
+    operator happened to be in — most likely a workspace, where nobody finds it."""
+    from labpilot.cli.bench_cli import CORPUS
+
+    assert CORPUS.is_absolute()
+    assert CORPUS.name == "competitions"
+
+
+def test_the_summary_counts_the_rows_it_wrote(tmp_path: Path) -> None:
+    """Review finding, and the second time this exact miscount shipped.
+
+    `len(listing.files) - len(fixture.files)` treats captured and listed as a
+    partition of the listing, and refused entries are in neither — so the console
+    reported files it had not recorded. The fixture's own `unverifiable` count
+    had the same defect one commit earlier; this is it reappearing ten lines away
+    in the output of the commit that fixed it.
+
+    Counted from `listing.tsv` now, which is the thing being described.
+    """
+    from labpilot.cli.bench_cli import _listing_rows
+
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    assert _listing_rows(destination) == 0, "no listing is not some listing"
+
+    (destination / "listing.tsv").write_text("a.png\t1\t\nb.png\t2\t\n\n", encoding="utf-8")
+
+    assert _listing_rows(destination) == 2, "blank lines are not entries"
+
+
+def test_the_command_reports_all_three_categories(tmp_path: Path) -> None:
+    """The summary itself, not just the helper under it.
+
+    The previous version subtracted two sets that do not partition the listing,
+    so refused entries were reported as recorded. Driven through the command so
+    the arithmetic is exercised where it is written.
+    """
+    from unittest import mock
+
+    from typer.testing import CliRunner
+
+    import labpilot.cli.bench_cli as module
+
+    listing = RemoteListing(
+        slug="c",
+        complete=True,
+        files=(
+            RemoteFile("train.csv", 10),
+            RemoteFile("img/a.png", 10),
+            RemoteFile("../../escaped.csv", 10),
+        ),
+    )
+
+    def _download(api, slug, name, target):
+        target.write_text("id,y\n1,2\n", encoding="utf-8")
+
+    with (
+        # No `create=True`. That flag is how an inert mock looks like a
+        # working one: the name must already exist, or the code is reading a
+        # different binding from the one being patched.
+        mock.patch.object(module, "fetch_listing", return_value=listing),
+        mock.patch.object(module, "_download_to", _download),
+        mock.patch(
+            "labpilot.accessor.kaggle.client.KaggleClient.authenticate", lambda self: object()
+        ),
+    ):
+        result = CliRunner().invoke(
+            module.bench_app, ["capture-remote", "c", "--into", str(tmp_path)]
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "1 table(s) by header" in result.output
+    assert "1 file(s) by name and size" in result.output
+    assert "1 refused" in result.output, "refused entries are not 'by name and size'"
+
+
 def test_the_cli_is_the_production_caller() -> None:
     """Review finding: neither entry point had one, so the feature was reachable
     only from tests — the same gap #164 and #165 needed noted after review."""
