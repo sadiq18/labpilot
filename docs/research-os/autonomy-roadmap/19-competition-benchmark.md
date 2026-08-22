@@ -190,8 +190,11 @@ Two criteria the original brief did not have:
   media probing, undecimated rogii, and **generic-beats-dummy**, defined as
   strictly better in the metric's declared direction *by more than the
   fold-to-fold std*. Not "better by any epsilon" — that is noise.
-- **Tier 3 — the agreement check.** Score both the truncated fixture and the full
-  dataset, and assert they agree on every tier-1 criterion.
+- **Tier 3 — the agreement check.** ✅ Score both the truncated fixture and the
+  full dataset, and assert they agree on every tier-1 criterion.
+  `tests/integration/test_corpus_agrees_with_reality.py`, marked `slow` and
+  skipped loudly with every path it looked in. All five fixtures agree today,
+  over 4–5 claimed criteria each, rogii's 1,546 tables included.
 
 **Tier 3 is the single most important test here.** It is what licenses a hermetic
 corpus to stand in for real data. If the two disagree on a criterion, that
