@@ -194,10 +194,18 @@ Two criteria the original brief did not have:
   `tests/integration/test_dummy_baseline_on_real_data.py` — three competitions
   pass, and making it scoreable in the hermetic tier needs fixtures that carry
   rows, which is a per-fixture licence decision rather than a code change.
-- **Tier 2 — full data, nightly.** Row counts, cardinality, distributions, real
-  media probing, undecimated rogii, and **generic-beats-dummy**, defined as
-  strictly better in the metric's declared direction *by more than the
-  fold-to-fold std*. Not "better by any epsilon" — that is noise.
+- **Tier 2 — full data, nightly.** ✅ (generic-beats-dummy) Row counts,
+  cardinality, distributions, real media probing, undecimated rogii, and
+  **generic-beats-dummy**, defined as strictly better in the metric's declared
+  direction *by more than the fold-to-fold std*. Not "better by any epsilon" —
+  that is noise.
+
+  `.github/workflows/tier2.yml`, nightly, `-rs` so skips are loud.
+  Generic-beats-dummy holds on all three fittable competitions today: titanic
+  0.6161 → 0.8216 (gap 0.206 vs spread 0.034), spaceship-titanic 0.4635 → 0.7955
+  (0.332 vs 0.011), house-prices RMSLE 0.3992 → 0.1317 (0.268 vs 0.011). Row
+  counts, cardinality and media probing are still to come; rogii and
+  playground-series-s6e7 need a partitioned fit and a resolved metric.
 - **Tier 3 — the agreement check.** ✅ Score both the truncated fixture and the
   full dataset, and assert they agree on every tier-1 criterion.
   `tests/integration/test_corpus_agrees_with_reality.py`, marked `slow` and

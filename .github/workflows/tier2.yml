@@ -1,0 +1,37 @@
+# M24 tier 2 — the truth the hermetic corpus is checked against.
+#
+# Nightly rather than per PR, because it needs the full competition datasets:
+# row counts, cardinality, undecimated rogii, and generic-beats-dummy. Tier 1 is
+# the gate and runs on every change; this is what keeps tier 1 honest about what
+# it stands in for.
+#
+# **It will skip on a runner with no datasets, and loudly.** Every skip names the
+# paths it looked in, so "0 failed" over an empty corpus reads as the absence it
+# is rather than as a pass — which is M24's exit criterion 7, and the bug
+# `capability.py:333` documents.
+name: tier2
+
+on:
+  schedule:
+    # 03:00 UTC. Nothing depends on the hour; it is out of the way.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  tier2:
+    name: tier2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Run tier 2
+        # `-rs` so the skip reasons are printed. A silent skip here is the whole
+        # failure mode: a nightly job that quietly measures nothing looks
+        # identical to one that measures everything and finds no problem.
+        run: uv run pytest -m tier2 -rs
+        env:
+          LABPILOT_CORPUS_FULL_DATA: ${{ vars.LABPILOT_CORPUS_FULL_DATA }}

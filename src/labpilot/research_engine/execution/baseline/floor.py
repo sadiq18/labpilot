@@ -96,6 +96,13 @@ class FloorReading(BaseModel):
     metric_name: str
     #: Every strategy tried, and what it scored. The winner is `best_strategy`.
     strategies: dict[str, float] = Field(default_factory=dict)
+    #: The winning strategy's score on each fold, unaggregated.
+    #:
+    #: Tier 2 asks whether a model beats the floor *by more than the fold-to-fold
+    #: std* — "not better by any epsilon, that is noise" — and a mean alone
+    #: cannot answer it. It also makes one catastrophic fold visible instead of
+    #: averaged into something that merely looks mediocre.
+    fold_scores: list[float] = Field(default_factory=list)
     best_strategy: str = ""
     score: float | None = None
     #: The plan this was computed under, copied rather than referenced — a
@@ -386,6 +393,7 @@ def compute_floor(
         )
         return reading
 
+    per_fold: dict[str, list[float]] = {}
     for name in names:
         scores: list[float] = []
         for train_idx, val_idx in folds:
@@ -417,6 +425,7 @@ def compute_floor(
                 break
         if scores:
             reading.strategies[name] = float(np.mean(scores))
+            per_fold[name] = [float(s) for s in scores]
 
     if not reading.strategies:
         reading.undefined_reason = "no strategy could be scored against this target"
@@ -425,6 +434,10 @@ def compute_floor(
     pick = max if direction == "maximize" else min
     reading.best_strategy = pick(reading.strategies, key=lambda k: reading.strategies[k])
     reading.score = reading.strategies[reading.best_strategy]
+    # The winner's folds, not every strategy's: the comparison tier 2 makes is
+    # against the floor, and the floor is one number with one set of folds behind
+    # it. Carrying all of them would be carrying the losers' noise too.
+    reading.fold_scores = per_fold.get(reading.best_strategy, [])
     return reading
 
 

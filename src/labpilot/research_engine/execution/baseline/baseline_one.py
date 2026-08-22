@@ -53,6 +53,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "BASELINE_ONE_FILENAME",
+    "NOISE_MULTIPLE",
+    "NoiseMargin",
+    "beats_floor_beyond_noise",
     "BaselineComparison",
     "ModelReading",
     "affordability",
@@ -194,7 +197,13 @@ def _prepare(frame: pd.DataFrame, feature_columns: list[str]) -> pd.DataFrame:
     features = frame[feature_columns].copy()
     for name in features.columns:
         column = features[name]
-        if column.dtype == object or isinstance(column.dtype, pd.CategoricalDtype):
+        # Asked through `pd.api.types`, never by comparing the dtype object.
+        # `column.dtype == object` missed every string column under pandas 3.0,
+        # which reports them as `str` — so LightGBM was handed raw strings and
+        # refused to fit *every real competition with a text column*, which is
+        # most of them. `ColumnProfile` carries a comment warning about exactly
+        # this, added when the same trap caught the profiler.
+        if not (pd.api.types.is_numeric_dtype(column) or pd.api.types.is_bool_dtype(column)):
             features[name] = column.astype("category")
     return features
 
@@ -368,6 +377,60 @@ def compare(
     gain = (model_score - floor_score) / abs(floor_score)
     comparison.improvement = gain if direction == "maximize" else -gain
     return comparison
+
+
+#: How many fold-to-fold standard deviations a model must clear the floor by.
+#: One, because the question is whether the gap is distinguishable from the noise
+#: in the estimate at all — not whether it is large. A stricter multiplier would
+#: be a judgement about how much improvement is worth having, which is the
+#: campaign's business rather than the gate's.
+NOISE_MULTIPLE = 1.0
+
+
+class NoiseMargin(BaseModel):
+    """Whether a win survives the fold-to-fold spread it was measured against."""
+
+    gap: float = 0.0
+    noise: float = 0.0
+    beats_noise: bool = False
+    reason: str = ""
+
+
+def beats_floor_beyond_noise(
+    floor: FloorReading, model: ModelReading | None, direction: str
+) -> NoiseMargin:
+    """M24 tier 2's *generic-beats-dummy*, with the bar the plan sets.
+
+    *"Strictly better in the metric's declared direction by more than the
+    fold-to-fold std. Not 'better by any epsilon' — that is noise."*
+
+    The spread is taken over the **model's** folds. That is the variance in the
+    estimate being defended: a model whose five folds disagree by more than its
+    margin over the floor has not shown it is better, it has shown the folds
+    disagree. The floor's own folds are far quieter — a constant does not vary
+    with what it was fitted on — so using them would set the bar at almost zero
+    and let every epsilon through, which is the outcome the sentence forbids.
+    """
+    if model is None or not model.is_defined or not floor.is_defined:
+        return NoiseMargin(reason="both readings are needed to compare them")
+    if direction not in ("maximize", "minimize"):
+        return NoiseMargin(reason=f"direction {direction!r} is not maximize or minimize")
+    if len(model.fold_scores) < 2:
+        return NoiseMargin(reason="fewer than two folds, so there is no spread to measure against")
+
+    floor_score, model_score = float(floor.score), float(model.score)
+    gap = (model_score - floor_score) if direction == "maximize" else (floor_score - model_score)
+    noise = float(np.std(model.fold_scores, ddof=1))
+    return NoiseMargin(
+        gap=gap,
+        noise=noise,
+        beats_noise=gap > noise * NOISE_MULTIPLE,
+        reason=(
+            ""
+            if gap > noise * NOISE_MULTIPLE
+            else f"gap {gap:.4f} does not clear the fold spread {noise:.4f}"
+        ),
+    )
 
 
 def write_baseline_one(root: Path, reading: ModelReading) -> Path:
