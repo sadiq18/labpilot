@@ -186,6 +186,23 @@ class DatasetProfile(BaseModel):
         """
         return min((self.confidence_in(field) for field in REQUIRED_FIELDS), default=0.0)
 
+    def _scored_are_train_columns(self, scored: list[str]) -> bool:
+        """Whether every scored submission column is a column of `train`.
+
+        The discriminator between "several targets" and "one target, written out
+        as classes". `self.columns` profiles the train table, so membership is
+        the whole test: `a, b` are there and are genuinely two answers;
+        `class_0..2` are not, and are one answer in three columns.
+
+        `False` when nothing is known about the columns — an empty profile
+        cannot support the multi-output claim, and the fall-through reports the
+        target's own kind rather than asserting a shape.
+        """
+        if not self.columns:
+            return False
+        known = {column.name for column in self.columns}
+        return all(name in known for name in scored)
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def target_type(self) -> TargetType:
@@ -206,8 +223,13 @@ class DatasetProfile(BaseModel):
         worse a 663-class problem, is the misreading this milestone's corpus
         names by name.
         """
-        if self.target_column is None:
-            return "none"
+        # The template's shape is read **before** asking whether a single target
+        # was named, because for a multi-output competition the answer to that
+        # question is legitimately "none of them, all of them". The profiler
+        # leaves `target_column` unresolved there on purpose, and an early
+        # `return "none"` would report a dataset with no target at all — turning
+        # the one branch that describes multi-output back into dead code.
+        #
         # An empty `id_columns` means the key was **not resolved**, not that
         # there is no key — and it is empty exactly when the profiler decided to
         # ask, which is the rogii case. Subtracting nothing left `['id','tvt']`
@@ -216,9 +238,13 @@ class DatasetProfile(BaseModel):
         # the classification path.
         if self.id_columns:
             scored = [c for c in self.submission_columns if c not in set(self.id_columns)]
-            if len(scored) > 1:
-                # The template asks for several numbers per unit. One of them
-                # being `target_column` does not make the task single-output.
+            # Several scored columns mean multi-output only when train actually
+            # holds them. `class_0, class_1, class_2` is one target's classes
+            # written out — three columns of the same answer, not three answers —
+            # and calling that `multilabel` sent every multiclass competition
+            # scored on probabilities down the multi-output path. Those fall
+            # through to the target column's own kind, which is what they are.
+            if len(scored) > 1 and self._scored_are_train_columns(scored):
                 return "multilabel"
         elif len(self.submission_columns) > 2:
             # Ids unknown and more than two columns: "key plus N labels" and
@@ -226,6 +252,8 @@ class DatasetProfile(BaseModel):
             # is worse than saying so. Two columns are unambiguous whichever the
             # key turns out to be, so those fall through and get measured.
             return "unknown"
+        if self.target_column is None:
+            return "none"
         column = next((c for c in self.columns if c.name == self.target_column), None)
         if column is None:
             return "unknown"
@@ -1192,15 +1220,104 @@ class TabularProfiler:
                 severity="blocking",
             )
 
-        # A contract, not an inference: a template whose columns are not the id
-        # and the target describes a submission this profile cannot produce, and
-        # failing here is closer to the cause than failing at submission time.
+        # A template that scores several columns of `train` is a question, not a
+        # crash.
+        #
+        # This used to raise on any submission that was not exactly
+        # `[id, target]`, which made every multi-target and multiclass-probability
+        # competition unprofileable — and unmeasurable, since the exception
+        # escaped the benchmark rather than being scored. But it could not simply
+        # be deleted: with the raise removed, a `[Id, a, b]` template resolves
+        # `target_column` to *one* of `a` and `b`, confidently, and asks nothing.
+        # A campaign would then optimise `b` and never mention `a`.
+        #
+        # So the refusal stays and moves to the mechanism that actually stops
+        # things. `Note.severity` is written and never read; what blocks a
+        # campaign is an uncertain `target_column`, via `pending_schema_questions`.
+        # Leaving the target unresolved says exactly what is true — the template
+        # asks for several answers and "which single column is the target" has no
+        # right answer — and every candidate is kept as an alternative so the
+        # operator chooses from evidence rather than from a list of names.
         if sample_table is not None:
-            expected_submission_columns = [id_column, target_column]
-            if submission_columns != expected_submission_columns:
-                raise ValueError(
-                    "Sample submission schema does not match the inferred ID and target columns: "
-                    f"expected {expected_submission_columns}, got {submission_columns}."
+            scored = [name for name in submission_columns if name not in set(profile.id_columns)]
+            # An answer settles it, and must survive this branch.
+            #
+            # Review of my own first version: the refusal below ran
+            # unconditionally, so an operator who answered the very question it
+            # raises had their answer honoured by `_answered` and then discarded
+            # here. `pending_schema_questions` skips answered fields, so no
+            # question came back either — the profile ended up with no target and
+            # nothing asking for one, and a campaign ran against it. That is
+            # worse than the `ValueError` this replaced, which at least stopped:
+            # it made the question askable but unanswerable, on exactly the
+            # competitions this change exists to unblock.
+            #
+            # `answer and not refused` is `_key_columns`' own test for the same
+            # thing, kept identical so the two cannot drift.
+            target_is_answered = bool(answers.get("target_column")) and not refused
+            # One question about the template's shape, asked once, so the four
+            # outcomes stay mutually exclusive. A first attempt tested
+            # `not target_is_answered` inside the multi-output condition and let
+            # the answered case fall through to the next branch, which then filed
+            # `encoded_target_template` — "none of which train holds" — about
+            # columns train demonstrably holds.
+            multi_output = len(scored) > 1 and profile._scored_are_train_columns(scored)
+            if multi_output and target_is_answered:
+                # Still multi-output — `target_type` says so from the template —
+                # but a person has named which column they are predicting, and
+                # that is the one thing the profiler was missing.
+                _note(
+                    profile,
+                    "multi_output_template_answered",
+                    f"the template scores {len(scored)} columns ({', '.join(scored)}); "
+                    f"an operator named {profile.target_column!r} as the target",
+                    field="target_column",
+                )
+            elif multi_output:
+                profile.target_column = None
+                profile.inferences["target_column"] = Inference.of(
+                    [],
+                    alternatives=[
+                        Alternative.of(name, target_candidates.get(name, [])) for name in scored
+                    ],
+                    rejected=refused,
+                )
+                _note(
+                    profile,
+                    "multi_output_template",
+                    f"the template scores {len(scored)} columns of train ({', '.join(scored)}); "
+                    "no single column is the target",
+                    field="target_column",
+                    severity="blocking",
+                )
+            elif len(scored) > 1:
+                # One target written out as classes. The target resolves normally
+                # and `target_type` reports its own kind; recorded so a reader
+                # knows the submission is wider than the answer.
+                _note(
+                    profile,
+                    "encoded_target_template",
+                    f"the template scores {len(scored)} columns none of which train holds "
+                    f"({', '.join(scored)}); read as one target written out",
+                    field="submission_columns",
+                )
+            elif len(scored) == 1 and profile.target_column and scored[0] != profile.target_column:
+                # The other half of what the removed guard checked.
+                #
+                # `[Id, Prediction]` against a `SalePrice` target used to raise.
+                # Accepting it is right — competitions rename the scored column
+                # all the time — but accepting it *silently* is not: the profile
+                # would record a target and a template that do not correspond,
+                # with nothing to say whether that was checked and allowed or
+                # simply never looked at. Everything else this profiler cannot
+                # confirm gets a note, and so does this.
+                _note(
+                    profile,
+                    "template_column_is_not_the_target",
+                    f"the template scores {scored[0]!r}, which is not the resolved target "
+                    f"{profile.target_column!r}; the submission is written under the "
+                    "template's name",
+                    field="submission_columns",
                 )
 
         for column in profile.columns:
@@ -1295,9 +1412,12 @@ class TabularProfiler:
             for text in modality.signals:
                 _note(profile, "modality_signal", text, field="modality")
         logger.info(
+            # `profile.target_column`, not the local: a multi-output template
+            # leaves the profile's target unresolved on purpose, and logging the
+            # local would announce a target the profile does not claim.
             "Profiled '%s': target=%s, id=%s, train_rows=%d, test_rows=%d",
             competition,
-            target_column,
+            profile.target_column,
             id_column,
             profile.row_count,
             profile.test_row_count,

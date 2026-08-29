@@ -137,8 +137,11 @@ system got wrong) · `store-sales` (temporal, multi-table) · `home-credit`
 to nothing** — expected `unknown`, proving the system says so instead of
 defaulting to maximize).
 
-**Text** — `nlp-getting-started` · `feedback-prize` (six target columns; today
-`tabular.py:302` *raises* on any submission that is not `[id, target]`).
+**Text** — `nlp-getting-started` · `feedback-prize` (six target columns; the
+profiler used to *raise* on any submission that was not `[id, target]`, which is
+why this sat on the wishlist. It now refuses by asking — `target_column` is left
+unresolved and `pending_schema_questions` raises it — so the competition
+profiles, scores `abstention`, and can be captured. #171).
 
 **Image** — `dogs-vs-cats` (no `train.csv` at all; the label is in the filename) ·
 `aerial-cactus` (the manifest-join path) · `biohub` (zarr, node/edge submission,
