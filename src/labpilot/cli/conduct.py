@@ -293,9 +293,7 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
     for line in objective.evidence:
         console.print(f"  [dim]-[/dim] {line}")
     if objective.alternatives:
-        console.print(
-            f"  [dim]candidates:[/dim] {', '.join(objective.alternatives)}"
-        )
+        console.print(f"  [dim]candidates:[/dim] {', '.join(objective.alternatives)}")
     # Advice from the operator's own domain. Telling a benchmark operator to
     # "set evaluation_metric in competition.json" names a file their workspace
     # will never have, which is the same leak as the gate refusing them outright
@@ -341,6 +339,8 @@ def _budget_metadata(
     target_metric: str | None,
     target_value: float | None,
     plateau_window: int,
+    max_barren_steps: int | None = None,
+    max_consecutive_failures: int | None = None,
     maximize: bool | None = None,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -352,6 +352,16 @@ def _budget_metadata(
         target_metric=target_metric,
         target_value=target_value,
         plateau_window=plateau_window,
+        # Omitted rather than passed as None: `None` disables a breaker
+        # entirely, while an unset flag must keep the default. A campaign
+        # that silently lost its circuit breaker because a flag went
+        # unspecified is the opposite of what exposing them is for.
+        **({} if max_barren_steps is None else {"max_barren_steps": max_barren_steps}),
+        **(
+            {}
+            if max_consecutive_failures is None
+            else {"max_consecutive_failures": max_consecutive_failures}
+        ),
         # Resolved from the competition, not defaulted. `BudgetConfig.maximize`
         # used to default True with nothing overriding it, so on rogii (MSE)
         # every session stored `"maximize": true` and a metric target would have
@@ -423,6 +433,20 @@ def conduct_run(
     target_metric: str | None = typer.Option(None, "--target-metric"),
     target_value: float | None = typer.Option(None, "--target-value"),
     plateau_window: int = typer.Option(3, "--plateau-window"),
+    max_barren_steps: int | None = typer.Option(
+        None,
+        "--max-barren-steps",
+        help="Stop after N steps with no successful execution (default 8). "
+        "Raise it when the policy legitimately spends steps implementing "
+        "before it runs anything.",
+    ),
+    max_consecutive_failures: int | None = typer.Option(
+        None,
+        "--max-consecutive-failures",
+        help="Stop after N consecutive failed executions (default 3). "
+        "Raise it to let the repair loop work through several distinct "
+        "defects in generated code.",
+    ),
     config_path: Path = typer.Option(Path("configs/default.yaml"), "--config"),
     knowledge_dir: Path | None = typer.Option(None, "--knowledge-dir"),
     workspace_path: Path | None = typer.Option(None, "--workspace"),
@@ -450,6 +474,8 @@ def conduct_run(
             target_metric=target_metric,
             target_value=target_value,
             plateau_window=plateau_window,
+            max_barren_steps=max_barren_steps,
+            max_consecutive_failures=max_consecutive_failures,
             maximize=_resolve_campaign_direction(ws, competition),
             existing={
                 "max_steps": max_steps,
