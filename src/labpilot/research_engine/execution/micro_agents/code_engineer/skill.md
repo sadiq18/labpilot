@@ -45,6 +45,20 @@ generated from scratch from the dataset profile and `data/raw` inventory.
 - Always end `pipeline/train.py` with exact ``if __name__ == "__main__":`` + ``main()``
   (ASCII ``__main__`` only — never alter that string)
 - No network calls, no Kaggle upload, no inventing leaderboard scores
+- **LightGBM 4.x: `fit()` takes no `verbose` and no `early_stopping_rounds`.**
+  Both moved to callbacks in 4.0 and raise `TypeError` now:
+  ```python
+  # WRONG — TypeError on lightgbm>=4
+  model.fit(X, y, eval_set=[(Xv, yv)], verbose=False, early_stopping_rounds=50)
+  # RIGHT
+  model.fit(X, y, eval_set=[(Xv, yv)],
+            callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)])
+  ```
+  Set `verbose=-1` in the **constructor** to silence training output.
+  Measured on playground-series-s6e8 (2026-08-30): these two kwargs were the
+  single most common generated-code defect, failing five separate attempts
+  across two campaigns and retiring the baseline hypothesis both times. The
+  installed version is >=4; the API a model recalls from training data is 3.x.
 - Prefer one cohesive `pipeline/train.py` (+ small helpers) over sprawling packages
 - **Declare every third-party import in a PEP 723 block at the top of
   `pipeline/train.py`**, immediately after the module docstring:
