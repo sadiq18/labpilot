@@ -45,6 +45,20 @@ generated from scratch from the dataset profile and `data/raw` inventory.
 - Always end `pipeline/train.py` with exact ``if __name__ == "__main__":`` + ``main()``
   (ASCII ``__main__`` only — never alter that string)
 - No network calls, no Kaggle upload, no inventing leaderboard scores
+- **Honour `LABPILOT_SMOKE`.** The verification gate runs your script with that
+  env var set and kills it after 120s. It is how the harness asks "does this
+  run at all?" without waiting for a real fit, so the script must take a short
+  path when it is set:
+  ```python
+  SMOKE = os.environ.get("LABPILOT_SMOKE") == "1"
+  if SMOKE:                      # prove the pipeline runs, do not train it
+      train_df = train_df.head(2000)
+      n_splits, n_estimators = 2, 20
+  ```
+  A script that ignores it trains on the full table and is killed at 120s —
+  reported as `smoke_gate timed out`, which verifies nothing either way.
+  Measured on playground-series-s6e8 (2026-08-30): 691,369 rows and a 5-fold
+  fit, timed out, and the baseline hypothesis was retired for it.
 - **LightGBM 4.x: `fit()` takes no `verbose` and no `early_stopping_rounds`.**
   Both moved to callbacks in 4.0 and raise `TypeError` now:
   ```python
