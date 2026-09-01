@@ -50,3 +50,22 @@ def test_an_empty_response_does_not_overwrite_a_good_one(cache: PromptCache) -> 
     cache.set("k", "", model="m")
 
     assert cache.get("k") == '{"tool": "run_plan"}'
+
+
+def test_an_already_cached_empty_response_is_a_miss(cache: PromptCache, tmp_path: Path) -> None:
+    """Refusing to write one only protects a cache that never had the problem.
+
+    Every machine that hit this already holds the rows — six of them in the run
+    it was found on — written before the guard existed. Without a read-side
+    check they go on being served an empty answer, at $0.00, with the fix
+    merged and apparently applied. A blank body is a miss, so the call reaches
+    a provider that is healthy by now.
+    """
+    assert cache._conn is not None
+    cache._conn.execute(
+        "INSERT INTO llm_cache (cache_key, response, model) VALUES (?, ?, ?)",
+        ("legacy", "", "m"),
+    )
+    cache._conn.commit()
+
+    assert cache.get("legacy") is None

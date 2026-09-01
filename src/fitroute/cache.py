@@ -63,8 +63,17 @@ class PromptCache:
             ).fetchone()
         if row is None:
             return None
+        response = str(row[0])
+        if not response.strip():
+            # Refusing to *write* one only protects a cache that never had the
+            # problem. Every machine that hit the bug already holds the rows —
+            # six of them, in the run this was found on — and would go on being
+            # served an empty answer, at $0.00, with the fix merged. A blank
+            # body is a miss: the call goes to a provider that is healthy now.
+            logger.debug("ignoring a cached empty response for %s", key[:12])
+            return None
         logger.debug("LLM cache hit: %s", key[:12])
-        return str(row[0])
+        return response
 
     def set(self, key: str, response: str, *, model: str) -> None:
         """Store a response, unless it is empty.
