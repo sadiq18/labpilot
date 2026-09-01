@@ -65,3 +65,35 @@ def test_each_flag_moves_only_itself() -> None:
 
     assert budgets["max_barren_steps"] == 25
     assert budgets["max_consecutive_failures"] == DEFAULT_MAX_CONSECUTIVE_FAILURES
+
+
+def test_zero_is_the_disable_not_a_limit_of_zero() -> None:
+    """`0` had the sharpest possible edge: the breakers compare `>=` against a
+    counter that starts at 0, so a literal zero limit ended the campaign on its
+    first check — before anything ran — reported as an ordinary `stop:failing`.
+
+    It is read as "no limit" instead, which also gives the documented opt-out a
+    spelling: `None` is spent on "flag unset", so disabling a breaker on purpose
+    was otherwise unreachable from the CLI.
+    """
+    budgets = _budgets(max_barren_steps=0, max_consecutive_failures=0)
+
+    assert budgets["max_barren_steps"] is None
+    assert budgets["max_consecutive_failures"] is None
+
+
+def test_a_disabled_breaker_does_not_stop_a_fresh_campaign() -> None:
+    """The failure the zero-handling exists to prevent, asserted where it
+    happened rather than on the flag alone."""
+    from labpilot.research_engine.conductor.budgets import (
+        BudgetConfig,
+        BudgetState,
+        evaluate_stops,
+    )
+
+    # A literal 0 reaching `BudgetConfig` is what the CLI must never produce.
+    assert evaluate_stops(BudgetConfig(max_barren_steps=0), BudgetState()) == "failing"
+    # What it produces instead. `evaluate_stops` spells "keep going" as "none".
+    disabled = BudgetConfig(**_budgets(max_barren_steps=0))
+    assert disabled.max_barren_steps is None
+    assert evaluate_stops(disabled, BudgetState()) == "none"
