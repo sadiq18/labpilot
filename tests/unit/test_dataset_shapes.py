@@ -18,6 +18,7 @@ Design: `docs/research-os/autonomy-roadmap/design/17-dataset-understanding.md`
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -81,11 +82,21 @@ def _normalized(profile: DatasetProfile) -> dict:
 # --- golden snapshots -------------------------------------------------------
 
 
+#: Set to regenerate the snapshots instead of checking against them. An env var
+#: rather than "write it if it is missing", because that spelling made the check
+#: unable to fail on the one input it exists to catch: with the goldens absent —
+#: deleted for a regeneration and committed that way, lost to a merge, or simply
+#: never checked out — the test wrote each file from the run in front of it and
+#: then compared that run against itself. Five green tests pinning nothing.
+REGEN_ENV = "LABPILOT_REGEN_GOLDEN"
+
+
 @pytest.mark.parametrize("shape", sorted(PROFILEABLE))
 def test_profile_matches_its_golden_snapshot(tmp_path: Path, shape: str) -> None:
     """Pin every profileable shape, so step 1 must change nothing.
 
-    Delete a golden file to regenerate it; the diff is then the review.
+    Regenerate with `LABPILOT_REGEN_GOLDEN=1 pytest tests/unit/test_dataset_shapes.py`;
+    the diff is then the review. A missing golden is a failure, not a blank to fill.
     """
     builder, config = PROFILEABLE[shape]
     actual = _normalized(_profile(builder(tmp_path), config))
@@ -94,10 +105,16 @@ def test_profile_matches_its_golden_snapshot(tmp_path: Path, shape: str) -> None
     # is exactly what a broken profiler produces.
     assert actual["columns"], "profile has no columns; the snapshot would be vacuous"
 
-    GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
     golden = GOLDEN_DIR / f"{shape}.golden.json"
-    if not golden.is_file():
+    if os.environ.get(REGEN_ENV):
+        GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
         golden.write_text(json.dumps(actual, indent=2) + "\n", encoding="utf-8")
+        pytest.skip(f"{REGEN_ENV} set: rewrote {golden.name} instead of checking it")
+
+    assert golden.is_file(), (
+        f"{golden} is missing. A snapshot this test writes for itself cannot fail, "
+        f"so regeneration is explicit: rerun with {REGEN_ENV}=1 and review the diff."
+    )
     assert actual == json.loads(golden.read_text(encoding="utf-8"))
 
 
