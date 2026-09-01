@@ -54,7 +54,15 @@ generated from scratch from the dataset profile and `data/raw` inventory.
   if SMOKE:                      # prove the pipeline runs, do not train it
       train_df = train_df.head(2000)
       n_splits, n_estimators = 2, 20
+  ...
+  metrics = {"cv_<metric>": score}
+  if SMOKE:
+      metrics["status"] = "smoke"   # a score from a slice is not a result
   ```
+  **Stamp the status.** `metrics.json` is written to the same path whether the
+  run is a smoke run or the real one, so a score with nothing marking it is
+  indistinguishable from a trained result — `PLACEHOLDER_STATUSES` is what
+  downstream reads to tell them apart, and it only knows what a run declares.
   A script that ignores it trains on the full table and is killed at 120s —
   reported as `smoke_gate timed out`, which verifies nothing either way.
   Measured on playground-series-s6e8 (2026-08-30): 691,369 rows and a 5-fold

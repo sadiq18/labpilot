@@ -42,7 +42,14 @@ _NOISE = 0.001
 #: `last_resort_scaffold` from the generated fallback script. Both write a
 #: plausible-looking number — 0.5 and 0.0 — which is why they fooled every
 #: downstream check that only asked whether a score was present.
-PLACEHOLDER_STATUSES = frozenset({"dry_run_stub", "last_resort_scaffold"})
+#:
+#: `smoke` is the third: a script run under `LABPILOT_SMOKE` trains on a slice
+#: with a couple of folds to prove the pipeline executes, and writes a score
+#: that looks like any other. The smoke gate restores `metrics.json` so this
+#: normally never reaches a reader — this entry is the second lock, for a file
+#: that arrives some other way (a run started by hand, a gate that crashed
+#: before restoring). A number produced to prove a script runs is not a result.
+PLACEHOLDER_STATUSES = frozenset({"dry_run_stub", "last_resort_scaffold", "smoke"})
 
 
 def is_placeholder_metrics(metrics: dict[str, Any] | None) -> bool:
@@ -121,9 +128,7 @@ def _same_metric(left: str, right: str) -> bool:
     return left == right and bool(left)
 
 
-def _found(
-    result: ValidationResult | None, metrics: dict[str, Any]
-) -> tuple[float, str] | None:
+def _found(result: ValidationResult | None, metrics: dict[str, Any]) -> tuple[float, str] | None:
     """The (score, key) pair, preferring one a validator already extracted.
 
     Identical output either way — the Kaggle validator calls `_primary_cv_keyed`

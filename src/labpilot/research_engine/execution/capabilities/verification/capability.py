@@ -5,6 +5,9 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 
 from labpilot.research_engine.execution.capabilities._helpers import (
     evidence,
@@ -24,6 +27,48 @@ from labpilot.research_engine.planner.schemas.task_types import TaskType
 
 #: How much of a failure to keep. Same budget as before; the change is *which*
 #: end of the output it comes from.
+
+
+#: Artifacts the smoke gate must not leave behind.
+#:
+#: The gate runs the real training script from the workspace root, so whatever
+#: the script writes there lands in exactly the files a training run writes —
+#: and `LABPILOT_SMOKE` asks it to take a short path, so what it leaves is a
+#: truncated, few-fold result sitting where a trained result belongs.
+#:
+#: Nothing downstream can tell the two apart. `_metrics_written_since` only asks
+#: whether the mtime is newer than the step began, and the gate runs *inside*
+#: that step (plan order is smoke → train under one `run_experiment`), so a
+#: training run that then fails inherits the gate's numbers and reports success.
+#: `is_placeholder_metrics` only knows the statuses a stub writes. Rather than
+#: teach both about a third case — and rather than depend on generated code
+#: remembering to mark its own output — the gate puts these files back.
+_SMOKE_MUST_NOT_KEEP = ("metrics.json", "submission.csv")
+
+
+@contextmanager
+def _artifacts_preserved(root: Path, names: tuple[str, ...]) -> Iterator[None]:
+    """Restore `names` under `root` to exactly what they were.
+
+    By rename rather than by copy: mtime belongs to the inode and survives one,
+    which matters because the freshness check downstream reads mtime alone —
+    restoring the right bytes under a new timestamp would still say "this run
+    produced it".
+    """
+    stashed: dict[Path, Path] = {}
+    for name in names:
+        path = root / name
+        if path.is_file():
+            stash = root / f".{name}.presmoke"
+            path.replace(stash)
+            stashed[path] = stash
+    try:
+        yield
+    finally:
+        for name in names:
+            (root / name).unlink(missing_ok=True)
+        for path, stash in stashed.items():
+            stash.replace(path)
 
 
 class VerificationCapability(BaseCapability):
@@ -224,23 +269,27 @@ class VerificationCapability(BaseCapability):
         # could not run.
         started = time.monotonic()
         try:
-            proc = subprocess.run(  # noqa: S603
-                training_command(train, python=sys.executable),
-                capture_output=True,
-                text=True,
-                check=False,
-                # Workspace root so scripts can open pipeline/config.yaml and write
-                # metrics.json / submission.csv at the competition root.
-                cwd=context.workspace_root,
-                timeout=int(context.constraints.get("smoke_timeout_s", 120)),
-                # The command was shared and the environment was not: this passed
-                # the operator's `os.environ` straight through, so the first thing
-                # to execute model-written code gave it the provider and Kaggle keys
-                # that `child_environment` exists to withhold. `LABPILOT_SMOKE` is
-                # the one difference this gate is entitled to — it is how a script
-                # knows to take its short path, and production must not set it.
-                env={**child_environment(), "LABPILOT_SMOKE": "1"},
-            )
+            # See `_SMOKE_MUST_NOT_KEEP`: asking "does this run at all?" must not
+            # leave a result behind that a later reader mistakes for a trained one.
+            with _artifacts_preserved(Path(context.workspace_root), _SMOKE_MUST_NOT_KEEP):
+                proc = subprocess.run(  # noqa: S603
+                    training_command(train, python=sys.executable),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    # Workspace root so scripts can open pipeline/config.yaml and write
+                    # metrics.json / submission.csv at the competition root.
+                    cwd=context.workspace_root,
+                    timeout=int(context.constraints.get("smoke_timeout_s", 120)),
+                    # The command was shared and the environment was not: this
+                    # passed the operator's `os.environ` straight through, so the
+                    # first thing to execute model-written code gave it the
+                    # provider and Kaggle keys that `child_environment` exists to
+                    # withhold. `LABPILOT_SMOKE` is the one difference this gate is
+                    # entitled to — it is how a script knows to take its short
+                    # path, and production must not set it.
+                    env={**child_environment(), "LABPILOT_SMOKE": "1"},
+                )
         except subprocess.TimeoutExpired as expired:
             return self._timed_out(context, log_path, expired, check="smoke_gate", started=started)
         duration = time.monotonic() - started
