@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from labpilot.accessor.common.provenance import FAILURE_LOOKBACK, failure_signature
 from labpilot.research_engine.conductor.models import _now
 from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
     MEASUREMENT_PREFIXES,
@@ -182,35 +182,6 @@ class ScoreEvent(BaseModel):
     timestamp: str = Field(default_factory=_now)
 
 
-#: Noise that differs between two reports of the same failure. Addresses and
-#: line numbers move; ids (`P-001-T03`, `H-011`) are per-attempt by
-#: construction, so leaving them in would make every failure look novel.
-_FAILURE_NOISE = re.compile(r"0x[0-9a-f]+|\d+", re.IGNORECASE)
-
-
-#: How many recent failures to keep, and therefore how long a cycle
-#: `failures_are_repeating` can see. Three held only the failures that would
-#: trip the shipped threshold, which is enough for a stall repeating one defect
-#: and enough for an A/B oscillation, but not for an A/B/C one — that needs a
-#: fourth slot to see the repeat of A. Five, at 200 characters each, is a
-#: kilobyte of session metadata for a cycle length no repair loop should reach.
-_FAILURE_WINDOW = 5
-
-
-def _failure_signature(error: str) -> str:
-    """What two failure excerpts have to share to count as the same failure.
-
-    Deliberately crude: case-folded, whitespace-collapsed, digits removed.
-    Under-normalising is the safe direction — a repeat mistaken for novel costs
-    a few extra steps and is caught by `max_barren_steps`, while novel mistaken
-    for a repeat ends the campaign, which is the failure being removed. So this
-    strips only what provably varies between two reports of one defect, and
-    accepts that it will also collapse errors differing solely in a version
-    number.
-    """
-    return _FAILURE_NOISE.sub("", " ".join(str(error).split()).lower())
-
-
 class BudgetState(BaseModel):
     """Live counters persisted in session metadata / metrics table."""
 
@@ -253,7 +224,7 @@ class BudgetState(BaseModel):
     consecutive_unmapped: int = 0
     #: What the failures said, most recent last. Bounded — this is a stop
     #: *reason*, not a log, and it is written into session metadata.
-    #: `_FAILURE_WINDOW` sets the bound; it is also the span
+    #: `FAILURE_LOOKBACK` sets the bound; it is also the span
     #: `failures_are_repeating` can see, so the two moved together.
     recent_failures: list[str] = Field(default_factory=list)
 
@@ -267,7 +238,7 @@ class BudgetState(BaseModel):
         self.consecutive_failures += 1
         excerpt = " ".join(str(error).split())[:200]
         if excerpt:
-            self.recent_failures = [*self.recent_failures[-(_FAILURE_WINDOW - 1) :], excerpt]
+            self.recent_failures = [*self.recent_failures[-(FAILURE_LOOKBACK - 1) :], excerpt]
 
     def failures_are_repeating(self) -> bool:
         """True when the campaign is stuck rather than working through defects.
@@ -287,7 +258,7 @@ class BudgetState(BaseModel):
         That cycle is a stall by any reading; it is only *adjacent* failures that
         differ. Convergence means each failure is one not seen before.
 
-        The window (`_FAILURE_WINDOW`) is what bounds the cycle length this can
+        The window (`FAILURE_LOOKBACK`) is what bounds the cycle length this can
         see. A longer one still evades it and is left to `max_barren_steps`,
         which is the backstop for every case this predicate declines to stop.
 
@@ -298,8 +269,8 @@ class BudgetState(BaseModel):
         """
         if len(self.recent_failures) < 2:
             return True
-        newest = _failure_signature(self.recent_failures[-1])
-        return any(_failure_signature(prior) == newest for prior in self.recent_failures[:-1])
+        newest = failure_signature(self.recent_failures[-1])
+        return any(failure_signature(prior) == newest for prior in self.recent_failures[:-1])
 
     def ensure_wall_start(self) -> None:
         if not self.wall_started_at:
