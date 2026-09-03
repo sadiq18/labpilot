@@ -35,6 +35,11 @@ _MINUTE = 60.0
 _DAY = 86_400.0
 
 
+def _held(reserve: float) -> str:
+    """Say so when a caller was refused early, rather than misquoting the limit."""
+    return f" (holding {reserve:.0%} in reserve)" if reserve > 0.0 else ""
+
+
 @dataclass(frozen=True)
 class Availability:
     """Whether a provider can be called now, and if not, how long until it can."""
@@ -119,9 +124,20 @@ class BudgetLedger:
         rpm: int | None = None,
         rpd: int | None = None,
         tpm: int | None = None,
+        reserve: float = 0.0,
         now: float | None = None,
     ) -> Availability:
         """Can ``provider`` be called right now, and if not, when?
+
+        ``reserve`` withholds that fraction of every configured window from
+        this caller, so a background worker runs out before the foreground one
+        does. The consumer asks with 0.0 and sees the real limit; a producer
+        asks with 0.2 and stops 20% early.
+
+        A fraction rather than a call count because `rpm`/`rpd` are free-tier
+        shapes: a paid, token-metered provider binds on `tpm`, where "hold back
+        five calls" means nothing. One knob, applied to whichever window binds
+        first.
 
         Locked like the writers. Reads were left unlocked when the writers were
         wrapped, which was safe only because `server._GATEWAY_LOCK` happened to
@@ -131,6 +147,25 @@ class BudgetLedger:
         from two different states.
         """
         now = now if now is not None else time.time()
+        keep = min(max(reserve, 0.0), 1.0)
+
+        def _effective(limit: int | None) -> int | None:
+            """The limit this caller may reach. Never below 1 while any is left:
+            a reserve is meant to make a background caller yield sooner, not to
+            take a provider away from it entirely."""
+            if limit is None or keep <= 0.0:
+                return limit
+            return max(1, int(limit * (1.0 - keep)))
+
+        # The *effective* values are what this caller may reach; the originals
+        # stay for the messages. Rebinding the names put the reduced number in
+        # the reason string — "daily limit 800 reached" against a published
+        # limit of 1000 — which reaches `RouteDecision.reason`, the producer's
+        # skip reason and `research doctor`, where an operator reads it as the
+        # provider's real quota and cannot reconcile it with the dashboard.
+        rpm_allowed = _effective(rpm)
+        rpd_allowed = _effective(rpd)
+        tpm_allowed = _effective(tpm)
         with self._lock:
             row = self._conn.execute(
                 "SELECT until_ts, reason FROM llm_cooldowns WHERE provider = ?", (provider,)
@@ -140,25 +175,31 @@ class BudgetLedger:
                     False, float(row["until_ts"]) - now, f"cooling down ({row['reason']})"
                 )
 
-            if rpd is not None:
+            if rpd_allowed is not None:
                 used, _ = self._count(provider, _DAY, now)
-                if used >= rpd:
+                if used >= rpd_allowed:
                     oldest = self._oldest_in_window(provider, _DAY, now)
                     wait = (oldest + _DAY) - now if oldest else _DAY
-                    return Availability(False, max(wait, 0.0), f"daily limit {rpd} reached")
+                    return Availability(
+                        False, max(wait, 0.0), f"daily limit {rpd} reached{_held(keep)}"
+                    )
 
-            if rpm is not None:
+            if rpm_allowed is not None:
                 used, _ = self._count(provider, _MINUTE, now)
-                if used >= rpm:
+                if used >= rpm_allowed:
                     oldest = self._oldest_in_window(provider, _MINUTE, now)
                     wait = (oldest + _MINUTE) - now if oldest else _MINUTE
-                    return Availability(False, max(wait, 0.0), f"rate limit {rpm}/min reached")
+                    return Availability(
+                        False, max(wait, 0.0), f"rate limit {rpm}/min reached{_held(keep)}"
+                    )
 
-            if tpm is not None:
+            if tpm_allowed is not None:
                 _, tokens = self._count(provider, _MINUTE, now)
-                if tokens >= tpm:
+                if tokens >= tpm_allowed:
                     oldest = self._oldest_in_window(provider, _MINUTE, now)
                     wait = (oldest + _MINUTE) - now if oldest else _MINUTE
-                    return Availability(False, max(wait, 0.0), f"token limit {tpm}/min reached")
+                    return Availability(
+                        False, max(wait, 0.0), f"token limit {tpm}/min reached{_held(keep)}"
+                    )
 
             return Availability(True)

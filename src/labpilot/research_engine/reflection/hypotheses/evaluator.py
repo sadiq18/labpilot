@@ -55,6 +55,22 @@ class HypothesisEvaluator:
         self._revision = HypothesisRevisionAgent(llm_client=llm_client)
 
     def mark_testing(self, hypothesis_id: str) -> Hypothesis | None:
+        """Record that this hypothesis is under test. **Not a claim.**
+
+        `mark_testing_if_proposed` deliberately, not `claim_if_proposed`: the
+        one caller (`execution/engineer.py`) is often running *inside* a claim
+        somebody else already made. M11 fan-out claims in `prepare_branches`
+        and then dispatches the branch to the engineer, so an exclusive claim
+        here would report "lost" on every branch of a healthy fan-out.
+
+        The distinction matters for a caller that acts on ownership — who may
+        release, who runs the experiment. Use `HypothesisStore.claim_if_proposed`
+        there; `fanout.py` is the worked example. This one only needs the status
+        to reflect reality, and is correct whether or not it was the one to set
+        it.
+
+        `None` means "no such hypothesis", never "someone else has it".
+        """
         if not hypothesis_id:
             return None
         try:

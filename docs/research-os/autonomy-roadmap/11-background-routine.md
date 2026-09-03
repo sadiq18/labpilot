@@ -1,6 +1,7 @@
 # M16 — Evidence routine as a background producer
 
-**Status:** gating shipped, routine not started ·
+**Status:** routine shipped behind `--gather-background`; campaign runs
+2026-08-20 — all exit criteria met, two follow-ups open ·
 **Design:** [design/11-background-routine.md](design/11-background-routine.md) ·
 **Blockers cleared:** M11 (concurrency) shipped 2026-08-11/12 and M14 completed
 2026-08-07, so this is unblocked and waiting on a decision, not on other work
@@ -130,12 +131,14 @@ Full mechanism in [design/11-background-routine.md](design/11-background-routine
    option: `EventBus.publish` is a synchronous `signal.send`, so the handler
    runs on the publisher's thread and would block the consumer at exactly the
    moment this milestone exists to unblock it.
-3. **Claim hypotheses atomically.** M11 shipped this: `claim_if_proposed`
-   returns `None` to the loser, backed by a cross-process `fcntl.flock` per
-   hypothesis id. `mark_testing_if_proposed` cannot express a race — every
-   caller is handed `status=testing` and concludes it won — and one caller is
-   still on it, `reflection/hypotheses/evaluator.py`.
-   **Claiming is not the only race.** Neither minting path dedupes safely under
+3. **Claim hypotheses atomically.** Already shipped with M11:
+   `claim_if_proposed` returns `None` to the loser, backed by a cross-process
+   `fcntl.flock` per hypothesis id, and `fanout.py` uses it. The remaining
+   caller of `mark_testing_if_proposed` — `reflection/hypotheses/evaluator.py`
+   — is correct as it stands: the producer proposes and never claims, and that
+   caller usually runs inside a claim fan-out already made, where an exclusive
+   claim would report "lost" on every healthy branch. It now says so.
+   **Claiming is not the only race, and the other one is open.** Neither minting path dedupes safely under
    two writers: `persist_recommendations` (the producer's own output) does not
    dedupe at all, and `_already_covered_by_proposed` lists the proposed pool
    *outside* the lock `create()` takes. Two writers produce two rows for one
@@ -161,9 +164,43 @@ Full mechanism in [design/11-background-routine.md](design/11-background-routine
    concurrently produce **one** row. Claiming was the only race this plan
    named; creating is the other one.
 
-Criterion 1 needs a campaign log with the producer on and one without, on the
-same workspace, and the number that settles it is **steps per hour** — not "the
-tool was skipped", which the shipped gate already achieves without a producer.
+**Measured 2026-08-20** on sandbox clones of rogii (design §3, §3.1). The
+consumer never stalled and evidence went from **158h stale to 0.01h**, against
+**+0 and 158h** on the baseline. A sweep takes **~20 minutes**, so the first two
+attempts ended before it finished; a 51-minute run produced **two complete
+sweeps, 18 hypotheses minted, 18 consumer steps, and zero `analyze_competition`
+dispatched by the campaign**. Criterion 3 met.
+
+**What bounds the campaign is `max_barren_steps`, not `--max-steps`.** Both
+short runs died on *"8 step(s) since the last success"* — on a workspace whose
+experiments fail, that fires long before anything else, and it has no CLI flag.
+
+**The producer could not satisfy the gate it gates on** — now fixed (design §7.5). Ten hypotheses
+minted, and the next tick still read *"only 10 viable hypotheses queued"*:
+`viable_hypothesis_count` excludes rows the selector has passed over twice, and
+every `generate_plan` ages every row it did not pick, so the producer's output
+aged out as fast as it arrived. It swept continuously — ~40 minutes of
+reasoning-role LLM work in a 51-minute campaign — with `_MIN_RESWEEP_HOURS` the
+only brake. Not the M21 ratchet (nothing is held shut) but the same shape
+inverted. The producer now latches that clause when a completed sweep leaves the
+count where it found it, and lifts the latch when the count moves.
+
+**Left open, deliberately:** at a 153-row pool with one pick per selection,
+"passed over twice" is arithmetic, not a quality signal — 8 of 18 fresh rows
+were stale within one campaign. Whether `viable_hypothesis_count` is the right
+gate for *anyone* is a bigger question than M16: it decides the consumer's
+allowlist too, and loosening it is how [M21](16-hypothesis-selection.md)'s
+ratchet re-opens.
+
+**Criterion 1's premise did not reproduce, and that matters more than the
+result.** The baseline never blocked on gathering. The gate reported
+*"Evidence gathering available: only 10 viable hypotheses queued"* at all five
+steps and the LLM policy chose testing every single time. So **steps per hour
+does not discriminate here** — the failure this milestone actually removes is
+not a campaign stalled behind a sweep, it is a campaign testing hard against
+five-day-old evidence while the gate says "go and look" and the policy
+correctly refuses because it has work to do. Nothing else in the system
+resolves that standoff.
 
 ## Traps
 
@@ -177,13 +214,13 @@ tool was skipped", which the shipped gate already achieves without a producer.
   (WAL + 5s `busy_timeout`), multi-statement writes take `write_lock_for`, and
   both are file locks that keep holding across processes. What M11 did *not*
   give is content-level dedupe — see Approach 3.
-- **The producer competes for the same LLM budget.** **Still unbuilt, and the
-  only unbuilt dependency.** `fitroute/budget.py`'s `BudgetLedger` tracks spend
-  per *provider*; `availability()` answers identically for every caller, so
-  there is no mechanism behind "producer work should be the lower priority
-  claim on the ledger from [M10](04-llm-tiering.md)". Hypothesis generation is a
-  `reasoning` role — a background producer running hot will exhaust the free
-  tier the consumer needs.
+- ~~**The producer competes for the same LLM budget.**~~ **Built.**
+  `availability(..., reserve=)` withholds a fraction of each window from the
+  caller that asks for it — a fraction, not a call count, so a token-metered
+  provider is covered too. It threads through `select_route` and
+  `LLMGateway.preview`, and the producer asks before a sweep rather than
+  per call inside one: a sweep abandoned halfway has already spent the quota it
+  was meant to protect. `LABPILOT_GATHER_RESERVE` defaults to `0.2`.
 - **A backlog is not a good backlog.** **Partly answered.** The count is now of
   *viable* hypotheses ([M21](16-hypothesis-selection.md)), so rows the selector
   has passed over twice stop voting, and the stagnant clause reopens gathering

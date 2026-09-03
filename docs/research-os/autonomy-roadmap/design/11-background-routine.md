@@ -1,8 +1,9 @@
 # Design — M16: the evidence routine as a background producer
 
-**Plan:** [../11-background-routine.md](../11-background-routine.md) · **Status:** design ·
-**Owner:** unassigned · **Depends on:** M7, M11, M14 (all shipped) ·
-**Unbuilt dependency it carries:** producer priority on the LLM ledger (§8)
+**Plan:** [../11-background-routine.md](../11-background-routine.md) ·
+**Status:** built behind `--gather-background`; measured 2026-08-20 (§3, §3.1), all exit criteria met, one follow-up open (§11) ·
+**Depends on:** M7, M11, M14 (all shipped) ·
+**Ledger priority (§8):** built — `availability(..., reserve=)`
 
 ---
 
@@ -21,7 +22,7 @@ otherwise.
 | 1 | **No callable entry point.** The gate lives *inside* `available_tools`, which returns tool names; the invocation is an `OsTask` through `Scheduler.dispatch`. Nothing can ask "gather now, if you should" without the policy step this milestone bypasses | `conductor/policy.py`, `conductor/scheduler.py` |
 | 2 | **No runner.** `_run_until_stop_inner` is `for step in range(max_steps)`, one dispatch per step. M11's fan-out is bounded to a single step and joins before the loop advances | `conductor/loop.py:1116` |
 | 3 | **Content dedupe is unsafe under two writers.** `persist_recommendations` (the producer's own output) does not dedupe at all; `_already_covered_by_proposed` scans the proposed pool *outside* the lock `create()` takes. `create()` holds `.alloc.lock` across allocate-and-write, so two writers cannot collide on an **id** — only on an **idea** | `intelligence/hypothesis/persist.py`, `execution/outcome.py` |
-| 4 | **One weak claim call.** `mark_testing_if_proposed` returns the hypothesis whether or not the caller won, so every racer concludes it claimed. `fanout.py` migrated to `claim_if_proposed`; the reflection path did not | `reflection/hypotheses/evaluator.py:61` |
+| 4 | ~~**One weak claim call.**~~ **Checked and withdrawn.** `evaluator.mark_testing` does use `mark_testing_if_proposed`, and that is correct: the producer never claims — it proposes — so M16 adds no claimer, and its one caller (`execution/engineer.py`) usually runs *inside* a claim `prepare_branches` already made. An exclusive claim there would report "lost" on every branch of a healthy fan-out. Documented at the method instead | `reflection/hypotheses/evaluator.py:57` |
 | 5 | **The LLM ledger has no priority.** `availability()` answers identically for every caller, so nothing implements the plan's "producer yields to consumer". Hypothesis generation is a `reasoning`-role call | `fitroute/budget.py` |
 
 Gaps 1, 2 and 4 are latent-by-design. Gap 3 is latent only because there is
@@ -61,20 +62,167 @@ the reason the stagnant clause must stay independent of the count.
 | Producer crash impact on campaign | **zero** — every tick exception-isolated, same shape as `_maybe_mint_on_stagnation` |
 | Behaviour change when off | **zero** — off is the default (§11) |
 
-## 3. Success metrics
+## 3. Success metrics — measured 2026-08-20
 
-Measured on one workspace, two campaign runs, producer off then on:
+A paired run on one workspace, producer off then on. Sandbox clones of
+`rogii-wellbore-geology-prediction` (never the operator's copy), identical
+environment on both sides, `--max-steps 8 --yes --max-submissions 0`.
 
-| Metric | Now | Target |
+| | Producer **off** | Producer **on** |
 |---|---|---|
-| Campaign steps per hour | baseline TBD from the paired run | **higher** — the whole point |
-| Wall-clock a step spends inside the gathering tool | up to ~15 min | **0** |
-| Untested hypotheses idle during a sweep | 10 observed | not applicable — nothing idles |
-| Duplicate hypothesis rows after a concurrent run | n/a (one writer) | **0** |
+| Wall clock | 847s | 1047s |
+| Steps dispatched | 5 | 4 |
+| Tools chosen | implement, run_experiment ×2, generate_plan, run_experiment | run_experiment ×2, generate_plan, run_plan |
+| `analyze_competition` dispatched **by the campaign** | **0** | **0** |
+| Research artifacts | 239 → **239** (+0) | 239 → **257** (+18) |
+| Evidence age at end | **158.1h** | **0.02h** |
+| Hypothesis pool (viable/proposed) | 10/136 → 10/136 | 10/136 → 10/136 |
+| Producer ticks | — | 1 (gathering; still sweeping at shutdown) |
 
-"The tool was skipped" is **not** a success metric — the shipped gate already
-achieves that without a producer. Steps per hour is the number that settles
-criterion 1.
+### What this shows, and what it does not
+
+**The consumer never waited.** With the producer running, the campaign
+dispatched four steps and `analyze_competition` zero times, while the sweep ran
+beside it. Requirement 6 and exit criterion 1 hold as *observed* behaviour, not
+just as a property of the allowlist.
+
+**Evidence refilled; the hypothesis queue did not — in the 8-step run.** +18
+artifacts and staleness collapsing from 158 hours to one minute is the producer
+doing its job, but the pool stayed at 10 viable because the sweep was still
+running when the campaign stopped. A third run settles it; see §3.1.
+
+**The premise of criterion 1 did not reproduce.** The baseline never blocked on
+gathering — not because it was prevented, but because it *declined*: the gate
+reported "Evidence gathering available: only 10 viable hypotheses queued" at all
+five steps and the LLM policy chose testing every time. The ~15-minute blocking
+sweep in the plan's opening observation came from an earlier policy regime. So
+**steps per hour is not the discriminating measure on this workspace** — the
+two runs chose different tools and ran different experiments, and the 847s/1047s
+difference measures that, not the producer. The measure that discriminates is
+evidence freshness: 158h versus 0.02h, for the same campaign work.
+
+That is a correction to §3 as originally written, and it moves what this
+milestone is *for*. The failure it removes here is not a campaign stalled behind
+a sweep; it is a campaign testing hard for fourteen minutes against evidence
+five days stale, with a gate that says "go and look" every single step and a
+policy that correctly refuses because it has work to do. Nothing else in the
+system resolves that standoff.
+
+**The provenance fix is confirmed in the field.** 29 invocations recorded from
+the producer thread during the run — `RepositoryAnalyzerAgent` ×22,
+`ConceptNormalizerAgent` ×5, `CompetitionPageAnalyzerAgent`,
+`RepoQueryPlannerAgent` — none of which the campaign could have produced, since
+it dispatched no `analyze_competition`. Before `contextvars.copy_context()` in
+`start()` every one of those rows was dropped.
+
+**Shutdown behaved as designed.** "Evidence producer still sweeping at shutdown;
+leaving it to the process exit" — the bounded join (§7.4), taken rather than
+made the operator wait out a multi-minute sweep.
+
+### 3.1 The long run — criterion 3, met
+
+A sweep on this workspace takes **~20 minutes**. An 8-step campaign does not
+last that long, so the first two attempts measured the wrong thing. What bounds
+the campaign is not `--max-steps` and not the failure breaker:
+
+```
+stop:failing — 2 consecutive failed execution(s), 8 step(s) since the last success
+```
+
+That is `max_barren_steps=8`. On a workspace whose experiments never succeed, it
+fires long before anything else, and it has no CLI flag — raising `--max-steps`
+and even `max_consecutive_failures` changed nothing across two runs. With
+`max_barren_steps=40` set on the session, the third run gave the producer room:
+
+| | Long producer-on run |
+|---|---|
+| Wall clock | **3083s** (51 min), 19 decisions, 18 dispatches |
+| Consumer work | run_experiment ×10, generate_plan ×4, run_plan ×2, query_memory ×1 |
+| `analyze_competition` dispatched **by the campaign** | **0** |
+| Producer sweeps | **2 complete** (1344.6s, 1043.9s), a third in flight at shutdown |
+| Hypotheses minted | **10 + 10** |
+| Proposed pool | 136 → **153** (18 created during the run) |
+| Research artifacts | 239 → **274** (+35) |
+| Evidence age | 158h → **0.01h** |
+| Provenance rows this run | 274, of which 20 `HypothesisGeneratorAgent` |
+
+**Exit criterion 3 is met.** The queue refilled — 18 new proposals — while the
+consumer dispatched 18 steps and never once waited on a sweep.
+
+**And the run found something the design did not anticipate.** The producer
+swept *continuously*: two full sweeps and a third started, ~40 minutes of
+reasoning-role LLM work inside a 51-minute campaign. The reason is visible in
+its own log —
+
+```
+Evidence producer: analyze_competition finished in 1344.6s, 10 hypothesis(es) added
+Evidence producer: gathering — only 10 viable hypotheses queued
+```
+
+— ten hypotheses added, and the next tick still reads *only 10 viable*. Measured
+at the end: 18 rows created during the run, `proposed` up by 17, and
+`viable_hypothesis_count` **unchanged at 10 throughout**.
+
+`viable_hypothesis_count` excludes rows the selector has passed over
+`STALE_AFTER_SELECTIONS` (2) times, and every `generate_plan` ages every
+row it does not pick. Measured at the end of the run: **8 of the 18 rows it
+minted were already stale**, against 63 recorded selections and a 153-row pool.
+**The producer cannot satisfy the gate it gates on**, and so it never stopped.
+
+**Fixed** — see §7.5. The producer now latches the `thin` clause when a
+completed sweep leaves the count where it found it, and lifts the latch the
+moment the count rises.
+
+**A follow-up probe refined the diagnosis.** Running the producer against the
+same workspace with **no consumer beside it** — real registry, real LLM, the
+same 145-row pool — one sweep moved the viable count **10 → 20**, and the latch
+correctly did not fire (`thin_clause_unmovable: False`). So the producer is not
+inherently unable to move its own signal. The loop needs *both* halves: the
+producer minting rows and a consumer whose `generate_plan` selections age them
+out faster than they arrive. That is a producer↔consumer interaction, not a
+property of gathering, and it is worth stating precisely because the fix is
+hysteresis on an observation rather than a claim about what the producer can
+ever achieve.
+
+Field-confirmed so far: the branch where a working sweep is **not** latched.
+The branch where an ineffective sweep **is** latched is covered by unit tests
+(§10) and has not been witnessed on a live campaign — three attempts ended
+before a ~25-minute sweep completed, at 847s, 1047s, 1317s and 3083s, on
+stop conditions unrelated to M16.
+
+That is not the M21 ratchet — the pool is not holding gathering *shut* — but it
+is the same shape inverted, and it is worse for a background worker than for a
+campaign step: a sequential campaign that re-swept would at least be visible as
+a step it chose. Options, none of them free:
+
+1. **Count freshly minted rows as viable for a grace period.** Root-level, and
+   the riskiest: `viable_hypothesis_count` decides the *consumer's* allowlist
+   too, and loosening it is how the M21 ratchet re-opens. Not taken — see the
+   trap recorded in the plan.
+2. **Stop the producer repeating an action that provably changed nothing.**
+   Taken (§7.5).
+3. **Leave it, and rely on `_MIN_RESWEEP_HOURS`.** Not taken: that would make a
+   rate limit into the only thing preventing unbounded spend, which is not what
+   §5.2 says it is for.
+
+### Conditions, so the numbers are readable
+
+* `evaluation_metric` was `null` in the workspace contract and the campaign
+  refuses to run without one. Set in the sandbox to `rmse`/minimize — what this
+  workspace's own `metrics.json` already records every prior run against, not a
+  metric chosen for this exercise. **The research these runs produced is not
+  meaningful; only the loop's mechanics and timings are.**
+* `LABPILOT_VIABLE_HYPOTHESIS_TARGET=25` on both sides, so the 10-viable pool
+  reads as thin — criterion 3's condition. `LABPILOT_MIN_RESWEEP_HOURS=0.02` so
+  a producer could sweep more than once inside a bounded run; it did not get
+  the chance to.
+* One pair, one workspace, free-tier providers with observed 429s and failovers.
+  This is an existence proof about mechanism, not a performance measurement.
+* **The long run is not a healthy campaign.** Its experiments failed throughout
+  ("completed without writing metrics"; `smoke_gate timed out after 120s`), and
+  it was kept alive by raising `max_barren_steps` purely to buy the producer
+  wall clock. That is a fair test of *"does the queue refill while the consumer
+  keeps working"* and a poor one of anything about research quality.
 
 ## 4. Scope
 
@@ -215,7 +363,7 @@ producer is not the thing standing in M12's way.
 | `shared/experiments/hypothesis.py` | `create_unless_covered` | **new method** |
 | `intelligence/hypothesis/persist.py` | route through it | edit |
 | `execution/outcome.py` | route four `maybe_mint_*` through it; drop the unlocked pre-check | edit |
-| `reflection/hypotheses/evaluator.py` | `claim_if_proposed` | edit |
+| `reflection/hypotheses/evaluator.py` | docstring: why this is a status marker and not a claim | edit |
 | `fitroute/budget.py` | `availability(..., reserve=)` | edit |
 | `cli/conduct.py` | `--gather-background` | edit |
 
@@ -260,13 +408,48 @@ the same thread. So `covered_by` must not call `create()`, and the implementatio
 cannot be "take the lock, then call the existing `create`" — the
 allocate-and-write body has to be factored out and shared.
 
-### 7.3 The claim
+### 7.3 The claim (no change, and why)
 
-`evaluator.mark_testing` moves to `claim_if_proposed`, returning `None` on a lost
-race. Callers must read that as "someone else has it", distinct from the
-`FileNotFoundError` they already handle. `mark_testing_if_proposed` stays for
-callers that genuinely do not care who won; no path that *acts* on the claim uses
-it.
+`claim_if_proposed` already exists and `fanout.py` already uses it. The design's
+first draft called for migrating `evaluator.mark_testing` to it as well; reading
+the call path retired that.
+
+The producer **proposes**; it never claims. So M16 introduces no second claimer,
+and the only concurrent claiming remains M11's fan-out, which claims in
+`prepare_branches` before the branch reaches the engineer. `mark_testing` then
+runs against a hypothesis that is already `testing` and legitimately owned — an
+exclusive claim there would answer `None` on every branch of a healthy fan-out
+and mean nothing by it.
+
+What was actually missing was the rule written down. `mark_testing` now says it
+is a status marker, that `None` means "no such hypothesis" and never "someone
+else has it", and that a caller acting on *ownership* wants
+`HypothesisStore.claim_if_proposed` with `fanout.py` as the worked example.
+
+Exit criterion 4 is unchanged and still worth its test — it pins the property,
+not the migration.
+
+### 7.5 Hysteresis: not repeating what changed nothing
+
+A worker that repeats an action on a schedule needs one rule a campaign step
+does not: **do not re-run an action on a signal your own last run failed to
+move.** A step that re-swept was at least a step someone chose; an unattended
+producer doing it is invisible and unbounded.
+
+`gather_verdict` (a thin extension of `should_gather_evidence`, same three
+clauses) now returns *which* clause decided, because a caller that acts on the
+verdict has to branch on it and matching the prose would break the first time it
+is reworded. `gather_once` takes `skip_clauses`; the runner supplies them.
+
+The producer records the viable count either side of a sweep. When a *completed*
+sweep on the `thin` clause leaves that count where it found it, the clause is
+latched and skipped — with a logged reason, not silently — until the count rises
+above where it stuck. Staleness and stagnation are untouched, deliberately: they
+are signals the producer's own work *does* move (158h → 0.01h in the measured
+run), so they keep firing while `thin` is held.
+
+The latch is per-clause and lifts on evidence, so a pool that genuinely drains —
+the case the clause exists for — reopens gathering normally.
 
 ### 7.4 Shutdown
 
@@ -338,15 +521,40 @@ Off by default. `research conduct run --gather-background` (or
 byte-for-byte today's behaviour, including `analyze_competition` staying gated on
 the predicate in the consumer's allowlist. **Rollback is dropping the flag.**
 
-Ship order, each step independently useful:
+Ship order, each step independently useful — **all four landed**:
 
-1. §7.2 dedupe + §7.3 claim — correctness under two writers, no producer yet.
-2. §5.1 `gather_once` — callable, invoked from nowhere.
-3. §5.2 runner + §5.3 allowlist + §9 observability, behind the flag.
-4. §8 reserve.
+1. ~~§7.2 dedupe~~ — correctness under two writers, no producer yet (§7.3 turned
+   out to be documentation, not a change).
+2. ~~§5.1 `gather_once`~~ — callable, invoked from nowhere.
+3. ~~§5.2 runner + §5.3 allowlist + §9 observability~~, behind the flag.
+4. ~~§8 reserve~~ — `availability(..., reserve=)`, `select_route(..., reserve=)`,
+   `LLMGateway.preview(role, reserve=)`, and a pre-flight check in the producer.
 
-Then the paired campaign run in §3. Until it exists, this milestone sits exactly
-where M8 and M11 do: implementation complete, exit criteria undemonstrated.
+What the tests cover, and what they do not:
+
+| Criterion | State |
+|---|---|
+| 1 — a step never blocks on gathering | **Unit-proven at the allowlist**: with a producer running, `analyze_competition` leaves the consumer's allowlist even when the gate says *gather*. Not yet shown on a campaign log |
+| 2 — full backlog ticks and no-ops with a reason | **Covered** |
+| 3 — a thin backlog refills without the consumer stalling | **Met, measured 2026-08-20** (§3.1). 18 hypotheses minted across two completed sweeps while the consumer dispatched 18 steps and never waited. Needed `max_barren_steps` raised for the campaign to outlast a ~20-minute sweep |
+| 4 — producer and consumer never claim the same hypothesis | **Covered**, and structurally: the producer proposes and never claims (§7.3) |
+| 5 — one idea, one row, under two writers | **Covered and mutation-checked** — moving the predicate outside `.alloc.lock` makes eight racing writers produce eight rows, and the test catches it |
+| 6 — a tick that raises does not take the campaign with it | **Covered** |
+| 7 — the plan decides what is gathered, not the producer | **Covered** — driven with a stub tool and non-Kaggle args |
+
+All five exit criteria are now met (§3.1). Two things the runs surfaced are
+**not** fixed and should be booked before this is called done:
+
+1. ~~**The producer cannot satisfy its own gate**~~ **fixed** (§7.5) — the
+   `thin` clause is latched when a sweep does not move it. What is *not* fixed
+   is the underlying question: at a 153-row pool with one pick per selection,
+   "passed over twice" is arithmetic rather than a quality signal, and
+   `viable_hypothesis_count` decides the consumer's allowlist too. Left alone
+   deliberately; changing it is how M21's ratchet re-opens, and no measurement
+   here says which way it should move.
+2. **A sweep costs ~20 minutes**, most of it `RepositoryAnalyzerAgent`. Any
+   campaign shorter than that gets fresh evidence and no new hypotheses — a
+   perfectly reasonable outcome the plan never names.
 
 **It does not fix what a campaign is short of.** The plan's first trap stands,
 now aimed at M22–M26: a faster supply of hypotheses tested against a target

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
+from labpilot.research_engine.intelligence.hypothesis.models import HypothesisRecommendation
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import (
     HypothesisCreatedBy,
@@ -12,10 +15,62 @@ from labpilot.research_engine.shared.experiments.models import (
     HypothesisOrigin,
     HypothesisStatus,
 )
-from labpilot.research_engine.intelligence.hypothesis.models import HypothesisRecommendation
-
 
 logger = logging.getLogger(__name__)
+
+
+def _mint_identity(hyp_or_card: Any) -> tuple[str, str, str, str]:
+    """What makes two proposals the same idea, for the write-race check only.
+
+    Same technique, same combination, same parent **and the same words**. That
+    last clause is what keeps it narrow, and it is not paranoia: one analyze
+    batch legitimately carries five cards for `SpecAugment` — from a belief,
+    from the untried ledger, from a pipeline diff — and the system's own policy
+    says those are distinct proposals worth ranking separately. A
+    technique-level identity here silently collapsed ten recommendations to
+    five.
+
+    The *policy* filter — which techniques the backlog already covers, across
+    proposed/testing/confirmed — runs upstream in `HypothesisAssistant.recommend`
+    via `load_open_hypothesis_tags`, and is unchanged. This closes a different
+    hole: that filter reads the pool before the LLM drafts, and the rows land
+    tens of seconds later, so a second writer can create the same card in
+    between. Two writers racing on the same evidence produce the same text, so
+    matching on it is enough — and only a *newly created* row can appear in
+    that window, which is why the `proposed` snapshot
+    `create_unless_covered` passes is the right pool to search.
+
+    Compared on the *stored* technique, via `derive_technique`, not the one
+    the card arrived with. A combination proposal carries its members in
+    `combo_techniques` and an empty `technique`, which the store fills in on
+    write — so comparing the raw fields put `("", "alpha+beta", …)` next to
+    `("alphabeta", "alpha+beta", …)` and called them different ideas. Every
+    combination card duplicated freely while every other kind was caught.
+
+    Narrow on purpose: a false positive here loses an idea, while a false
+    negative leaves one duplicate for the upstream filter to catch next pass.
+    """
+    from labpilot.research_engine.intelligence.retrieval.fetchers import normalize_label
+    from labpilot.research_engine.shared.experiments.hypothesis import derive_technique
+
+    combo = [str(t).strip() for t in (getattr(hyp_or_card, "combo_techniques", None) or [])]
+    stored_technique = derive_technique(getattr(hyp_or_card, "technique", "") or "", combo)
+    return (
+        normalize_label(stored_technique or ""),
+        "+".join(sorted(normalize_label(t) for t in combo)),
+        str(getattr(hyp_or_card, "parent_hypothesis_id", "") or ""),
+        " ".join(str(getattr(hyp_or_card, "prediction", "") or "").split()),
+    )
+
+
+def _covers(card: HypothesisRecommendation) -> Callable[[list[Any]], bool]:
+    """Predicate for `create_unless_covered` (M16): same card already proposed?"""
+    identity = _mint_identity(card)
+
+    def covered(proposed: list[Any]) -> bool:
+        return any(_mint_identity(hyp) == identity for hyp in proposed)
+
+    return covered
 
 
 def persist_recommendations(
@@ -26,6 +81,12 @@ def persist_recommendations(
     workspace_root: Path | None = None,
 ) -> list[HypothesisRecommendation]:
     """Create Suggested (proposed) M2 hypotheses; fill hypothesis_id on cards.
+
+    Returns only the cards that produced a row. A card another writer created
+    in the meantime is dropped rather than returned with no hypothesis, because
+    the caller reports `new_count = len(...)` of what comes back — counting a
+    card that created nothing is how "23 new hypotheses" gets printed for a run
+    that added three. A refusal below returns the same way, for the same reason.
 
     M23 step 8 gates here because this is the **only durable write** — the point
     past which a belief outlives the run. Blocking further upstream would stop a
@@ -46,7 +107,8 @@ def persist_recommendations(
     store = HypothesisStore(knowledge_dir, competition)
     updated: list[HypothesisRecommendation] = []
     for card in recommendations:
-        hyp = store.create(
+        hyp = store.create_unless_covered(
+            covered_by=_covers(card),
             observation=card.observation or card.title,
             reason=card.reason or card.title,
             prediction=card.prediction,
@@ -64,6 +126,8 @@ def persist_recommendations(
             technique_stack=card.technique_stack,
             combo_techniques=card.combo_techniques,
         )
+        if hyp is None:
+            continue
         updated.append(card.model_copy(update={"hypothesis_id": hyp.id}))
     return updated
 
@@ -195,14 +259,10 @@ def load_open_hypothesis_tags(knowledge_dir: Path, competition: str) -> set[str]
         if hyp.technique:
             open_tags.add(normalize_label(hyp.technique))
         if hyp.parent_hypothesis_id and hyp.technique:
-            open_tags.add(
-                normalize_label(f"{hyp.parent_hypothesis_id}+{hyp.technique}")
-            )
+            open_tags.add(normalize_label(f"{hyp.parent_hypothesis_id}+{hyp.technique}"))
         combo = [str(t).strip() for t in (hyp.combo_techniques or []) if str(t).strip()]
         if len(combo) >= 2:
             joined = "+".join(sorted(normalize_label(t) for t in combo))
             open_tags.add(joined)
-            open_tags.add(
-                normalize_label(f"{hyp.parent_hypothesis_id or 'root'}+{joined}")
-            )
+            open_tags.add(normalize_label(f"{hyp.parent_hypothesis_id or 'root'}+{joined}"))
     return open_tags

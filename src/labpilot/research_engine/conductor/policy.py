@@ -64,6 +64,7 @@ def build_observe_bundle(
     max_context_items: int = 16,
     max_context_chars: int = 4000,
     budgets: tuple[BudgetConfig, BudgetState] | None = None,
+    producer_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Gather durable state for policy input.
 
@@ -132,6 +133,13 @@ def build_observe_bundle(
     observe["viable_hypotheses"] = viable
     observe["untested_hypotheses"] = proposed_total
     observe["hours_since_last_artifact"] = hours_since_last_artifact(workspace)
+    # M16: what the background producer last did, when one is running. Purely
+    # descriptive — the gate is what decides, and a number the model merely
+    # reads has changed no decision in nine campaigns. It is here so the policy
+    # is not watching the hypothesis pool grow between steps with no account of
+    # why it is growing.
+    if producer_status is not None:
+        observe["evidence_producer"] = producer_status
     _attach_score_progress(observe, session, budgets)
     _attach_evidence_refresh(observe, workspace)
     if include_context:
@@ -621,6 +629,8 @@ def available_tools(
     workspace: Workspace,
     allowlist: set[str],
     budgets: tuple[BudgetConfig, BudgetState] | None = None,
+    *,
+    external_gathering: bool = False,
 ) -> set[str]:
     """Drop tools whose preconditions the workspace does not yet satisfy.
 
@@ -644,11 +654,22 @@ def available_tools(
     # minutes of network and LLM work). Once there is a backlog of untested
     # hypotheses, the useful move is to *test* one, not to re-derive the same
     # techniques and beliefs again. Gathering reopens when the backlog runs dry.
-    gather_ok, gather_reason = should_gather_evidence(workspace, budgets)
-    if not gather_ok:
-        logger.info("Skipping evidence gathering: %s", gather_reason)
+    #
+    # `external_gathering` (M16): a background producer owns the sweep, so the
+    # tool leaves the consumer's allowlist *unconditionally* — not gated on the
+    # same predicate. Leaving it gated would let both components pass the same
+    # gate in the same second and sweep twice. It also makes the exit criterion
+    # checkable: "a campaign step never blocks on gathering" becomes a property
+    # of the allowlist rather than a hope about scheduling.
+    if external_gathering:
+        gather_ok = False
+        logger.debug("Evidence gathering belongs to the background producer this run")
     else:
-        logger.info("Evidence gathering available: %s", gather_reason)
+        gather_ok, gather_reason = should_gather_evidence(workspace, budgets)
+        if not gather_ok:
+            logger.info("Skipping evidence gathering: %s", gather_reason)
+        else:
+            logger.info("Evidence gathering available: %s", gather_reason)
 
     requires: dict[str, bool] = {
         # Nothing to reflect on until an experiment has produced evidence.
@@ -762,7 +783,52 @@ def should_gather_evidence(
     re-ingests known kernels. The cost of *not* gathering was four campaigns
     that could not improve, so the asymmetry is deliberate.
     """
+    return gather_verdict(workspace, budgets)[:2]
+
+
+#: Which clause opened (or closed) the gate. Returned alongside the human
+#: reason because a caller that *acts* on the verdict needs to branch on it,
+#: and matching the prose would break the first time it is reworded. M16's
+#: producer needs it: a background worker that repeats an action has to know
+#: which signal it is trying to move.
+GATHER_CLAUSES = ("floor", "thin", "stagnant", "stale", "first", "held", "satisfied")
+
+
+def gather_verdict(
+    workspace: Workspace,
+    budgets: tuple[BudgetConfig, BudgetState] | None = None,
+    *,
+    suppress: tuple[str, ...] = (),
+) -> tuple[bool, str, str]:
+    """`should_gather_evidence`, plus the name of the clause that decided it.
+
+    ``suppress`` names clauses the caller has already acted on without effect
+    (M16's producer latch). A suppressed clause **falls through to the ones
+    below it** rather than ending the verdict — which is the whole reason this
+    argument exists here rather than in the caller.
+
+    Filtering the returned clause instead was wrong in a way that only showed
+    up in combination: the clauses are ordered, and `thin` returns before
+    `stagnant`, `first` and `stale` are ever evaluated. So a caller that
+    skipped on a returned `thin` skipped *every* tick for as long as the pool
+    stayed under target — day-old evidence and a stalled campaign included,
+    because the gate had never reached the lines that would have said so. The
+    producer's latch is meant to stop it repeating one futile action, not to
+    stop it working.
+
+    A clause that fires and is suppressed is remembered: with nothing below it
+    firing either, the verdict is `held` rather than `satisfied`, so the reason
+    string says the pool is thin instead of claiming it is full.
+    """
     age_hours = hours_since_last_artifact(workspace)
+    held: list[str] = []
+
+    def _fires(clause: str, reason: str) -> tuple[bool, str, str] | None:
+        """The verdict for a clause that just fired, unless it is suppressed."""
+        if clause in suppress:
+            held.append(reason)
+            return None
+        return True, reason, clause
 
     # A floor under both clauses, not a third gate. Making the conditions
     # independent introduces a failure the AND version could not have: a
@@ -773,11 +839,13 @@ def should_gather_evidence(
     # Minutes, not hours: long enough that no campaign re-sweeps inside a single
     # loop, short enough that it never becomes the reason evidence goes stale.
     if age_hours is not None and age_hours < _MIN_RESWEEP_HOURS:
-        return False, f"evidence gathered {age_hours * 60:.0f} minutes ago"
+        return False, f"evidence gathered {age_hours * 60:.0f} minutes ago", "floor"
 
     viable = viable_hypothesis_count(workspace.knowledge_dir, workspace.competition)
     if viable < _VIABLE_TARGET:
-        return True, f"only {viable} viable hypotheses queued"
+        verdict = _fires("thin", f"only {viable} viable hypotheses queued")
+        if verdict is not None:
+            return verdict
 
     # Shares `plateau_window` so one knob governs "how long is long enough",
     # but the two measure different things and do not fire together: this
@@ -799,16 +867,29 @@ def should_gather_evidence(
         window = max(1, stagnant_config.plateau_window)
         stagnant_for = score_summary(stagnant_state, stagnant_config).steps_since_improvement
         if stagnant_for >= window:
-            return True, f"{stagnant_for} experiments with no improvement"
+            verdict = _fires("stagnant", f"{stagnant_for} experiments with no improvement")
+            if verdict is not None:
+                return verdict
 
     if age_hours is None:
-        return True, "no evidence gathered yet"
-    if age_hours >= _EVIDENCE_COOLDOWN_HOURS:
-        return True, f"evidence is {age_hours:.1f}h old"
+        verdict = _fires("first", "no evidence gathered yet")
+        if verdict is not None:
+            return verdict
+    elif age_hours >= _EVIDENCE_COOLDOWN_HOURS:
+        verdict = _fires("stale", f"evidence is {age_hours:.1f}h old")
+        if verdict is not None:
+            return verdict
 
+    if held:
+        # Not `satisfied`: the workspace is not. Reporting it as satisfied put
+        # "5 viable hypotheses queued" in the log of a campaign holding one.
+        return False, f"{held[0]}, and the last sweep did not change that", "held"
+
+    ago = "never" if age_hours is None else f"{age_hours:.1f}h ago"
     return (
         False,
-        f"{viable} viable hypotheses queued and evidence gathered {age_hours:.1f}h ago",
+        f"{viable} viable hypotheses queued and evidence gathered {ago}",
+        "satisfied",
     )
 
 
@@ -835,9 +916,7 @@ def has_unrun_plan(workspace: Workspace) -> bool:
         # Fails *open*, as its neighbour does: reporting outstanding work that
         # cannot be read would gate `generate_plan`, and a campaign that cannot
         # plan cannot do anything else either.
-        logger.exception(
-            "cannot read unrun plans for %s; treating as none", workspace.competition
-        )
+        logger.exception("cannot read unrun plans for %s; treating as none", workspace.competition)
         return False
     finally:
         if store is not None:
@@ -913,6 +992,8 @@ def decide_next(
     auto_offline_fallback: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
     budgets: tuple[BudgetConfig, BudgetState] | None = None,
+    external_gathering: bool = False,
+    producer_status: dict[str, Any] | None = None,
 ) -> tuple[NextAction, dict[str, Any]]:
     """Observe + think; return validated NextAction and observe bundle.
 
@@ -926,13 +1007,16 @@ def decide_next(
     caller with no campaign state behaves exactly as before.
     """
     all_tools = set(registry.names())
-    allowlist = available_tools(workspace, all_tools, budgets)
+    allowlist = available_tools(
+        workspace, all_tools, budgets, external_gathering=external_gathering
+    )
     observe = build_observe_bundle(
         store,
         workspace,
         session_id,
         include_context=not prefer_offline,
         budgets=budgets,
+        producer_status=producer_status,
     )
     action = llm_next_action(
         observe,
