@@ -188,6 +188,15 @@ class ScoreEvent(BaseModel):
 _FAILURE_NOISE = re.compile(r"0x[0-9a-f]+|\d+", re.IGNORECASE)
 
 
+#: How many recent failures to keep, and therefore how long a cycle
+#: `failures_are_repeating` can see. Three held only the failures that would
+#: trip the shipped threshold, which is enough for a stall repeating one defect
+#: and enough for an A/B oscillation, but not for an A/B/C one — that needs a
+#: fourth slot to see the repeat of A. Five, at 200 characters each, is a
+#: kilobyte of session metadata for a cycle length no repair loop should reach.
+_FAILURE_WINDOW = 5
+
+
 def _failure_signature(error: str) -> str:
     """What two failure excerpts have to share to count as the same failure.
 
@@ -244,6 +253,8 @@ class BudgetState(BaseModel):
     consecutive_unmapped: int = 0
     #: What the failures said, most recent last. Bounded — this is a stop
     #: *reason*, not a log, and it is written into session metadata.
+    #: `_FAILURE_WINDOW` sets the bound; it is also the span
+    #: `failures_are_repeating` can see, so the two moved together.
     recent_failures: list[str] = Field(default_factory=list)
 
     def record_execution(self, *, succeeded: bool, error: str = "") -> None:
@@ -256,7 +267,7 @@ class BudgetState(BaseModel):
         self.consecutive_failures += 1
         excerpt = " ".join(str(error).split())[:200]
         if excerpt:
-            self.recent_failures = [*self.recent_failures[-2:], excerpt]
+            self.recent_failures = [*self.recent_failures[-(_FAILURE_WINDOW - 1) :], excerpt]
 
     def failures_are_repeating(self) -> bool:
         """True when the campaign is stuck rather than working through defects.
@@ -268,9 +279,17 @@ class BudgetState(BaseModel):
         and only the second is a reason to end a campaign. The breaker counted
         both the same way and stopped the converging one at three.
 
-        Two excerpts is enough to answer it, which matters because
-        `recent_failures` is bounded — it is a stop reason, not a log — so a
-        raised threshold has no longer window to consult.
+        Asked against **every** failure still in the window, not just the one
+        before. Comparing adjacent pairs answers a narrower question — "is this
+        the same as last time?" — and a loop where fixing A reintroduces B and
+        fixing B reintroduces A answers no to it forever: measured on the branch,
+        A/B/A/B/A/B/A/B reported novel on all eight and the breaker never fired.
+        That cycle is a stall by any reading; it is only *adjacent* failures that
+        differ. Convergence means each failure is one not seen before.
+
+        The window (`_FAILURE_WINDOW`) is what bounds the cycle length this can
+        see. A longer one still evades it and is left to `max_barren_steps`,
+        which is the backstop for every case this predicate declines to stop.
 
         **Fewer than two recorded failures answers True**, keeping the old
         behaviour wherever this cannot see. A failure with no error text
@@ -279,9 +298,8 @@ class BudgetState(BaseModel):
         """
         if len(self.recent_failures) < 2:
             return True
-        return _failure_signature(self.recent_failures[-1]) == _failure_signature(
-            self.recent_failures[-2]
-        )
+        newest = _failure_signature(self.recent_failures[-1])
+        return any(_failure_signature(prior) == newest for prior in self.recent_failures[:-1])
 
     def ensure_wall_start(self) -> None:
         if not self.wall_started_at:

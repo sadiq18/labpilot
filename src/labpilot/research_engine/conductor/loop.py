@@ -1116,6 +1116,35 @@ def _answer_schema_questions(
     return True
 
 
+def _why_it_is_failing(state: Any) -> str:
+    """Which reading of `stop:failing` the operator is looking at.
+
+    The readings mean opposite things and the transcript looked identical: the
+    same failure repeating is a stall, while distinct failures that ran out of
+    steps is a repair loop interrupted mid-convergence. An operator who cannot
+    tell them apart concludes the model cannot write code, which was the wrong
+    lesson from playground-series-s6e8 (issue #173).
+
+    Four states, not two. `failures_are_repeating()` answers True on an empty
+    history — correct for the *gate*, which must keep stopping where it cannot
+    see, and wrong as a description: a campaign that never reached an execution
+    printed "the same failure is repeating" beside a count of zero. That is the
+    barren breaker's own case (rogii's S-021 spent 30 steps without producing an
+    execution), so it was both the most likely reading to be shown and the most
+    obviously false.
+    """
+    if state.consecutive_failures == 0:
+        return "no execution failed — the campaign never reached one"
+    if not state.recent_failures:
+        return "the failures recorded no error text, so they cannot be compared"
+    if state.failures_are_repeating():
+        return "the same failure is repeating"
+    return (
+        "the failures were distinct — the repair loop was still converging when "
+        "the barren-step limit ended it; --max-barren-steps buys it more attempts"
+    )
+
+
 def run_until_stop(
     store: ConductorStore,
     workspace: Workspace,
@@ -1557,21 +1586,7 @@ def _run_until_stop_inner(
                 # Say what broke. A bare `stop:failing` reproduces the original
                 # complaint — a campaign that ended and did not say why.
                 why = "; ".join(budget_state.recent_failures[-2:]) or "no successful experiment"
-                # And say *which* rule ended it. The two read identically in a
-                # transcript and mean opposite things: the same failure three
-                # times is a stall, while distinct failures that ran out of
-                # steps is a repair loop interrupted mid-convergence. An
-                # operator who cannot tell them apart concludes the model
-                # cannot write code, which was the wrong lesson from
-                # playground-series-s6e8.
-                if budget_state.failures_are_repeating():
-                    which = "the same failure is repeating"
-                else:
-                    which = (
-                        "the failures were distinct — the repair loop was still "
-                        "converging when the barren-step limit ended it; "
-                        "--max-barren-steps buys it more attempts"
-                    )
+                which = _why_it_is_failing(budget_state)
                 rationale = (
                     f"stop:{stop} — {budget_state.consecutive_failures} consecutive "
                     f"failed execution(s), {budget_state.steps_since_success} step(s) "
