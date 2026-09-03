@@ -99,6 +99,27 @@ class KaggleConfig(BaseModel):
     key: str = Field(default="", exclude=True, repr=False)
 
 
+class CampaignConfig(BaseModel):
+    """Defaults for the campaign's automatic stops (issue #173).
+
+    Three states per field, and they are not the two a plain int would give:
+
+    * ``None`` — not configured. The shipped default in `budgets.py` applies,
+      and the field is omitted from `BudgetConfig` rather than passed through.
+    * ``0`` — configured *off*. `BudgetConfig` spells "no limit" as ``None``,
+      which is already spent here on "unset", so zero carries the disable — the
+      same spelling `--max-barren-steps 0` uses on the command line.
+    * anything else — the limit itself.
+
+    A `conduct run` flag still wins over the value here; this is the default an
+    operator sets once for a workspace whose models need more attempts than the
+    shipped three, rather than retyping it every invocation.
+    """
+
+    max_consecutive_failures: int | None = Field(default=None, ge=0)
+    max_barren_steps: int | None = Field(default=None, ge=0)
+
+
 class RuntimeDefaults(BaseModel):
     runtimes_dir: Path = Path("configs/runtimes")
     default_runtime: str = "local-default"
@@ -239,6 +260,7 @@ class AppConfig(BaseModel):
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     experiments: ExperimentsConfig = Field(default_factory=ExperimentsConfig)
     baseline_gate: BaselineGateConfig = Field(default_factory=BaselineGateConfig)
+    campaign: CampaignConfig = Field(default_factory=CampaignConfig)
 
 
 class Settings(BaseSettings):

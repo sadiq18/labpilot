@@ -360,6 +360,17 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
     raise typer.Exit(2)
 
 
+def _configured(flag: int | None, configured: int | None) -> int | None:
+    """The flag if it was passed, else the workspace's configured default.
+
+    `None` means "not given" at both layers, so this is a plain first-set —
+    which is only correct because `0` carries the disable rather than `None`.
+    Were zero not spelled that way, a configured `0` would be indistinguishable
+    from an absent setting and could never turn a breaker off.
+    """
+    return flag if flag is not None else configured
+
+
 def _breaker(name: str, value: int | None) -> dict[str, int | None]:
     """One breaker override, or nothing at all — three states in one flag.
 
@@ -528,8 +539,10 @@ def conduct_run(
             target_metric=target_metric,
             target_value=target_value,
             plateau_window=plateau_window,
-            max_barren_steps=max_barren_steps,
-            max_consecutive_failures=max_consecutive_failures,
+            max_barren_steps=_configured(max_barren_steps, config.campaign.max_barren_steps),
+            max_consecutive_failures=_configured(
+                max_consecutive_failures, config.campaign.max_consecutive_failures
+            ),
             maximize=_resolve_campaign_direction(ws, competition),
             existing={
                 "max_steps": max_steps,
