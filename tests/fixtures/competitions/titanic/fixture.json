@@ -1,0 +1,60 @@
+{
+  "slug": "titanic",
+  "captured_at": "2026-08-20",
+  "source": "kaggle: titanic",
+  "provenance": "derived",
+  "licence": "kaggle-getting-started",
+  "redistribution": "unknown",
+  "files": [
+    {
+      "path": "gender_submission.csv",
+      "mode": "headers_only",
+      "source_sha256": "7a262a7f4cb807f53911dccc84257ed3976b21b7b50ffc468b58446bff8bb6a4",
+      "source_bytes": 3258,
+      "source_rows": 418,
+      "fixture_rows": 0
+    },
+    {
+      "path": "test.csv",
+      "mode": "headers_only",
+      "source_sha256": "56023b9948236f3c7a1c9448fcf418b283e109ef177fa8c7e069158dd7dd52b2",
+      "source_bytes": 28629,
+      "source_rows": 418,
+      "fixture_rows": 0
+    },
+    {
+      "path": "train.csv",
+      "mode": "headers_only",
+      "source_sha256": "7d118fef8b6ccf7f81111877bc388536f7b1e498a655e3d649d19aaa010e9f6f",
+      "source_bytes": 61194,
+      "source_rows": 891,
+      "fixture_rows": 0
+    },
+    {
+      "path": "competition.json",
+      "mode": "verbatim",
+      "source_sha256": "0aad6919b735a326392816469519784879c1215d6c28e2fc7fdb17d0a7e2b711",
+      "source_bytes": 1205,
+      "source_rows": null,
+      "fixture_rows": null
+    }
+  ],
+  "expected": {
+    "target_column": "Survived",
+    "id_columns": [
+      "PassengerId"
+    ],
+    "train_test_relationship": "disjoint_units",
+    "modality": "tabular",
+    "feature_columns": null,
+    "metric_name": "accuracy",
+    "must_ask": []
+  },
+  "unverifiable": {
+    "row_count": "headers_only capture keeps a subset of rows",
+    "cardinality": "headers_only capture keeps a subset of rows",
+    "feature_columns": "no rows, so constant and equals-target exclusions cannot fire"
+  },
+  "known_failures": {},
+  "notes": "The submission template is named `gender_submission.csv`, not `sample_submission.csv`. That is the point of this fixture: a profiler that finds the template by filename convention rather than by what the file contains resolves nothing here, and every criterion that leans on the template \u2014 target, id, submission columns \u2014 falls with it. 891 train rows against 418 test rows, 12 columns. Scored on \"Categorization Accuracy\", which is `accuracy`. Kaggle states the metric as \"Categorization Accuracy\"."
+}

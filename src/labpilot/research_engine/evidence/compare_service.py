@@ -67,9 +67,7 @@ def resolve_control(
 
     # Prefer metrics already on plan; else look up experiment artifact.
     if control_exec and not control_metrics:
-        control_metrics = _metrics_from_artifact(
-            knowledge_dir, competition, str(control_exec)
-        )
+        control_metrics = _metrics_from_artifact(knowledge_dir, competition, str(control_exec))
 
     if not control_metrics and control_hyp:
         control_exec2, metrics2 = _metrics_for_hypothesis(
@@ -96,11 +94,45 @@ def resolve_control(
                 ),
             )
             control_hyp = best.id
-            control_exec2, metrics2 = _metrics_for_hypothesis(
-                knowledge_dir, competition, best.id
-            )
+            control_exec2, metrics2 = _metrics_for_hypothesis(knowledge_dir, competition, best.id)
             control_metrics = metrics2
             control_exec = control_exec or control_exec2
+
+    if not control_metrics and str(plan_meta.get("plan_kind") or "") == "baseline":
+        # M23 step 7. The baseline plan has no parent by construction — it *is*
+        # the first run — so its COMPARE used to find no control, and
+        # `missing_control` meant no evidence card and `H-BASELINE` sitting on
+        # `proposed` forever. The floor is the control it always had and nobody
+        # read: what the dumbest defensible answer scores on the same folds.
+        #
+        # Deliberately arriving as `parent_cv` rather than as a third reading on
+        # `ObservedOutcomes`. `_decide` is the single funnel for every verdict in
+        # this system, so the gain, the sign, the card and the hypothesis status
+        # all work unchanged — and a metric mismatch is caught for free by
+        # `_same_metric`, machinery that already exists and has already been
+        # debugged.
+        from labpilot.research_engine.execution.baseline.runner import (
+            ensure_readings,
+            floor_as_control,
+        )
+
+        try:
+            # Producing the readings is called out here rather than hidden
+            # inside `floor_as_control`: it fits five LightGBM models, which is
+            # tens of seconds on a large table, and a function that reads like a
+            # dict lookup should not be where that happens.
+            floor, _model = ensure_readings(context.workspace_root)
+            floor_metrics = floor_as_control(floor)
+        except Exception as exc:  # noqa: BLE001 — no control is the status quo
+            logger.info("Could not read a floor to compare against: %s", exc)
+            floor_metrics = {}
+        if floor_metrics:
+            control_metrics = floor_metrics
+            # No `control_hypothesis_id`. It used to be set to `floor:<strategy>`,
+            # a value no `HypothesisStore` contains, in a field the lines above
+            # look up by id — the next reader had no way to know that particular
+            # one was synthetic. Which strategy won is in `baseline_floor.json`,
+            # where it is a measurement rather than a fabricated key.
 
     return (
         str(control_exec) if control_exec else None,

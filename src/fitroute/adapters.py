@@ -126,7 +126,18 @@ class OpenAICompatAdapter:
         if not choices:
             raise RuntimeError(f"{self.base_url} returned no choices for {model!r}")
         content = (choices[0].get("message") or {}).get("content")
-        if not isinstance(content, str):
+        # `""` is a `str`, so an isinstance check alone accepts an empty body as
+        # a valid answer: no raise, no failover, and the caller gets nothing.
+        # `_RETRYABLE_TEXT` already lists "NO MESSAGE.CONTENT" precisely so this
+        # case moves to the next provider — but it only ever fired for a missing
+        # key, never for a present-and-empty one.
+        #
+        # Measured on playground-series-s6e8 (2026-08-30): the Conductor policy
+        # failed twice in one campaign with "Response did not contain a JSON
+        # object. Got: ''" and dropped to the offline engine, while the gateway
+        # logged no provider failure at all — because from its side the call had
+        # succeeded.
+        if not isinstance(content, str) or not content.strip():
             raise RuntimeError(f"{self.base_url} returned no message.content for {model!r}")
 
         usage = body.get("usage") or {}
@@ -194,7 +205,9 @@ class OllamaAdapter:
             raise RuntimeError(f"Ollama unreachable at {self.base_url}: {exc}") from exc
 
         content = (body.get("message") or {}).get("content")
-        if not isinstance(content, str):
+        # Same reasoning as the openai_compat adapter above: an empty string is
+        # a `str`, and returning it hands the caller an answer that is not one.
+        if not isinstance(content, str) or not content.strip():
             raise RuntimeError("Ollama response missing message.content")
         return Completion(
             text=content,

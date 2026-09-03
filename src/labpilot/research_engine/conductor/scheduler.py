@@ -12,6 +12,37 @@ from labpilot.research_engine.tools.registry import ToolRegistry
 from labpilot.research_engine.workspace_facade import Workspace
 
 
+def with_llm_client(
+    registry: ToolRegistry,
+    tool_name: str,
+    args: dict[str, Any],
+    llm_client: Any | None,
+) -> dict[str, Any]:
+    """Add `llm_client` to `args` only when the handler declares the parameter.
+
+    Signature-driven rather than a hardcoded tool list, so a new execution tool
+    is wired by accepting `llm_client` — the failure mode being avoided is a
+    tool silently running without one.
+
+    Module-level because the Conductor is no longer the only caller: M16's
+    evidence producer invokes a tool outside the task queue, and a second copy
+    of this rule is a second place for it to fall out of date.
+    """
+    if llm_client is None or "llm_client" in args:
+        return args
+    tool = registry.get(tool_name)
+    handler = getattr(tool, "handler", None)
+    if handler is None:
+        return args
+    try:
+        params = inspect.signature(handler).parameters
+    except (TypeError, ValueError):
+        return args
+    if "llm_client" not in params:
+        return args
+    return {**args, "llm_client": llm_client}
+
+
 class Scheduler:
     """Pick the next ready task and invoke its tool. Does not chain tools."""
 
@@ -38,25 +69,8 @@ class Scheduler:
         self.llm_client = llm_client
 
     def _with_llm_client(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-        """Inject the client only into handlers that declare the parameter.
-
-        Signature-driven rather than a hardcoded tool list, so a new execution
-        tool is wired by accepting `llm_client` — the failure mode being avoided
-        is a tool silently running without one.
-        """
-        if self.llm_client is None or "llm_client" in args:
-            return args
-        tool = self.registry.get(tool_name)
-        handler = getattr(tool, "handler", None)
-        if handler is None:
-            return args
-        try:
-            params = inspect.signature(handler).parameters
-        except (TypeError, ValueError):
-            return args
-        if "llm_client" not in params:
-            return args
-        return {**args, "llm_client": self.llm_client}
+        """This scheduler's client, through the shared rule above."""
+        return with_llm_client(self.registry, tool_name, args, self.llm_client)
 
     def next_ready(self, session_id: str) -> OsTask | None:
         ready = self.store.ready_tasks(session_id)

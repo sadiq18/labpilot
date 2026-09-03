@@ -55,6 +55,7 @@ markers = [
     "image: marks tests that require the image extra (torch, pillow)",
     "deep: marks tests that require the deep extra (transformers)",
     "rejects: names the capability whose rejection this test proves (M20)",
+    "tier2: M24 tier 2 — needs the full datasets, runs nightly rather than per PR",
 ]
 
 [tool.ruff]

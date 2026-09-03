@@ -46,9 +46,15 @@ def select_route(
     ledger: BudgetLedger,
     *,
     now: float | None = None,
+    reserve: float = 0.0,
     credential_resolver: CredentialResolver | None = None,
 ) -> RouteDecision:
     """Pick a provider for ``role`` within entitlement, policy and budget.
+
+    ``reserve`` withholds that fraction of each provider's window from this
+    call, so a background caller (M16's evidence producer) is refused while the
+    campaign it runs beside still has room. Default 0.0 — every existing caller
+    sees the real limits.
 
     Exhaustion is handled per role rather than globally. Downgrading a codegen
     or hypothesis call to a weak model is worse than waiting: the weak output
@@ -67,6 +73,7 @@ def select_route(
             rpm=provider.rpm,
             rpd=provider.rpd,
             tpm=provider.tpm,
+            reserve=reserve,
             now=now,
         )
         if avail.ok:
@@ -92,6 +99,7 @@ def select_route(
                 rpm=provider.rpm,
                 rpd=provider.rpd,
                 tpm=provider.tpm,
+                reserve=reserve,
                 now=now,
             )
             if avail.ok:

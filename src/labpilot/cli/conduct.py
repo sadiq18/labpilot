@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,34 @@ conduct_app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_FALSEY = frozenset({"0", "false", "no", "off"})
+
+
+def _gather_background_enabled(flag: bool) -> bool:
+    """The flag, or `LABPILOT_GATHER_BACKGROUND` for callers that cannot pass one.
+
+    Read here rather than in `EvidenceProducer` so the environment reaches one
+    decision point: a producer that could switch itself on from a variable the
+    CLI never saw is a campaign whose behaviour is not in its own command line.
+
+    An allowlist, not "anything that is not a known false". The denylist form
+    turned `LABPILOT_GATHER_BACKGROUND=disabled` — and `none`, and `n`, and a
+    stray `2` — into *on*, so an operator trying to switch the feature off
+    switched it on and moved gathering to a different component without being
+    told.
+    """
+    if flag:
+        return True
+    raw = os.environ.get("LABPILOT_GATHER_BACKGROUND", "").strip().lower()
+    if raw and raw not in _TRUTHY and raw not in _FALSEY:
+        console.print(
+            f"[yellow]LABPILOT_GATHER_BACKGROUND={raw!r} is not a boolean; "
+            "treating it as off.[/yellow]"
+        )
+    return raw in _TRUTHY
 
 
 def _apply_deterministic_env(offline: bool) -> None:
@@ -230,65 +259,6 @@ def _resolve_campaign_direction(ws: Any, competition: str) -> bool | None:
         return None
 
 
-def _stated_target(root: Path) -> str | None:
-    """The target column, from the profile that already inferred it.
-
-    `competition.json` does not carry one; `profile.json` does. Without this the
-    `target` field on every ObjectiveSpec was None in the shipped path while
-    reading as though it were populated.
-    """
-    import json
-
-    path = root / "profile.json"
-    if not path.is_file():
-        return None
-    try:
-        profile = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    target = profile.get("target_column") if isinstance(profile, dict) else None
-    return str(target) if target else None
-
-
-def _stated_objective(
-    ws: Any, competition: str
-) -> tuple[str | None, str | None, str | None, str | None]:
-    """(metric_raw, declared_direction, problem_type, target) from the workspace."""
-    import json
-
-    root = getattr(ws, "root", None)
-    if root is None:
-        return None, None, None, None
-    target = _stated_target(Path(root))
-    path = Path(root) / "competition.json"
-    if not path.is_file():
-        # A workspace with no competition contract is not necessarily a workspace
-        # with no objective. A benchmark states its own, and the gate used to
-        # refuse it with advice from another domain — "set evaluation_metric in
-        # competition.json", a file it will never have. That refusal *was* exit
-        # criterion 3 failing: the same `research conduct` phrasing has to work
-        # in both domains, and it could not start a campaign in one of them.
-        from labpilot.research_engine.validation import harness
-
-        metric, direction = harness.stated_objective(Path(root))
-        return metric, direction, None, target
-    try:
-        spec = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None, None, None, target
-    metric = spec.get("evaluation_metric") or spec.get("metric") or {}
-    if not isinstance(metric, dict):
-        metric = {}
-    raw = metric.get("name") or metric.get("key")
-    declared = metric.get("direction")
-    return (
-        str(raw) if raw else None,
-        str(declared) if declared in ("maximize", "minimize") else None,
-        str(spec.get("problem_type") or "") or None,
-        target,
-    )
-
-
 def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict[str, Any]:
     """Refuse to start a campaign whose objective cannot be justified.
 
@@ -306,18 +276,26 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
     stay distinguishable from a resolved one long after the console line is gone.
     """
     from labpilot.research_engine.intelligence.competition.objective import resolve_objective
-
-    metric_raw, declared, problem_type, target = _stated_objective(ws, competition)
-    from labpilot.research_engine.validation import harness
+    from labpilot.research_engine.intelligence.competition.objective_stage import (
+        OBJECTIVE_FILENAME,
+        ensure_objective,
+    )
 
     root = getattr(ws, "root", None)
-    objective = resolve_objective(
-        metric_raw=metric_raw,
-        declared_direction=declared,  # type: ignore[arg-type]
-        task=problem_type,
-        target=target,
-        externally_scored=bool(root) and harness.handles(Path(root)),
-    )
+    objective_path: Path | None = None
+    if root is None:
+        # No workspace, nothing to persist to. The preflight still has to answer,
+        # and an objective resolved from nothing says so rather than defaulting.
+        objective = resolve_objective(metric_raw=None)
+    else:
+        stored, how = ensure_objective(Path(root), competition)
+        objective = stored.spec
+        # Only when it was actually written. This gate is a *read* of a workspace
+        # that a campaign is about to run in, and a read-only or absent workspace
+        # must still get its verdict rather than a traceback.
+        if how != "unpersisted":
+            objective_path = Path(root) / OBJECTIVE_FILENAME
+
     if not objective.blocks_launch:
         console.print(
             f"[dim]objective:[/dim] {objective.metric_name} "
@@ -331,15 +309,20 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
             "objective_direction": objective.direction,
             "objective_source": objective.source,
             "objective_confidence": objective.confidence,
+            # The file is the record; these five strings are the index into it.
+            # They stay because sessions are queried by them, and a session that
+            # named its metric only by a path would have to open the workspace to
+            # answer "what was this campaign optimising?".
+            **({} if objective_path is None else {"objective_path": str(objective_path)}),
         }
+
+    from labpilot.research_engine.validation import harness
 
     console.print(f"[red]Objective not resolved[/red] - {objective.why_blocked()}")
     for line in objective.evidence:
         console.print(f"  [dim]-[/dim] {line}")
     if objective.alternatives:
-        console.print(
-            f"  [dim]candidates:[/dim] {', '.join(objective.alternatives)}"
-        )
+        console.print(f"  [dim]candidates:[/dim] {', '.join(objective.alternatives)}")
     # Advice from the operator's own domain. Telling a benchmark operator to
     # "set evaluation_metric in competition.json" names a file their workspace
     # will never have, which is the same leak as the gate refusing them outright
@@ -377,6 +360,28 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
     raise typer.Exit(2)
 
 
+def _breaker(name: str, value: int | None) -> dict[str, int | None]:
+    """One breaker override, or nothing at all — three states in one flag.
+
+    *Unset* must keep the shipped default, so the key is omitted entirely:
+    `None` means *disabled* in `BudgetConfig`, and forwarding an unset flag
+    would silently remove the circuit breaker from every campaign that never
+    mentioned it.
+
+    *Zero* is how an operator asks for that disable on purpose. It needs a
+    spelling because `None` is spent on "unset", and it needs to be this one
+    because the breakers compare with `>=` against a counter that starts at 0 —
+    so a literal `0` limit stopped the campaign on its first check, before
+    anything had run, reported as an ordinary `stop:failing`. Reading it as
+    "no limit" turns the sharpest edge on the flag into the documented opt-out
+    (`BudgetConfig`: "a campaign deliberately probing a broken workspace is a
+    legitimate thing to run"), which was otherwise unreachable from the CLI.
+    """
+    if value is None:
+        return {}
+    return {name: None if value == 0 else value}
+
+
 def _budget_metadata(
     *,
     max_submissions: int | None,
@@ -385,6 +390,8 @@ def _budget_metadata(
     target_metric: str | None,
     target_value: float | None,
     plateau_window: int,
+    max_barren_steps: int | None = None,
+    max_consecutive_failures: int | None = None,
     maximize: bool | None = None,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -396,6 +403,8 @@ def _budget_metadata(
         target_metric=target_metric,
         target_value=target_value,
         plateau_window=plateau_window,
+        **_breaker("max_barren_steps", max_barren_steps),
+        **_breaker("max_consecutive_failures", max_consecutive_failures),
         # Resolved from the competition, not defaulted. `BudgetConfig.maximize`
         # used to default True with nothing overriding it, so on rogii (MSE)
         # every session stored `"maximize": true` and a metric target would have
@@ -461,12 +470,37 @@ def conduct_run(
         min=0,
         max=1,
     ),
+    gather_background: bool = typer.Option(
+        False,
+        "--gather-background",
+        help=(
+            "Run evidence gathering as a background producer instead of a campaign "
+            "step, so testing never waits on a kernel/paper sweep. Also settable "
+            "with LABPILOT_GATHER_BACKGROUND=1."
+        ),
+    ),
     max_submissions: int | None = typer.Option(None, "--max-submissions"),
     max_wall_s: float | None = typer.Option(None, "--max-wall-s"),
     max_cost_usd: float | None = typer.Option(None, "--max-cost-usd"),
     target_metric: str | None = typer.Option(None, "--target-metric"),
     target_value: float | None = typer.Option(None, "--target-value"),
     plateau_window: int = typer.Option(3, "--plateau-window"),
+    max_barren_steps: int | None = typer.Option(
+        None,
+        "--max-barren-steps",
+        min=0,
+        help="Stop after N steps with no successful execution (default 8). "
+        "Raise it when the policy legitimately spends steps implementing "
+        "before it runs anything. 0 removes the limit.",
+    ),
+    max_consecutive_failures: int | None = typer.Option(
+        None,
+        "--max-consecutive-failures",
+        min=0,
+        help="Stop after N consecutive failed executions (default 3). "
+        "Raise it to let the repair loop work through several distinct "
+        "defects in generated code. 0 removes the limit.",
+    ),
     config_path: Path = typer.Option(Path("configs/default.yaml"), "--config"),
     knowledge_dir: Path | None = typer.Option(None, "--knowledge-dir"),
     workspace_path: Path | None = typer.Option(None, "--workspace"),
@@ -494,6 +528,8 @@ def conduct_run(
             target_metric=target_metric,
             target_value=target_value,
             plateau_window=plateau_window,
+            max_barren_steps=max_barren_steps,
+            max_consecutive_failures=max_consecutive_failures,
             maximize=_resolve_campaign_direction(ws, competition),
             existing={
                 "max_steps": max_steps,
@@ -528,6 +564,7 @@ def conduct_run(
             prefer_offline=offline,
             offline_fallback_prompt=None if yes else _offline_fallback_prompt(yes),
             branches=branches,
+            gather_background=_gather_background_enabled(gather_background),
         )
     finally:
         store.close()
@@ -545,6 +582,7 @@ def _continue_session(
     competition: str | None,
     max_steps: int | None,
     branches: int,
+    gather_background: bool = False,
     yes: bool,
     offline: bool,
     autonomy: int | None,
@@ -606,6 +644,7 @@ def _continue_session(
             prefer_offline=offline,
             offline_fallback_prompt=None if yes else _offline_fallback_prompt(yes),
             branches=branches,
+            gather_background=_gather_background_enabled(gather_background),
         )
     finally:
         store.close()
@@ -630,6 +669,15 @@ def conduct_continue(
             "Keep K within twice your provider's per-minute limit."
         ),
     ),
+    gather_background: bool = typer.Option(
+        False,
+        "--gather-background",
+        help=(
+            "Run evidence gathering as a background producer instead of a campaign "
+            "step, so testing never waits on a kernel/paper sweep. Also settable "
+            "with LABPILOT_GATHER_BACKGROUND=1."
+        ),
+    ),
     yes: bool = typer.Option(False, "--yes", "-y"),
     offline: bool = typer.Option(False, "--offline"),
     autonomy: int | None = typer.Option(None, "--autonomy", min=0, max=1),
@@ -643,6 +691,7 @@ def conduct_continue(
         competition=competition,
         max_steps=max_steps,
         branches=branches,
+        gather_background=gather_background,
         yes=yes,
         offline=offline,
         autonomy=autonomy,
@@ -667,6 +716,15 @@ def conduct_resume(
             "Keep K within twice your provider's per-minute limit."
         ),
     ),
+    gather_background: bool = typer.Option(
+        False,
+        "--gather-background",
+        help=(
+            "Run evidence gathering as a background producer instead of a campaign "
+            "step, so testing never waits on a kernel/paper sweep. Also settable "
+            "with LABPILOT_GATHER_BACKGROUND=1."
+        ),
+    ),
     yes: bool = typer.Option(False, "--yes", "-y"),
     offline: bool = typer.Option(False, "--offline"),
     autonomy: int | None = typer.Option(None, "--autonomy", min=0, max=1),
@@ -680,6 +738,7 @@ def conduct_resume(
         competition=competition,
         max_steps=max_steps,
         branches=branches,
+        gather_background=gather_background,
         yes=yes,
         offline=offline,
         autonomy=autonomy,

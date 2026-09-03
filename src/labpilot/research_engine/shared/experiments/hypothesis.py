@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from labpilot.accessor.common import atomic_write_text, locked
 from labpilot.research_engine.shared.experiments.graph import ExperimentGraph
@@ -23,6 +23,23 @@ logger = logging.getLogger(__name__)
 
 _ID_PATTERN = re.compile(r"^H-(\d+)$")
 BASELINE_HYPOTHESIS_ID = "H-BASELINE"
+
+
+def derive_technique(technique: str | None, combo_techniques: Iterable[str] = ()) -> str | None:
+    """The technique a hypothesis is *stored* under, given what was passed in.
+
+    A combination proposal usually arrives with an empty `technique` and its
+    members in `combo_techniques`; the store fills the first from the second.
+    Anything comparing a not-yet-created proposal against stored rows has to
+    apply the same rule or it compares "" against "a+b" and concludes they are
+    different ideas — which is exactly how combination cards slipped past the
+    M16 duplicate check while every other kind was caught.
+    """
+    combo = [str(item).strip() for item in combo_techniques if str(item).strip()]
+    tech = (technique or "").strip() or None
+    if combo and not tech:
+        tech = "+".join(combo)
+    return tech
 
 
 def _now() -> datetime:
@@ -148,6 +165,139 @@ class HypothesisStore:
         technique_stack: Iterable[str] = (),
         combo_techniques: Iterable[str] = (),
     ) -> Hypothesis:
+        prepared = self._prepare(
+            observation=observation,
+            reason=reason,
+            prediction=prediction,
+            confidence=confidence,
+            expected_impact=expected_impact,
+            tags=tags,
+            source=source,
+            created_by=created_by,
+            generator=generator,
+            origin=origin,
+            origins=origins,
+            evidence=evidence,
+            technique=technique,
+            parent_hypothesis_id=parent_hypothesis_id,
+            technique_stack=technique_stack,
+            combo_techniques=combo_techniques,
+        )
+        # Locked (M11): _allocate_id() globs for the current max before this
+        # id exists on disk — two concurrent create() calls must not both
+        # glob the same max and both write the same H-NNN path.
+        with locked(self._alloc_lock_path()):
+            hypothesis = self._write_new(prepared)
+        self._mirror_to_db(hypothesis)
+        return hypothesis
+
+    def create_unless_covered(
+        self,
+        *,
+        covered_by: Callable[[list[Hypothesis]], bool],
+        **fields: Any,
+    ) -> Hypothesis | None:
+        """Create, unless an open proposal already covers the same idea (M16).
+
+        `covered_by` receives the current `proposed` pool and answers whether
+        this idea is already in it; `None` comes back when it says yes.
+
+        The point is *where* the check runs. Every minting path already had one
+        — `_already_covered_by_proposed` in `execution/outcome.py`, and three
+        inline scans beside it — and all of them listed the pool, decided, and
+        then called `create()`, with nothing holding across the pair. One
+        writer never noticed. Under M16's background producer there are two,
+        and the second reads the pool a millisecond before the first writes to
+        it: both see "not covered", both create, and the campaign plans the
+        same idea twice.
+
+        Running the predicate inside `.alloc.lock` — the lock `create()`
+        already takes to allocate an id — closes that window without a second
+        lock to reason about.
+
+        **`covered_by` must not call `create()`.** `locked()` is
+        `fcntl.flock(LOCK_EX)`, which is not reentrant: a second acquisition on
+        a new descriptor for the same file blocks forever, including from the
+        thread that already holds it.
+
+        `**fields` is forwarded to `_prepare` verbatim, so this accepts exactly
+        what `create()` does and a typo raises `TypeError` there.
+
+        The pool is read twice, and only the second read is under the lock.
+        Reading it whole inside would hold the cross-process allocation lock
+        across a full directory parse on every mint — a batch of ten cards
+        against a few hundred hypotheses is ten full scans, all of them
+        serialising the fan-out branches queued behind the same lock. The
+        window this method closes can only be filled by a row *created* during
+        it, and a created row is a file that was not there before, so the
+        in-lock read only has to cover ids the first read did not see.
+        """
+        prepared = self._prepare(**fields)
+        seen = self._proposed_snapshot()
+        if covered_by(seen):
+            return None
+        seen_ids = {hypothesis.id for hypothesis in seen}
+        with locked(self._alloc_lock_path()):
+            arrived = self._proposed_snapshot(skip_ids=seen_ids)
+            if arrived and covered_by([*seen, *arrived]):
+                return None
+            hypothesis = self._write_new(prepared)
+        self._mirror_to_db(hypothesis)
+        return hypothesis
+
+    def _proposed_snapshot(self, *, skip_ids: set[str] | None = None) -> list[Hypothesis]:
+        """Proposed hypotheses, read straight from disk.
+
+        Not `list(status=PROPOSED)`: that backfills `knowledge.db` as a side
+        effect, and one caller runs inside `.alloc.lock`. A cache refresh
+        unrelated to the decision being made has no business lengthening the
+        critical section every other writer is queued behind.
+
+        ``skip_ids`` names hypotheses the caller has already read, so the
+        in-lock pass parses only what arrived since.
+        """
+        if not self.hypotheses_dir.is_dir():
+            return []
+        found: list[Hypothesis] = []
+        for path in sorted(self.hypotheses_dir.glob("H-*.json")):
+            if skip_ids and path.stem in skip_ids:
+                continue
+            try:
+                hypothesis = Hypothesis.model_validate_json(path.read_text())
+            except (OSError, ValueError) as exc:
+                logger.debug("Skipping unreadable hypothesis %s: %s", path, exc)
+                continue
+            if hypothesis.status == HypothesisStatus.PROPOSED:
+                found.append(hypothesis)
+        return found
+
+    def _write_new(self, prepared: dict[str, Any]) -> Hypothesis:
+        """Allocate an id and write the file. **Caller must hold `.alloc.lock`.**"""
+        hypothesis = Hypothesis(id=self._allocate_id(), **prepared)
+        self._write_json(hypothesis)
+        return hypothesis
+
+    def _prepare(
+        self,
+        *,
+        observation: str,
+        reason: str,
+        prediction: str,
+        confidence: float,
+        expected_impact: float = 0.0,
+        tags: Iterable[str] = (),
+        source: Literal["manual", "reflection", "llm", "analyze"] = "manual",
+        created_by: HypothesisCreatedBy | str | None = None,
+        generator: HypothesisGenerator | str | None = None,
+        origin: HypothesisOrigin | str | None = None,
+        origins: Iterable[HypothesisOrigin | str] = (),
+        evidence: Iterable[HypothesisEvidenceRef | dict] = (),
+        technique: str | None = None,
+        parent_hypothesis_id: str | None = None,
+        technique_stack: Iterable[str] = (),
+        combo_techniques: Iterable[str] = (),
+    ) -> dict[str, Any]:
+        """Normalise create() inputs into `Hypothesis` fields. Takes no lock."""
         now = _now()
         resolved_created_by = _coerce_created_by(created_by, source)
         resolved_generator = _coerce_generator(generator, source)
@@ -169,37 +319,28 @@ class HypothesisStore:
         for member in combo:
             if member not in stack:
                 stack.append(member)
-        if combo and not tech:
-            tech = "+".join(combo)
-        # Locked (M11): _allocate_id() globs for the current max before this
-        # id exists on disk — two concurrent create() calls must not both
-        # glob the same max and both write the same H-NNN path.
-        with locked(self._alloc_lock_path()):
-            hypothesis = Hypothesis(
-                id=self._allocate_id(),
-                competition=self.competition,
-                observation=observation,
-                reason=reason,
-                prediction=prediction,
-                confidence=confidence,
-                expected_impact=expected_impact,
-                tags=list(tags),
-                source=source,
-                created_by=resolved_created_by,
-                generator=resolved_generator,
-                origin=resolved_origin,
-                origins=resolved_origins,
-                evidence=evidence_refs,
-                technique=tech,
-                parent_hypothesis_id=(parent_hypothesis_id or None),
-                technique_stack=stack,
-                combo_techniques=combo,
-                created_at=now,
-                updated_at=now,
-            )
-            self._write_json(hypothesis)
-        self._mirror_to_db(hypothesis)
-        return hypothesis
+        tech = derive_technique(tech, combo)
+        return {
+            "competition": self.competition,
+            "observation": observation,
+            "reason": reason,
+            "prediction": prediction,
+            "confidence": confidence,
+            "expected_impact": expected_impact,
+            "tags": list(tags),
+            "source": source,
+            "created_by": resolved_created_by,
+            "generator": resolved_generator,
+            "origin": resolved_origin,
+            "origins": resolved_origins,
+            "evidence": evidence_refs,
+            "technique": tech,
+            "parent_hypothesis_id": (parent_hypothesis_id or None),
+            "technique_stack": stack,
+            "combo_techniques": combo,
+            "created_at": now,
+            "updated_at": now,
+        }
 
     def get(self, hypothesis_id: str) -> Hypothesis | None:
         path = self._path_for(hypothesis_id)

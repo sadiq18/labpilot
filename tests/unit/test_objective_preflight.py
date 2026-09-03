@@ -21,7 +21,8 @@ from pathlib import Path
 import pytest
 import typer
 
-from labpilot.cli.conduct import _preflight_objective, _stated_objective
+from labpilot.cli.conduct import _preflight_objective
+from labpilot.research_engine.intelligence.competition.objective_stage import read_inputs
 
 
 class _Workspace:
@@ -129,6 +130,11 @@ def test_an_operator_at_a_terminal_is_offered_the_choice(tmp_path: Path, monkeyp
 
 
 # --- reading the contract ---------------------------------------------------
+#
+# Through `read_inputs`, which is what ships. These used to go through a
+# `_stated_objective` wrapper in the CLI; once the preflight stopped calling it,
+# the wrapper had no production caller and these assertions guarded code nobody
+# ran — which is how two precedence regressions passed a green suite.
 
 
 def test_a_malformed_contract_is_not_read_as_an_objective(tmp_path: Path) -> None:
@@ -136,7 +142,13 @@ def test_a_malformed_contract_is_not_read_as_an_objective(tmp_path: Path) -> Non
     constraint stated'."""
     (tmp_path / "competition.json").write_text("{ not json", encoding="utf-8")
 
-    assert _stated_objective(_Workspace(tmp_path), "demo") == (None, None, None, None)
+    facts = read_inputs(tmp_path)
+    assert (facts.metric_raw, facts.declared_direction, facts.task, facts.target) == (
+        None,
+        None,
+        None,
+        None,
+    )
     assert _blocks(_Workspace(tmp_path))
 
 
@@ -145,8 +157,7 @@ def test_a_bogus_direction_is_discarded_rather_than_trusted(tmp_path: Path) -> N
     probe rather than being carried as a declaration."""
     ws = _workspace(tmp_path, {"name": "rmse", "direction": "sideways"})
 
-    _raw, declared, _task, _target = _stated_objective(ws, "demo")
-    assert declared is None
+    assert read_inputs(tmp_path).declared_direction is None
     assert not _blocks(ws), "the probe should still resolve rmse on its own"
 
 
@@ -158,9 +169,10 @@ def test_the_legacy_metric_key_is_read_too(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    raw, declared, _task, _target = _stated_objective(_Workspace(tmp_path), "demo")
-    assert raw == "rmse"
-    assert declared == "minimize"
+    facts = read_inputs(tmp_path)
+
+    assert facts.metric_raw == "rmse"
+    assert facts.declared_direction == "minimize"
 
 
 # --- review findings --------------------------------------------------------
@@ -212,7 +224,7 @@ def test_the_target_column_reaches_the_objective(tmp_path: Path) -> None:
     ws = _workspace(tmp_path, {"name": "rmse", "direction": "minimize"})
     (tmp_path / "profile.json").write_text(json.dumps({"target_column": "TVT"}), encoding="utf-8")
 
-    assert _stated_objective(ws, "demo")[3] == "TVT"
+    assert read_inputs(tmp_path).target == "TVT"
     assert _preflight_objective(ws, "demo", assume_yes=True)["objective_target"] == "TVT"
 
 
@@ -220,13 +232,13 @@ def test_a_missing_or_broken_profile_is_not_a_target(tmp_path: Path) -> None:
     """Absent, unparseable and target-less must all read as 'not stated', and
     none of them may stop a resolvable objective from launching."""
     ws = _workspace(tmp_path, {"name": "rmse", "direction": "minimize"})
-    assert _stated_objective(ws, "demo")[3] is None
+    assert read_inputs(tmp_path).target is None
 
     (tmp_path / "profile.json").write_text("{ not json", encoding="utf-8")
-    assert _stated_objective(ws, "demo")[3] is None
+    assert read_inputs(tmp_path).target is None
 
     (tmp_path / "profile.json").write_text(json.dumps({"target_column": None}), encoding="utf-8")
-    assert _stated_objective(ws, "demo")[3] is None
+    assert read_inputs(tmp_path).target is None
     assert not _blocks(ws)
 
 

@@ -925,8 +925,89 @@ def _next_hypothesis_id(workspace: Workspace) -> str | None:
     return ranked[0].id if ranked else None
 
 
+def _baseline_is_done(workspace: Workspace) -> bool:
+    """Whether the campaign may stop asking for a baseline and start iterating.
+
+    M23 step 8. `_baseline_plan_exists` answered *"was a plan object compiled?"*
+    to a caller asking *"has the baseline been done?"* — so a campaign flipped to
+    research mode on the strength of a file existing, whatever the pipeline it
+    described actually scored. That is how rogii spent two weeks minting
+    hypotheses over a pipeline 91x worse than one line of code.
+
+    Under enforcement the answer is the gate's: `passed` or `waived`. Otherwise
+    it is the old one, because the rollout's whole shape is that step 8 is a
+    config flip and observe-only must not change what a campaign does.
+    """
+    root = getattr(workspace, "root", None)
+    if root is not None:
+        try:
+            from labpilot.research_engine.execution.baseline.gate import (
+                baseline_is_settled,
+                enforcement_enabled,
+                evaluate_gate,
+            )
+
+            if enforcement_enabled():
+                # `baseline_is_settled`, not `not blocks_research`. Seven of the
+                # nine states block, and two of them — `awaiting_ml` on an image
+                # dataset, `floor_undefined` on an uncatalogued metric — are
+                # facts about the data that no re-run changes. Answering "no"
+                # forever left `generate_plan` pinned to `baseline`, and since
+                # baseline compilation is idempotent the campaign recompiled the
+                # same plan and could never run a second experiment.
+                return baseline_is_settled(evaluate_gate(Path(root), enforced=True).state)
+        except Exception as exc:  # noqa: BLE001 — a gate that cannot run must
+            # not force a baseline recompile over the top of existing work.
+            logger.warning("Baseline gate unavailable, falling back to plan lookup: %s", exc)
+    return _baseline_plan_exists(workspace)
+
+
+def _baseline_failure(workspace: Workspace) -> tuple[str, str] | None:
+    """`(rationale, report)` when the gate says the pipeline loses, else None.
+
+    `stop:baseline_failed`, distinct from `stop:failing`. The two describe
+    opposite situations and collapsing them would lose the one this milestone
+    exists for: `failing` is a campaign whose experiments crash, and this is a
+    campaign whose experiments run fine and are worse than predicting a constant.
+
+    Only under enforcement. Observe-only records the verdict and withholds
+    nothing, which includes not ending the run.
+    """
+    root = getattr(workspace, "root", None)
+    if root is None:
+        return None
+    try:
+        from labpilot.research_engine.execution.baseline.gate import (
+            enforcement_enabled,
+            evaluate_gate,
+        )
+        from labpilot.research_engine.execution.baseline.report import build_report
+
+        if not enforcement_enabled():
+            return None
+        verdict = evaluate_gate(Path(root), enforced=True)
+        if verdict.state != "failed":
+            return None
+        report = build_report(Path(root), verdict, competition=workspace.competition)
+    except Exception as exc:  # noqa: BLE001 — a gate that cannot run must not
+        # end a campaign. A fault here would stop a run for a reason that is not
+        # about the run.
+        logger.warning("Baseline gate could not be evaluated for a stop: %s", exc)
+        return None
+    return (
+        f"stop:baseline_failed — {verdict.reason}. "
+        f"Waive with `research baseline waive <reason>` or fix the pipeline.",
+        report.render(),
+    )
+
+
 def _baseline_plan_exists(workspace: Workspace) -> bool:
-    """True when a baseline plan has already been compiled for this competition."""
+    """True when a baseline plan has already been compiled for this competition.
+
+    Retained only as `_baseline_is_done`'s observe-only fallback. It answers a
+    different question from the one its caller asks, which is the defect step 8
+    exists to fix.
+    """
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
     from labpilot.research_engine.intelligence.paths import store_is_absent
 
@@ -1052,6 +1133,7 @@ def run_until_stop(
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
     schema_prompt: SchemaPrompt | None = None,
     branches: int = 1,
+    gather_background: bool = False,
 ) -> list[DecisionRecord]:
     """Run until stop, budget, operator pause, or ``max_steps`` if one is set.
 
@@ -1070,31 +1152,58 @@ def run_until_stop(
     When online policy fails, asks the operator (allow / deny / retry) before
     using the deterministic offline order — unless ``prefer_offline`` or
     ``auto_approve`` (``--yes``) is set.
+
+    ``gather_background`` (M16) hands evidence gathering to a producer thread
+    and takes `analyze_competition` off the consumer's allowlist for the whole
+    run. Default off: without it this is byte-for-byte the behaviour it has
+    always had, gate included.
     """
     # Every micro-agent invocation in this campaign is recorded: which agent,
     # whether the LLM or its rule engine produced the answer, and on failure
     # what kind. M14 2b and 3 are both blocked on having that as *data* rather
     # than log lines, and it can only be collected while the run happens.
+    producer = None
+    if gather_background:
+        from labpilot.research_engine.conductor.producer import EvidenceProducer
+
+        producer = EvidenceProducer(
+            workspace,
+            registry,
+            session_id=session_id,
+            llm_client=llm_client,
+        )
+
     with recording_provenance(
         workspace.knowledge_dir, workspace.competition, session_id=session_id
     ):
-        return _run_until_stop_inner(
-            store,
-            workspace,
-            session_id,
-            registry,
-            llm_client=llm_client,
-            max_steps=max_steps,
-            auto_approve=auto_approve,
-            approval_prompt=approval_prompt,
-            on_progress=on_progress,
-            autonomy=autonomy,
-            campaign_mode=campaign_mode,
-            prefer_offline=prefer_offline,
-            offline_fallback_prompt=offline_fallback_prompt,
-            schema_prompt=schema_prompt,
-            branches=branches,
-        )
+        # Stopped out here, started inside: shutdown has to happen on *every*
+        # exit — stop condition, budget, exception, Ctrl-C — and one
+        # try/finally around the call is the version of that which cannot be
+        # forgotten in a new branch. Starting is the opposite problem; it has
+        # to wait for the memory repair the loop opens with (see
+        # `_run_until_stop_inner`), so it happens there.
+        try:
+            return _run_until_stop_inner(
+                store,
+                workspace,
+                session_id,
+                registry,
+                llm_client=llm_client,
+                max_steps=max_steps,
+                auto_approve=auto_approve,
+                approval_prompt=approval_prompt,
+                on_progress=on_progress,
+                autonomy=autonomy,
+                campaign_mode=campaign_mode,
+                prefer_offline=prefer_offline,
+                offline_fallback_prompt=offline_fallback_prompt,
+                schema_prompt=schema_prompt,
+                branches=branches,
+                producer=producer,
+            )
+        finally:
+            if producer is not None:
+                producer.stop()
 
 
 def _run_until_stop_inner(
@@ -1114,6 +1223,7 @@ def _run_until_stop_inner(
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
     schema_prompt: SchemaPrompt | None = None,
     branches: int = 1,
+    producer: Any | None = None,
 ) -> list[DecisionRecord]:
     scheduler = Scheduler(store, registry, workspace, llm_client=llm_client)
     decisions: list[DecisionRecord] = []
@@ -1165,6 +1275,40 @@ def _run_until_stop_inner(
         "auto_offline_fallback": auto_approve,
         "offline_fallback_prompt": offline_fallback_prompt,
     }
+
+    def _producer_status() -> dict[str, Any] | None:
+        """Read per decision, not once: the point is that it changes mid-run."""
+        return None if producer is None else producer.status()
+
+    def _producer_owns_gathering() -> bool:
+        """Whether the sweep is somebody else's job *right now*.
+
+        Liveness, not existence. Keyed on the object alone, a producer whose
+        thread never started or has since stopped would still take
+        `analyze_competition` off the consumer's allowlist for the rest of the
+        run — leaving a campaign that cannot gather and nothing gathering for
+        it. Asked per decision so the tool comes back the moment it is nobody
+        else's.
+        """
+        return producer is not None and producer.is_running()
+
+    def _gathering_owned() -> set[str]:
+        """Tools the background producer owns right now, to subtract (M16).
+
+        `available_tools` gates the *policy prompt*. Campaign mode builds its
+        own allowlist — `set(registry.names())` minus the submit carve-out —
+        and hands that to `offline_next_research_action` and
+        `map_research_action`, so gating only inside `decide_next` left the
+        offline path dispatching the very sweep the producer was already
+        running. Two sweeps of the same competition at once, which is the exact
+        thing the handover exists to prevent.
+
+        Named from the producer's own plan rather than hardcoded, so the one
+        domain-coupled site stays `default_gather_plan`.
+        """
+        if producer is None or not producer.is_running():
+            return set()
+        return {producer.plan.tool}
 
     # Repair research memory before acting on it. A claim no measurement
     # supports steers every decision this loop is about to make, and the repair
@@ -1243,6 +1387,16 @@ def _run_until_stop_inner(
     except Exception as exc:  # noqa: BLE001 — never block a campaign on repair
         logger.warning("Claim revalidation at session start failed: %s", exc)
 
+    # Only now (M16). The producer's first tick fires immediately, and its
+    # sweep mints hypotheses from beliefs and skill overlays — the very things
+    # the block above has just finished repairing. Started before it, the first
+    # sweep reads the pre-repair compass, which is the failure that chain
+    # exists to prevent: a full campaign once ran with 45 false `vit` claims
+    # intact, and every rogii overlay said `Avoid: SWA` about the only
+    # technique that had ever improved the metric.
+    if producer is not None:
+        producer.start()
+
     step = -1
     while True:
         step += 1
@@ -1320,6 +1474,39 @@ def _run_until_stop_inner(
             store.append_decision(decisions[-1])
             break
 
+        # A pipeline worse than a constant is not a budget condition, so it is
+        # checked here rather than in `evaluate_stops`. It is also **goal 3**:
+        # the first failure in this system for being *worse* rather than for
+        # crashing.
+        #
+        # `failed` cannot occur before work has been done — it needs both
+        # readings — so this never fires on a fresh workspace. And it stops
+        # rather than pinning `generate_plan` to `baseline`: re-compiling an
+        # idempotent plan cannot fix a pipeline, and the operator has causes to
+        # read.
+        baseline_stop = _baseline_failure(workspace)
+        if baseline_stop is not None:
+            rationale, report = baseline_stop
+            store.update_session_status(session_id, "failed")
+            store.increment_metric(session_id, "unmet_goal")
+            _progress(f"Stop condition: {rationale}")
+            # The report inline, which is §9's whole point: until now the gate
+            # reached a verdict nobody could see.
+            for line in report.splitlines():
+                _progress(line)
+            decisions.append(
+                DecisionRecord(
+                    id=store.new_decision_id(),
+                    session_id=session_id,
+                    tool_name=None,
+                    rationale=rationale,
+                    stop=True,
+                    observe={"stop_reason": "baseline_failed", "report": report},
+                )
+            )
+            store.append_decision(decisions[-1])
+            break
+
         budget_cfg, budget_state = load_budget_pair(session)
         if not submit_tools_allowed(budget_cfg):
             # A campaign told never to submit must not be *offered* the tool.
@@ -1327,6 +1514,7 @@ def _run_until_stop_inner(
             # gated tool to `auto_approve`, so a non-interactive run has no
             # brake between "selected submit_learn" and "uploaded to Kaggle".
             allowlist -= SUBMIT_TOOLS
+        allowlist -= _gathering_owned()
         # Before the stop evaluation, not after: the step that ends the
         # campaign is the one an operator most wants a progress line for, and
         # a line printed after the `break` is a line never printed.
@@ -1429,6 +1617,8 @@ def _run_until_stop_inner(
                     # stagnant clause gates the allowlist before the prompt is
                     # built, so the series has to arrive with the decision.
                     budgets=(budget_cfg, budget_state),
+                    producer_status=_producer_status(),
+                    external_gathering=_producer_owns_gathering(),
                     **policy_kw,
                 )
                 _progress(
@@ -1454,6 +1644,10 @@ def _run_until_stop_inner(
             allowlist = set(registry.names())
             if not submit_tools_allowed(budget_cfg):
                 allowlist -= SUBMIT_TOOLS
+            # Re-applied for the same reason the submit carve-out is: this is
+            # the allowlist that reaches `map_research_action`, so a plain
+            # re-read hands the tool back at the point it gets selected.
+            allowlist -= _gathering_owned()
             plan = map_research_action(research, allowlist)
             if research.stop and _objective_unmet(budget_cfg, budget_state):
                 # Goal persistence. The policy tends to call it done once it has
@@ -1557,7 +1751,7 @@ def _run_until_stop_inner(
                     latest_plan_id=_latest_plan_id(workspace),
                     latest_execution_id=_latest_execution_id(workspace),
                     next_hypothesis_id=_next_hypothesis_id(workspace),
-                    baseline_plan_exists=_baseline_plan_exists(workspace),
+                    baseline_plan_exists=_baseline_is_done(workspace),
                 )
                 task = store.enqueue(
                     session_id,
@@ -1697,6 +1891,8 @@ def _run_until_stop_inner(
             registry,
             llm_client=llm_client,
             budgets=(budget_cfg, budget_state),
+            producer_status=_producer_status(),
+            external_gathering=_producer_owns_gathering(),
             **policy_kw,
         )
         decision_id = store.new_decision_id()
@@ -1730,7 +1926,7 @@ def _run_until_stop_inner(
             latest_plan_id=_latest_plan_id(workspace),
             latest_execution_id=_latest_execution_id(workspace),
             next_hypothesis_id=_next_hypothesis_id(workspace),
-            baseline_plan_exists=_baseline_plan_exists(workspace),
+            baseline_plan_exists=_baseline_is_done(workspace),
         )
         record.args = action_args
         task = store.enqueue(

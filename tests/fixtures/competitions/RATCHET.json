@@ -1,0 +1,14 @@
+{
+  "corpus_hash": "d30fe57066abe2523f25912c91411a8666b6ef1584e75de07c48787beab60741",
+  "floors": {
+    "abstention": 1.0,
+    "id_columns": 1.0,
+    "metric_name": 0.75,
+    "modality": 1.0,
+    "target_column": 1.0,
+    "train_test_relationship": 1.0
+  },
+  "goal": 0.95,
+  "note": "Today's measured value, not the goal. The suite enforces these; 0.95 is what they are climbing to. Raise a floor in the same commit that earns it.",
+  "recorded_at": "2026-08-22"
+}

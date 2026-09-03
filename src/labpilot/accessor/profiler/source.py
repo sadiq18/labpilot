@@ -28,6 +28,7 @@ declaration nothing reaches, which is the defect class this milestone removes.
 
 from __future__ import annotations
 
+import os.path
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -145,9 +146,20 @@ class LocalFileSource:
         :meth:`tables`, which cannot produce one; from step 3 they will also
         come from operator answers and model proposals, and the check has to
         exist before the untrusted caller does, not after.
+
+        **The uri is normalised, not resolved.** `..` is collapsed lexically —
+        which settles both escapes above — while symlinks are left to the read
+        that follows. Resolving first rejected a link *the root itself
+        contains*: :meth:`tables` recurses into a symlinked ``train/`` and
+        lists what it finds there, so `path` was refusing uris `tables` had
+        just produced, and a dataset holding its partitions on another volume
+        stopped profiling entirely. What is being bounded is which file a uri
+        may *address*; a link inside the root was placed there by whoever laid
+        the dataset out, and following it is what reading a CSV has always
+        meant.
         """
         root = self.root.resolve()
-        resolved = (root / table.uri).resolve()
+        resolved = Path(os.path.normpath(root / table.uri))
         if resolved != root and root not in resolved.parents:
             raise ValueError(
                 f"table uri {table.uri!r} resolves outside the dataset root {self.root}"

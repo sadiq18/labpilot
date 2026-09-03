@@ -22,6 +22,8 @@ from labpilot.accessor.profiler.schema import (
     ModalityPresence,
     PredictionUnit,
     SplitRelationship,
+    TargetDistribution,
+    TargetType,
 )
 from labpilot.accessor.profiler.source import (
     DatasetSource,
@@ -56,7 +58,23 @@ class ColumnProfile(BaseModel):
 #: was first given and every later improvement is invisible to it. rogii's was
 #: written 2026-08-02 and reused by every campaign since; the anchor column
 #: added on 08-13 would never have reached it.
-PROFILE_SCHEMA_VERSION = 3
+PROFILE_SCHEMA_VERSION = 4
+
+#: Above this many distinct values, a whole-numbered target is no longer read as
+#: a label set. Deliberately generous: a 30-class problem is ordinary and a
+#: 30-value regression target is not, so the cost of the two mistakes is not
+#: symmetric — reading a regression as classification makes the floor a class
+#: prior over hundreds of "classes", which is both wrong and slow.
+#:
+#: `selector.py` reads `target_type` rather than keeping its own copy of this
+#: number. It had one, set to 20, and the two disagreed about every target with
+#: 21-30 labels.
+DISCRETE_LABEL_CEILING = 30
+
+#: How tightly integer values must crowd their own range to read as counts.
+#: `max < unique_count * 10` holds for 0-50 over 51 distinct values and fails for
+#: SalePrice, whose 663 values span 755,000.
+_COUNT_DENSITY = 10
 
 
 class DatasetProfile(BaseModel):
@@ -91,6 +109,12 @@ class DatasetProfile(BaseModel):
     train_test_relationship: SplitRelationship = "unknown"
     #: What the dataset is scored by, and how that was reached.
     metric: MetricRef | None = None
+    #: What the target looks like: class counts, median, zero-inflation, skew.
+    #: Measured, so it carries no confidence of its own — it inherits the
+    #: target's, because a distribution over the wrong column is wrong however
+    #: precisely it was computed. `target_type` below is derived from it and the
+    #: target's column profile.
+    target_distribution: TargetDistribution = Field(default_factory=TargetDistribution)
     submission_columns: list[str] = Field(default_factory=list)
     #: Structured reasons. `warnings` below is the prose view over these.
     notes: list[Note] = Field(default_factory=list)
@@ -161,6 +185,111 @@ class DatasetProfile(BaseModel):
         answers hide the one that matters.
         """
         return min((self.confidence_in(field) for field in REQUIRED_FIELDS), default=0.0)
+
+    def _scored_are_train_columns(self, scored: list[str]) -> bool:
+        """Whether every scored submission column is a column of `train`.
+
+        The discriminator between "several targets" and "one target, written out
+        as classes". `self.columns` profiles the train table, so membership is
+        the whole test: `a, b` are there and are genuinely two answers;
+        `class_0..2` are not, and are one answer in three columns.
+
+        `False` when nothing is known about the columns — an empty profile
+        cannot support the multi-output claim, and the fall-through reports the
+        target's own kind rather than asserting a shape.
+        """
+        if not self.columns:
+            return False
+        known = {column.name for column in self.columns}
+        return all(name in known for name in scored)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def target_type(self) -> TargetType:
+        """The shape of the prediction target, derived from what was measured.
+
+        Derived rather than stored, and that is the whole design: every input —
+        `unique_count`, `is_numeric`, the numeric `stats`, the submission
+        template — is already in this profile, so a stored copy could only ever
+        be a second answer free to disagree with them. It also means every
+        profile written before this field existed acquires it on load instead of
+        needing a migration.
+
+        What it refuses to decide is as load-bearing as what it decides.
+        `ordinal` is never returned: whether 1-5 stars are ranks or five
+        unrelated labels is a fact about the world. `count` is returned only for
+        dense non-negative integers — `SalePrice` is an integer column with 663
+        distinct values and a maximum of 755,000, and calling that a count, or
+        worse a 663-class problem, is the misreading this milestone's corpus
+        names by name.
+        """
+        # The template's shape is read **before** asking whether a single target
+        # was named, because for a multi-output competition the answer to that
+        # question is legitimately "none of them, all of them". The profiler
+        # leaves `target_column` unresolved there on purpose, and an early
+        # `return "none"` would report a dataset with no target at all — turning
+        # the one branch that describes multi-output back into dead code.
+        #
+        # An empty `id_columns` means the key was **not resolved**, not that
+        # there is no key — and it is empty exactly when the profiler decided to
+        # ask, which is the rogii case. Subtracting nothing left `['id','tvt']`
+        # as two scored columns, so the corpus fixture this milestone is built
+        # around read as `multilabel` and its continuous depth target went down
+        # the classification path.
+        if self.id_columns:
+            scored = [c for c in self.submission_columns if c not in set(self.id_columns)]
+            # Several scored columns mean multi-output only when train actually
+            # holds them. `class_0, class_1, class_2` is one target's classes
+            # written out — three columns of the same answer, not three answers —
+            # and calling that `multilabel` sent every multiclass competition
+            # scored on probabilities down the multi-output path. Those fall
+            # through to the target column's own kind, which is what they are.
+            if len(scored) > 1 and self._scored_are_train_columns(scored):
+                return "multilabel"
+        elif len(self.submission_columns) > 2:
+            # Ids unknown and more than two columns: "key plus N labels" and
+            # "N+1 labels" are the same shape from here, and guessing either way
+            # is worse than saying so. Two columns are unambiguous whichever the
+            # key turns out to be, so those fall through and get measured.
+            return "unknown"
+        if self.target_column is None:
+            return "none"
+        column = next((c for c in self.columns if c.name == self.target_column), None)
+        if column is None:
+            return "unknown"
+        if column.unique_count <= 1:
+            # Constant, or nothing left after nulls. Not binary, and a floor
+            # built on it would be perfect and meaningless.
+            return "unknown"
+        if column.unique_count == 2:
+            return "binary"
+        if not column.is_numeric:
+            return "multiclass"
+        stats = column.stats if isinstance(column.stats, dict) else {}
+        low, high = _as_number(stats.get("min")), _as_number(stats.get("max"))
+        if low is None or high is None:
+            # Absent, or present and unreadable. Both mean the numeric branch
+            # has nothing to reason with, and this is a `computed_field` — a
+            # raise here does not fail one field, it fails `model_dump_json` for
+            # the whole profile.
+            return "unknown"
+        whole = low.is_integer() and high.is_integer()
+        if not whole:
+            return "continuous"
+        # Labels repeat. Twelve distinct prices over twelve rows cleared the
+        # ceiling and read as a twelve-class problem — the `SalePrice` misreading
+        # again, arriving through the small-fixture door instead of the
+        # large-dataset one. `row_count <= 0` means nobody counted, and a rule
+        # that silently used 0 as "no repeats" would send every uncounted
+        # dataset down the numeric branch.
+        labels_repeat = self.row_count <= 0 or column.unique_count < self.row_count
+        if column.unique_count <= DISCRETE_LABEL_CEILING and labels_repeat:
+            return "multiclass"
+        # Dense non-negative integers: the values crowd their own range, which
+        # is what a count does and what a price does not.
+        if low >= 0 and high < column.unique_count * _COUNT_DENSITY:
+            return "count"
+        return "continuous"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -712,6 +841,77 @@ def _is_known_prefix_of(frame: "pd.DataFrame", name: str, target: str) -> bool |
     return bool((frame.loc[known, name] == frame.loc[known, target]).all())
 
 
+def _as_number(value: object) -> float | None:
+    """A finite float, or None for anything that is not one.
+
+    `ColumnProfile.stats` is `dict[str, Any]` and profiles are read from disk,
+    so "the writer only ever puts floats there" is a fact about today's writer
+    rather than about the data.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return None if number != number or number in (float("inf"), float("-inf")) else number
+
+
+def _measure_target(profile: DatasetProfile, frame: pd.DataFrame) -> None:
+    """Attach the target's distribution, if the frame in hand holds the target.
+
+    Both profiling paths call this rather than each measuring for itself: the
+    flat one and the partitioned one already resolve the target differently, and
+    two measurements of one field is how they would come to disagree about it.
+    """
+    target = profile.target_column
+    if target and target in frame.columns:
+        profile.target_distribution = _target_distribution(frame[target])
+
+
+def _target_distribution(series: pd.Series) -> TargetDistribution:
+    """Measure the target. Never raises; a column it cannot read stays empty.
+
+    Empty is a real answer and a safe one — M23's floor refuses to build on an
+    empty distribution, which is the right response to a target nobody could
+    measure. An exception here would take down a profile that is otherwise
+    correct about everything else.
+    """
+    import pandas as pd
+
+    null_count = int(series.isna().sum())
+    values = series.dropna()
+    if values.empty:
+        return TargetDistribution(null_count=null_count)
+
+    numeric = pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values)
+    distribution = TargetDistribution(null_count=null_count)
+    # Counts for anything with few enough distinct values to have labels —
+    # including a numeric one, because a 0/1 target is a class prior even when
+    # pandas calls it int64. `DISCRETE_LABEL_CEILING` is the same line
+    # `target_type` draws, so the two cannot disagree about what a label is.
+    # `< len(values)` and not just the ceiling: a label set has labels that
+    # *repeat*. Twelve distinct prices over twelve rows cleared the ceiling and
+    # produced a "class prior" of twelve ones, which is not a prior — it is the
+    # data, re-listed, under a name that invites a floor to be built on it.
+    unique = values.nunique()
+    if unique <= DISCRETE_LABEL_CEILING and unique < len(values):
+        counts = values.value_counts()
+        distribution.class_counts = {str(k): int(v) for k, v in counts.items()}
+        # The keys are strings because JSON has no other kind. `class_dtype`
+        # is how the label gets back to what it was: a float64 target — which is
+        # any integer column pandas met a NaN in — gives keys "0.0"/"1.0", and a
+        # floor predicting the argmax would otherwise write that string into a
+        # submission whose sample column is an integer.
+        distribution.class_dtype = str(values.dtype)
+    if numeric:
+        try:
+            distribution.median = float(values.median())
+            distribution.zero_fraction = round(float((values == 0).mean()), 6)
+            skew = float(values.skew()) if len(values) > 2 else None
+            distribution.skew = None if skew is None or skew != skew else round(skew, 6)
+        except (TypeError, ValueError):
+            pass
+    return distribution
+
+
 class TabularProfiler:
     """Profile tabular competition datasets."""
 
@@ -975,6 +1175,11 @@ class TabularProfiler:
         settled, refused = _answered(target_candidates, answers.get("target_column"), known=known)
         target_column, target_inference = _resolve(settled)
         profile.target_column = target_column
+        # Measured here, where the resolved target and the frame that holds it
+        # are both in scope. Not in `_profile_columns`: that runs before anything
+        # knows which column is the target, and measuring a class prior for every
+        # column would be paying for 80 answers to throw away 79.
+        _measure_target(profile, train_sample)
         profile.inferences["target_column"] = target_inference.model_copy(
             update={"rejected": refused}
         )
@@ -1015,15 +1220,104 @@ class TabularProfiler:
                 severity="blocking",
             )
 
-        # A contract, not an inference: a template whose columns are not the id
-        # and the target describes a submission this profile cannot produce, and
-        # failing here is closer to the cause than failing at submission time.
+        # A template that scores several columns of `train` is a question, not a
+        # crash.
+        #
+        # This used to raise on any submission that was not exactly
+        # `[id, target]`, which made every multi-target and multiclass-probability
+        # competition unprofileable — and unmeasurable, since the exception
+        # escaped the benchmark rather than being scored. But it could not simply
+        # be deleted: with the raise removed, a `[Id, a, b]` template resolves
+        # `target_column` to *one* of `a` and `b`, confidently, and asks nothing.
+        # A campaign would then optimise `b` and never mention `a`.
+        #
+        # So the refusal stays and moves to the mechanism that actually stops
+        # things. `Note.severity` is written and never read; what blocks a
+        # campaign is an uncertain `target_column`, via `pending_schema_questions`.
+        # Leaving the target unresolved says exactly what is true — the template
+        # asks for several answers and "which single column is the target" has no
+        # right answer — and every candidate is kept as an alternative so the
+        # operator chooses from evidence rather than from a list of names.
         if sample_table is not None:
-            expected_submission_columns = [id_column, target_column]
-            if submission_columns != expected_submission_columns:
-                raise ValueError(
-                    "Sample submission schema does not match the inferred ID and target columns: "
-                    f"expected {expected_submission_columns}, got {submission_columns}."
+            scored = [name for name in submission_columns if name not in set(profile.id_columns)]
+            # An answer settles it, and must survive this branch.
+            #
+            # Review of my own first version: the refusal below ran
+            # unconditionally, so an operator who answered the very question it
+            # raises had their answer honoured by `_answered` and then discarded
+            # here. `pending_schema_questions` skips answered fields, so no
+            # question came back either — the profile ended up with no target and
+            # nothing asking for one, and a campaign ran against it. That is
+            # worse than the `ValueError` this replaced, which at least stopped:
+            # it made the question askable but unanswerable, on exactly the
+            # competitions this change exists to unblock.
+            #
+            # `answer and not refused` is `_key_columns`' own test for the same
+            # thing, kept identical so the two cannot drift.
+            target_is_answered = bool(answers.get("target_column")) and not refused
+            # One question about the template's shape, asked once, so the four
+            # outcomes stay mutually exclusive. A first attempt tested
+            # `not target_is_answered` inside the multi-output condition and let
+            # the answered case fall through to the next branch, which then filed
+            # `encoded_target_template` — "none of which train holds" — about
+            # columns train demonstrably holds.
+            multi_output = len(scored) > 1 and profile._scored_are_train_columns(scored)
+            if multi_output and target_is_answered:
+                # Still multi-output — `target_type` says so from the template —
+                # but a person has named which column they are predicting, and
+                # that is the one thing the profiler was missing.
+                _note(
+                    profile,
+                    "multi_output_template_answered",
+                    f"the template scores {len(scored)} columns ({', '.join(scored)}); "
+                    f"an operator named {profile.target_column!r} as the target",
+                    field="target_column",
+                )
+            elif multi_output:
+                profile.target_column = None
+                profile.inferences["target_column"] = Inference.of(
+                    [],
+                    alternatives=[
+                        Alternative.of(name, target_candidates.get(name, [])) for name in scored
+                    ],
+                    rejected=refused,
+                )
+                _note(
+                    profile,
+                    "multi_output_template",
+                    f"the template scores {len(scored)} columns of train ({', '.join(scored)}); "
+                    "no single column is the target",
+                    field="target_column",
+                    severity="blocking",
+                )
+            elif len(scored) > 1:
+                # One target written out as classes. The target resolves normally
+                # and `target_type` reports its own kind; recorded so a reader
+                # knows the submission is wider than the answer.
+                _note(
+                    profile,
+                    "encoded_target_template",
+                    f"the template scores {len(scored)} columns none of which train holds "
+                    f"({', '.join(scored)}); read as one target written out",
+                    field="submission_columns",
+                )
+            elif len(scored) == 1 and profile.target_column and scored[0] != profile.target_column:
+                # The other half of what the removed guard checked.
+                #
+                # `[Id, Prediction]` against a `SalePrice` target used to raise.
+                # Accepting it is right — competitions rename the scored column
+                # all the time — but accepting it *silently* is not: the profile
+                # would record a target and a template that do not correspond,
+                # with nothing to say whether that was checked and allowed or
+                # simply never looked at. Everything else this profiler cannot
+                # confirm gets a note, and so does this.
+                _note(
+                    profile,
+                    "template_column_is_not_the_target",
+                    f"the template scores {scored[0]!r}, which is not the resolved target "
+                    f"{profile.target_column!r}; the submission is written under the "
+                    "template's name",
+                    field="submission_columns",
                 )
 
         for column in profile.columns:
@@ -1118,9 +1412,12 @@ class TabularProfiler:
             for text in modality.signals:
                 _note(profile, "modality_signal", text, field="modality")
         logger.info(
+            # `profile.target_column`, not the local: a multi-output template
+            # leaves the profile's target unresolved on purpose, and logging the
+            # local would announce a target the profile does not claim.
             "Profiled '%s': target=%s, id=%s, train_rows=%d, test_rows=%d",
             competition,
-            target_column,
+            profile.target_column,
             id_column,
             profile.row_count,
             profile.test_row_count,
@@ -1541,6 +1838,12 @@ class TabularProfiler:
                     field="target_column",
                     severity="blocking",
                 )
+
+        # After the answer, the procedure and their disagreement have all had
+        # their say — measuring before that would describe a column the profile
+        # then stops naming. rogii reaches this path and not the flat one, and it
+        # is the fixture M23's floor most needs a distribution for.
+        _measure_target(profile, sample_df)
 
         id_settled, id_refused = _answered(
             {

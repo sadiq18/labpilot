@@ -1,0 +1,60 @@
+{
+  "slug": "house-prices-advanced-regression-techniques",
+  "captured_at": "2026-08-20",
+  "source": "kaggle: house-prices-advanced-regression-techniques",
+  "provenance": "derived",
+  "licence": "kaggle-getting-started",
+  "redistribution": "unknown",
+  "files": [
+    {
+      "path": "sample_submission.csv",
+      "mode": "headers_only",
+      "source_sha256": "f19e99699b925aa3085c8d2ae43c62f15fbcd35e4a953b98025f8392c3ffa807",
+      "source_bytes": 31939,
+      "source_rows": 1459,
+      "fixture_rows": 0
+    },
+    {
+      "path": "test.csv",
+      "mode": "headers_only",
+      "source_sha256": "8fdd3d829d4d986b58f845c9553b225e67dd8383624d90fb6ca1d4bed5798c1e",
+      "source_bytes": 451405,
+      "source_rows": 1459,
+      "fixture_rows": 0
+    },
+    {
+      "path": "train.csv",
+      "mode": "headers_only",
+      "source_sha256": "1e18addf81e5e4d347cc17ee6075bbe4a42b7fa26b9e5b063e8f692a5f929d41",
+      "source_bytes": 460676,
+      "source_rows": 1460,
+      "fixture_rows": 0
+    },
+    {
+      "path": "competition.json",
+      "mode": "verbatim",
+      "source_sha256": "eb9933aa16bf56b3aa4f3dd6d64d564a9863fcdf9cf1aeb13ca8f001b4a97f18",
+      "source_bytes": 1338,
+      "source_rows": null,
+      "fixture_rows": null
+    }
+  ],
+  "expected": {
+    "target_column": "SalePrice",
+    "id_columns": [
+      "Id"
+    ],
+    "train_test_relationship": "disjoint_units",
+    "modality": "tabular",
+    "feature_columns": null,
+    "metric_name": "rmsle",
+    "must_ask": []
+  },
+  "unverifiable": {
+    "row_count": "headers_only capture keeps a subset of rows",
+    "cardinality": "headers_only capture keeps a subset of rows",
+    "feature_columns": "no rows, so constant and equals-target exclusions cannot fire"
+  },
+  "known_failures": {},
+  "notes": "81 columns, the widest tabular schema in the corpus, and a continuous target \u2014 the regression counterpart to two classification fixtures. `Id` is the whole of the id; the remaining 79 are features of every dtype the profiler distinguishes. Scored on \"Root Mean Squared Logarithmic Error\", which is `rmsle` \u2014 not `rmse`, and the difference is the whole competition. Kaggle states the metric as \"Root Mean Squared Logarithmic Error\"."
+}

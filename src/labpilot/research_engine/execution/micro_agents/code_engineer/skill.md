@@ -45,6 +45,44 @@ generated from scratch from the dataset profile and `data/raw` inventory.
 - Always end `pipeline/train.py` with exact ``if __name__ == "__main__":`` + ``main()``
   (ASCII ``__main__`` only — never alter that string)
 - No network calls, no Kaggle upload, no inventing leaderboard scores
+- **Honour `LABPILOT_SMOKE`.** The verification gate runs your script with that
+  env var set and kills it after 120s. It is how the harness asks "does this
+  run at all?" without waiting for a real fit, so the script must take a short
+  path when it is set:
+  ```python
+  SMOKE = os.environ.get("LABPILOT_SMOKE") == "1"
+  if SMOKE:                      # prove the pipeline runs, do not train it
+      train_df = train_df.head(2000)
+      n_splits, n_estimators = 2, 20
+  ...
+  metrics = {"cv_<metric>": score}
+  if SMOKE:
+      metrics["status"] = "smoke"   # a score from a slice is not a result
+  ```
+  **Stamp the status.** `metrics.json` is written to the same path whether the
+  run is a smoke run or the real one, so a score with nothing marking it is
+  indistinguishable from a trained result — `PLACEHOLDER_STATUSES` is what
+  downstream reads to tell them apart, and it only knows what a run declares.
+  A script that ignores it trains on the full table and is killed at 120s —
+  reported as `smoke_gate timed out`, which verifies nothing either way.
+  Measured on playground-series-s6e8 (2026-08-30): 691,369 rows and a 5-fold
+  fit, timed out, and the baseline hypothesis was retired for it.
+- **LightGBM 4.x: `fit()` takes no `verbose` and no `early_stopping_rounds`.**
+  Both moved to callbacks in 4.0 and raise `TypeError` now:
+  ```python
+  # WRONG — TypeError on lightgbm>=4
+  model.fit(X, y, eval_set=[(Xv, yv)], verbose=False, early_stopping_rounds=50)
+  # RIGHT
+  model.fit(X, y, eval_set=[(Xv, yv)],
+            callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)])
+  ```
+  Set `verbose=-1` in the **constructor** to silence training output.
+  Measured on playground-series-s6e8 (2026-08-30): these two kwargs were the
+  single most common generated-code defect, failing five separate attempts
+  across two campaigns and retiring the baseline hypothesis both times. The
+  API a model recalls from training data is 3.x, and the version you get is the
+  one you declare in the PEP 723 block below — where the example pins
+  `lightgbm>=4.0`, so it is the 4.x signature that has to be written.
 - Prefer one cohesive `pipeline/train.py` (+ small helpers) over sprawling packages
 - **Declare every third-party import in a PEP 723 block at the top of
   `pipeline/train.py`**, immediately after the module docstring:
