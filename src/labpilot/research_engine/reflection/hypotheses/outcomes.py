@@ -31,7 +31,10 @@ now fixed three times (plan projections, evidence-card dumps, skill overlays).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from enum import StrEnum
+
+from labpilot.accessor.common.provenance import failure_signature
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +43,31 @@ logger = logging.getLogger(__name__)
 #: about the idea being tested.
 _TRANSIENT_KINDS: frozenset[str] = frozenset({"rate_limit", "unavailable", "timeout", "no_client"})
 
-#: Attempts before an otherwise-retryable hypothesis is retired.
+#: Attempts before an otherwise-retryable hypothesis is retired **on a repeat**.
 #:
 #: Three, matching `llm_max_attempts`. The fourth identical failure teaches
 #: nothing the third did not, and every attempt after it is a campaign step
 #: spent on an idea that has not worked yet.
+#:
+#: **Identical** was load-bearing and only the prose knew it (issue #176, the
+#: sibling of #173 one layer down). Three attempts that each fix the previous
+#: defect and surface a new one is the repair loop converging, and retiring on
+#: that wrote `REJECTED` — a durable claim about the *idea* — on evidence that
+#: only said the generated code did not run yet.
 DEFAULT_MAX_ATTEMPTS = 3
+
+#: The ceiling regardless of whether the failures repeat.
+#:
+#: The campaign breaker could hand its distinct-failure case to
+#: `max_barren_steps`; there is no equivalent here, and a hypothesis whose
+#: failures are endlessly novel would never retire at all — a worse failure
+#: than retiring one early, because the selector would keep offering it.
+#:
+#: Eight to three is the ratio the campaign layer already uses
+#: (`DEFAULT_MAX_BARREN_STEPS` over `DEFAULT_MAX_CONSECUTIVE_FAILURES`), for the
+#: same reason: the slower limit is not a second opinion about the same
+#: question, it is the backstop for the case the faster one declines to judge.
+DEFAULT_MAX_DISTINCT_ATTEMPTS = 8
 
 
 class HypothesisOutcome(StrEnum):
@@ -57,12 +79,34 @@ class HypothesisOutcome(StrEnum):
     DEAD_END = "dead_end"
 
 
+def _failures_are_repeating(recent_failures: Sequence[str]) -> bool:
+    """True when this hypothesis is stuck rather than working through defects.
+
+    The newest failure against every other one still recorded, not against the
+    previous one alone: a loop where fixing A reintroduces B and fixing B
+    reintroduces A differs from its predecessor every time and is a stall by any
+    reading. `BudgetState.failures_are_repeating` asks the same question of the
+    campaign, and both defer to `failure_signature` so there is one answer to it.
+
+    **Fewer than two recorded failures answers True**, keeping the old
+    behaviour wherever this cannot see — a caller that supplies no history gets
+    exactly the retirement it got before.
+    """
+    texts = [t for t in recent_failures if str(t).strip()]
+    if len(texts) < 2:
+        return True
+    newest = failure_signature(texts[-1])
+    return any(failure_signature(prior) == newest for prior in texts[:-1])
+
+
 def classify_hypothesis_failure(
     *,
     failure_reason: str = "",
     failure_kind: str | None = None,
     attempts: int = 1,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    max_distinct_attempts: int = DEFAULT_MAX_DISTINCT_ATTEMPTS,
+    recent_failures: Sequence[str] = (),
     redundant: bool = False,
 ) -> tuple[HypothesisOutcome, str]:
     """Return ``(outcome, why)`` for one failed attempt at a hypothesis.
@@ -83,11 +127,21 @@ def classify_hypothesis_failure(
             failure_reason or "the parent already implements this change",
         )
 
-    if attempts >= max_attempts:
+    if attempts >= max_distinct_attempts:
         return (
             HypothesisOutcome.DEAD_END,
             f"failed {attempts} time(s), the last as {failure_kind or 'unknown'}: "
             f"{failure_reason or 'no reason recorded'}",
+        )
+
+    # Exhausted *and* stuck. A hypothesis whose attempts each surfaced a new
+    # defect is not evidence against the idea, and `RETRYABLE` below returns it
+    # to the pool rather than writing a verdict the selector will honour.
+    if attempts >= max_attempts and _failures_are_repeating(recent_failures):
+        return (
+            HypothesisOutcome.DEAD_END,
+            f"failed {attempts} time(s) with the same failure, the last as "
+            f"{failure_kind or 'unknown'}: {failure_reason or 'no reason recorded'}",
         )
 
     kind = str(failure_kind or "").strip().lower()

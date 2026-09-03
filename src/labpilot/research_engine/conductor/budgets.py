@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from labpilot.accessor.common.provenance import failure_signature
 from labpilot.research_engine.conductor.models import _now
 from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
     MEASUREMENT_PREFIXES,
@@ -182,12 +182,6 @@ class ScoreEvent(BaseModel):
     timestamp: str = Field(default_factory=_now)
 
 
-#: Noise that differs between two reports of the same failure. Addresses and
-#: line numbers move; ids (`P-001-T03`, `H-011`) are per-attempt by
-#: construction, so leaving them in would make every failure look novel.
-_FAILURE_NOISE = re.compile(r"0x[0-9a-f]+|\d+", re.IGNORECASE)
-
-
 #: How many recent failures to keep, and therefore how long a cycle
 #: `failures_are_repeating` can see. Three held only the failures that would
 #: trip the shipped threshold, which is enough for a stall repeating one defect
@@ -195,20 +189,6 @@ _FAILURE_NOISE = re.compile(r"0x[0-9a-f]+|\d+", re.IGNORECASE)
 #: fourth slot to see the repeat of A. Five, at 200 characters each, is a
 #: kilobyte of session metadata for a cycle length no repair loop should reach.
 _FAILURE_WINDOW = 5
-
-
-def _failure_signature(error: str) -> str:
-    """What two failure excerpts have to share to count as the same failure.
-
-    Deliberately crude: case-folded, whitespace-collapsed, digits removed.
-    Under-normalising is the safe direction — a repeat mistaken for novel costs
-    a few extra steps and is caught by `max_barren_steps`, while novel mistaken
-    for a repeat ends the campaign, which is the failure being removed. So this
-    strips only what provably varies between two reports of one defect, and
-    accepts that it will also collapse errors differing solely in a version
-    number.
-    """
-    return _FAILURE_NOISE.sub("", " ".join(str(error).split()).lower())
 
 
 class BudgetState(BaseModel):
@@ -298,8 +278,8 @@ class BudgetState(BaseModel):
         """
         if len(self.recent_failures) < 2:
             return True
-        newest = _failure_signature(self.recent_failures[-1])
-        return any(_failure_signature(prior) == newest for prior in self.recent_failures[:-1])
+        newest = failure_signature(self.recent_failures[-1])
+        return any(failure_signature(prior) == newest for prior in self.recent_failures[:-1])
 
     def ensure_wall_start(self) -> None:
         if not self.wall_started_at:

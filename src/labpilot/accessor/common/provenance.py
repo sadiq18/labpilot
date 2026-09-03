@@ -30,6 +30,7 @@ this cannot break a run that would otherwise have worked.
 from __future__ import annotations
 
 import logging
+import re
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -120,6 +121,36 @@ def classify_failure(reason: str | None) -> str | None:
         if any(marker in text for marker in markers):
             return kind
     return "other"
+
+
+#: Noise that differs between two reports of the same failure. Addresses and
+#: line numbers move; ids (`P-001-T03`, `H-011`, `E-042`) are per-attempt by
+#: construction, so leaving them in would make every repeat look novel.
+_FAILURE_NOISE = re.compile(r"0x[0-9a-f]+|\d+", re.IGNORECASE)
+
+
+def failure_signature(error: str | None) -> str:
+    """What two failure messages have to share to count as the same failure.
+
+    Coarser than `classify_failure` and asking a different question: that one
+    buckets a failure by *kind* for a rate, this one asks whether two messages
+    describe the same defect, so a caller can tell a stalled loop from one
+    working through distinct problems.
+
+    Deliberately crude — case-folded, whitespace-collapsed, digits removed.
+    Under-normalising is the safe direction wherever this is used: a repeat
+    mistaken for novel costs a few extra attempts, while novel mistaken for a
+    repeat retires work that was still converging. So it strips only what
+    provably varies between two reports of one defect, and accepts that it will
+    also collapse messages differing solely in a version number.
+
+    **Here rather than in either caller.** The campaign breaker
+    (`conductor/budgets.py`) and the hypothesis retirement rule
+    (`reflection/hypotheses/outcomes.py`) both need it, they sit in layers that
+    do not import each other, and two answers to one question is how the
+    primary-metric key ended up with four disagreeing resolvers.
+    """
+    return _FAILURE_NOISE.sub("", " ".join(str(error or "").split()).lower())
 
 
 def record_invocation(

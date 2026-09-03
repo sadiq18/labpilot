@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,7 @@ class HypothesisEvaluator:
         failure_reason: str = "",
         failure_kind: str | None = None,
         attempts: int = 1,
+        recent_failures: Sequence[str] = (),
         redundant: bool = False,
     ) -> Hypothesis | None:
         """Move a hypothesis out of `testing` after its experiment failed.
@@ -106,6 +108,7 @@ class HypothesisEvaluator:
             failure_reason=failure_reason,
             failure_kind=failure_kind,
             attempts=attempts,
+            recent_failures=recent_failures,
             redundant=redundant,
         )
         status = (

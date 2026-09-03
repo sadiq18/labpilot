@@ -32,6 +32,12 @@ from labpilot.research_engine.planner.validator import topological_levels, valid
 logger = logging.getLogger(__name__)
 
 
+#: How many prior failure texts to carry into the retirement rule. Enough to see
+#: a short cycle (A/B, A/B/C) repeat; not a log — it answers one same-or-different
+#: question and is read on every failed execution.
+_FAILURE_HISTORY = 5
+
+
 class EngineerError(RuntimeError):
     """Fatal orchestration failure."""
 
@@ -348,11 +354,16 @@ class ResearchEngineer:
             from labpilot.accessor.common.provenance import classify_failure
             from labpilot.research_engine.reflection.hypotheses import HypothesisEvaluator
 
+            attempts, prior_failures = self._failed_attempts_for(hypothesis_id)
             HypothesisEvaluator(self.knowledge_dir, self.competition).record_failed_attempt(
                 hypothesis_id,
                 failure_reason=error,
                 failure_kind=classify_failure(error),
-                attempts=self._failed_attempts_for(hypothesis_id),
+                attempts=attempts,
+                # From the same rows the count comes from. `ResearchExecution`
+                # stores each failure's text, so the history the retirement rule
+                # needs was already being read and thrown away (issue #176).
+                recent_failures=prior_failures,
                 # Redundancy is decided upstream, by `AiderAgent`, which holds
                 # both the claim and the parent. Deciding it again from the
                 # failure text here would be two answers to one question, and
@@ -362,18 +373,32 @@ class ResearchEngineer:
         except Exception as exc:  # noqa: BLE001 — bookkeeping must not mask the failure
             logger.warning("could not record attempt on %s: %s", hypothesis_id, exc)
 
-    def _failed_attempts_for(self, hypothesis_id: str) -> int:
-        """How many executions for this hypothesis have already failed."""
+    def _failed_attempts_for(self, hypothesis_id: str) -> tuple[int, list[str]]:
+        """How many executions for this hypothesis failed, and what they said.
+
+        Both, from one pass. The retirement rule needs the texts as well as the
+        count — three attempts that each surfaced a new defect is a converging
+        repair loop, three reporting one defect is a stall — and the executions
+        being counted already carry `error` (issue #176). Returning only the
+        count read the history and discarded it.
+
+        Oldest first, capped: this feeds a same-or-different comparison, not a
+        log, and a hypothesis with fifty failed executions needs no more of them
+        to answer it than one with five.
+        """
         try:
             plans = self._plan_store.list_plans(hypothesis_id=hypothesis_id)
-            failed = sum(
-                len(self._exec_store.list_executions(plan_id=p.id, status="failed")) for p in plans
-            )
+            executions = [
+                execution
+                for plan in plans
+                for execution in self._exec_store.list_executions(plan_id=plan.id, status="failed")
+            ]
         except Exception:  # noqa: BLE001 — an unreadable store means "first attempt"
-            return 1
+            return 1, []
+        errors = [str(e.error).strip() for e in executions if str(e.error or "").strip()]
         # At least 1: this is called *from* a failure, so the current one counts
         # even if the store has not recorded it yet.
-        return max(1, failed)
+        return max(1, len(executions)), errors[-_FAILURE_HISTORY:]
 
     def _train_script_is_unrunnable(self) -> bool:
         """True when the script we are about to re-run cannot possibly work.
