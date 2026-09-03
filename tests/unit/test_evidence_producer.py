@@ -46,9 +46,7 @@ def _registry(calls: list[dict], *, name: str = "gather_stub", created: int = 0)
         return ToolResult(refs=[], data={"report": _Report()})
 
     registry = ToolRegistry()
-    registry.register(
-        ToolDescriptor(name=name, handler=handler, capability_status="fixed")
-    )
+    registry.register(ToolDescriptor(name=name, handler=handler, capability_status="fixed"))
     return registry
 
 
@@ -90,13 +88,32 @@ def _quiet_workspace(tmp_path: Path, *, hypotheses: int = 6, evidence_age_hours:
 
 
 def _stale_workspace(tmp_path: Path):
-    """A pool that is not thin, with evidence old enough to gather on anyway.
+    """A **thin** pool with evidence old enough to gather on anyway.
 
     The `stale` clause is what the producer's own work *does* move — 158h to
     0.01h in the measured run — so it has to keep firing while `thin` is
     latched.
+
+    Thin on purpose, and this is the whole point of the fixture. It read
+    `hypotheses=40`, which put the pool over target, so `thin` could not fire
+    and the suppression under test was never exercised: the gate returns at the
+    first clause that fires, and with a full pool it simply reached `stale` on
+    its own. The test passed against a producer that skipped every tick while
+    latched. One hypothesis makes `thin` fire *and* be suppressed, which is the
+    only arrangement that can tell the two behaviours apart.
     """
-    return _quiet_workspace(tmp_path, hypotheses=40, evidence_age_hours=48.0)
+    return _quiet_workspace(tmp_path, hypotheses=1, evidence_age_hours=48.0)
+
+
+def _stagnant_budgets():
+    """A campaign whose last two experiments beat nothing."""
+    from labpilot.research_engine.conductor.budgets import BudgetConfig, BudgetState, ScoreEvent
+
+    events = [
+        ScoreEvent(experiment_id=f"E-{i}", metric_name="rmse", value=value, maximize=False)
+        for i, value in enumerate((1.0, 2.0, 3.0))
+    ]
+    return BudgetConfig(plateau_window=1), BudgetState(score_events=events)
 
 
 def test_an_empty_pool_gathers_and_reports_the_gate_reason(tmp_path: Path) -> None:
@@ -255,9 +272,7 @@ def test_status_reports_the_gate_reason_a_skipped_tick_gave(tmp_path: Path) -> N
 
     ws = _quiet_workspace(tmp_path)
     calls: list[dict] = []
-    producer = EvidenceProducer(
-        ws, _registry(calls), plan=GatherPlan(tool="gather_stub")
-    )
+    producer = EvidenceProducer(ws, _registry(calls), plan=GatherPlan(tool="gather_stub"))
 
     producer.tick_once()
     status = producer.status()
@@ -364,9 +379,7 @@ def test_no_reserve_means_no_pre_flight_question(tmp_path: Path) -> None:
     calls: list[dict] = []
     router = _Router(available_at_reserve=0.0)
 
-    outcome = gather_once(
-        ws, _registry(calls), GatherPlan(tool="gather_stub"), llm_client=router
-    )
+    outcome = gather_once(ws, _registry(calls), GatherPlan(tool="gather_stub"), llm_client=router)
 
     assert outcome.gathered is True
     assert router.asked == []
@@ -418,9 +431,7 @@ def test_the_producer_thread_inherits_the_provenance_context(tmp_path: Path) -> 
     registry.register(
         ToolDescriptor(name="gather_stub", handler=handler, capability_status="fixed")
     )
-    producer = EvidenceProducer(
-        ws, registry, plan=GatherPlan(tool="gather_stub"), tick_seconds=1.0
-    )
+    producer = EvidenceProducer(ws, registry, plan=GatherPlan(tool="gather_stub"), tick_seconds=1.0)
 
     sentinel = object()
     token = provenance.set_sink(sentinel)  # type: ignore[arg-type]
@@ -818,8 +829,15 @@ def test_a_sweep_that_does_not_move_the_viable_count_stops_the_producer_sweeping
     monkeypatch.setattr(producer_mod, "_viable", lambda _ws: 3)  # never moves
 
     calls: list[dict] = []
+    # A workspace with recent, non-stale evidence: `_ws` has no artifact at
+    # all, so the gate answers `first` — a real second reason to sweep — and
+    # the second tick would gather on it rather than on the latched clause.
+    # The case under test is a pool that stays thin, not one that has never
+    # gathered.
     producer = EvidenceProducer(
-        _ws(tmp_path), _registry(calls, created=10), plan=GatherPlan(tool="gather_stub")
+        _quiet_workspace(tmp_path, hypotheses=1, evidence_age_hours=1.0),
+        _registry(calls, created=10),
+        plan=GatherPlan(tool="gather_stub"),
     )
 
     first = producer.tick_once()
@@ -896,5 +914,143 @@ def test_the_latch_only_silences_the_clause_it_was_earned_on(tmp_path: Path, mon
     )
 
     assert outcome.gathered is True
-    assert outcome.clause in {"stale", "first"}
+    # `stale` exactly. `first` was in here as an alternative, and it hid the
+    # difference: on a workspace with no artifact at all the gate answers
+    # `first` whether or not suppression works.
+    assert outcome.clause == "stale"
     assert len(calls) == 1
+
+
+def test_a_latched_clause_falls_through_to_stagnation(tmp_path: Path, monkeypatch) -> None:
+    """The other clause below `thin`, and the one a thin pool masks longest.
+
+    `gather_verdict` returns at the first clause that fires and `thin` is
+    evaluated before `stagnant`, so a caller that filtered the *returned*
+    clause suppressed stagnation as well without ever evaluating it.
+    """
+    from labpilot.research_engine.conductor import producer as producer_mod
+    from labpilot.research_engine.conductor.producer import gather_once
+
+    monkeypatch.setattr(producer_mod, "_viable", lambda _ws: 3)
+    calls: list[dict] = []
+
+    outcome = gather_once(
+        _quiet_workspace(tmp_path, hypotheses=1, evidence_age_hours=1.0),
+        _registry(calls),
+        GatherPlan(tool="gather_stub"),
+        budgets=_stagnant_budgets(),
+        skip_clauses=("thin",),
+    )
+
+    assert outcome.gathered is True
+    assert outcome.clause == "stagnant"
+    assert len(calls) == 1
+
+
+def test_a_latched_clause_with_nothing_below_it_is_held_not_satisfied(tmp_path: Path) -> None:
+    """When suppression really is the last word, say which signal is stuck.
+
+    `satisfied` would report "5 viable hypotheses queued" for a campaign
+    holding one, into the log an operator reads to work out why nothing is
+    gathering.
+    """
+    from labpilot.research_engine.conductor.producer import gather_once
+
+    calls: list[dict] = []
+    outcome = gather_once(
+        _quiet_workspace(tmp_path, hypotheses=1, evidence_age_hours=1.0),
+        _registry(calls),
+        GatherPlan(tool="gather_stub"),
+        skip_clauses=("thin",),
+    )
+
+    assert outcome.gathered is False
+    assert outcome.clause == "held"
+    assert "1 viable" in outcome.reason and "did not change that" in outcome.reason
+    assert not calls
+
+
+# --- the two guards that fail quietly ----------------------------------------
+
+
+def test_a_malformed_interval_warns_instead_of_killing_the_campaign(monkeypatch) -> None:
+    """`producer.py` is imported lazily from inside `run_until_stop`, so a
+    `float()` raising at module scope took the campaign down several steps in,
+    with a traceback naming neither the variable nor the value.
+    """
+    from labpilot.research_engine.conductor.producer import _env_float
+
+    monkeypatch.setenv("LABPILOT_GATHER_TICK_S", "5m")
+    assert _env_float("LABPILOT_GATHER_TICK_S", 300.0) == 300.0
+
+    monkeypatch.setenv("LABPILOT_GATHER_TICK_S", "  60  ")
+    assert _env_float("LABPILOT_GATHER_TICK_S", 300.0) == 60.0
+
+    monkeypatch.delenv("LABPILOT_GATHER_TICK_S")
+    assert _env_float("LABPILOT_GATHER_TICK_S", 300.0) == 300.0
+
+
+class _PreviewClient:
+    """Minimal stand-in for the routed LLM client `_budget_headroom` asks."""
+
+    def __init__(self, *, raises: bool) -> None:
+        self.raises = raises
+        self.previews = 0
+
+    def preview(self, _role, *, reserve):
+        self.previews += 1
+        if self.raises:
+            raise RuntimeError("no such parameter: reserve")
+        return type("R", (), {"provider": None, "reason": "daily limit reached"})()
+
+
+def test_a_refusal_does_not_outlive_the_client_it_describes() -> None:
+    """The refusal set held `id(client)` — an address, and nothing more.
+
+    So the entry survived the client and the set grew for the life of the
+    process; and because CPython hands a freed address to the next object of
+    that size, a fresh client could inherit the refusal. `_budget_headroom`
+    would then answer "go ahead" without ever calling `preview`, leaving the
+    reserve off in the campaign it exists to protect, with no log line.
+
+    The address-reuse half cannot be forced without depending on the allocator,
+    so what is pinned here is the invariant underneath it: an entry that cannot
+    outlive its client cannot be inherited by another.
+
+    Recorded through `_remember_refusal` rather than by provoking a real
+    failure, deliberately. `_budget_headroom` logs the exception, the traceback
+    holds the frame that holds the client, and pytest keeps log records for the
+    length of the test — so a client refused the realistic way stays reachable
+    and the collection below would measure the harness instead of the code.
+    """
+    import gc
+
+    from labpilot.research_engine.conductor.producer import _PREVIEW_REFUSED, _remember_refusal
+
+    tracked = _PreviewClient(raises=False)
+    _remember_refusal(tracked)
+
+    # Fails outright against a `set[int]` of ids: a client is not its address.
+    assert tracked in _PREVIEW_REFUSED
+    held = len(_PREVIEW_REFUSED)
+
+    del tracked
+    gc.collect()
+    assert len(_PREVIEW_REFUSED) == held - 1, "the refusal outlived the client it described"
+
+
+def test_a_broken_preview_is_recorded_once_and_never_blocks_gathering() -> None:
+    """A signature mismatch does not heal, so it is asked once; and it must not
+    be read as "no budget", which would stop the producer on a bad answer."""
+    from labpilot.research_engine.conductor.producer import _PREVIEW_REFUSED, _budget_headroom
+
+    broken = _PreviewClient(raises=True)
+    assert _budget_headroom(broken, 0.2) is None
+    assert _budget_headroom(broken, 0.2) is None
+    assert broken.previews == 1, "a client whose preview raised must not be asked again"
+    assert broken in _PREVIEW_REFUSED
+
+    healthy = _PreviewClient(raises=False)
+    reason = _budget_headroom(healthy, 0.2)
+    assert healthy.previews == 1, "a different client must be consulted on its own terms"
+    assert reason is not None and "holding 20%" in reason

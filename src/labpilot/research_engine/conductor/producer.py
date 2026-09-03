@@ -19,6 +19,7 @@ import logging
 import os
 import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -125,7 +126,28 @@ _PRODUCER_ROLE = "reasoning"
 #: Clients whose `preview` has already raised. A signature mismatch does not
 #: heal, and a traceback every tick for twelve hours buries the campaign's own
 #: log without telling the operator anything the first one did not.
-_PREVIEW_REFUSED: set[int] = set()
+#:
+#: Weak, and holding the client rather than `id(client)`. An id is only an
+#: address: a refused client that is then collected leaves its number behind,
+#: and CPython hands the same address to the next object of that size — so a
+#: brand-new client in a second campaign inherited the refusal, and
+#: `_budget_headroom` returned "go ahead" without ever asking. The reserve was
+#: then off, silently, in the run it exists to protect. A `WeakSet` forgets the
+#: entry when the client dies, and cannot outlive what it describes.
+_PREVIEW_REFUSED: weakref.WeakSet[Any] = weakref.WeakSet()
+
+
+def _remember_refusal(client: Any) -> None:
+    """Note that this client's `preview` raised, if it can be tracked at all.
+
+    A `__slots__` class with no `__weakref__` cannot be weakly referenced. That
+    is worth one repeated traceback per tick, and is not worth a strong
+    reference that keeps a dead client alive for the life of the process.
+    """
+    try:
+        _PREVIEW_REFUSED.add(client)
+    except TypeError:
+        logger.debug("Cannot track preview refusal for %r; it is not weak-referenceable", client)
 
 
 def _budget_headroom(llm_client: Any | None, reserve: float) -> str | None:
@@ -150,12 +172,12 @@ def _budget_headroom(llm_client: Any | None, reserve: float) -> str | None:
     preview = getattr(llm_client, "preview", None)
     if not callable(preview):
         return None
-    if id(llm_client) in _PREVIEW_REFUSED:
+    if llm_client in _PREVIEW_REFUSED:
         return None
     try:
         route = preview(_PRODUCER_ROLE, reserve=reserve)
     except Exception:
-        _PREVIEW_REFUSED.add(id(llm_client))
+        _remember_refusal(llm_client)
         logger.exception(
             "Evidence producer could not preview its route; gathering without a "
             "budget reserve for the rest of this run"
@@ -195,21 +217,22 @@ def gather_once(
     direct caller (and every test) on the real limits.
 
     ``skip_clauses`` names gate clauses this call must not act on — the
-    runner's hysteresis (see `EvidenceProducer._unmovable`). Passed in rather
-    than decided here so the unit stays a pure gate-then-pipeline.
+    runner's hysteresis (see `EvidenceProducer._skip_clauses`). Handed to the
+    gate rather than applied to its answer: the clauses are ordered and `thin`
+    is evaluated before `stagnant`, `first` and `stale`, so filtering the
+    returned clause here suppressed every reason below it as well. A producer
+    latched on `thin` then skipped day-old evidence too, because the gate had
+    never reached the line that would have reported it. `gather_verdict`
+    instead falls through a suppressed clause to the ones under it, and
+    answers `held` only when nothing else fires either.
 
     Raises whatever the tool raises. Isolating a bad tick is the runner's job,
     and a unit that swallows its own failures cannot be tested for them.
     """
-    ok, reason, clause = gather_verdict(workspace, budgets)
+    ok, reason, clause = gather_verdict(workspace, budgets, suppress=skip_clauses or ())
     if not ok:
         logger.info("Evidence producer: skipping — %s", reason)
         return GatherOutcome(gathered=False, reason=reason, clause=clause)
-
-    if clause in (skip_clauses or ()):
-        held = f"{reason}, and the last sweep did not change that"
-        logger.info("Evidence producer: skipping — %s", held)
-        return GatherOutcome(gathered=False, reason=held, clause=clause)
 
     yielded = _budget_headroom(llm_client, reserve)
     if yielded is not None:
@@ -253,10 +276,30 @@ def _viable(workspace: Workspace) -> int | None:
         return None
 
 
+def _env_float(name: str, default: float) -> float:
+    """A float from the environment, or the default with a warning.
+
+    `float(os.environ.get(...))` at import time turns a typo into a
+    `ValueError` raised out of an import — and this module is imported lazily,
+    from inside `run_until_stop`, so `LABPILOT_GATHER_TICK_S=5m` killed the
+    campaign several steps in with a traceback naming neither the variable nor
+    the value. `conduct.py` already validates `LABPILOT_GATHER_BACKGROUND` this
+    way and says why; the same reasoning applies to a number.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("%s=%r is not a number; using %s", name, raw, default)
+        return default
+
+
 #: Seconds between ticks. A **rate limit, not a cadence assumption**: a domain
 #: whose evidence moves weekly rather than hourly needs no different runner, it
 #: just gets more no-ops, and a no-op is one freshness read plus one pool scan.
-_TICK_SECONDS = float(os.environ.get("LABPILOT_GATHER_TICK_S", "300"))
+_TICK_SECONDS = _env_float("LABPILOT_GATHER_TICK_S", 300.0)
 
 #: Floor under the tick. `Event.wait(0)` returns immediately, so a zero or
 #: negative interval turns the loop into a spin that globs the hypothesis
@@ -268,12 +311,12 @@ _MIN_TICK_SECONDS = 1.0
 #: Fraction of the LLM budget the producer leaves alone. Hypothesis generation
 #: is a `reasoning` call and a sweep makes many of them; a background worker
 #: running hot exhausts the free tier the campaign needs to plan.
-_RESERVE = float(os.environ.get("LABPILOT_GATHER_RESERVE", "0.2"))
+_RESERVE = _env_float("LABPILOT_GATHER_RESERVE", 0.2)
 
 #: How long campaign shutdown waits for a tick already in flight. A sweep runs
 #: for minutes and an operator must not wait it out; past this the thread is
 #: left daemon and the process exits.
-_STOP_GRACE_S = float(os.environ.get("LABPILOT_GATHER_STOP_GRACE_S", "5"))
+_STOP_GRACE_S = _env_float("LABPILOT_GATHER_STOP_GRACE_S", 5.0)
 
 
 class EvidenceProducer:
@@ -416,9 +459,14 @@ class EvidenceProducer:
         least a step someone chose; an unattended producer doing it is invisible
         and unbounded.
 
-        The latch lifts the moment the count rises above where it stuck, so a
-        pool that genuinely drains — the case the clause exists for — reopens
-        gathering normally. Whether `viable_hypothesis_count` is the right
+        The latch lifts when the count rises above where it stuck — something
+        this producer has just demonstrated it cannot cause, so in practice it
+        is the consumer's own minting (`execution/outcome.py`) that reopens
+        gathering. A pool that drains *further* keeps the latch on, which is
+        correct and worth saying plainly: fewer hypotheses is not evidence that
+        sweeping would work this time. What the latch must never do is silence
+        the other clauses, and it no longer can — see `gather_once`.
+        Whether `viable_hypothesis_count` is the right
         signal for *anyone* to gate on at this pool size is a separate and
         larger question; it decides the consumer's allowlist too, and changing
         it risks re-opening the ratchet M21 closed. Recorded in the plan's

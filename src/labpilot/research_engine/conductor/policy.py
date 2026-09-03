@@ -791,15 +791,44 @@ def should_gather_evidence(
 #: and matching the prose would break the first time it is reworded. M16's
 #: producer needs it: a background worker that repeats an action has to know
 #: which signal it is trying to move.
-GATHER_CLAUSES = ("floor", "thin", "stagnant", "stale", "first", "satisfied")
+GATHER_CLAUSES = ("floor", "thin", "stagnant", "stale", "first", "held", "satisfied")
 
 
 def gather_verdict(
     workspace: Workspace,
     budgets: tuple[BudgetConfig, BudgetState] | None = None,
+    *,
+    suppress: tuple[str, ...] = (),
 ) -> tuple[bool, str, str]:
-    """`should_gather_evidence`, plus the name of the clause that decided it."""
+    """`should_gather_evidence`, plus the name of the clause that decided it.
+
+    ``suppress`` names clauses the caller has already acted on without effect
+    (M16's producer latch). A suppressed clause **falls through to the ones
+    below it** rather than ending the verdict — which is the whole reason this
+    argument exists here rather than in the caller.
+
+    Filtering the returned clause instead was wrong in a way that only showed
+    up in combination: the clauses are ordered, and `thin` returns before
+    `stagnant`, `first` and `stale` are ever evaluated. So a caller that
+    skipped on a returned `thin` skipped *every* tick for as long as the pool
+    stayed under target — day-old evidence and a stalled campaign included,
+    because the gate had never reached the lines that would have said so. The
+    producer's latch is meant to stop it repeating one futile action, not to
+    stop it working.
+
+    A clause that fires and is suppressed is remembered: with nothing below it
+    firing either, the verdict is `held` rather than `satisfied`, so the reason
+    string says the pool is thin instead of claiming it is full.
+    """
     age_hours = hours_since_last_artifact(workspace)
+    held: list[str] = []
+
+    def _fires(clause: str, reason: str) -> tuple[bool, str, str] | None:
+        """The verdict for a clause that just fired, unless it is suppressed."""
+        if clause in suppress:
+            held.append(reason)
+            return None
+        return True, reason, clause
 
     # A floor under both clauses, not a third gate. Making the conditions
     # independent introduces a failure the AND version could not have: a
@@ -814,7 +843,9 @@ def gather_verdict(
 
     viable = viable_hypothesis_count(workspace.knowledge_dir, workspace.competition)
     if viable < _VIABLE_TARGET:
-        return True, f"only {viable} viable hypotheses queued", "thin"
+        verdict = _fires("thin", f"only {viable} viable hypotheses queued")
+        if verdict is not None:
+            return verdict
 
     # Shares `plateau_window` so one knob governs "how long is long enough",
     # but the two measure different things and do not fire together: this
@@ -836,16 +867,28 @@ def gather_verdict(
         window = max(1, stagnant_config.plateau_window)
         stagnant_for = score_summary(stagnant_state, stagnant_config).steps_since_improvement
         if stagnant_for >= window:
-            return True, f"{stagnant_for} experiments with no improvement", "stagnant"
+            verdict = _fires("stagnant", f"{stagnant_for} experiments with no improvement")
+            if verdict is not None:
+                return verdict
 
     if age_hours is None:
-        return True, "no evidence gathered yet", "first"
-    if age_hours >= _EVIDENCE_COOLDOWN_HOURS:
-        return True, f"evidence is {age_hours:.1f}h old", "stale"
+        verdict = _fires("first", "no evidence gathered yet")
+        if verdict is not None:
+            return verdict
+    elif age_hours >= _EVIDENCE_COOLDOWN_HOURS:
+        verdict = _fires("stale", f"evidence is {age_hours:.1f}h old")
+        if verdict is not None:
+            return verdict
 
+    if held:
+        # Not `satisfied`: the workspace is not. Reporting it as satisfied put
+        # "5 viable hypotheses queued" in the log of a campaign holding one.
+        return False, f"{held[0]}, and the last sweep did not change that", "held"
+
+    ago = "never" if age_hours is None else f"{age_hours:.1f}h ago"
     return (
         False,
-        f"{viable} viable hypotheses queued and evidence gathered {age_hours:.1f}h ago",
+        f"{viable} viable hypotheses queued and evidence gathered {ago}",
         "satisfied",
     )
 
@@ -873,9 +916,7 @@ def has_unrun_plan(workspace: Workspace) -> bool:
         # Fails *open*, as its neighbour does: reporting outstanding work that
         # cannot be read would gate `generate_plan`, and a campaign that cannot
         # plan cannot do anything else either.
-        logger.exception(
-            "cannot read unrun plans for %s; treating as none", workspace.competition
-        )
+        logger.exception("cannot read unrun plans for %s; treating as none", workspace.competition)
         return False
     finally:
         if store is not None:
