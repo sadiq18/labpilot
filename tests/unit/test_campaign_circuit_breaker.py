@@ -88,18 +88,18 @@ def test_the_stop_carries_what_broke():
 def test_the_failure_record_is_bounded():
     """This is a stop reason, not a log, and it lands in session metadata.
 
-    The bound is read from `_FAILURE_WINDOW` rather than repeated here. It moved
+    The bound is read from `FAILURE_LOOKBACK` rather than repeated here. It moved
     from 3 to 5 with issue #173: the window is also the span
     `failures_are_repeating` can see, and three held only the failures that would
     trip the shipped threshold — enough for a stall on one defect, not enough to
     catch a loop cycling A/B/C. Hard-coding the number here would make widening
     it look like a regression.
     """
-    from labpilot.research_engine.conductor.budgets import _FAILURE_WINDOW
+    from labpilot.accessor.common.provenance import FAILURE_LOOKBACK
 
     state = _failed(50)
 
-    assert len(state.recent_failures) <= _FAILURE_WINDOW
+    assert len(state.recent_failures) <= FAILURE_LOOKBACK
     assert all(len(f) <= 200 for f in state.recent_failures)
     # Still bounded in the way that matters: kilobytes, not a transcript.
     assert sum(len(f) for f in state.recent_failures) <= 1000

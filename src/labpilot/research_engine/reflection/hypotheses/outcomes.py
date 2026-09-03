@@ -120,6 +120,28 @@ def classify_hypothesis_failure(
     transient, and a rate limit that has blocked three attempts is still a
     campaign making no progress; treating "transient" as "retry forever" is how
     a loop with a plausible excuse runs to its step budget.
+
+    **Exhaustion is now two rules, not one** (issue #176):
+
+    * ``max_distinct_attempts`` is the ceiling, and it does not care what the
+      failures said. It is what stops a hypothesis whose failures are endlessly
+      novel, since nothing else here would.
+    * ``max_attempts`` retires only when ``recent_failures`` shows the same
+      failure coming back. Three attempts that each fixed the last defect and
+      surfaced a new one is the repair loop converging, and retiring on that
+      writes ``REJECTED`` — a durable claim about the *idea* — from evidence
+      that only says the generated code has not run yet.
+
+    So the guarantee above is narrower than it reads: three *identical* rate
+    limits still stop at ``max_attempts``, while three *different* transient
+    failures now retry on to the ceiling. That is the intended trade — distinct
+    infrastructure failures are not evidence about the hypothesis either — but
+    it is a weaker bound than "exhaustion beats transience" alone implies.
+
+    ``recent_failures`` is oldest-first and its **last entry must be the newest
+    failure**; that is what `_failures_are_repeating` compares the others
+    against. An empty history answers "repeating", so a caller that supplies
+    none gets exactly the retirement it got before this rule existed.
     """
     if redundant:
         return (

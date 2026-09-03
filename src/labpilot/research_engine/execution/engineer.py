@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from labpilot.accessor.common.provenance import FAILURE_LOOKBACK
 from labpilot.research_engine.execution.codegen_strategy import (
     resolve_codegen_strategy,
     resolve_codegen_timeout_s,
@@ -32,10 +33,16 @@ from labpilot.research_engine.planner.validator import topological_levels, valid
 logger = logging.getLogger(__name__)
 
 
-#: How many prior failure texts to carry into the retirement rule. Enough to see
-#: a short cycle (A/B, A/B/C) repeat; not a log — it answers one same-or-different
-#: question and is read on every failed execution.
-_FAILURE_HISTORY = 5
+def _allocation_order(execution: ResearchExecution) -> tuple[int, str]:
+    """Sort key putting failed executions in the order they happened.
+
+    Numerically, not lexicographically. `allocate_sequential_id` pads to three
+    and then grows, so `E-1000` sorts *before* `E-999` as a string — the store's
+    own `ORDER BY id` carries the same latent trap, and here it would silently
+    reorder the failure history the retirement rule reads as chronological.
+    """
+    _, _, digits = execution.id.partition("-")
+    return (int(digits) if digits.isdigit() else 0, execution.id)
 
 
 class EngineerError(RuntimeError):
@@ -385,20 +392,33 @@ class ResearchEngineer:
         Oldest first, capped: this feeds a same-or-different comparison, not a
         log, and a hypothesis with fifty failed executions needs no more of them
         to answer it than one with five.
+
+        **Sorted, because the query is per plan.** A hypothesis accrues a second
+        plan the moment a retryable failure returns it to the pool and it is
+        selected again — which this rule makes more common — and iterating plans
+        in the outer loop groups executions by plan rather than by time. The
+        caller reads the last entry as *the newest failure*, so a hypothesis
+        failing A then B on one plan and A twice on another handed it an A where
+        the real newest was B, and retired a loop that was still converging.
         """
         try:
             plans = self._plan_store.list_plans(hypothesis_id=hypothesis_id)
-            executions = [
-                execution
-                for plan in plans
-                for execution in self._exec_store.list_executions(plan_id=plan.id, status="failed")
-            ]
+            executions = sorted(
+                (
+                    execution
+                    for plan in plans
+                    for execution in self._exec_store.list_executions(
+                        plan_id=plan.id, status="failed"
+                    )
+                ),
+                key=_allocation_order,
+            )
         except Exception:  # noqa: BLE001 — an unreadable store means "first attempt"
             return 1, []
         errors = [str(e.error).strip() for e in executions if str(e.error or "").strip()]
         # At least 1: this is called *from* a failure, so the current one counts
         # even if the store has not recorded it yet.
-        return max(1, len(executions)), errors[-_FAILURE_HISTORY:]
+        return max(1, len(executions)), errors[-FAILURE_LOOKBACK:]
 
     def _train_script_is_unrunnable(self) -> bool:
         """True when the script we are about to re-run cannot possibly work.

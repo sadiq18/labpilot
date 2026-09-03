@@ -129,6 +129,21 @@ def classify_failure(reason: str | None) -> str | None:
 _FAILURE_NOISE = re.compile(r"0x[0-9a-f]+|\d+", re.IGNORECASE)
 
 
+#: How many recent failures a caller keeps in order to ask `failure_signature`
+#: whether it is looking at a repeat, and therefore the longest cycle either
+#: caller can see. Three holds only the failures that would trip the campaign's
+#: shipped threshold — enough for a stall on one defect and for an A/B
+#: oscillation, not enough for an A/B/C one, which needs a fourth slot to see A
+#: come back. Five, at 200 characters each, is about a kilobyte of session
+#: metadata for a cycle length no repair loop should reach.
+#:
+#: Shared for the same reason `failure_signature` is: the campaign breaker and
+#: the hypothesis retirement rule both look back over failures, and two
+#: independently tuned windows would have the two layers disagreeing about what
+#: counts as a cycle on identical input.
+FAILURE_LOOKBACK = 5
+
+
 def failure_signature(error: str | None) -> str:
     """What two failure messages have to share to count as the same failure.
 

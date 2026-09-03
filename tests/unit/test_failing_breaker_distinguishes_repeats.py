@@ -303,7 +303,7 @@ def test_a_genuinely_converging_loop_is_still_allowed_to_run() -> None:
 
 def test_the_window_is_bounded() -> None:
     """It is a stop reason written into session metadata, not a log."""
-    from labpilot.research_engine.conductor.budgets import _FAILURE_WINDOW
+    from labpilot.accessor.common.provenance import FAILURE_LOOKBACK
 
     # Spelled out rather than numbered: `_failure_signature` strips digits,
     # so "failure 1" and "failure 2" are one signature and the fixture would
@@ -311,7 +311,7 @@ def test_the_window_is_bounded() -> None:
     words = "alpha bravo charlie delta echo foxtrot golf hotel india juliet".split()
     _, state = _after(*[f"{word} exploded" for word in words])
 
-    assert len(state.recent_failures) == _FAILURE_WINDOW
+    assert len(state.recent_failures) == FAILURE_LOOKBACK
 
 
 # --- what the operator is told ------------------------------------------------

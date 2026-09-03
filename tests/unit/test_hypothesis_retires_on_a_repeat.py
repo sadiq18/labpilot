@@ -149,38 +149,48 @@ def test_redundancy_still_settles_it_before_anything_else() -> None:
 # --- the plumbing, not the two ends of it ------------------------------------
 
 
-def _seed_failed_executions(knowledge: Path, errors: list[str]) -> None:
-    """A hypothesis with one plan and a failed execution per error."""
+def _seed_failed_executions(
+    knowledge: Path, errors: list[str], *, plan_ids: list[str] | None = None
+) -> None:
+    """One failed execution per error, in the order given.
+
+    `plan_ids` places each failure on a named plan. A hypothesis accrues a
+    second plan as soon as a retryable failure returns it to the pool and it is
+    selected again, so interleaving them is the ordinary case rather than a
+    contrived one.
+    """
+    plan_ids = plan_ids or ["P-001"] * len(errors)
     now = datetime.now(UTC)
     plans = PlanStore(knowledge, "demo")
     try:
-        plans.upsert_plan(
-            ResearchPlan(
-                id="P-001",
-                competition="demo",
-                hypothesis_id="H-001",
-                goal="mini",
-                status=PlanStatus.READY,
-                tasks=[
-                    ResearchTask(
-                        id="P-001-T01",
-                        plan_id="P-001",
-                        type=TaskType.PREPARE_WORKSPACE,
-                        description="a",
-                        order=0,
-                    )
-                ],
-                created_at=now,
-                updated_at=now,
+        for plan_id in dict.fromkeys(plan_ids):
+            plans.upsert_plan(
+                ResearchPlan(
+                    id=plan_id,
+                    competition="demo",
+                    hypothesis_id="H-001",
+                    goal="mini",
+                    status=PlanStatus.READY,
+                    tasks=[
+                        ResearchTask(
+                            id=f"{plan_id}-T01",
+                            plan_id=plan_id,
+                            type=TaskType.PREPARE_WORKSPACE,
+                            description="a",
+                            order=0,
+                        )
+                    ],
+                    created_at=now,
+                    updated_at=now,
+                )
             )
-        )
     finally:
         plans.close()
 
     executions = ExecutionStore(knowledge, "demo")
     try:
-        for error in errors:
-            execution = executions.create_execution("P-001")
+        for plan_id, error in zip(plan_ids, errors, strict=True):
+            execution = executions.create_execution(plan_id)
             executions.update_status(execution.id, "failed", error=error)
     finally:
         executions.close()
@@ -242,3 +252,71 @@ def test_executions_with_no_error_text_are_left_out(tmp_path: Path, blank) -> No
 
     assert attempts == 3, "a blank failure is still an attempt"
     assert errors == [CONVERGING[0], CONVERGING[1]]
+
+
+def test_the_history_is_chronological_across_plans(tmp_path: Path) -> None:
+    """The query is per plan, so the flattening has to be re-sorted.
+
+    A hypothesis gets a second plan the moment a retryable failure returns it to
+    the pool and it is selected again — which this rule makes *more* common — and
+    iterating plans in the outer loop groups executions by plan rather than by
+    time. The last entry is read as the newest failure, so grouping hands the
+    rule the wrong one.
+    """
+    knowledge = tmp_path / "knowledge"
+    _seed_failed_executions(
+        knowledge,
+        ["t1 first", "t2 second", "t3 third", "t4 NEWEST"],
+        plan_ids=["P-001", "P-002", "P-002", "P-001"],
+    )
+    engineer = ResearchEngineer(
+        knowledge_dir=knowledge, competition="demo", registry=default_stub_registry()
+    )
+    try:
+        attempts, errors = engineer._failed_attempts_for("H-001")
+    finally:
+        engineer.close()
+
+    assert attempts == 4
+    assert errors == ["t1 first", "t2 second", "t3 third", "t4 NEWEST"]
+    assert errors[-1] == "t4 NEWEST", "the retirement rule reads the last entry as the newest"
+
+
+def test_a_converging_loop_split_across_plans_is_not_retired(tmp_path: Path) -> None:
+    """The misclassification the ordering caused, end to end.
+
+    Grouped by plan the history reads [A, B, A, A] — newest A, matching a prior
+    A — and the hypothesis is retired. In time order it is [A, A, A, B], whose
+    newest failure is one nothing has seen before.
+    """
+    knowledge = tmp_path / "knowledge"
+    a, b = STUCK, CONVERGING[1]
+    _seed_failed_executions(knowledge, [a, a, a, b], plan_ids=["P-001", "P-002", "P-002", "P-001"])
+    engineer = ResearchEngineer(
+        knowledge_dir=knowledge, competition="demo", registry=default_stub_registry()
+    )
+    try:
+        attempts, errors = engineer._failed_attempts_for("H-001")
+    finally:
+        engineer.close()
+
+    outcome, _ = classify_hypothesis_failure(attempts=attempts, recent_failures=errors)
+    assert outcome is HypothesisOutcome.RETRYABLE
+
+
+def test_the_sort_key_survives_ids_past_nine_hundred_and_ninety_nine() -> None:
+    """`allocate_sequential_id` pads to three and then grows, so `E-1000` sorts
+    before `E-999` as a string. The store's own `ORDER BY id` has the same trap;
+    here it would silently reorder the history."""
+    from labpilot.research_engine.execution.engineer import _allocation_order
+    from labpilot.research_engine.execution.schemas import ResearchExecution
+
+    ids = ["E-999", "E-1000", "E-002"]
+    executions = [ResearchExecution(id=i, plan_id="P-001") for i in ids]
+
+    assert [e.id for e in sorted(executions, key=_allocation_order)] == [
+        "E-002",
+        "E-999",
+        "E-1000",
+    ]
+    assert sorted(ids) != ["E-002", "E-999", "E-1000"], "a plain string sort would pass vacuously"
