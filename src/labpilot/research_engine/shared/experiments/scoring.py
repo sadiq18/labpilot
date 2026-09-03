@@ -34,10 +34,24 @@ def comparable_metric_value(metrics: Any, metric_key: str) -> float | None:
       admitted NaN wins a `min()` by default rather than losing.
     """
     from labpilot.research_engine.evidence.builder import is_placeholder_metrics
+    from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+        name_self_declared_metrics,
+    )
 
     if not isinstance(metrics, dict) or is_placeholder_metrics(metrics):
         return None
-    raw = metrics.get(metric_key)
+    # The same renaming `metrics_as_experiment` applies, because `metric_key`
+    # was resolved against those canonical names. Reading the raw dict alone
+    # would miss every self-declared payload — promotion would find no
+    # comparable value and decline a cohort it could rank.
+    #
+    # Only when the direct lookup misses, though: this runs once per candidate
+    # inside promotion's filter, and renaming builds a fresh dict every call.
+    # A payload that already names its metric — the common case — pays nothing.
+    if metric_key in metrics:
+        raw = metrics[metric_key]
+    else:
+        raw = name_self_declared_metrics(metrics).get(metric_key)
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
     value = float(raw)

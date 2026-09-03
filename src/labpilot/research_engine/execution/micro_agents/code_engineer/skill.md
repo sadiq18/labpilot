@@ -80,7 +80,9 @@ generated from scratch from the dataset profile and `data/raw` inventory.
   Measured on playground-series-s6e8 (2026-08-30): these two kwargs were the
   single most common generated-code defect, failing five separate attempts
   across two campaigns and retiring the baseline hypothesis both times. The
-  installed version is >=4; the API a model recalls from training data is 3.x.
+  API a model recalls from training data is 3.x, and the version you get is the
+  one you declare in the PEP 723 block below — where the example pins
+  `lightgbm>=4.0`, so it is the 4.x signature that has to be written.
 - Prefer one cohesive `pipeline/train.py` (+ small helpers) over sprawling packages
 - **Declare every third-party import in a PEP 723 block at the top of
   `pipeline/train.py`**, immediately after the module docstring:

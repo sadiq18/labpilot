@@ -133,13 +133,18 @@ def run_experiment(
     meta = {"plan_id": plan_id, "dry_run": dry_run, **extra}
     # Hard gate: specialist path never uploads.
     meta["submit"] = False
+    started_at = time.time()
     task = AgentTask(
-        id=str(meta.pop("task_id", "T-experiment")),
+        # Unique per invocation. The agent falls back to `E-agent-{task.id}`
+        # when the inner result names no execution, and a constant default made
+        # every such run share one id — indistinguishable in the record index
+        # and, now that this path feeds the series, in the `ScoreEvent`
+        # citations that exit criterion 1 and the stagnation mint both read.
+        id=str(meta.pop("task_id", None) or f"T-experiment-{plan_id}-{int(started_at * 1000)}"),
         capability="run_experiment",
         description=description or f"run experiment for {plan_id}",
         metadata=meta,
     )
-    started_at = time.time()
     refs = execute_agent_sync(
         candidates[0].agent,
         task,
@@ -158,7 +163,11 @@ def run_experiment(
     # rogii 2026-08-07 — eight consecutive failed executions, every one recorded
     # `run_experiment completed`, and the campaign looked healthy for 20 steps.
     # Ask whether *this run* wrote it.
-    if not dry_run and not _metrics_written_since(metrics_ref, started_at):
+    # Asked once, and reused below. A dry run skips the *raise* — it is allowed
+    # to produce nothing — but the answer still decides whether this run may
+    # name itself to the score writer.
+    metrics_are_this_runs = _metrics_written_since(metrics_ref, started_at)
+    if not dry_run and not metrics_are_this_runs:
         stale = metrics_ref is not None
         raise ExperimentProducedNoMetricsError(
             f"run_experiment for {plan_id} completed without writing metrics"
@@ -175,8 +184,42 @@ def run_experiment(
             "specialist": candidates[0].name,
             "plan_id": plan_id,
             "dry_run": dry_run,
+            # The id the specialist already stamped on its own artifacts. Without
+            # it the conductor has nothing to record a score against, so every
+            # experiment run through this path was invisible to `metric_target`
+            # and `plateau` however well it trained — measured 2026-08-20, two
+            # campaigns chose this tool six times each and appended nothing to
+            # the series.
+            # **Only when this run wrote the metrics.** The experiment record is
+            # built from whatever `metrics.json` sits at the workspace root, and
+            # a dry run reads that file without the raise above ever testing its
+            # age. Naming ourselves unconditionally would let a dry run re-submit
+            # the previous run's number as a fresh reading: three of them make
+            # `plateau` fire on one measurement counted thrice, and reset the
+            # counter that watches for exactly that stall.
+            "execution_id": (
+                _execution_id_from(experiment_ref, metrics_ref)
+                if metrics_are_this_runs
+                else None
+            ),
             "experiment_path": experiment_ref.path if experiment_ref else None,
             "metrics_path": metrics_ref.path if metrics_ref else None,
             "submit": False,
         },
     )
+
+
+def _execution_id_from(*refs: Any) -> str | None:
+    """The execution id the specialist encoded in its ref ids.
+
+    `experiment:E-007` / `metrics:E-007` — the agent builds both from one
+    `execution_id`, so either answers. Read from the refs rather than threaded
+    through as a second parameter, because the refs are what the specialist
+    actually returns and a parameter could disagree with them.
+    """
+    for ref in refs:
+        raw = str(getattr(ref, "id", "") or "")
+        _, _, execution_id = raw.partition(":")
+        if execution_id.strip():
+            return execution_id.strip()
+    return None

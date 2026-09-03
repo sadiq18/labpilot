@@ -45,6 +45,43 @@ Hard rules:
   invented directory and prefixed `./`, which *is* relative — so training
   succeeded and wrote its result where nothing reads it. A rule the model can
   satisfy while still being wrong is not a rule; name the paths.
+- **The entry point is exactly `pipeline/train.py`.** Whatever the task, plan or
+  hypothesis is called, the script the runner executes has that path. It is
+  looked up by name, not discovered: a file written as `pipeline/baseline.py`
+  or `pipeline/experiment.py` applies cleanly and is then never run, and the
+  step fails for a missing entry point having reported the code as written.
+  Helpers may sit beside it under any name; the entry point may not.
+
+  Naming the script after the work is the natural thing to do and it is wrong
+  here. Measured 2026-08-20: three consecutive runs emitted
+  `pipeline/baseline.py` — matching the plan's own name and the
+  `configs/baseline.yaml` beside it — and every one was applied, found to have
+  produced no entry point, and retried into the same file.
+
+- **Declare every third-party import in a PEP 723 block**, at the top of the
+  script immediately after its module docstring:
+
+  ```python
+  # /// script
+  # requires-python = ">=3.11"
+  # dependencies = ["numpy>=1.26", "pandas>=2.0", "scikit-learn>=1.4"]
+  # ///
+  ```
+
+  The runner builds the script's environment from that block **alone**. Anything
+  outside the standard library must be named there, however ordinary it looks —
+  whether a package happens to be installed somewhere is not the question, and
+  the block is the only thing consulted. Only stdlib may go undeclared.
+
+  This also means you are not limited to what is already available: name the
+  library you want and the runner installs it.
+
+  The block is checked before your file is applied. A file that imports
+  something it does not declare is rejected whole — it never runs and produces
+  nothing at all, so there is no partial result to salvage. Measured: an
+  undeclared import has cost eight consecutive runs on one occasion, and on
+  another every file two separate models produced.
+
 - When prior_train_py / improve_on_prior is set: keep what already works in the
   prior pipeline and apply the hypothesis technique(s) as a delta. When
   combo_techniques is non-empty, apply ALL listed techniques in that single

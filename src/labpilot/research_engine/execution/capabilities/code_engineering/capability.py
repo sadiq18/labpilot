@@ -32,6 +32,7 @@ from labpilot.research_engine.execution.capabilities._helpers import (
 from labpilot.research_engine.execution.capabilities.base import BaseCapability
 from labpilot.research_engine.execution.capabilities.code_engineering.apply import (
     ALLOWED_ROOTS,
+    TRAIN_RELPATH,
     ApplyError,
     apply_proposal,
 )
@@ -323,6 +324,25 @@ def _observe_delta(
         )
         out["delta_flags"] = flags
     return out
+
+
+def _missing_entry_point(written: list[Path]) -> str:
+    """Say what landed instead, not just what is absent.
+
+    `"train.py missing after apply"` is true and unactionable: the proposal
+    applied, so files *were* written, and the one question worth answering
+    is which. Measured 2026-08-20 — three runs wrote `pipeline/baseline.py`
+    and the message named none of them, so the retry regenerated the same
+    file and the transcript showed three identical failures with no clue
+    that the entry point had simply been given another name.
+    """
+    names = sorted(str(path.name) for path in written)
+    listed = ", ".join(names) if names else "nothing"
+    return (
+        f"{TRAIN_RELPATH} missing after apply — the proposal wrote {listed}. "
+        "The runner looks the entry point up by name; a script under any "
+        "other name applies cleanly and is never run."
+    )
 
 
 class RedundantHypothesisError(RuntimeError):
@@ -804,7 +824,7 @@ class CodeEngineeringCapability(BaseCapability):
                 # Reported on PR #118.
                 "technique_origin": "llm" if origin in {"llm", "aider"} else "none",
             },
-            error=None if train_path.is_file() else "train.py missing after apply",
+            error=None if train_path.is_file() else _missing_entry_point(written),
         )
 
     def _modify_config(self, context: TaskContext) -> TaskEvidence:

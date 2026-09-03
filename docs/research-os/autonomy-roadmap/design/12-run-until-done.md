@@ -121,7 +121,9 @@ new failure counting is needed.
 
 ## 4. Goals & success metrics
 
-The plan's five exit criteria, made checkable:
+The plan's five exit criteria, made checkable. **What seven campaigns actually
+showed is §13** — 3, 4 and 5 met, 1 and 2 still open on a defect outside these
+stops.
 
 | # | Criterion | Check |
 |---|---|---|
@@ -133,7 +135,7 @@ The plan's five exit criteria, made checkable:
 
 Criteria 1–3 cannot be met by unit tests. They need a campaign on a workspace
 that passes PR #142's objective preflight — the same evidence M8 and M11 still
-owe.
+owe. Run 2026-08-20; see §13.
 
 ---
 
@@ -500,7 +502,237 @@ the hollow-layer failure this roadmap is named for.
 
 ---
 
-## 13. Rollout
+## 13. Results — seven campaigns, 2026-08-20
+
+Run in an isolated sandbox workspace (`research init`, own experience store, no
+Kaggle credentials), on a synthetic tabular regression: 900 train / 300 test,
+`target = 3·f_lin − 2·f_sq² + 0.8·f_cat + noise(sd 1.0)`. A constant predictor
+scores RMSE 4.64, so a working model should reach ≈1.0–1.7. Two campaigns —
+one with a reachable target (`rmse ≤ 2.0`), one unreachable (`rmse ≤ 0.1`,
+below the noise floor) — across three model tiers.
+
+**rogii could not host this.** `resolve_objective` on its `competition.json`
+returns `blocks_launch: True, unresolved: ['metric'], evidence: ['no evaluation
+metric stated']` — PR #142's preflight refuses at second zero, which is the gate
+working. Demonstrating stops there would have meant overriding it and building
+evidence on an unknown objective.
+
+### 13.1 Criterion by criterion
+
+| # | Criterion | Verdict |
+|---|---|---|
+| 1 | Unreachable target stops on `plateau` | **Not demonstrated** — §13.3, §13.5 |
+| 2 | Reachable target stops on `metric_target` | **Not demonstrated on a campaign.** Its two blockers are fixed and the second is verified against the live payload by test; what remains is a policy that must choose `run_plan` to exercise it — §13.5 |
+| 3 | Cannot progress → recorded reason, not a spin | **Met, by a different route than the plan's** — §13.4 |
+| 4 | Goal line every step; `status` shows the same | **Met** — 12 lines in a 12-step campaign, in all seven runs |
+| 5 | `metric_history` non-empty after an experiment | **Met** — `recorded cv_score=1.6523199050168489 for E-001` |
+
+**And the result the milestone exists for: `max_steps` ended none of the seven
+campaigns.** Before this work every campaign in the roadmap's evidence logs
+ended on that counter. The stops that ended these were `failing`, a policy
+`Conductor stop`, and — fourteen times across the runs — a goal-persistence
+override refusing an advisory stop while the target was unmet.
+
+### 13.2 Two defects found, both fixed
+
+**The codegen gate enforced a rule no prompt stated.** Every generated
+`train.py` was rejected: *"imports numpy, pandas, sklearn but its PEP 723 block
+does not declare them"*. The rule lived in the code engineer's `skill.md`, which
+nothing loads; `code_engineer_system.md`, `coder.md` and `delta_brief_system.md`
+mentioned it zero times. Two unrelated models — `qwen2.5-coder:14b` and
+`gemini-3.5-flash-lite` — failed identically, which is the signature of an
+undeclared requirement rather than weak codegen. Fixed by stating the rule in
+the prompt the model is actually sent; **zero rejections in the four campaigns
+since**. Note what the gate does *not* do: a file with no block at all skips the
+check entirely, so the models were writing a block and under-filling it — which
+is why the prompt now names `pandas`/`numpy`/`sklearn`, the imports that read as
+ambient.
+
+**A correct score, recorded under a name its target cannot match.** §13.3.
+
+### 13.3 Why criteria 1 and 2 did not fire, and what was fixed
+
+`gemini-pro-latest` produced training code that ran and wrote a real result:
+
+```json
+{"cv_score": 1.6523199050168489, "metric": "rmse"}
+```
+
+1.65 is comfortably inside the 2.0 target. `metric_target` did not fire, and
+could not have:
+
+```
+metric_names_match('cv_score', 'rmse') = False
+metric_names_match('cv_rmse',  'rmse') = True
+```
+
+The emitted file puts the metric's identity in a *sibling field* while naming
+the column generically, and `resolve_metric_and_direction` keys off the column
+name — so the series records `cv_score`, and no target spelled `rmse` can ever
+be answered by it. Criterion 1 is blocked by the same cause plus its need for
+three comparable readings.
+
+This is the drift the plan warned about — *"resolution order should be
+`cv_<target>` → `<target>` → generic fallbacks"* — occurring at **emission**,
+upstream of the matching logic built to absorb it. It is *not* a defect in these
+stops: `evaluate_stops` refusing a target it is not measuring is exactly what
+`_last_metric_matches_target` was added for.
+
+**Fixed.** `name_self_declared_metrics` renames a generically-keyed reading to
+the metric its own payload declares, preserving the measurement prefix, so
+`{"cv_score": 1.65, "metric": "rmse"}` resolves as `cv_rmse`. Applied at both
+read paths — the `Experiment` view and `comparable_metric_value` — because
+promotion looks up the raw dict with a key resolved elsewhere, and fixing one
+alone would have made M11 decline cohorts it can rank. Narrow by construction:
+generic stems only, only when the declared name resolves in the vocabulary, only
+numeric entries, never clobbering a canonical key already present. A run that
+named its metric is untouched, and a reading that names *no* metric still cannot
+answer a target — this closes the drift, not the check.
+
+**§8.4's design decision earned itself here.** The goal line dropped the target
+the instant the recorded key stopped answering it:
+
+```
+before the score:  goal rmse:     no result yet · target 2
+after the score:   goal cv_score: best 1.65232 · 1 result(s) · 0 since improvement
+```
+
+A renderer that had shown `target 2` beside a `cv_score` reading would have made
+this invisible; refusing to turned a silent mismatch into something an operator
+watches disappear.
+
+### 13.4 Criterion 3, met by the route this design chose
+
+The plan asks for a `needs_guidance` pause when the trainer dies. Three campaigns
+ended instead on:
+
+```
+stop:failing — 3 consecutive failed execution(s), 5 step(s) since the last
+success. Last: run_experiment for P-001 completed without writing metrics.
+```
+
+That is §9's deliberate divergence behaving as designed — three failed
+*executions* mean something is broken, and M20 puts a broken campaign in
+`failed` rather than a pause. The criterion's substance is met: the campaign
+stopped, named its cause, and named the failing tool, rather than spinning.
+`needs_guidance` itself is covered by unit tests (§12) and has not yet fired on
+a live campaign, because no run reached ten scoreless steps or three unmapped
+ones before another stop bound it first.
+
+### 13.5 The specialist path cannot feed the series at all
+
+Three further runs of the same campaign, after the drift fix, split cleanly on
+which experiment tool the policy happened to pick:
+
+| run | `run_plan` | `run_experiment` | scores recorded |
+|---|---|---|---|
+| first | 2 | 0 | **1** |
+| second | 0 | 6 | 0 |
+| third | 0 | 6 | 0 |
+
+Every run that reached `run_plan` scored; every run that took the specialist
+path scored nothing. That path writes no execution outcome, so the score writer
+declines it by design:
+
+```python
+# The specialist `run_experiment` path writes no execution outcome, so
+# this is the ordinary way a non-`run_plan` experiment lands here.
+logger.info("no execution outcome for %s; no score recorded", execution_id)
+```
+
+So **a campaign that favours `run_experiment` can never fire an objective
+stop**, however well it trains — `metric_target` and `plateau` both read a
+series it cannot append to. This is precisely the gap `steps_since_new_score`
+was added for (§8.2), and it is worth noting the counter did not get to prove it
+here: `failing` bound the run first, at three consecutive failed executions.
+
+**Fixed.** Two causes, both small because the pieces existed already. The
+handler never surfaced the execution id it had *already stamped on its own
+refs* (`experiment:E-007`, `metrics:E-007`), so the conductor passed `None` and
+skipped scoring outright; `_execution_id_from` reads it back off those refs.
+And the score writer looked only for `execution_outcome.json`, which this path
+does not write — it writes an experiment record, keyed by the same execution id,
+carrying the same `metrics`, with `find_experiment_record` already there to read
+it.
+
+Both properties the original design insisted on still hold, which is what makes
+this a repair rather than a loosening. *Attribution*: the record is indexed by
+execution id — and an explicit guard was needed, because
+`find_experiment_record` falls back to the **latest** record when an id is not
+indexed, which would have scored one execution from another run's numbers.
+*Freshness*: `run_experiment` already raises unless *this* run wrote the metrics,
+so anything reaching the writer has proved the readings are its own.
+
+Not recovered: the specialist record carries no `hypothesis_id`, so scores from
+this path reach the series without technique attribution. The stagnation mint
+sees the reading and not what produced it.
+
+**Criteria 1 and 2 are still undemonstrated, now for a fourth reason.**
+Each fix is verified by test against the artifact that defeated it —
+`evaluate_stops` returns `metric_target` for the exact
+`{"cv_score": 1.65, "metric": "rmse"}` that could not fire before, and a
+specialist record now produces a `ScoreEvent`. What a campaign still cannot do
+is *succeed at an experiment on this path*: `write_code` leaves no
+`pipeline/train.py`, the plan's task fails with `train.py missing`, and the
+record is written with `status: "failed", metrics: {}` — which the writer
+correctly declines to score.
+
+So the series is now reachable from both experiment tools, and the run that
+would fill it fails earlier, for a reason none of these milestones own. One
+attempt rephrased the goal to name the plan path
+(*"reach rmse 2.0 by generating and running a training plan"*), which is
+steering and is recorded as such; it changed nothing. Re-rolling until the
+policy cooperates would produce a demonstration worth less than this note.
+
+**That blocker was two defects, both since fixed, and a third behind them.**
+
+*The entry point had a required name nothing stated.* The runner looks
+`pipeline/train.py` up by name; the system prompt mentioned it only as a
+placeholder inside a JSON example and in a branch assuming prior code, and the
+task prompt not at all. So the model named the script after the work —
+`pipeline/baseline.py`, matching the plan `P-001`, the hypothesis `H-BASELINE`,
+and the `configs/baseline.yaml` beside it. Three consecutive runs, same name.
+Stating the rule in the *system* prompt did not move it; stating the path in the
+**user** prompt beside the task description did, and `train.py` landed on the
+next campaign. Worth keeping: the general instruction lost to the specific one
+sitting next to the task, which is where a per-task requirement belongs.
+
+*Every retry rebuilt blind.* `Engineer._first_failure_reason` computes why an
+attempt failed, the capability threads it into context data as `retry_reason`,
+and `code_engineer_user.j2` has a prominent block for it — and
+`CodeEngineerAgent.user_prompt` never passed it to the template. Jinja renders
+an undefined name as empty, so the block never appeared and every retry re-sent
+the original prompt verbatim. That is why each defect in this session cost
+exactly three attempts: the breaker stops at three, so one unreadable failure
+consumes a campaign's whole allowance. `engineer.py` had already named the
+shape, about a different cause — *"`retry_reason` stayed empty and three
+consecutive retries rebuilt blind while the error sat one field away."*
+
+Also fixed alongside: `"train.py missing after apply"` now names what was
+written instead, which is the whole question once you know the proposal applied.
+
+**Still open.** With `train.py` landing, the next attempt returned *"Code
+generation produced no files"* and the campaign ended on `failing` with no
+metrics. Criteria 1 and 2 remain undemonstrated on a campaign; each fix has
+revealed the next layer, and this is where the session stopped rather than
+keep going.
+
+### 13.6 Also observed
+
+- **Both campaigns were killed mid-step** by the sandbox reaping long-running
+  processes, and both resumed under `conduct continue` with session, budget
+  state and goal line intact.
+- **Model tier is the limiter, exactly as the roadmap says.**
+  `qwen2.5-coder:14b` and `gemini-3.5-flash-lite` produced no runnable training
+  code even after the prompt fix — a `CodeProposal` schema violation (`files` as
+  a dict, not a list) and a `LightGBMError: number of features in data (4) is
+  not the same as it was in training data (5)`, the train/test mismatch the
+  system prompt warns about at length. Only `gemini-pro-latest` produced a
+  result.
+
+---
+
+## 14. Rollout
 
 **Prerequisites, in order.**
 
