@@ -19,7 +19,11 @@ from labpilot.cli.config_helpers import (
 from labpilot.llm.client import resolve_llm_client
 from labpilot.research_engine.conductor import ConductorStore, run_until_stop
 from labpilot.research_engine.conductor.approvals import ApprovalResult
-from labpilot.research_engine.conductor.budgets import BudgetConfig, budgets_to_metadata
+from labpilot.research_engine.conductor.budgets import (
+    BudgetConfig,
+    budgets_to_metadata,
+    goal_progress,
+)
 from labpilot.research_engine.conductor.checkpoint import (
     latest_active_session,
     load_budget_pair,
@@ -28,6 +32,13 @@ from labpilot.research_engine.conductor.checkpoint import (
 from labpilot.research_engine.conductor.metrics import ensure_metrics
 from labpilot.research_engine.tools.descriptors import ToolDescriptor, ToolResult
 from labpilot.research_engine.workspace_facade import Workspace
+
+#: Why the default is no bound: a campaign that ends on a step counter has
+#: not answered its question, it has run out of turns. M17.
+_MAX_STEPS_HELP = (
+    "Stop after N policy steps. Unset, the campaign runs until its objective, "
+    "a plateau, a budget, or a guidance pause"
+)
 
 conduct_app = typer.Typer(
     help="Run the Research Conductor / Campaign Engine (product entry).",
@@ -148,6 +159,24 @@ def _offline_fallback_prompt(yes: bool):
     return _prompt
 
 
+def _schema_prompt(question):
+    """Ask an operator which column is right, showing what the profiler saw.
+
+    Only ever installed for an interactive run. There is no `--yes` variant on
+    purpose: `--yes` means "do not ask me to approve your plan", and it must not
+    come to mean "decide what my label is".
+    """
+    print(f"\nSchema question: {question.field}")
+    print(f"  {question.context}")
+    if question.provisional:
+        print(f"  provisional (not acted on): {question.provisional}")
+    for candidate in question.candidates:
+        fired = ", ".join(signal.id for signal in candidate.signals) or "nothing fired"
+        print(f"  · {candidate.candidate} ({candidate.confidence:.2f}) — {fired}")
+    answer = input(f"Which column is {question.field}? [blank to stop]: ").strip()
+    return answer or None
+
+
 def _approval_prompt(yes: bool):
     def _approve(tool_name: str) -> ApprovalResult:
         if yes:
@@ -230,56 +259,6 @@ def _resolve_campaign_direction(ws: Any, competition: str) -> bool | None:
         return None
 
 
-def _stated_target(root: Path) -> str | None:
-    """The target column, from the profile that already inferred it.
-
-    `competition.json` does not carry one; `profile.json` does. Without this the
-    `target` field on every ObjectiveSpec was None in the shipped path while
-    reading as though it were populated.
-    """
-    import json
-
-    path = root / "profile.json"
-    if not path.is_file():
-        return None
-    try:
-        profile = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    target = profile.get("target_column") if isinstance(profile, dict) else None
-    return str(target) if target else None
-
-
-def _stated_objective(
-    ws: Any, competition: str
-) -> tuple[str | None, str | None, str | None, str | None]:
-    """(metric_raw, declared_direction, problem_type, target) from the workspace."""
-    import json
-
-    root = getattr(ws, "root", None)
-    if root is None:
-        return None, None, None, None
-    target = _stated_target(Path(root))
-    path = Path(root) / "competition.json"
-    if not path.is_file():
-        return None, None, None, target
-    try:
-        spec = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None, None, None, target
-    metric = spec.get("evaluation_metric") or spec.get("metric") or {}
-    if not isinstance(metric, dict):
-        metric = {}
-    raw = metric.get("name") or metric.get("key")
-    declared = metric.get("direction")
-    return (
-        str(raw) if raw else None,
-        str(declared) if declared in ("maximize", "minimize") else None,
-        str(spec.get("problem_type") or "") or None,
-        target,
-    )
-
-
 def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict[str, Any]:
     """Refuse to start a campaign whose objective cannot be justified.
 
@@ -297,14 +276,26 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
     stay distinguishable from a resolved one long after the console line is gone.
     """
     from labpilot.research_engine.intelligence.competition.objective import resolve_objective
-
-    metric_raw, declared, problem_type, target = _stated_objective(ws, competition)
-    objective = resolve_objective(
-        metric_raw=metric_raw,
-        declared_direction=declared,  # type: ignore[arg-type]
-        task=problem_type,
-        target=target,
+    from labpilot.research_engine.intelligence.competition.objective_stage import (
+        OBJECTIVE_FILENAME,
+        ensure_objective,
     )
+
+    root = getattr(ws, "root", None)
+    objective_path: Path | None = None
+    if root is None:
+        # No workspace, nothing to persist to. The preflight still has to answer,
+        # and an objective resolved from nothing says so rather than defaulting.
+        objective = resolve_objective(metric_raw=None)
+    else:
+        stored, how = ensure_objective(Path(root), competition)
+        objective = stored.spec
+        # Only when it was actually written. This gate is a *read* of a workspace
+        # that a campaign is about to run in, and a read-only or absent workspace
+        # must still get its verdict rather than a traceback.
+        if how != "unpersisted":
+            objective_path = Path(root) / OBJECTIVE_FILENAME
+
     if not objective.blocks_launch:
         console.print(
             f"[dim]objective:[/dim] {objective.metric_name} "
@@ -318,19 +309,35 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
             "objective_direction": objective.direction,
             "objective_source": objective.source,
             "objective_confidence": objective.confidence,
+            # The file is the record; these five strings are the index into it.
+            # They stay because sessions are queried by them, and a session that
+            # named its metric only by a path would have to open the workspace to
+            # answer "what was this campaign optimising?".
+            **({} if objective_path is None else {"objective_path": str(objective_path)}),
         }
+
+    from labpilot.research_engine.validation import harness
 
     console.print(f"[red]Objective not resolved[/red] - {objective.why_blocked()}")
     for line in objective.evidence:
         console.print(f"  [dim]-[/dim] {line}")
     if objective.alternatives:
+        console.print(f"  [dim]candidates:[/dim] {', '.join(objective.alternatives)}")
+    # Advice from the operator's own domain. Telling a benchmark operator to
+    # "set evaluation_metric in competition.json" names a file their workspace
+    # will never have, which is the same leak as the gate refusing them outright
+    # — a refusal nobody can act on is a wall, and this gate exists to ask rather
+    # than to wall.
+    if bool(root) and harness.handles(Path(root)):
         console.print(
-            f"  [dim]candidates:[/dim] {', '.join(objective.alternatives)}"
+            f"\n  Set it in {harness.OBJECTIVE_FILE} and re-run:\n"
+            '    [cyan]{"metric": "pass_rate", "direction": "maximize"}[/cyan]'
         )
-    console.print(
-        "\n  Set it in the workspace contract and re-run, e.g. competition.json:\n"
-        '    [cyan]"evaluation_metric": {"name": "rmse", "direction": "minimize"}[/cyan]'
-    )
+    else:
+        console.print(
+            "\n  Set it in the workspace contract and re-run, e.g. competition.json:\n"
+            '    [cyan]"evaluation_metric": {"name": "rmse", "direction": "minimize"}[/cyan]'
+        )
 
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
     if not assume_yes and interactive:
@@ -353,6 +360,28 @@ def _preflight_objective(ws: Any, competition: str, *, assume_yes: bool) -> dict
     raise typer.Exit(2)
 
 
+def _breaker(name: str, value: int | None) -> dict[str, int | None]:
+    """One breaker override, or nothing at all — three states in one flag.
+
+    *Unset* must keep the shipped default, so the key is omitted entirely:
+    `None` means *disabled* in `BudgetConfig`, and forwarding an unset flag
+    would silently remove the circuit breaker from every campaign that never
+    mentioned it.
+
+    *Zero* is how an operator asks for that disable on purpose. It needs a
+    spelling because `None` is spent on "unset", and it needs to be this one
+    because the breakers compare with `>=` against a counter that starts at 0 —
+    so a literal `0` limit stopped the campaign on its first check, before
+    anything had run, reported as an ordinary `stop:failing`. Reading it as
+    "no limit" turns the sharpest edge on the flag into the documented opt-out
+    (`BudgetConfig`: "a campaign deliberately probing a broken workspace is a
+    legitimate thing to run"), which was otherwise unreachable from the CLI.
+    """
+    if value is None:
+        return {}
+    return {name: None if value == 0 else value}
+
+
 def _budget_metadata(
     *,
     max_submissions: int | None,
@@ -361,6 +390,8 @@ def _budget_metadata(
     target_metric: str | None,
     target_value: float | None,
     plateau_window: int,
+    max_barren_steps: int | None = None,
+    max_consecutive_failures: int | None = None,
     maximize: bool | None = None,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -372,6 +403,8 @@ def _budget_metadata(
         target_metric=target_metric,
         target_value=target_value,
         plateau_window=plateau_window,
+        **_breaker("max_barren_steps", max_barren_steps),
+        **_breaker("max_consecutive_failures", max_consecutive_failures),
         # Resolved from the competition, not defaulted. `BudgetConfig.maximize`
         # used to default True with nothing overriding it, so on rogii (MSE)
         # every session stored `"maximize": true` and a metric target would have
@@ -401,7 +434,7 @@ def _budget_metadata(
 def conduct_run(
     goal: str = typer.Argument(..., help='Research goal, e.g. "Win Rogii"'),
     competition: str | None = typer.Option(None, "--competition", "-c"),
-    max_steps: int = typer.Option(8, "--max-steps", help="Stop after N policy steps"),
+    max_steps: int | None = typer.Option(None, "--max-steps", help=_MAX_STEPS_HELP),
     branches: int = typer.Option(
         1,
         "--branches",
@@ -452,6 +485,22 @@ def conduct_run(
     target_metric: str | None = typer.Option(None, "--target-metric"),
     target_value: float | None = typer.Option(None, "--target-value"),
     plateau_window: int = typer.Option(3, "--plateau-window"),
+    max_barren_steps: int | None = typer.Option(
+        None,
+        "--max-barren-steps",
+        min=0,
+        help="Stop after N steps with no successful execution (default 8). "
+        "Raise it when the policy legitimately spends steps implementing "
+        "before it runs anything. 0 removes the limit.",
+    ),
+    max_consecutive_failures: int | None = typer.Option(
+        None,
+        "--max-consecutive-failures",
+        min=0,
+        help="Stop after N consecutive failed executions (default 3). "
+        "Raise it to let the repair loop work through several distinct "
+        "defects in generated code. 0 removes the limit.",
+    ),
     config_path: Path = typer.Option(Path("configs/default.yaml"), "--config"),
     knowledge_dir: Path | None = typer.Option(None, "--knowledge-dir"),
     workspace_path: Path | None = typer.Option(None, "--workspace"),
@@ -479,6 +528,8 @@ def conduct_run(
             target_metric=target_metric,
             target_value=target_value,
             plateau_window=plateau_window,
+            max_barren_steps=max_barren_steps,
+            max_consecutive_failures=max_consecutive_failures,
             maximize=_resolve_campaign_direction(ws, competition),
             existing={
                 "max_steps": max_steps,
@@ -507,6 +558,7 @@ def conduct_run(
             max_steps=max_steps,
             auto_approve=yes,
             approval_prompt=None if yes else _approval_prompt(yes),
+            schema_prompt=None if yes else _schema_prompt,
             on_progress=lambda msg: console.print(f"  {msg}"),
             autonomy=autonomy,
             prefer_offline=offline,
@@ -528,7 +580,7 @@ def _continue_session(
     *,
     session_id: str | None,
     competition: str | None,
-    max_steps: int,
+    max_steps: int | None,
     branches: int,
     gather_background: bool = False,
     yes: bool,
@@ -586,6 +638,7 @@ def _continue_session(
             max_steps=max_steps,
             auto_approve=yes,
             approval_prompt=None if yes else _approval_prompt(yes),
+            schema_prompt=None if yes else _schema_prompt,
             on_progress=lambda msg: console.print(f"  {msg}"),
             autonomy=level,
             prefer_offline=offline,
@@ -605,7 +658,7 @@ def conduct_continue(
         None, "--session", help="Session id (default: latest active)"
     ),
     competition: str | None = typer.Option(None, "--competition", "-c"),
-    max_steps: int = typer.Option(8, "--max-steps"),
+    max_steps: int | None = typer.Option(None, "--max-steps", help=_MAX_STEPS_HELP),
     branches: int = typer.Option(
         1,
         "--branches",
@@ -652,7 +705,7 @@ def conduct_continue(
 def conduct_resume(
     session: str | None = typer.Option(None, "--session"),
     competition: str | None = typer.Option(None, "--competition", "-c"),
-    max_steps: int = typer.Option(8, "--max-steps"),
+    max_steps: int | None = typer.Option(None, "--max-steps", help=_MAX_STEPS_HELP),
     branches: int = typer.Option(
         1,
         "--branches",
@@ -799,10 +852,22 @@ def conduct_status(
             f"max_wall_s={cfg.max_wall_s} max_cost_usd={cfg.max_cost_usd} "
             f"target={cfg.target_metric}:{cfg.target_value}"
         )
+        # `last_metric` stays on the raw-state line beside the other persisted
+        # counters. It is not a second progress rendering — the goal line below
+        # is the interpreted view, this is the field itself, and it is the one
+        # `metric_target` compares against. Dropping it also blanked the metric
+        # entirely for a session predating `score_events`, which has readings
+        # here and an empty series.
         console.print(
             f"  budget_state: submissions={state.submissions} "
             f"cost={state.llm_cost_usd} last_metric={state.last_metric}"
         )
+        # The same line the campaign prints each step, so a detached run can be
+        # checked without tailing its log — and so there is one rendering of
+        # *progress* rather than two that can disagree.
+        line = goal_progress(cfg, state)
+        if line:
+            console.print(f"  {line}")
         if metrics:
             console.print(
                 f"  metrics: failed={metrics.tasks_failed} blocked={metrics.tasks_blocked} "

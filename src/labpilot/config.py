@@ -68,6 +68,10 @@ class ProfilerConfig(BaseModel):
     # Partitioned datasets can hold thousands of per-entity CSVs; schema and row
     # statistics converge long before reading them all.
     max_files_sample: int = 25
+    #: Ask a model what it thinks the schema is (M22 step 6). Off by default:
+    #: it can add 0.10 to a confidence and can never write a value, but the
+    #: cheapest way to keep that guarantee true is not to run it unless asked.
+    llm_proposals: bool = False
 
 
 class DeepBaselineConfig(BaseModel):
@@ -204,6 +208,24 @@ class CodegenConfig(BaseModel):
     timeout_s: int = Field(660, gt=0)
 
 
+class BaselineGateConfig(BaseModel):
+    """Whether a campaign that loses to a constant may still mint hypotheses.
+
+    Off by default, and step 8's flip is this one setting rather than a code
+    change. It stays off until a campaign's worth of recorded verdicts turns
+    "the gate is right" from an argument into a false-positive rate — the plan's
+    own trap notes that `_observe_delta` was calibrated against hand-written
+    samples, and that is precisely how two bugs got in.
+
+    Not an environment variable, deliberately. One of those gets set during a
+    frustrating afternoon and never unset, and nothing records that it happened;
+    a per-workspace `baseline_waiver.json` names a reason and the fingerprint it
+    was granted against.
+    """
+
+    enforced: bool = False
+
+
 class AppConfig(BaseModel):
     runs_dir: Path = Path("runs")
     knowledge_dir: Path = Path("knowledge")
@@ -216,6 +238,7 @@ class AppConfig(BaseModel):
     runtime: RuntimeDefaults = Field(default_factory=RuntimeDefaults)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     experiments: ExperimentsConfig = Field(default_factory=ExperimentsConfig)
+    baseline_gate: BaselineGateConfig = Field(default_factory=BaselineGateConfig)
 
 
 class Settings(BaseSettings):
@@ -300,11 +323,7 @@ def kaggle_credentials_setup_hint() -> str:
     from labpilot.workspace import discover_workspace
 
     workspace = discover_workspace()
-    env_path = (
-        workspace.root / ".env"
-        if workspace is not None
-        else Path.cwd() / ".env"
-    )
+    env_path = workspace.root / ".env" if workspace is not None else Path.cwd() / ".env"
     return (
         "Kaggle authentication failed.\n"
         "\n"
@@ -363,7 +382,6 @@ def _normalize_paths(raw: dict[str, Any]) -> dict[str, Any]:
         if isinstance(cache, dict) and "path" in cache:
             cache["path"] = Path(cache["path"])
     return raw
-
 
 
 def _apply_settings(config: AppConfig, settings: Settings, raw: dict[str, Any]) -> AppConfig:

@@ -5,8 +5,26 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
+from labpilot.accessor.profiler.evidence import (
+    Alternative,
+    Inference,
+    Note,
+    RejectedClaim,
+    Signal,
+    combine,
+)
+from labpilot.accessor.profiler.questions import answers_fingerprint
+from labpilot.accessor.profiler.schema import (
+    ExclusionReason,
+    MetricRef,
+    ModalityPresence,
+    PredictionUnit,
+    SplitRelationship,
+    TargetDistribution,
+    TargetType,
+)
 from labpilot.accessor.profiler.source import (
     DatasetSource,
     DeclaredFacts,
@@ -40,7 +58,23 @@ class ColumnProfile(BaseModel):
 #: was first given and every later improvement is invisible to it. rogii's was
 #: written 2026-08-02 and reused by every campaign since; the anchor column
 #: added on 08-13 would never have reached it.
-PROFILE_SCHEMA_VERSION = 2
+PROFILE_SCHEMA_VERSION = 4
+
+#: Above this many distinct values, a whole-numbered target is no longer read as
+#: a label set. Deliberately generous: a 30-class problem is ordinary and a
+#: 30-value regression target is not, so the cost of the two mistakes is not
+#: symmetric — reading a regression as classification makes the floor a class
+#: prior over hundreds of "classes", which is both wrong and slow.
+#:
+#: `selector.py` reads `target_type` rather than keeping its own copy of this
+#: number. It had one, set to 20, and the two disagreed about every target with
+#: 21-30 labels.
+DISCRETE_LABEL_CEILING = 30
+
+#: How tightly integer values must crowd their own range to read as counts.
+#: `max < unique_count * 10` holds for 0-50 over 51 distinct values and fails for
+#: SalePrice, whose 663 values span 755,000.
+_COUNT_DENSITY = 10
 
 
 class DatasetProfile(BaseModel):
@@ -63,10 +97,40 @@ class DatasetProfile(BaseModel):
     column_count: int = 0
     columns: list[ColumnProfile] = Field(default_factory=list)
     target_column: str | None = None
-    id_column: str | None = None
+    #: A list, because a composite key is ordinary outside Kaggle —
+    #: `(store, date)`, `(patient, visit)`. `id_column` below is the first of
+    #: them, kept for every existing reader.
+    id_columns: list[str] = Field(default_factory=list)
+    #: Why each non-feature column is not one, by reason code. A measurement:
+    #: two people with the same bytes would agree, so no confidence attaches.
+    excluded_columns: dict[str, ExclusionReason] = Field(default_factory=dict)
+    #: How the scored units relate to the training units. What validation has to
+    #: reproduce, and the first thing M23's floor needs to be computed on.
+    train_test_relationship: SplitRelationship = "unknown"
+    #: What the dataset is scored by, and how that was reached.
+    metric: MetricRef | None = None
+    #: What the target looks like: class counts, median, zero-inflation, skew.
+    #: Measured, so it carries no confidence of its own — it inherits the
+    #: target's, because a distribution over the wrong column is wrong however
+    #: precisely it was computed. `target_type` below is derived from it and the
+    #: target's column profile.
+    target_distribution: TargetDistribution = Field(default_factory=TargetDistribution)
     submission_columns: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    modality: str = "tabular"
+    #: Structured reasons. `warnings` below is the prose view over these.
+    notes: list[Note] = Field(default_factory=list)
+    #: Which answers this profile was built from (`questions.answers_fingerprint`).
+    #: Empty when there were none. A profile built before an answer was given
+    #: describes a different question, so this is part of what makes it stale.
+    answers_fingerprint: str = ""
+    #: Why the value plane says what it says, keyed by field name. Absent for a
+    #: field nothing has reasoned about yet, which `confidence_in` reports as
+    #: 0.0 — "no evidence recorded", not "no evidence exists".
+    inferences: dict[str, Inference] = Field(default_factory=dict)
+    #: Every modality present, primary first. `modality` below is the mirror
+    #: over the primary, so the six modules that read a string keep working.
+    modalities: list[ModalityPresence] = Field(default_factory=list)
+    #: What one prediction is about — a row, a row of a partition, an episode.
+    prediction_unit: PredictionUnit = "unknown"
     image_dir: str | None = None
     image_column: str | None = None
     text_column: str | None = None
@@ -79,6 +143,13 @@ class DatasetProfile(BaseModel):
     train_partition_count: int = 0
     test_partition_count: int = 0
     row_count_estimated: bool = False
+    #: How many rows the per-column statistics were computed over.
+    #:
+    #: `row_count` is the file's; these are the sample's, and once the cap binds
+    #: the two differ. Without this a reader computing a null *fraction* as
+    #: `null_count / row_count` is wrong by the sampling ratio — 6.9× on
+    #: `playground-series-s6e7` — and nothing in the profile says so.
+    column_stats_rows: int = 0
     # True when the scored rows form a contiguous *suffix* of each test
     # partition (predict-forward / forecast tasks). Validation must then hold
     # out the tail of each training partition, not random rows.
@@ -91,6 +162,528 @@ class DatasetProfile(BaseModel):
     # the series actually was, so a forecast should be a residual from its last
     # known value rather than a fit over the other columns.
     anchor_column: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def modality(self) -> str:
+        """The primary modality, as a string. A view over `modalities`.
+
+        Six modules read this name and none of them should have to learn a list
+        to keep working; computed rather than stored so the two cannot drift.
+        Empty list means nothing was detected — `"tabular"` is the same default
+        the field carried before, and the accompanying note says which happened.
+        """
+        return self.modalities[0].modality if self.modalities else "tabular"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def confidence(self) -> float:
+        """One number a gate can read: the **weakest** of the required answers.
+
+        Not an average. A schema certain about four things and guessing at the
+        target is a guessing schema, and a mean would let three confident
+        answers hide the one that matters.
+        """
+        return min((self.confidence_in(field) for field in REQUIRED_FIELDS), default=0.0)
+
+    def _scored_are_train_columns(self, scored: list[str]) -> bool:
+        """Whether every scored submission column is a column of `train`.
+
+        The discriminator between "several targets" and "one target, written out
+        as classes". `self.columns` profiles the train table, so membership is
+        the whole test: `a, b` are there and are genuinely two answers;
+        `class_0..2` are not, and are one answer in three columns.
+
+        `False` when nothing is known about the columns — an empty profile
+        cannot support the multi-output claim, and the fall-through reports the
+        target's own kind rather than asserting a shape.
+        """
+        if not self.columns:
+            return False
+        known = {column.name for column in self.columns}
+        return all(name in known for name in scored)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def target_type(self) -> TargetType:
+        """The shape of the prediction target, derived from what was measured.
+
+        Derived rather than stored, and that is the whole design: every input —
+        `unique_count`, `is_numeric`, the numeric `stats`, the submission
+        template — is already in this profile, so a stored copy could only ever
+        be a second answer free to disagree with them. It also means every
+        profile written before this field existed acquires it on load instead of
+        needing a migration.
+
+        What it refuses to decide is as load-bearing as what it decides.
+        `ordinal` is never returned: whether 1-5 stars are ranks or five
+        unrelated labels is a fact about the world. `count` is returned only for
+        dense non-negative integers — `SalePrice` is an integer column with 663
+        distinct values and a maximum of 755,000, and calling that a count, or
+        worse a 663-class problem, is the misreading this milestone's corpus
+        names by name.
+        """
+        # The template's shape is read **before** asking whether a single target
+        # was named, because for a multi-output competition the answer to that
+        # question is legitimately "none of them, all of them". The profiler
+        # leaves `target_column` unresolved there on purpose, and an early
+        # `return "none"` would report a dataset with no target at all — turning
+        # the one branch that describes multi-output back into dead code.
+        #
+        # An empty `id_columns` means the key was **not resolved**, not that
+        # there is no key — and it is empty exactly when the profiler decided to
+        # ask, which is the rogii case. Subtracting nothing left `['id','tvt']`
+        # as two scored columns, so the corpus fixture this milestone is built
+        # around read as `multilabel` and its continuous depth target went down
+        # the classification path.
+        if self.id_columns:
+            scored = [c for c in self.submission_columns if c not in set(self.id_columns)]
+            # Several scored columns mean multi-output only when train actually
+            # holds them. `class_0, class_1, class_2` is one target's classes
+            # written out — three columns of the same answer, not three answers —
+            # and calling that `multilabel` sent every multiclass competition
+            # scored on probabilities down the multi-output path. Those fall
+            # through to the target column's own kind, which is what they are.
+            if len(scored) > 1 and self._scored_are_train_columns(scored):
+                return "multilabel"
+        elif len(self.submission_columns) > 2:
+            # Ids unknown and more than two columns: "key plus N labels" and
+            # "N+1 labels" are the same shape from here, and guessing either way
+            # is worse than saying so. Two columns are unambiguous whichever the
+            # key turns out to be, so those fall through and get measured.
+            return "unknown"
+        if self.target_column is None:
+            return "none"
+        column = next((c for c in self.columns if c.name == self.target_column), None)
+        if column is None:
+            return "unknown"
+        if column.unique_count <= 1:
+            # Constant, or nothing left after nulls. Not binary, and a floor
+            # built on it would be perfect and meaningless.
+            return "unknown"
+        if column.unique_count == 2:
+            return "binary"
+        if not column.is_numeric:
+            return "multiclass"
+        stats = column.stats if isinstance(column.stats, dict) else {}
+        low, high = _as_number(stats.get("min")), _as_number(stats.get("max"))
+        if low is None or high is None:
+            # Absent, or present and unreadable. Both mean the numeric branch
+            # has nothing to reason with, and this is a `computed_field` — a
+            # raise here does not fail one field, it fails `model_dump_json` for
+            # the whole profile.
+            return "unknown"
+        whole = low.is_integer() and high.is_integer()
+        if not whole:
+            return "continuous"
+        # Labels repeat. Twelve distinct prices over twelve rows cleared the
+        # ceiling and read as a twelve-class problem — the `SalePrice` misreading
+        # again, arriving through the small-fixture door instead of the
+        # large-dataset one. `row_count <= 0` means nobody counted, and a rule
+        # that silently used 0 as "no repeats" would send every uncounted
+        # dataset down the numeric branch.
+        labels_repeat = self.row_count <= 0 or column.unique_count < self.row_count
+        if column.unique_count <= DISCRETE_LABEL_CEILING and labels_repeat:
+            return "multiclass"
+        # Dense non-negative integers: the values crowd their own range, which
+        # is what a count does and what a price does not.
+        if low >= 0 and high < column.unique_count * _COUNT_DENSITY:
+            return "count"
+        return "continuous"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def id_column(self) -> str | None:
+        """The first key column. A view over `id_columns`, so the two cannot drift."""
+        return self.id_columns[0] if self.id_columns else None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def feature_columns(self) -> list[str]:
+        """Everything a model may use: the columns, minus the exclusions.
+
+        Derived rather than stored because this is the one answer where a wrong
+        value is worse than no value — a leak makes a score look *better*, so
+        nothing downstream detects it — and a stored copy that drifts from
+        `excluded_columns` would be exactly that failure with no symptom.
+        """
+        return [c.name for c in self.columns if c.name not in self.excluded_columns]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def warnings(self) -> list[str]:
+        """The prose view over `notes`, in the order they were recorded.
+
+        Kept because four things render it — one of them the codegen prompt —
+        and computed rather than stored so the two can never disagree. A reader
+        that wants to *act* on a reason reads `notes[].code` instead of matching
+        substrings against this.
+        """
+        return [note.text for note in self.notes]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _adopt_legacy_modality(cls, data: Any) -> Any:
+        """A pre-step-5 profile's `modality` string becomes its primary presence.
+
+        The same shape as the `warnings` adoption below, and the same reason:
+        `modality` is computed now, so pydantic would drop the stored value and
+        every legacy profile would read `tabular` — birdclef's says `audio`, and
+        the analyzers that key off it would silently start describing an audio
+        competition as a tabular one.
+        """
+        # `not in`, not falsy. An *empty* list is a profile that recorded
+        # "nothing detected" — the non-local-source branch writes exactly that,
+        # beside a `modality_not_detected` note — and treating it as legacy made
+        # every later read fabricate a `tabular` presence with a provenance line
+        # claiming it came from an older profile. Both halves false, and the
+        # file then contradicted its own note.
+        if not isinstance(data, dict) or "modalities" in data:
+            return data
+        stored = data.get("modality")
+        if isinstance(stored, str) and stored:
+            data = dict(data)
+            data["modalities"] = [
+                {
+                    "modality": stored,
+                    "role": "primary",
+                    "detail": "adopted from a profile written before modalities were a list",
+                    "image_dir": data.get("image_dir"),
+                    "image_column": data.get("image_column"),
+                    "text_column": data.get("text_column"),
+                }
+            ]
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _adopt_legacy_warnings(cls, data: Any) -> Any:
+        """A pre-M22 profile's prose becomes notes, rather than being dropped.
+
+        `warnings` used to be a stored field, so every `profile.json` on disk
+        carries one and pydantic would ignore it now that the name is computed.
+        Silently losing it would take the anchor-column advice — the one line
+        that tells codegen not to fit the target from a column identical to it —
+        out of every workspace still serving a stale profile.
+        """
+        if not isinstance(data, dict) or data.get("notes"):
+            return data
+        legacy = data.get("warnings")
+        if isinstance(legacy, list) and legacy:
+            data = dict(data)
+            data["notes"] = [
+                {"code": "legacy", "text": str(text), "severity": "info"} for text in legacy
+            ]
+        return data
+
+    def confidence_in(self, field: str) -> float:
+        """How sure the profiler is about one field, or 0.0 if it never reasoned about it."""
+        inference = self.inferences.get(field)
+        return inference.confidence if inference else 0.0
+
+
+#: What the schema-level `confidence` summarises. Broader than the fields whose
+#: uncertainty *stops* a campaign (`questions.BLOCKING_FIELDS`): a capped
+#: `disjoint_units` and a missing metric both drag the number down without being
+#: worth stopping for, which is the distinction between "how good is this
+#: description" and "may I proceed on it".
+REQUIRED_FIELDS = ("target_column", "id_columns", "train_test_relationship", "metric")
+
+
+def _answered(
+    candidates: dict[str, list[Signal]],
+    answer: str | None,
+    *,
+    known: set[str],
+    field: str = "target_column",
+) -> tuple[dict[str, list[Signal]], list[RejectedClaim]]:
+    """Fold an operator's answer into the candidate set, if it names a column.
+
+    The answer becomes a candidate carrying `operator_answer` (1.00), so it wins
+    by evidence rather than by bypassing the resolver — and its other signals are
+    kept, so the profile still shows what the data said about the column a person
+    chose. A column the profiler never *considered* is added, because not seeing
+    something is why the question was asked.
+
+    A column that does not **exist** is refused and recorded in `rejected`.
+    `operator_answer` is the top of the scale, so an unchecked value would assert
+    a target that is not in the dataset — and silently re-admit the
+    `equals_target` leak, since nothing equals a column that is not there. The
+    CLI checks too; this is the guard for every other way a `DeclaredFacts`
+    reaches the profiler.
+    """
+    if not answer:
+        return candidates, []
+    from labpilot.accessor.profiler.questions import parse_answer
+
+    try:
+        named = parse_answer(field, answer)
+    except ValueError as exc:
+        return candidates, [RejectedClaim(claim=answer, source="operator", refuted_by=str(exc))]
+    unknown = [name for name in named if known and name not in known]
+    if unknown:
+        return candidates, [
+            RejectedClaim(
+                claim=answer,
+                source="operator",
+                refuted_by=f"{unknown} names no column in this dataset",
+            )
+        ]
+    settled = dict(candidates)
+    for name in named:
+        settled[name] = [
+            Signal(id="operator_answer", detail=f"answered: {name!r}"),
+            *candidates.get(name, []),
+        ]
+    return settled, []
+
+
+def _key_columns(
+    answer: str | None, refused: list[RejectedClaim], resolved: str | None
+) -> list[str]:
+    """The key, which an answer may state as several columns.
+
+    `_resolve` picks one winner, which is right when the profiler is inferring
+    and wrong when a person has answered `store_id,date`: taking the first of
+    those would settle a composite key as half of itself and close the question.
+    """
+    from labpilot.accessor.profiler.questions import parse_answer
+
+    if answer and not refused:
+        try:
+            return parse_answer("id_columns", answer)
+        except ValueError:
+            pass
+    return [resolved] if resolved else []
+
+
+def _resolve(candidates: dict[str, list[Signal]]) -> tuple[str | None, Inference]:
+    """Pick the best-evidenced candidate, and record what every candidate had.
+
+    One decision procedure for every question, replacing a chain of `if`s per
+    path: score each candidate against the catalogue, take the highest, keep the
+    rest as alternatives with their own evidence.
+
+    A tie keeps today's answer — the last of the tied candidates in sort order —
+    so this step changes no value that today's code gets right. That is not a
+    defence of the rule: it is position deciding, the caller records a note
+    saying so, and step 4 replaces it with a question. What has changed already
+    is that the tie is *visible*, because the runners-up carry the same
+    confidence in the profile.
+    """
+    if not candidates:
+        return None, Inference.of([])
+    scored = sorted(
+        ((name, combine(signals), signals) for name, signals in candidates.items()),
+        key=lambda row: (-row[1], row[0]),
+    )
+    tied = [row for row in scored if row[1] == scored[0][1]]
+    winner, _, winning_signals = tied[-1] if len(tied) > 1 else scored[0]
+    return winner, Inference.of(
+        winning_signals,
+        alternatives=[
+            Alternative.of(name, signals) for name, _, signals in scored if name != winner
+        ],
+    )
+
+
+def _exclusions(
+    profile: DatasetProfile,
+    *,
+    target: str | None,
+    ids: list[str],
+    unavailable: set[str],
+    equals_target: str | None = None,
+) -> dict[str, ExclusionReason]:
+    """Why each column is not a feature.
+
+    Order matters only in that a column gets one reason; the first that applies
+    is the one a reader most needs. `equals_target` is last because it is the
+    subtlest and the most expensive to get wrong: rogii's `TVT_input` is the
+    strongest predictor in the dataset *and* unusable as a plain feature, and a
+    profile that lists it among the features is how a model learns to copy a
+    column that is NaN on every scored row.
+    """
+    reasons: dict[str, ExclusionReason] = {}
+    for column in profile.columns:
+        name = column.name
+        if target is not None and name == target:
+            reasons[name] = "is_target"
+        elif name in ids:
+            reasons[name] = "is_id"
+        elif name in unavailable:
+            reasons[name] = "unavailable_at_scoring"
+        elif equals_target is not None and name == equals_target:
+            reasons[name] = "equals_target"
+        elif column.unique_count <= 1:
+            reasons[name] = "constant"
+    return reasons
+
+
+def _modality_signals(
+    presences: list[ModalityPresence], *, tiebroken: bool = False
+) -> list[Signal]:
+    """What is known about which modality carries the signal.
+
+    One modality present is the strong case: there is nothing to weigh it
+    against. Several means a preference was applied, and a preference is worth
+    less than an absence of alternatives. A model breaking the tie is capped, so
+    a modality chosen that way can be acted on and never asserted.
+    """
+    if not presences:
+        return []
+    if tiebroken:
+        return [
+            Signal(
+                id="llm_modality_tiebreak",
+                detail=f"a model chose {presences[0].modality!r} between the candidates",
+            )
+        ]
+    if len(presences) == 1:
+        return [
+            Signal(
+                id="single_modality_present",
+                detail=f"only {presences[0].modality!r} is present",
+            )
+        ]
+    # One id for both cases. Two branches sharing `csv_majority` meant an
+    # image-primary dataset fired a signal whose catalogue entry said "tables
+    # outnumber the other modality's files" — the id reading as the opposite of
+    # what happened, to anything keying off ids rather than prose.
+    others = ", ".join(sorted({p.modality for p in presences[1:]}))
+    return [
+        Signal(
+            id="modality_majority",
+            detail=f"{presences[0].modality!r} ({presences[0].detail}) over {others}",
+        )
+    ]
+
+
+def _unit_from(signals: list[Signal]) -> PredictionUnit:
+    """The unit the evidence names, rather than the one the call site expected.
+
+    Both call sites used to map "any signal" onto a fixed value — `row` on the
+    flat path, `partition_row` on the partitioned one — so the day a flat-path
+    suffix detector lands, the profile would read `prediction_unit: row` while
+    its own evidence said the scored rows are a partition tail.
+    """
+    fired = {signal.id for signal in signals}
+    if "scored_rows_are_a_partition_tail" in fired:
+        return "partition_row"
+    if "submission_row_per_scoring_row" in fired:
+        return "row"
+    return "unknown"
+
+
+def _prediction_unit_signals(
+    profile: DatasetProfile, *, template_matches_test: bool
+) -> list[Signal]:
+    """What is known about what one prediction is about."""
+    signals: list[Signal] = []
+    if profile.scored_is_partition_suffix:
+        signals.append(
+            Signal(
+                id="scored_rows_are_a_partition_tail",
+                detail="one row of one partition; rows are not exchangeable across them",
+            )
+        )
+    elif template_matches_test:
+        signals.append(
+            Signal(
+                id="submission_row_per_scoring_row",
+                detail="the template has one row per row of the scoring input",
+            )
+        )
+    return signals
+
+
+def _split_signals(*, has_scoring_input: bool, scored_is_partition_suffix: bool) -> list[Signal]:
+    """What is known about how the scored units relate to the training ones."""
+    if not has_scoring_input:
+        return [Signal(id="no_scoring_input", detail="no scoring input in this dataset")]
+    if scored_is_partition_suffix:
+        return [
+            Signal(
+                id="scored_rows_are_partition_tail",
+                detail="scored rows are a contiguous tail of each test partition",
+            )
+        ]
+    return [Signal(id="scoring_input_present", detail="a scoring input exists; no split signal")]
+
+
+def _metric_signals(metric: MetricRef | None) -> list[Signal]:
+    signals: list[Signal] = []
+    if metric is None:
+        return signals
+    signals.append(Signal(id="declared_by_source", detail=f"declared metric {metric.name!r}"))
+    if metric.direction is not None:
+        signals.append(Signal(id="direction_declared", detail=f"direction={metric.direction}"))
+    return signals
+
+
+def _column_signals(profile: DatasetProfile, name: str | None) -> list[Signal]:
+    """The distributional evidence a profiled column carries about being a label.
+
+    Weak on purpose. "It is numeric" is true of most columns in most datasets;
+    it earns 0.15 because it is consistent with the answer rather than because
+    it points at one.
+    """
+    column = next((c for c in profile.columns if c.name == name), None)
+    if column is None:
+        return []
+    signals: list[Signal] = []
+    if column.null_count == 0:
+        signals.append(Signal(id="non_null_in_train", detail=f"{column.name}: no nulls in train"))
+    if column.is_numeric:
+        signals.append(Signal(id="is_numeric", detail=f"{column.name}: {column.dtype}"))
+    return signals
+
+
+def _identity_signals(
+    profile: DatasetProfile,
+    name: str | None,
+    *,
+    unit_count: int,
+    in_template: bool,
+    first_in_template: bool,
+    on_both_sides: bool,
+) -> list[Signal]:
+    """What is known about a column being the key.
+
+    `unique_per_unit` is measured against the frame that was actually profiled,
+    not against `row_count`: a partitioned profile estimates its row count from
+    a sample, and comparing a sampled cardinality to an extrapolated total would
+    make uniqueness look violated on every large dataset.
+    """
+    signals: list[Signal] = []
+    if in_template:
+        signals.append(Signal(id="named_in_prediction_template", detail=f"template names {name!r}"))
+    if first_in_template:
+        signals.append(
+            Signal(id="first_template_column", detail=f"{name!r} is the template's first column")
+        )
+    if on_both_sides:
+        signals.append(
+            Signal(id="present_in_train_and_scoring", detail=f"{name!r} is on both sides")
+        )
+    column = next((c for c in profile.columns if c.name == name), None)
+    if column is not None and unit_count > 0 and column.unique_count == unit_count:
+        signals.append(
+            Signal(id="unique_per_unit", detail=f"{column.unique_count} distinct in {unit_count}")
+        )
+    return signals
+
+
+def _note(
+    profile: DatasetProfile,
+    code: str,
+    text: str,
+    *,
+    field: str | None = None,
+    severity: str = "info",
+) -> None:
+    """Record a reason. One writer, so `warnings` has one order and one source."""
+    profile.notes.append(Note(code=code, text=text, field=field, severity=severity))  # type: ignore[arg-type]
 
 
 # Below this many per-entity train files, treat the dataset as ordinary
@@ -248,6 +841,77 @@ def _is_known_prefix_of(frame: "pd.DataFrame", name: str, target: str) -> bool |
     return bool((frame.loc[known, name] == frame.loc[known, target]).all())
 
 
+def _as_number(value: object) -> float | None:
+    """A finite float, or None for anything that is not one.
+
+    `ColumnProfile.stats` is `dict[str, Any]` and profiles are read from disk,
+    so "the writer only ever puts floats there" is a fact about today's writer
+    rather than about the data.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return None if number != number or number in (float("inf"), float("-inf")) else number
+
+
+def _measure_target(profile: DatasetProfile, frame: pd.DataFrame) -> None:
+    """Attach the target's distribution, if the frame in hand holds the target.
+
+    Both profiling paths call this rather than each measuring for itself: the
+    flat one and the partitioned one already resolve the target differently, and
+    two measurements of one field is how they would come to disagree about it.
+    """
+    target = profile.target_column
+    if target and target in frame.columns:
+        profile.target_distribution = _target_distribution(frame[target])
+
+
+def _target_distribution(series: pd.Series) -> TargetDistribution:
+    """Measure the target. Never raises; a column it cannot read stays empty.
+
+    Empty is a real answer and a safe one — M23's floor refuses to build on an
+    empty distribution, which is the right response to a target nobody could
+    measure. An exception here would take down a profile that is otherwise
+    correct about everything else.
+    """
+    import pandas as pd
+
+    null_count = int(series.isna().sum())
+    values = series.dropna()
+    if values.empty:
+        return TargetDistribution(null_count=null_count)
+
+    numeric = pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values)
+    distribution = TargetDistribution(null_count=null_count)
+    # Counts for anything with few enough distinct values to have labels —
+    # including a numeric one, because a 0/1 target is a class prior even when
+    # pandas calls it int64. `DISCRETE_LABEL_CEILING` is the same line
+    # `target_type` draws, so the two cannot disagree about what a label is.
+    # `< len(values)` and not just the ceiling: a label set has labels that
+    # *repeat*. Twelve distinct prices over twelve rows cleared the ceiling and
+    # produced a "class prior" of twelve ones, which is not a prior — it is the
+    # data, re-listed, under a name that invites a floor to be built on it.
+    unique = values.nunique()
+    if unique <= DISCRETE_LABEL_CEILING and unique < len(values):
+        counts = values.value_counts()
+        distribution.class_counts = {str(k): int(v) for k, v in counts.items()}
+        # The keys are strings because JSON has no other kind. `class_dtype`
+        # is how the label gets back to what it was: a float64 target — which is
+        # any integer column pandas met a NaN in — gives keys "0.0"/"1.0", and a
+        # floor predicting the argmax would otherwise write that string into a
+        # submission whose sample column is an integer.
+        distribution.class_dtype = str(values.dtype)
+    if numeric:
+        try:
+            distribution.median = float(values.median())
+            distribution.zero_fraction = round(float((values == 0).mean()), 6)
+            skew = float(values.skew()) if len(values) > 2 else None
+            distribution.skew = None if skew is None or skew != skew else round(skew, 6)
+        except (TypeError, ValueError):
+            pass
+    return distribution
+
+
 class TabularProfiler:
     """Profile tabular competition datasets."""
 
@@ -367,7 +1031,13 @@ class TabularProfiler:
         # portal/API automatically instead of relying on name matching.
         tables = source.tables()
         if not tables:
-            raise FileNotFoundError(f"No CSV files found in {_where(source)}.")
+            # Not an error. A dataset with no tables is an *environment* — a
+            # ConnectX-shaped competition, an interactive harness — and refusing
+            # to describe it sent the workspace to `_write_inventory_profile`,
+            # which wrote a valid-looking profile with a null target and a
+            # modality guessed from file extensions. Describing it honestly and
+            # asking the questions it cannot answer is the whole point.
+            return self._profile_environment(source, competition)
 
         # Partitioned layouts (train/<entity>.csv) match no filename prefix, so
         # try them before the single-file heuristic reports "found 0".
@@ -382,14 +1052,27 @@ class TabularProfiler:
         if partitioned is not None:
             return partitioned
 
-        train_table = self._single_table(
-            [table for table in tables if _name_of(table).startswith(train_pattern.lower())],
-            "training",
+        train_matches = [
+            table for table in tables if _name_of(table).startswith(train_pattern.lower())
+        ]
+        if not train_matches and len(tables) == 1:
+            # One table is the training table. A dataset that is not a
+            # competition has no `train` prefix to match — a warehouse extract,
+            # a study export, a log dump — and refusing to describe it at all
+            # was the profiler's answer to the entire world outside Kaggle.
+            train_table = tables[0]
+        else:
+            train_table = self._single_table(train_matches, "training")
+
+        sample_matches = [
+            table for table in tables if submission_pattern.lower() in _name_of(table)
+        ]
+        # Absent is a fact about the dataset; two is an ambiguity nobody can
+        # resolve from here, so only the second still refuses.
+        sample_table = (
+            self._single_table(sample_matches, "sample submission") if sample_matches else None
         )
-        sample_table = self._single_table(
-            [table for table in tables if submission_pattern.lower() in _name_of(table)],
-            "sample submission",
-        )
+
         test_matches = [
             table for table in tables if _name_of(table).startswith(test_pattern.lower())
         ]
@@ -398,85 +1081,319 @@ class TabularProfiler:
             test_table = test_matches[0]
         elif len(test_matches) == 0:
             test_table = sample_table
-            test_warnings.append(
-                "No test CSV found; using sample submission as the test reference file."
-            )
+            if sample_table is not None:
+                test_warnings.append(
+                    "No test CSV found; using sample submission as the test reference file."
+                )
         else:
             names = [Path(table.uri).name for table in test_matches]
             raise ValueError(f"Expected one test CSV, found {len(test_matches)}: {names}")
 
         train_columns = source.columns(train_table)
-        test_columns = source.columns(test_table)
-        submission_columns = source.columns(sample_table)
+        test_columns = source.columns(test_table) if test_table is not None else []
+        submission_columns = source.columns(sample_table) if sample_table is not None else []
 
-        target_candidates = [column for column in train_columns if column not in test_columns]
-        if len(target_candidates) == 1:
-            target_column = target_candidates[0]
-        elif test_table == sample_table:
-            overlap = [column for column in submission_columns if column in train_columns]
-            if len(overlap) >= 2:
-                target_column = overlap[1]
-            else:
-                raise ValueError(
-                    "Unable to infer one target column from train/sample submission schemas; "
-                    f"found {target_candidates or 'none'}."
-                )
-        else:
-            raise ValueError(
-                "Unable to infer one target column from train/test schemas; "
-                f"found {target_candidates or 'none'}."
-            )
-
-        id_candidates = [
-            column
-            for column in submission_columns
-            if column in train_columns and column in test_columns and column != target_column
-        ]
-        if not id_candidates:
-            raise ValueError("Unable to infer an ID column from the sample submission.")
-        id_column = id_candidates[0]
-
-        expected_submission_columns = [id_column, target_column]
-        if submission_columns != expected_submission_columns:
-            raise ValueError(
-                "Sample submission schema does not match the inferred ID and target columns: "
-                f"expected {expected_submission_columns}, got {submission_columns}."
-            )
-
-        # One read of the training table, where there were two: `profile_file`
-        # sampled it and then `enrich_column_stats` sampled it again with the
-        # same cap. Same bytes, same frame — the second read only cost time.
+        # The profile is built before the answers are resolved, because the
+        # evidence for an answer includes what the columns look like — whether
+        # the candidate is complete, whether it is numeric — and those are facts
+        # about the frame rather than about the header.
         train_sample = source.sample(train_table, self.config.max_rows_sample)
         profile = DatasetProfile(
             competition=competition,
             row_count=len(train_sample),
             column_count=len(train_sample.columns),
             columns=self.profile_columns(train_sample),
+            column_stats_rows=len(train_sample),
         )
-        profile.warnings.extend(test_warnings)
+        if len(train_sample) == self.config.max_rows_sample and train_columns:
+            # The cap bound, so the sample's length is a floor rather than a
+            # count. `playground-series-s6e7/profile.json` records 100,000 rows
+            # for a file of 690,088 and does not say it is a sample. One pass
+            # over one column is what the truth costs.
+            try:
+                profile.row_count = source.exact_unit_count(train_table, train_columns[0])
+                _note(
+                    profile,
+                    "columns_sampled",
+                    f"column statistics describe {profile.column_stats_rows:,} sampled rows of "
+                    f"{profile.row_count:,} — read null and unique counts against "
+                    "`column_stats_rows`, not `row_count`",
+                    field="columns",
+                    severity="caution",
+                )
+            except (OSError, ValueError):
+                profile.row_count_estimated = True
+        for text in test_warnings:
+            _note(profile, "no_test_file", text, severity="caution")
         from labpilot.accessor.profiler.modality import ModalityDetector
 
         detector = ModalityDetector()
         detector.enrich_column_stats(train_sample, profile.columns)
         profile.files = [table.uri for table in tables]
         profile.train_file = train_table.uri
-        profile.test_file = test_table.uri
-        profile.sample_submission_file = sample_table.uri
-        profile.test_row_count = source.exact_unit_count(test_table, id_column)
-        profile.target_column = target_column
-        profile.id_column = id_column
+        profile.test_file = test_table.uri if test_table is not None else None
+        profile.sample_submission_file = sample_table.uri if sample_table is not None else None
         profile.submission_columns = submission_columns
+
+        # --- which columns could be the label ------------------------------
+        withheld = [column for column in train_columns if column not in test_columns]
+        target_candidates: dict[str, list[Signal]] = {}
+        if test_table is not None:
+            for candidate in withheld:
+                signals: list[Signal] = []
+                if candidate in submission_columns:
+                    signals.append(
+                        Signal(
+                            id="named_in_prediction_template",
+                            detail=f"submission header names {candidate!r}",
+                        )
+                    )
+                if withheld == [candidate]:
+                    signals.append(
+                        Signal(
+                            id="sole_withheld_column",
+                            detail=f"{candidate!r} is the only column train has and test does not",
+                        )
+                    )
+                target_candidates[candidate] = signals + _column_signals(profile, candidate)
+        if not target_candidates and test_table is not None and test_table == sample_table:
+            # The positional branch: no column is withheld, so the template's
+            # own overlap with train is all there is. Capped at 0.50 by the
+            # catalogue, which is what makes it ask rather than answer.
+            overlap = [column for column in submission_columns if column in train_columns]
+            if len(overlap) >= 2:
+                target_candidates[overlap[1]] = [
+                    Signal(
+                        id="positional_template_overlap",
+                        detail=f"second of {len(overlap)} columns the template shares with train",
+                    )
+                ] + _column_signals(profile, overlap[1])
+
+        answers = source.declared().answers
+        profile.answers_fingerprint = answers_fingerprint(answers)
+        known = {column.name for column in profile.columns}
+        settled, refused = _answered(target_candidates, answers.get("target_column"), known=known)
+        target_column, target_inference = _resolve(settled)
+        profile.target_column = target_column
+        # Measured here, where the resolved target and the frame that holds it
+        # are both in scope. Not in `_profile_columns`: that runs before anything
+        # knows which column is the target, and measuring a class prior for every
+        # column would be paying for 80 answers to throw away 79.
+        _measure_target(profile, train_sample)
+        profile.inferences["target_column"] = target_inference.model_copy(
+            update={"rejected": refused}
+        )
+        for claim in refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="target_column",
+                severity="blocking",
+            )
+
+        # --- which columns could be the key --------------------------------
+        id_candidates: dict[str, list[Signal]] = {}
+        for candidate in submission_columns:
+            if candidate == target_column:
+                continue
+            id_candidates[candidate] = _identity_signals(
+                profile,
+                candidate,
+                unit_count=len(train_sample),
+                in_template=True,
+                first_in_template=candidate == submission_columns[0],
+                on_both_sides=candidate in train_columns and candidate in test_columns,
+            )
+        id_settled, id_refused = _answered(
+            id_candidates, answers.get("id_columns"), known=known, field="id_columns"
+        )
+        id_column, id_inference = _resolve(id_settled)
+        profile.id_columns = _key_columns(answers.get("id_columns"), id_refused, id_column)
+        profile.inferences["id_columns"] = id_inference.model_copy(update={"rejected": id_refused})
+        for claim in id_refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="id_columns",
+                severity="blocking",
+            )
+
+        # A template that scores several columns of `train` is a question, not a
+        # crash.
+        #
+        # This used to raise on any submission that was not exactly
+        # `[id, target]`, which made every multi-target and multiclass-probability
+        # competition unprofileable — and unmeasurable, since the exception
+        # escaped the benchmark rather than being scored. But it could not simply
+        # be deleted: with the raise removed, a `[Id, a, b]` template resolves
+        # `target_column` to *one* of `a` and `b`, confidently, and asks nothing.
+        # A campaign would then optimise `b` and never mention `a`.
+        #
+        # So the refusal stays and moves to the mechanism that actually stops
+        # things. `Note.severity` is written and never read; what blocks a
+        # campaign is an uncertain `target_column`, via `pending_schema_questions`.
+        # Leaving the target unresolved says exactly what is true — the template
+        # asks for several answers and "which single column is the target" has no
+        # right answer — and every candidate is kept as an alternative so the
+        # operator chooses from evidence rather than from a list of names.
+        if sample_table is not None:
+            scored = [name for name in submission_columns if name not in set(profile.id_columns)]
+            # An answer settles it, and must survive this branch.
+            #
+            # Review of my own first version: the refusal below ran
+            # unconditionally, so an operator who answered the very question it
+            # raises had their answer honoured by `_answered` and then discarded
+            # here. `pending_schema_questions` skips answered fields, so no
+            # question came back either — the profile ended up with no target and
+            # nothing asking for one, and a campaign ran against it. That is
+            # worse than the `ValueError` this replaced, which at least stopped:
+            # it made the question askable but unanswerable, on exactly the
+            # competitions this change exists to unblock.
+            #
+            # `answer and not refused` is `_key_columns`' own test for the same
+            # thing, kept identical so the two cannot drift.
+            target_is_answered = bool(answers.get("target_column")) and not refused
+            # One question about the template's shape, asked once, so the four
+            # outcomes stay mutually exclusive. A first attempt tested
+            # `not target_is_answered` inside the multi-output condition and let
+            # the answered case fall through to the next branch, which then filed
+            # `encoded_target_template` — "none of which train holds" — about
+            # columns train demonstrably holds.
+            multi_output = len(scored) > 1 and profile._scored_are_train_columns(scored)
+            if multi_output and target_is_answered:
+                # Still multi-output — `target_type` says so from the template —
+                # but a person has named which column they are predicting, and
+                # that is the one thing the profiler was missing.
+                _note(
+                    profile,
+                    "multi_output_template_answered",
+                    f"the template scores {len(scored)} columns ({', '.join(scored)}); "
+                    f"an operator named {profile.target_column!r} as the target",
+                    field="target_column",
+                )
+            elif multi_output:
+                profile.target_column = None
+                profile.inferences["target_column"] = Inference.of(
+                    [],
+                    alternatives=[
+                        Alternative.of(name, target_candidates.get(name, [])) for name in scored
+                    ],
+                    rejected=refused,
+                )
+                _note(
+                    profile,
+                    "multi_output_template",
+                    f"the template scores {len(scored)} columns of train ({', '.join(scored)}); "
+                    "no single column is the target",
+                    field="target_column",
+                    severity="blocking",
+                )
+            elif len(scored) > 1:
+                # One target written out as classes. The target resolves normally
+                # and `target_type` reports its own kind; recorded so a reader
+                # knows the submission is wider than the answer.
+                _note(
+                    profile,
+                    "encoded_target_template",
+                    f"the template scores {len(scored)} columns none of which train holds "
+                    f"({', '.join(scored)}); read as one target written out",
+                    field="submission_columns",
+                )
+            elif len(scored) == 1 and profile.target_column and scored[0] != profile.target_column:
+                # The other half of what the removed guard checked.
+                #
+                # `[Id, Prediction]` against a `SalePrice` target used to raise.
+                # Accepting it is right — competitions rename the scored column
+                # all the time — but accepting it *silently* is not: the profile
+                # would record a target and a template that do not correspond,
+                # with nothing to say whether that was checked and allowed or
+                # simply never looked at. Everything else this profiler cannot
+                # confirm gets a note, and so does this.
+                _note(
+                    profile,
+                    "template_column_is_not_the_target",
+                    f"the template scores {scored[0]!r}, which is not the resolved target "
+                    f"{profile.target_column!r}; the submission is written under the "
+                    "template's name",
+                    field="submission_columns",
+                )
+
         for column in profile.columns:
             column.is_target_candidate = column.name == target_column
 
+        if test_table is not None and id_column is not None:
+            profile.test_row_count = source.exact_unit_count(test_table, id_column)
+
+        # --- the remaining answers -----------------------------------------
+        profile.train_only_columns = withheld if test_table is not None else []
+        profile.excluded_columns = _exclusions(
+            profile,
+            target=target_column,
+            ids=profile.id_columns,
+            unavailable=set(profile.train_only_columns),
+        )
+        split_signals = _split_signals(
+            has_scoring_input=test_table is not None,
+            scored_is_partition_suffix=False,
+        )
+        profile.train_test_relationship = (
+            "disjoint_units" if test_table is not None else "no_test_provided"
+        )
+        profile.inferences["train_test_relationship"] = Inference.of(split_signals)
+        profile.metric = source.declared().metric
+        profile.inferences["metric"] = Inference.of(_metric_signals(profile.metric))
+        # Counted over one column rather than parsed whole: the template has a
+        # row per scored row, so on a large competition this read 690,000 rows
+        # into a frame and threw it away to learn one integer.
+        template_rows = (
+            source.exact_unit_count(sample_table, submission_columns[0])
+            if sample_table is not None and submission_columns
+            else 0
+        )
+        template_matches_test = (
+            sample_table is not None
+            and test_table is not None
+            and sample_table != test_table
+            and profile.test_row_count > 0
+            and template_rows == profile.test_row_count
+        )
+        unit_signals = _prediction_unit_signals(
+            profile, template_matches_test=template_matches_test
+        )
+        profile.prediction_unit = _unit_from(unit_signals)
+        profile.inferences["prediction_unit"] = Inference.of(unit_signals)
+        if profile.target_column is None:
+            why = (
+                "no scoring input to compare train against"
+                if test_table is None
+                else "no candidate column"
+            )
+            _note(
+                profile,
+                "no_target_identified",
+                f"no column could be identified as the label: {why}",
+                field="target_column",
+                severity="blocking",
+            )
+
         declared = source.declared()
+        if self.config.llm_proposals and llm_client is not None:
+            self._fold_in_proposal(profile, llm_client, declared)
         root = _local_root(source)
         if root is None:
             # Not a default that reads as a finding: `modality` stays "tabular"
             # either way, and the difference between "detected tabular" and
             # "never looked" has to be visible or it is the silent degrade M14
             # exists to remove.
-            profile.warnings.append("modality not detected: source exposes no directory")
+            _note(
+                profile,
+                "modality_not_detected",
+                "modality not detected: source exposes no directory",
+                field="modality",
+                severity="caution",
+            )
         else:
             modality = detector.detect(
                 root,
@@ -485,17 +1402,22 @@ class TabularProfiler:
                 competition_title=declared.title,
                 competition_description=declared.description,
             )
-            profile.modality = modality.modality
+            profile.modalities = detector.presences(root, profile)
             profile.image_dir = modality.image_dir
             profile.image_column = modality.image_column
             profile.text_column = modality.text_column
-            if modality.signals:
-                profile.warnings.extend(modality.signals)
-
+            profile.inferences["modality"] = Inference.of(
+                _modality_signals(profile.modalities, tiebroken=modality.tiebroken)
+            )
+            for text in modality.signals:
+                _note(profile, "modality_signal", text, field="modality")
         logger.info(
+            # `profile.target_column`, not the local: a multi-output template
+            # leaves the profile's target unresolved on purpose, and logging the
+            # local would announce a target the profile does not claim.
             "Profiled '%s': target=%s, id=%s, train_rows=%d, test_rows=%d",
             competition,
-            target_column,
+            profile.target_column,
             id_column,
             profile.row_count,
             profile.test_row_count,
@@ -544,6 +1466,79 @@ class TabularProfiler:
                 entity, _, kind = stem.partition(sep)
                 return entity, kind
         return stem, ""
+
+    def _fold_in_proposal(self, profile: DatasetProfile, llm_client: Any, declared: Any) -> None:
+        """Ask a model what it thinks, and let the data answer back.
+
+        Called after every deterministic answer is settled, and given none of
+        them: the proposal is worth something only if it was reached
+        independently. It can raise a confidence by 0.10 or add an alternative;
+        it cannot change a value, which `test_the_value_plane_ignores_the_model`
+        checks against a proposer that is wrong about everything.
+        """
+        from labpilot.accessor.profiler.proposer import apply_proposal, propose_schema
+
+        proposal = propose_schema(
+            profile,
+            llm_client=llm_client,
+            title=declared.title,
+            description=declared.description,
+        )
+        if proposal is None:
+            _note(
+                profile,
+                "llm_proposal_unavailable",
+                "the schema proposer was enabled and produced nothing",
+                severity="info",
+            )
+            return
+        apply_proposal(profile, proposal)
+
+    def _profile_environment(self, source: DatasetSource, competition: str) -> DatasetProfile:
+        """A dataset with no tables: say so, and ask what cannot be inferred.
+
+        No columns, so no target and no key — both `uncertain` at 0.0, which
+        raises the questions that stop a campaign rather than letting it act on
+        a description nobody produced. `action_space` is deliberately **not**
+        inferred: no fixture exists and the output would be unfalsifiable.
+        """
+        profile = DatasetProfile(competition=competition)
+        root = _local_root(source)
+        if root is not None:
+            profile.files = [
+                str(path.relative_to(root)) for path in sorted(root.rglob("*")) if path.is_file()
+            ][:200]
+            from labpilot.accessor.profiler.modality import ModalityDetector
+
+            profile.modalities = ModalityDetector().presences(root, profile)
+        else:
+            profile.modalities = [
+                ModalityPresence(
+                    modality="environment", role="primary", detail="source exposes no tables"
+                )
+            ]
+        profile.train_test_relationship = "environment"
+        profile.inferences["train_test_relationship"] = Inference.of(
+            [Signal(id="no_tabular_data", detail="no tables in this dataset")]
+        )
+        profile.inferences["modality"] = Inference.of(_modality_signals(profile.modalities))
+        profile.prediction_unit = "episode"
+        profile.inferences["prediction_unit"] = Inference.of(
+            [Signal(id="no_tabular_data", detail="no units to predict, only an environment")]
+        )
+        profile.metric = source.declared().metric
+        profile.inferences["metric"] = Inference.of(_metric_signals(profile.metric))
+        profile.inferences["target_column"] = Inference.of([])
+        profile.inferences["id_columns"] = Inference.of([])
+        profile.answers_fingerprint = answers_fingerprint(source.declared().answers)
+        _note(
+            profile,
+            "environment_dataset",
+            f"no tables found: {len(profile.files)} file(s), described as an environment. "
+            "Nothing here can name a target or a key.",
+            severity="blocking",
+        )
+        return profile
 
     def _try_profile_partitioned(
         self,
@@ -674,6 +1669,13 @@ class TabularProfiler:
         ambiguous_target: list[str] = []
         train_only = [c for c in sample_df.columns if withheld_at_test(str(c))]
         sub_lower = {c.lower() for c in submission_columns}
+        # How many of the primary kind's sampled tables carry each column. Read
+        # here rather than inside the fallback below, because it is evidence
+        # about every candidate — a label is in most partitions of its kind —
+        # and the fallback is only one of the two paths that need it.
+        seen_in = Counter[str]()
+        for frame in frames:
+            seen_in.update({str(c) for c in frame.columns})
         target = next((c for c in train_only if c.lower() in sub_lower), None)
         if target is None and train_only:
             # The fallback reads the **primary kind's** order, not the union's.
@@ -708,9 +1710,7 @@ class TabularProfiler:
             # is in one. Counting separates them and degrades gracefully, where
             # an intersection fails outright on a single quirk.
             union: list[str] = []
-            seen_in = Counter[str]()
             for frame in frames:
-                seen_in.update(set(frame.columns))
                 union.extend(c for c in frame.columns if c not in union)
             # The same per-kind question `train_only` asks. This filtered against
             # the cross-kind union, so the bug the per-kind rule was written for
@@ -731,8 +1731,8 @@ class TabularProfiler:
                 ambiguous_target.append(
                     "Target inference is ambiguous: "
                     f"{sorted(candidates)} are equally supported by the training "
-                    "partitions and none is named in a sample submission. Set "
-                    "`target_column` in the competition config to decide it."
+                    "partitions and none is named in a sample submission. Settle "
+                    "it with `research schema answer target_column <column>`."
                 )
                 candidates = sorted(candidates)
             primary_only = candidates
@@ -747,6 +1747,7 @@ class TabularProfiler:
         profile = DatasetProfile(
             competition=competition,
             columns=self.profile_columns(sample_df),
+            column_stats_rows=len(sample_df),
         )
         profile.files = [table.uri for table in tables[:200]]
         profile.train_file = sampled[0].uri
@@ -754,7 +1755,6 @@ class TabularProfiler:
         profile.sample_submission_file = sample_table.uri if sample_table else None
         profile.submission_columns = submission_columns
         profile.target_column = target
-        profile.id_column = submission_columns[0] if submission_columns else None
         profile.row_count = row_count
         profile.row_count_estimated = True
         profile.column_count = len(sample_df.columns)
@@ -764,33 +1764,226 @@ class TabularProfiler:
         profile.train_partition_count = len(kinds[primary_kind])
         profile.test_partition_count = len(test_kind_tables)
         profile.train_only_columns = train_only
-        self._detect_suffix_scoring(profile, source, sample_table, test_kind_tables)
-        profile.warnings = [
-            f"partitioned dataset: {len(train_files)} train / {len(test_files)} test CSVs",
-            f"primary kind={primary_kind!r}; kinds={profile.partition_kinds}",
-            f"row_count estimated from {len(sampled)} sampled files",
-            "rows are NOT iid across partitions — validation must group by partition",
-        ]
-        profile.warnings.extend(ambiguous_target)
-        if train_only:
-            profile.warnings.append(f"train-only columns (unavailable at test): {train_only}")
-        if profile.scored_is_partition_suffix:
-            profile.warnings.append(
-                f"scored rows are a contiguous suffix of each test partition "
-                f"(~{profile.scored_fraction:.0%} of rows) — this is a forecast task; "
-                "validate by holding out each partition's tail"
+
+        def target_signals_for(candidate: str) -> list[Signal]:
+            signals: list[Signal] = []
+            if candidate.lower() in sub_lower:
+                signals.append(
+                    Signal(
+                        id="named_in_prediction_template",
+                        detail=f"submission header names {candidate!r}",
+                    )
+                )
+            if train_only == [candidate]:
+                signals.append(
+                    Signal(
+                        id="sole_withheld_column",
+                        detail=f"{candidate!r} is the only column withheld at test",
+                    )
+                )
+            elif seen_in and seen_in[candidate] == max(
+                (seen_in[str(c)] for c in train_only), default=0
+            ):
+                # The modal count among the candidates, not "in every file": one
+                # partition with a schema quirk should not retire a label, and
+                # `max_files_sample` is 25, so some file having one is likely.
+                signals.append(
+                    Signal(
+                        id="present_across_train_units",
+                        detail=f"in {seen_in[candidate]}/{len(frames)} {primary_kind} tables",
+                    )
+                )
+            return signals + _column_signals(profile, candidate)
+
+        # The same resolver the flat path uses. `target` above is still the
+        # value — this step does not move answers the code already gets right —
+        # and the resolver is asserted to agree with it, so the two cannot drift
+        # while the old procedure is still in place.
+        answers = source.declared().answers
+        profile.answers_fingerprint = answers_fingerprint(answers)
+        known = {column.name for column in profile.columns}
+        settled, refused = _answered(
+            {str(c): target_signals_for(str(c)) for c in train_only},
+            answers.get("target_column"),
+            known=known,
+        )
+        scored_target, target_inference = _resolve(settled)
+        target_inference = target_inference.model_copy(update={"rejected": refused})
+        for claim in refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="target_column",
+                severity="blocking",
             )
+        if answers.get("target_column") and not refused:
+            # An answer is not a hint. Where a person has settled the question,
+            # the value follows the answer rather than the procedure that could
+            # not settle it — and `profile.target_column` is assigned above, so
+            # updating `target` alone would leave the answer in the evidence and
+            # the guess in the value.
+            target = scored_target
+            profile.target_column = scored_target
+        if target is not None:
+            profile.inferences["target_column"] = target_inference
+            if scored_target != str(target):
+                # Evidence and procedure disagreeing is a finding, not something
+                # to resolve silently in favour of either.
+                _note(
+                    profile,
+                    "target_disagrees_with_evidence",
+                    f"the inferred target is {target!r}; the best-evidenced candidate is "
+                    f"{scored_target!r}",
+                    field="target_column",
+                    severity="blocking",
+                )
+
+        # After the answer, the procedure and their disagreement have all had
+        # their say — measuring before that would describe a column the profile
+        # then stops naming. rogii reaches this path and not the flat one, and it
+        # is the fixture M23's floor most needs a distribution for.
+        _measure_target(profile, sample_df)
+
+        id_settled, id_refused = _answered(
+            {
+                candidate: _identity_signals(
+                    profile,
+                    candidate,
+                    unit_count=len(sample_df),
+                    # Named, but not *chosen* for being named: this path takes
+                    # the template's first column without checking anything
+                    # about it, so the evidence has to say position.
+                    in_template=False,
+                    first_in_template=candidate == submission_columns[0],
+                    on_both_sides=candidate in set(sample_df.columns) and candidate in test_columns,
+                )
+                for candidate in submission_columns[:1]
+            },
+            answers.get("id_columns"),
+            known=known,
+            field="id_columns",
+        )
+        id_column, id_inference = _resolve(id_settled)
+        profile.id_columns = _key_columns(answers.get("id_columns"), id_refused, id_column)
+        if id_column is not None:
+            profile.inferences["id_columns"] = id_inference.model_copy(
+                update={"rejected": id_refused}
+            )
+        for claim in id_refused:
+            _note(
+                profile,
+                "answer_refused",
+                f"answer {claim.claim!r} refused: {claim.refuted_by}",
+                field="id_columns",
+                severity="blocking",
+            )
+        self._detect_suffix_scoring(profile, source, sample_table, test_kind_tables)
+        # Once, not twice: it reads every sampled partition to answer, and both
+        # the exclusion below and `anchor_column` further down want the same
+        # column for the same reason.
         profile.anchor_column = _detect_anchor_column(
             frames, profile.target_column, lambda name: not withheld_at_test(name)
         )
+        profile.excluded_columns = _exclusions(
+            profile,
+            target=profile.target_column,
+            ids=profile.id_columns,
+            unavailable=set(train_only),
+            equals_target=profile.anchor_column,
+        )
+        profile.train_test_relationship = (
+            "partition_suffix"
+            if profile.scored_is_partition_suffix
+            else ("disjoint_units" if test_kind_tables else "no_test_provided")
+        )
+        profile.inferences["train_test_relationship"] = Inference.of(
+            _split_signals(
+                has_scoring_input=bool(test_kind_tables),
+                scored_is_partition_suffix=profile.scored_is_partition_suffix,
+            )
+        )
+        profile.metric = source.declared().metric
+        profile.inferences["metric"] = Inference.of(_metric_signals(profile.metric))
+        # Modality was never detected on this path at all: it returns before the
+        # block that does it, so every partitioned profile carried the field's
+        # *default*. rogii reads `modality: tabular` and nothing ever looked —
+        # which is why the PNG previews beside its 1,546 tables were invisible.
+        modality_root = _local_root(source)
+        if modality_root is None:
+            _note(
+                profile,
+                "modality_not_detected",
+                "modality not detected: source exposes no directory",
+                field="modality",
+                severity="caution",
+            )
+        else:
+            from labpilot.accessor.profiler.modality import ModalityDetector
+
+            profile.modalities = ModalityDetector().presences(modality_root, profile)
+            primary = profile.modalities[0] if profile.modalities else None
+            profile.image_dir = primary.image_dir if primary else None
+            profile.inferences["modality"] = Inference.of(_modality_signals(profile.modalities))
+        unit_signals = _prediction_unit_signals(profile, template_matches_test=False)
+        profile.prediction_unit = _unit_from(unit_signals)
+        profile.inferences["prediction_unit"] = Inference.of(unit_signals)
+        # Appended, not assigned. `profile.warnings = [...]` here discarded
+        # everything recorded earlier in this method — including the note
+        # `_detect_suffix_scoring` writes one line above when a source has no
+        # directory to count lines in, which was written and thrown away in the
+        # same breath.
+        _note(
+            profile,
+            "partitioned_layout",
+            f"partitioned dataset: {len(train_files)} train / {len(test_files)} test CSVs",
+        )
+        _note(
+            profile,
+            "primary_kind",
+            f"primary kind={primary_kind!r}; kinds={profile.partition_kinds}",
+        )
+        _note(
+            profile,
+            "row_count_estimated",
+            f"row_count estimated from {len(sampled)} sampled files",
+            field="row_count",
+        )
+        _note(
+            profile,
+            "rows_not_iid",
+            "rows are NOT iid across partitions — validation must group by partition",
+            severity="caution",
+        )
+        for text in ambiguous_target:
+            _note(profile, "ambiguous_target", text, field="target_column", severity="caution")
+        if train_only:
+            _note(
+                profile,
+                "train_only_columns",
+                f"train-only columns (unavailable at test): {train_only}",
+            )
+        if profile.scored_is_partition_suffix:
+            _note(
+                profile,
+                "scored_is_partition_suffix",
+                f"scored rows are a contiguous suffix of each test partition "
+                f"(~{profile.scored_fraction:.0%} of rows) — this is a forecast task; "
+                "validate by holding out each partition's tail",
+                severity="caution",
+            )
         if profile.anchor_column:
-            profile.warnings.append(
+            _note(
+                profile,
+                "anchor_column",
                 f"{profile.anchor_column!r} is the known prefix of {profile.target_column!r}: "
                 f"equal to it wherever present, absent exactly on the scored rows. Carrying its "
                 f"last known value forward is the baseline to beat — predict the residual from "
                 f"it, not {profile.target_column!r} from the other columns. Note it is identical "
                 f"to the target in training, so using it as a plain feature learns 'copy' and "
-                f"then meets NaN on every scored row."
+                f"then meets NaN on every scored row.",
+                field="anchor_column",
+                severity="caution",
             )
         return profile
 
@@ -819,8 +2012,11 @@ class TabularProfiler:
         if sample_table is None or not test_kind_tables:
             return
         if not isinstance(source, LocalFileSource):
-            profile.warnings.append(
-                "suffix scoring not detected: source exposes no directory to count lines in"
+            _note(
+                profile,
+                "suffix_scoring_not_detected",
+                "suffix scoring not detected: source exposes no directory to count lines in",
+                severity="caution",
             )
             return
         try:

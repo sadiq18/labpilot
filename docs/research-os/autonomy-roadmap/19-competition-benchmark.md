@@ -1,6 +1,10 @@
 # M24 — Understanding is measured, not asserted
 
-**Status:** not started · **Blocked by:** [M22](17-dataset-understanding.md), [M23](18-baseline-correctness.md) (there must be something to score)
+**Status:** in progress — capture, expander, scorer and tier 1 shipped
+2026-08-20 with two real fixtures · **Blocked by:** ~~[M22](17-dataset-understanding.md)~~
+**cleared**; [M23](18-baseline-correctness.md) blocks only the *baseline*
+criteria, so the four schema stages are scoreable now — and are, at
+`research bench score`
 
 ---
 
@@ -133,8 +137,11 @@ system got wrong) · `store-sales` (temporal, multi-table) · `home-credit`
 to nothing** — expected `unknown`, proving the system says so instead of
 defaulting to maximize).
 
-**Text** — `nlp-getting-started` · `feedback-prize` (six target columns; today
-`tabular.py:302` *raises* on any submission that is not `[id, target]`).
+**Text** — `nlp-getting-started` · `feedback-prize` (six target columns; the
+profiler used to *raise* on any submission that was not `[id, target]`, which is
+why this sat on the wishlist. It now refuses by asking — `target_column` is left
+unresolved and `pending_schema_questions` raises it — so the competition
+profiles, scores `abstention`, and can be captured. #171).
 
 **Image** — `dogs-vs-cats` (no `train.csv` at all; the label is in the filename) ·
 `aerial-cactus` (the manifest-join path) · `biohub` (zarr, node/edge submission,
@@ -178,16 +185,55 @@ Two criteria the original brief did not have:
 
 ## Three tiers
 
-- **Tier 1 — hermetic, every PR.** All schema/metric/validation/modality scoring,
-  plus dummy-baseline **validity**: it runs, emits a submission with exactly the
-  sample's columns and row count, no NaN, only labels seen in training. That is
-  the honest reading of *"dummy 100%"*. Under 60 seconds.
-- **Tier 2 — full data, nightly.** Row counts, cardinality, distributions, real
-  media probing, undecimated rogii, and **generic-beats-dummy**, defined as
-  strictly better in the metric's declared direction *by more than the
-  fold-to-fold std*. Not "better by any epsilon" — that is noise.
-- **Tier 3 — the agreement check.** Score both the truncated fixture and the full
-  dataset, and assert they agree on every tier-1 criterion.
+- **Tier 1 — hermetic, every PR.** ✅ All schema/metric/validation/modality
+  scoring, plus dummy-baseline **validity**: it runs, emits a submission with
+  exactly the sample's columns and row count, no NaN, only labels seen in
+  training. That is the honest reading of *"dummy 100%"*. Under 60 seconds.
+
+  **The criterion is `unverifiable` on every fixture today**, and honestly so:
+  the corpus is headers-only, and with no rows there is no constant to fit and
+  no sample to shape. Scoring that as a miss would measure the truncation. Give a
+  fixture rows and it scores for real — `score_full_dataset` already returns
+  `pass` for titanic, spaceship-titanic and house-prices — so the remaining
+  blocker is a per-fixture licence decision rather than a code change.
+
+  **The first version of this did not run at all.** `score_fixture` took a
+  `dummy` argument, `_score_directory` was its only caller, and it never passed
+  one — so every fixture reported `unverifiable` because nothing had been
+  computed, and tier 3 reported the same thing while reading the real dataset
+  with every row it has. The verdict was right by accident, which is the failure
+  this corpus exists to catch, one level up. `_dummy_reading` now runs it from
+  the profile the scorer already built, and
+  `tests/unit/test_dummy_criterion_is_wired.py` builds a dataset with rows so
+  that an unwired scorer fails rather than agreeing with a wired one.
+
+  **`fail` means the submission was built and would be rejected — nothing else.**
+  A floor that is not a point prediction (AUC's analytic 0.5, logloss's
+  probability vector, rogii's `anchor_carry_forward`) has no constant to write
+  into a column, and reporting that as invalid accuses a working pipeline of
+  being unable to hand in a file. Those are `unverifiable`, carrying the reason.
+  And whether the prediction must be a training label is the **metric's**
+  question, never the target values': an ordinal target scored by RMSE has few
+  repeating values and a fractional optimum, and a value-shape rule rejected the
+  floor's own answer. `SalePrice` escaped that rule on 663 distinct values, not
+  on being right.
+- **Tier 2 — full data, nightly.** ✅ (generic-beats-dummy) Row counts,
+  cardinality, distributions, real media probing, undecimated rogii, and
+  **generic-beats-dummy**, defined as strictly better in the metric's declared
+  direction *by more than the fold-to-fold std*. Not "better by any epsilon" —
+  that is noise.
+
+  `.github/workflows/tier2.yml`, nightly, `-rs` so skips are loud.
+  Generic-beats-dummy holds on all three fittable competitions today: titanic
+  0.6161 → 0.8216 (gap 0.206 vs spread 0.034), spaceship-titanic 0.4635 → 0.7955
+  (0.332 vs 0.011), house-prices RMSLE 0.3992 → 0.1317 (0.268 vs 0.011). Row
+  counts, cardinality and media probing are still to come; rogii and
+  playground-series-s6e7 need a partitioned fit and a resolved metric.
+- **Tier 3 — the agreement check.** ✅ Score both the truncated fixture and the
+  full dataset, and assert they agree on every tier-1 criterion.
+  `tests/integration/test_corpus_agrees_with_reality.py`, marked `slow` and
+  skipped loudly with every path it looked in. All five fixtures agree today,
+  over 4–5 claimed criteria each, rogii's 1,546 tables included.
 
 **Tier 3 is the single most important test here.** It is what licenses a hermetic
 corpus to stand in for real data. If the two disagree on a criterion, that
@@ -217,21 +263,39 @@ maximized — recording its single genuine improvement as `rejected`.
 
 ## Exit criteria
 
-1. A scorecard exists, is reproducible across two runs except its timestamp, and
-   is pinned to a corpus hash.
-2. Thresholds are a **ratchet starting at today's measured value**, with 95%
+1. ✅ A scorecard exists, is reproducible across two runs except its timestamp, and
+   is pinned to a corpus hash. `RATCHET.json` carries the digest; `bench score`
+   prints it.
+2. ✅ Thresholds are a **ratchet starting at today's measured value**, with 95%
    recorded as the goal. Asserting 95% on day one makes the suite red and teaches
-   everyone to ignore it.
+   everyone to ignore it. Recorded 2026-08-22; it fails in both directions, so an
+   improvement is raised rather than absorbed.
 3. The ledger is **bidirectional** — CI fails on `pass → fail` *and* on
    `known_fail → pass` (*"this now passes; update the ledger"*). Silently
    absorbing improvements is how a ratchet rots.
 4. Adding a competition requires **zero test-file edits**.
-5. Every `known_failure` carries a reason and a date; a stale xfail is a lie about
-   intent.
+5. ✅ Every `known_failure` carries a reason and a date; a stale xfail is a lie about
+   intent. `KnownFailure` requires both and refuses the bare-reason shape by name,
+   rather than coercing it — accepting a string would have been the easy migration
+   and would have left every later fixture undated, which is the state the
+   criterion exists to end. Three things can now go wrong and each is caught: it
+   starts passing (the scorecard's red cells and the fixture's declared ones must
+   be the same set), it is declared in the future, or nobody has re-read it in
+   `STALE_AFTER_DAYS` — a deadline for the *claim*, not for the fix, because a
+   cause nobody has revisited in six months describes code that may no longer
+   exist. Failing the last one is a review, not a repair: delete the entry or move
+   `declared` forward in the commit that re-affirms it.
 6. Tier 1 and tier 2 agree on every tier-1 criterion for every fixture, or the
    disagreeing criterion is demoted to `unverifiable`.
-7. `pytest.skip` when the full-data cache is absent is **loud** — never a silent
-   pass. `capability.py:333` documents exactly that bug.
+7. ✅ `pytest.skip` when the full-data cache is absent is **loud** — never a silent
+   pass. `capability.py:333` documents exactly that bug. Each skip names every
+   path it looked in *and* the job refuses to go green: `pytest` exits 0 when
+   everything skips, so `-rs` alone left the nightly reporting success over a
+   runner with no datasets — the failure mode described, shipped. `tier2.yml`
+   now reads its own junit report and fails on any skip. A first draft asked
+   only for one non-skipped test and passed a dataset-less run, because
+   `test_every_competition_is_accounted_for` needs no data; "we checked the
+   fixture list" is not the check.
 
 ## Traps
 

@@ -19,9 +19,17 @@ import os
 import socket
 import time
 from collections.abc import Callable
+from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from labpilot.accessor.common.micro_agents import LLMDegradedError
+from labpilot.accessor.profiler.questions import (
+    ANSWERS_FILENAME,
+    SchemaQuestion,
+    open_questions,
+    record_answer,
+)
 from labpilot.research_engine.conductor.actions import (
     ResearchAction,
     map_research_action,
@@ -39,6 +47,7 @@ from labpilot.research_engine.conductor.budgets import (
     BudgetState,
     comparable_tail,
     evaluate_stops,
+    goal_progress,
     metric_names_match,
     score_summary,
     submit_tools_allowed,
@@ -76,6 +85,17 @@ _MAX_STOP_OVERRIDES = 2
 #: to produce) an experiment; a failed `analyze_competition` is a bad step, not
 #: evidence that the campaign cannot work.
 _EXPERIMENT_TOOLS = frozenset({"run_experiment", "run_plan"})
+
+#: What a stop reason means for the session's status. Anything absent is a
+#: completion. `failing` is not one — a campaign whose every execution broke
+#: must not land where one that met its target does — and `needs_guidance` is
+#: not one either: nothing is broken and nothing is finished, so it pauses,
+#: which is the status a `conduct continue` picks back up.
+#:
+#: Immutable for the same reason `_EXPERIMENT_TOOLS` beside it is a frozenset:
+#: an importer that could rewrite this would silently change how every
+#: campaign's terminal status is recorded.
+_STOP_SESSION_STATUS = MappingProxyType({"failing": "failed", "needs_guidance": "paused"})
 
 
 #: Each experiment tool's own `dry_run` default, so a fan-out of a step that
@@ -283,9 +303,7 @@ def _fan_out_experiment(
             workspace=workspace,
             execution_id=outcome.execution_id,
         )
-        progress(
-            f"Branch {outcome.hypothesis_id}: {'ok' if outcome.ok else outcome.error}"
-        )
+        progress(f"Branch {outcome.hypothesis_id}: {'ok' if outcome.ok else outcome.error}")
     return decisions
 
 
@@ -311,9 +329,7 @@ def _reconcile_stale_worktrees(store, workspace: Workspace) -> None:
     from labpilot.research_engine.agents.git_worktree import reconcile_worktrees
 
     try:
-        result = reconcile_worktrees(
-            workspace.root, live_branches=_live_branches(store, workspace)
-        )
+        result = reconcile_worktrees(workspace.root, live_branches=_live_branches(store, workspace))
     except Exception:  # noqa: BLE001 — startup tidying must not stop a campaign
         logger.exception("worktree reconciliation failed; continuing")
         return
@@ -428,9 +444,8 @@ def _live_branches(store, workspace: Workspace) -> set[str]:
         if session is None:
             preserve.add(branch)
             continue
-        if (
-            str(session.status).strip().lower() in _LIVE_SESSION_STATUSES
-            and not _owner_is_gone(session)
+        if str(session.status).strip().lower() in _LIVE_SESSION_STATUSES and not _owner_is_gone(
+            session
         ):
             preserve.add(branch)
     return preserve
@@ -600,9 +615,7 @@ def _branch_context(workspace: Workspace) -> Any:
     from labpilot.research_engine.context.models import ContextBundle, ContextRequest
 
     return ContextBundle(
-        request=ContextRequest(
-            competition=workspace.competition, goal=workspace.goal or ""
-        )
+        request=ContextRequest(competition=workspace.competition, goal=workspace.goal or "")
     )
 
 
@@ -722,11 +735,36 @@ def _record_experiment_outcome(
                 )
             budget_state.metric_history = [e.value for e in comparable]
             budget_state.last_metric = event.value
+            # Reset here, at the append, and nowhere else. `steps_since_success`
+            # resets on any successful execution, which is why it cannot see a
+            # run that succeeds and writes a placeholder metric; this counter is
+            # keyed on the series it guards.
+            budget_state.steps_since_new_score = 0
             logger.info(
                 "recorded %s=%s for %s", event.metric_name, event.value, event.experiment_id
             )
             _maybe_mint_on_stagnation(workspace, budget_state, budget_cfg)
     persist_budgets(store, session_id, budget_cfg, budget_state)
+
+
+def _needs_guidance_reason(config: Any, state: Any) -> str:
+    """Which condition asked for a person, in the terms they can act on.
+
+    A bare `stop:needs_guidance` reproduces the complaint this milestone
+    exists to answer — a campaign that ended without saying why.
+    """
+    limit = getattr(config, "max_steps_without_score", None)
+    if limit is not None and getattr(state, "steps_since_new_score", 0) >= limit:
+        return (
+            f"{state.steps_since_new_score} step(s) produced no new comparable "
+            "score. The campaign is running and measuring nothing — check that "
+            "experiments are writing metrics."
+        )
+    return (
+        f"{getattr(state, 'consecutive_unmapped', 0)} consecutive step(s) chose "
+        "an action no registered tool can perform. The campaign has nothing "
+        "eligible to run; see the recorded suggestions for what was missing."
+    )
 
 
 def _fail_session_on_degraded_llm(store, session_id, record, decisions, exc) -> None:
@@ -887,8 +925,89 @@ def _next_hypothesis_id(workspace: Workspace) -> str | None:
     return ranked[0].id if ranked else None
 
 
+def _baseline_is_done(workspace: Workspace) -> bool:
+    """Whether the campaign may stop asking for a baseline and start iterating.
+
+    M23 step 8. `_baseline_plan_exists` answered *"was a plan object compiled?"*
+    to a caller asking *"has the baseline been done?"* — so a campaign flipped to
+    research mode on the strength of a file existing, whatever the pipeline it
+    described actually scored. That is how rogii spent two weeks minting
+    hypotheses over a pipeline 91x worse than one line of code.
+
+    Under enforcement the answer is the gate's: `passed` or `waived`. Otherwise
+    it is the old one, because the rollout's whole shape is that step 8 is a
+    config flip and observe-only must not change what a campaign does.
+    """
+    root = getattr(workspace, "root", None)
+    if root is not None:
+        try:
+            from labpilot.research_engine.execution.baseline.gate import (
+                baseline_is_settled,
+                enforcement_enabled,
+                evaluate_gate,
+            )
+
+            if enforcement_enabled():
+                # `baseline_is_settled`, not `not blocks_research`. Seven of the
+                # nine states block, and two of them — `awaiting_ml` on an image
+                # dataset, `floor_undefined` on an uncatalogued metric — are
+                # facts about the data that no re-run changes. Answering "no"
+                # forever left `generate_plan` pinned to `baseline`, and since
+                # baseline compilation is idempotent the campaign recompiled the
+                # same plan and could never run a second experiment.
+                return baseline_is_settled(evaluate_gate(Path(root), enforced=True).state)
+        except Exception as exc:  # noqa: BLE001 — a gate that cannot run must
+            # not force a baseline recompile over the top of existing work.
+            logger.warning("Baseline gate unavailable, falling back to plan lookup: %s", exc)
+    return _baseline_plan_exists(workspace)
+
+
+def _baseline_failure(workspace: Workspace) -> tuple[str, str] | None:
+    """`(rationale, report)` when the gate says the pipeline loses, else None.
+
+    `stop:baseline_failed`, distinct from `stop:failing`. The two describe
+    opposite situations and collapsing them would lose the one this milestone
+    exists for: `failing` is a campaign whose experiments crash, and this is a
+    campaign whose experiments run fine and are worse than predicting a constant.
+
+    Only under enforcement. Observe-only records the verdict and withholds
+    nothing, which includes not ending the run.
+    """
+    root = getattr(workspace, "root", None)
+    if root is None:
+        return None
+    try:
+        from labpilot.research_engine.execution.baseline.gate import (
+            enforcement_enabled,
+            evaluate_gate,
+        )
+        from labpilot.research_engine.execution.baseline.report import build_report
+
+        if not enforcement_enabled():
+            return None
+        verdict = evaluate_gate(Path(root), enforced=True)
+        if verdict.state != "failed":
+            return None
+        report = build_report(Path(root), verdict, competition=workspace.competition)
+    except Exception as exc:  # noqa: BLE001 — a gate that cannot run must not
+        # end a campaign. A fault here would stop a run for a reason that is not
+        # about the run.
+        logger.warning("Baseline gate could not be evaluated for a stop: %s", exc)
+        return None
+    return (
+        f"stop:baseline_failed — {verdict.reason}. "
+        f"Waive with `research baseline waive <reason>` or fix the pipeline.",
+        report.render(),
+    )
+
+
 def _baseline_plan_exists(workspace: Workspace) -> bool:
-    """True when a baseline plan has already been compiled for this competition."""
+    """True when a baseline plan has already been compiled for this competition.
+
+    Retained only as `_baseline_is_done`'s observe-only fallback. It answers a
+    different question from the one its caller asks, which is the defect step 8
+    exists to fix.
+    """
     from labpilot.research_engine.artifacts.plan import PlanArtifacts
     from labpilot.research_engine.intelligence.paths import store_is_absent
 
@@ -936,6 +1055,67 @@ def _latest_execution_id(workspace: Workspace) -> str | None:
     return nodes[-1].id if nodes else None
 
 
+#: Ask an operator to settle one schema question. Returns the chosen value, or
+#: None to leave it open. Injected by the CLI exactly like `approval_prompt` —
+#: with one deliberate asymmetry: there is **no `auto_answer` counterpart to
+#: `auto_approve`**. Absent a prompt, an approval falls back to auto-approve; a
+#: schema question has nothing to fall back to, so it blocks. An option that
+#: could answer one unattended must not exist, because `--yes` would eventually
+#: be wired to it.
+SchemaPrompt = Callable[[SchemaQuestion], str | None]
+
+
+def _schema_stamp(root: Path) -> tuple[int, int, int, int]:
+    """A cheap signature of the two files a schema question is derived from.
+
+    `open_questions` parses `profile.json` — on rogii that is 14 KB carrying
+    every column, the evidence plane and up to 200 paths — and this loop can run
+    unbounded since M17. Neither file changes *within* a step, so two `stat`
+    calls answer "is the previous result still good?" for a fraction of the cost.
+    """
+    stamps: list[int] = []
+    for name in ("profile.json", ANSWERS_FILENAME):
+        try:
+            info = (root / name).stat()
+            stamps.extend((info.st_mtime_ns, info.st_size))
+        except OSError:
+            stamps.extend((0, 0))
+    return (stamps[0], stamps[1], stamps[2], stamps[3])
+
+
+def _answer_schema_questions(
+    questions: list[SchemaQuestion],
+    root: Path,
+    prompt: SchemaPrompt | None,
+    progress: Callable[[str], None],
+) -> bool:
+    """Ask and record. True when every question is now settled.
+
+    Recording writes `schema_answers.json`, which changes the answers
+    fingerprint the profile was built with, so the profile it superseded reads
+    stale and `prepare_workspace` re-derives it on the next run.
+
+    A failed write is a blocked campaign, not a crashed one: a read-only
+    workspace or a full disk used to let `OSError` escape `run_until_stop`
+    entirely, ending the run with a traceback and no decision record — where
+    every other operator-facing prompt in this loop ends in one.
+    """
+    if prompt is None:
+        return False
+    for question in questions:
+        answer = prompt(question)
+        if not answer:
+            progress(f"{question.field} left unanswered")
+            return False
+        try:
+            record_answer(root, question.field, answer)
+        except (OSError, ValueError) as exc:
+            progress(f"{question.field} could not be recorded: {exc}")
+            return False
+        progress(f"{question.field} answered: {answer}")
+    return True
+
+
 def run_until_stop(
     store: ConductorStore,
     workspace: Workspace,
@@ -943,7 +1123,7 @@ def run_until_stop(
     registry: ToolRegistry,
     *,
     llm_client: Any | None = None,
-    max_steps: int = 8,
+    max_steps: int | None = 8,
     auto_approve: bool = False,
     approval_prompt: ApprovalPrompt | None = None,
     on_progress: ProgressCallback | None = None,
@@ -951,10 +1131,18 @@ def run_until_stop(
     campaign_mode: bool = True,
     prefer_offline: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+    schema_prompt: SchemaPrompt | None = None,
     branches: int = 1,
     gather_background: bool = False,
 ) -> list[DecisionRecord]:
-    """Run until stop, budget, max_steps, or operator pause status.
+    """Run until stop, budget, operator pause, or ``max_steps`` if one is set.
+
+    ``max_steps=None`` runs unbounded, which is what the CLI asks for: a
+    campaign should end on its objective, not on a counter. The default stays
+    ``8`` here rather than ``None`` so no in-process caller changes behaviour
+    by upgrading — a bounded run is what a library caller asking for "some
+    steps" means, and an unbounded one is a hang in a test suite with no
+    per-test timeout.
 
     ``branches`` is the fan-out width (M11). The default of 1 is the
     sequential path this loop has always run, unchanged: every fan-out
@@ -1009,6 +1197,7 @@ def run_until_stop(
                 campaign_mode=campaign_mode,
                 prefer_offline=prefer_offline,
                 offline_fallback_prompt=offline_fallback_prompt,
+                schema_prompt=schema_prompt,
                 branches=branches,
                 producer=producer,
             )
@@ -1024,7 +1213,7 @@ def _run_until_stop_inner(
     registry: ToolRegistry,
     *,
     llm_client: Any | None = None,
-    max_steps: int = 8,
+    max_steps: int | None = 8,
     auto_approve: bool = False,
     approval_prompt: ApprovalPrompt | None = None,
     on_progress: ProgressCallback | None = None,
@@ -1032,11 +1221,16 @@ def _run_until_stop_inner(
     campaign_mode: bool = True,
     prefer_offline: bool = False,
     offline_fallback_prompt: OfflineFallbackPrompt | None = None,
+    schema_prompt: SchemaPrompt | None = None,
     branches: int = 1,
     producer: Any | None = None,
 ) -> list[DecisionRecord]:
     scheduler = Scheduler(store, registry, workspace, llm_client=llm_client)
     decisions: list[DecisionRecord] = []
+    #: Cached across iterations: neither file changes within a step, and parsing
+    #: the profile every time is real work in an unbounded loop.
+    schema_stamp: tuple[int, int, int, int] | None = None
+    schema_questions: list[SchemaQuestion] = []
     session = store.get_session(session_id)
     if session is None:
         raise ValueError(f"unknown session: {session_id}")
@@ -1051,6 +1245,23 @@ def _run_until_stop_inner(
     ensure_metrics(store, session_id)
     budget_cfg, budget_state = load_budget_pair(session)
     budget_state.ensure_wall_start()
+    # A new run of the loop clears the guidance counters, and that *is* the
+    # resume. Without it a `needs_guidance` pause could never be picked up:
+    # the counters that tripped it are persisted at their thresholds, so the
+    # first `evaluate_stops` of the resumed run re-fires the same stop before
+    # anything is dispatched — the campaign takes zero steps, every time,
+    # however thoroughly the operator fixed what it asked about.
+    #
+    # Cleared here rather than in `conduct continue` so any resumer gets it,
+    # and unconditionally rather than on a stored stop reason: invoking the
+    # loop again is the operator saying "try again", and a campaign still
+    # unable to progress simply spends the counters afresh and pauses again.
+    #
+    # The M20 breaker's counters are deliberately not cleared. `failing` parks
+    # a session in `failed`, which resuming needs `--session` to reach at all,
+    # and that friction is the point of the distinction.
+    budget_state.steps_since_new_score = 0
+    budget_state.consecutive_unmapped = 0
     persist_budgets(store, session_id, budget_cfg, budget_state)
 
     def _progress(msg: str) -> None:
@@ -1186,13 +1397,114 @@ def _run_until_stop_inner(
     if producer is not None:
         producer.start()
 
-    for step in range(max_steps):
+    step = -1
+    while True:
+        step += 1
+        # A `for/else` cannot say "bound only when asked" — it would have to
+        # iterate `range(max_steps or sys.maxsize)` and then report `max_steps`
+        # on a run that never had one.
+        if max_steps is not None and step >= max_steps:
+            store.update_session_status(session_id, "paused")
+            _progress(f"Reached max_steps={max_steps}")
+            save_checkpoint(store, session_id, extra={"stop_reason": "max_steps"})
+            break
+        step_label = f"{step + 1}/{max_steps}" if max_steps is not None else f"{step + 1}"
         # Refresh each iteration so mid-session registration is visible.
         allowlist = set(registry.names())
         session = store.get_session(session_id)
         assert session is not None
         if session.status == "paused":
             _progress("Session paused by operator")
+            break
+
+        # A schema question is not a budget: it is the campaign discovering it
+        # does not know what it is optimising. Asked where there is someone to
+        # ask, and otherwise a stop — never a default, because a guess is frozen
+        # into `profile.json` for every later run of this workspace.
+        stamp = _schema_stamp(workspace.root)
+        if stamp != schema_stamp:
+            schema_stamp, schema_questions = stamp, open_questions(workspace.root)
+        if schema_questions:
+            answered = _answer_schema_questions(
+                schema_questions, workspace.root, schema_prompt, _progress
+            )
+            # Stopping either way, and the reasons are different.
+            #
+            # Unanswered is the campaign waiting for a person. **Answered is the
+            # campaign holding a description that has just been superseded**:
+            # the answer changed the fingerprint, so `profile.json` now reads
+            # stale, and `prepare_workspace` — a *plan task*, not a tool this
+            # loop can dispatch — is what re-derives it. Continuing here would
+            # run the rest of the campaign against the column the operator had
+            # just rejected, with the question closed so nothing would ask
+            # again. That is the silent-wrong-target failure this milestone
+            # exists to remove, and it is worth one re-run to avoid.
+            field = schema_questions[0].field
+            if answered:
+                rationale = (
+                    f"stop:schema_question — answer recorded for {field}; the profile it "
+                    "supersedes is now stale. Re-run to rebuild it and continue."
+                )
+            else:
+                rationale = (
+                    f"stop:schema_question — {field} is uncertain "
+                    f"({schema_questions[0].context}); answer with "
+                    f"`research schema answer {field} <value>`"
+                )
+            # `waiting`, not `failed`: the campaign is resumable the moment a
+            # person answers, and `checkpoint.py` already counts `waiting` among
+            # the active sessions. Nothing wrote it until now.
+            store.update_session_status(session_id, "waiting")
+            store.increment_metric(session_id, "unmet_goal")
+            _progress(f"Stop condition: {rationale}")
+            decisions.append(
+                DecisionRecord(
+                    id=store.new_decision_id(),
+                    session_id=session_id,
+                    tool_name=None,
+                    rationale=rationale,
+                    stop=True,
+                    observe={
+                        "stop_reason": "schema_question",
+                        "answered": answered,
+                        "questions": [{"id": q.id, "field": q.field} for q in schema_questions],
+                    },
+                )
+            )
+            store.append_decision(decisions[-1])
+            break
+
+        # A pipeline worse than a constant is not a budget condition, so it is
+        # checked here rather than in `evaluate_stops`. It is also **goal 3**:
+        # the first failure in this system for being *worse* rather than for
+        # crashing.
+        #
+        # `failed` cannot occur before work has been done — it needs both
+        # readings — so this never fires on a fresh workspace. And it stops
+        # rather than pinning `generate_plan` to `baseline`: re-compiling an
+        # idempotent plan cannot fix a pipeline, and the operator has causes to
+        # read.
+        baseline_stop = _baseline_failure(workspace)
+        if baseline_stop is not None:
+            rationale, report = baseline_stop
+            store.update_session_status(session_id, "failed")
+            store.increment_metric(session_id, "unmet_goal")
+            _progress(f"Stop condition: {rationale}")
+            # The report inline, which is §9's whole point: until now the gate
+            # reached a verdict nobody could see.
+            for line in report.splitlines():
+                _progress(line)
+            decisions.append(
+                DecisionRecord(
+                    id=store.new_decision_id(),
+                    session_id=session_id,
+                    tool_name=None,
+                    rationale=rationale,
+                    stop=True,
+                    observe={"stop_reason": "baseline_failed", "report": report},
+                )
+            )
+            store.append_decision(decisions[-1])
             break
 
         budget_cfg, budget_state = load_budget_pair(session)
@@ -1203,16 +1515,44 @@ def _run_until_stop_inner(
             # brake between "selected submit_learn" and "uploaded to Kaggle".
             allowlist -= SUBMIT_TOOLS
         allowlist -= _gathering_owned()
+        # Before the stop evaluation, not after: the step that ends the
+        # campaign is the one an operator most wants a progress line for, and
+        # a line printed after the `break` is a line never printed.
+        progress_line = goal_progress(budget_cfg, budget_state)
+        if progress_line:
+            _progress(progress_line)
+
         stop = evaluate_stops(budget_cfg, budget_state)
         if stop != "none":
             # `failing` is not a completion. Recording it as one would put the
             # campaign that could not run a single experiment in the same state
             # as the campaign that met its target, which is the distinction the
             # breaker exists to draw.
-            store.update_session_status(session_id, "failed" if stop == "failing" else "completed")
+            #
+            # `needs_guidance` is neither a completion nor a failure: nothing is
+            # broken and nothing is finished — the campaign is waiting on a
+            # person. It pauses, which is the status `conduct continue` resumes
+            # and `latest_active_session` still finds, so picking it back up
+            # needs no `--session`.
+            status = _STOP_SESSION_STATUS.get(stop, "completed")
+            store.update_session_status(session_id, status)
             if stop != "metric_target":
                 store.increment_metric(session_id, "unmet_goal")
             rationale = f"stop:{stop}"
+            if stop == "needs_guidance":
+                why = _needs_guidance_reason(budget_cfg, budget_state)
+                rationale = f"stop:{stop} — {why}"
+                record_suggestion(
+                    store,
+                    session_id,
+                    why,
+                    kind="needs_guidance",
+                    context={
+                        "step": step,
+                        "steps_since_new_score": budget_state.steps_since_new_score,
+                        "consecutive_unmapped": budget_state.consecutive_unmapped,
+                    },
+                )
             if stop == "failing":
                 # Say what broke. A bare `stop:failing` reproduces the original
                 # complaint — a campaign that ended and did not say why.
@@ -1234,11 +1574,17 @@ def _run_until_stop_inner(
                         "stop_reason": stop,
                         "consecutive_failures": budget_state.consecutive_failures,
                         "steps_since_success": budget_state.steps_since_success,
+                        "steps_since_new_score": budget_state.steps_since_new_score,
+                        "consecutive_unmapped": budget_state.consecutive_unmapped,
                         "recent_failures": budget_state.recent_failures,
                     },
                 )
             )
             store.append_decision(decisions[-1])
+            if stop == "needs_guidance":
+                # After the stop is on record, so the checkpoint an operator
+                # reads counts the decision that ended the run.
+                save_checkpoint(store, session_id, extra={"stop_reason": stop})
             break
 
         # One step is about to be spent. Counted here rather than on dispatch so
@@ -1246,6 +1592,7 @@ def _run_until_stop_inner(
         # steps without producing an execution, which no per-execution counter
         # would have noticed.
         budget_state.steps_since_success += 1
+        budget_state.steps_since_new_score += 1
         persist_budgets(store, session_id, budget_cfg, budget_state)
 
         if campaign_mode:
@@ -1258,7 +1605,7 @@ def _run_until_stop_inner(
                 # Observe (Context Engine retrieval) + think (LLM) both run
                 # before the first dispatch message, so without this a campaign
                 # step is several silent minutes on a local model.
-                _progress(f"step {step + 1}/{max_steps}: observing + deciding …")
+                _progress(f"step {step_label}: observing + deciding …")
                 started = time.monotonic()
                 next_tool, _obs = decide_next(
                     store,
@@ -1275,7 +1622,7 @@ def _run_until_stop_inner(
                     **policy_kw,
                 )
                 _progress(
-                    f"step {step + 1}/{max_steps}: chose "
+                    f"step {step_label}: chose "
                     f"{next_tool.tool or 'stop'} ({time.monotonic() - started:.1f}s)"
                 )
                 if next_tool.stop or not next_tool.tool:
@@ -1381,8 +1728,16 @@ def _run_until_stop_inner(
                 )
                 store.append_decision(record)
                 decisions.append(record)
+                budget_state.consecutive_unmapped += 1
+                persist_budgets(store, session_id, budget_cfg, budget_state)
                 _progress(f"No capability: {plan.suggestion}")
                 continue
+
+            # The plan maps. Whatever the campaign could not reach before, it
+            # can reach something now.
+            if budget_state.consecutive_unmapped:
+                budget_state.consecutive_unmapped = 0
+                persist_budgets(store, session_id, budget_cfg, budget_state)
 
             prev_id: str | None = None
             for tool_step in plan.steps:
@@ -1396,7 +1751,7 @@ def _run_until_stop_inner(
                     latest_plan_id=_latest_plan_id(workspace),
                     latest_execution_id=_latest_execution_id(workspace),
                     next_hypothesis_id=_next_hypothesis_id(workspace),
-                    baseline_plan_exists=_baseline_plan_exists(workspace),
+                    baseline_plan_exists=_baseline_is_done(workspace),
                 )
                 task = store.enqueue(
                     session_id,
@@ -1444,9 +1799,7 @@ def _run_until_stop_inner(
                         rationale=research.rationale or research.intent,
                         llm_client=llm_client,
                         dry_run=bool(
-                            step_args.get(
-                                "dry_run", _DRY_RUN_DEFAULTS.get(tool_step.tool, True)
-                            )
+                            step_args.get("dry_run", _DRY_RUN_DEFAULTS.get(tool_step.tool, True))
                         ),
                         submit=bool(step_args.get("submit", False)),
                         agent=branch_agent,
@@ -1573,7 +1926,7 @@ def _run_until_stop_inner(
             latest_plan_id=_latest_plan_id(workspace),
             latest_execution_id=_latest_execution_id(workspace),
             next_hypothesis_id=_next_hypothesis_id(workspace),
-            baseline_plan_exists=_baseline_plan_exists(workspace),
+            baseline_plan_exists=_baseline_is_done(workspace),
         )
         record.args = action_args
         task = store.enqueue(
@@ -1615,9 +1968,5 @@ def _run_until_stop_inner(
         store.append_decision(record)
         decisions.append(record)
         save_checkpoint(store, session_id)
-    else:
-        store.update_session_status(session_id, "paused")
-        _progress(f"Reached max_steps={max_steps}")
-        save_checkpoint(store, session_id, extra={"stop_reason": "max_steps"})
 
     return decisions

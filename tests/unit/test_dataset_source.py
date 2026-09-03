@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from helpers.dataset_sources import DictSource
 
 from labpilot.accessor.profiler import tabular as tabular_module
 from labpilot.accessor.profiler.source import (
@@ -182,33 +183,59 @@ def test_a_uri_cannot_leave_the_dataset_root(strong_signals_data_dir: Path) -> N
             source.path(TableRef(uri=escape))
 
 
-class DictSource:
-    """A dataset that is not a directory. Implements `DatasetSource`, nothing more.
+def test_a_symlinked_table_inside_the_root_is_still_readable(tmp_path: Path) -> None:
+    """The boundary is about which file a uri may address, not about inodes.
 
-    Deliberately holds no path, so any filesystem read the profiler attempts
-    fails loudly rather than silently working because the test happened to run
-    beside real files.
+    Keeping large partitions on another volume and linking them in is an
+    ordinary way to lay a dataset out, and `pd.read_csv` followed such a link
+    for as long as the profiler had one. A guard that resolved before comparing
+    refused uris `tables()` had just listed, and the workspace layer's broad
+    `except` turned that into a silent fall back to a filesystem inventory.
+
+    Both link shapes are checked through `path()`, because whether `tables()`
+    descends into a symlinked *directory* is a property of the interpreter —
+    `rglob` recursed into one until 3.13 and does not from 3.13 on — while the
+    uri naming it is one a caller can build on any version.
     """
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    pd.DataFrame({"id": [1, 2], "label": [0.0, 1.0]}).to_csv(elsewhere / "w001.csv", index=False)
+    root = tmp_path / "dataset"
+    (root / "train").mkdir(parents=True)
+    (root / "train" / "w001.csv").symlink_to(elsewhere / "w001.csv")
+    (root / "extra").symlink_to(elsewhere, target_is_directory=True)
 
-    def __init__(self, frames: dict[str, pd.DataFrame], declared: DeclaredFacts | None = None):
-        self._frames = frames
-        self._declared = declared or DeclaredFacts()
+    source = LocalFileSource(root)
 
-    def tables(self) -> list[TableRef]:
-        return [TableRef(uri=name) for name in self._frames]
+    # The linked file is listed, and every uri `tables()` lists, `path()` must
+    # accept — that is the invariant the docstring claims and the one that broke.
+    uris = {table.uri for table in source.tables()}
+    assert "train/w001.csv" in uris
+    for uri in uris:
+        assert source.columns(TableRef(uri=uri)) == ["id", "label"]
+    assert len(source.sample(TableRef(uri="train/w001.csv"), None)) == 2
 
-    def columns(self, table: TableRef) -> list[str]:
-        return [str(column) for column in self._frames[table.uri].columns]
+    # And through a linked directory, whether or not this interpreter walked it.
+    assert source.columns(TableRef(uri="extra/w001.csv")) == ["id", "label"]
 
-    def sample(self, table: TableRef, limit: int | None) -> pd.DataFrame:
-        frame = self._frames[table.uri]
-        return frame if limit is None else frame.head(limit)
 
-    def exact_unit_count(self, table: TableRef, column: str) -> int:
-        return len(self._frames[table.uri])
+def test_dot_dot_is_collapsed_without_consulting_the_filesystem(tmp_path: Path) -> None:
+    """`..` is refused lexically, so the guard does not depend on what exists.
 
-    def declared(self) -> DeclaredFacts:
-        return self._declared
+    A uri naming a directory that is not there resolved to a plausible path
+    under the old check too, but the point here is that the refusal is decided
+    by the string: step 3's untrusted callers get the same answer whether or not
+    the intermediate directories happen to have been created yet.
+    """
+    root = tmp_path / "dataset"
+    root.mkdir()
+    source = LocalFileSource(root)
+
+    for escape in ("train/../../secrets.csv", "does/not/exist/../../../../etc/passwd"):
+        with pytest.raises(ValueError, match="outside the dataset root"):
+            source.path(TableRef(uri=escape))
+    # Interior `..` that stays inside is fine, and is not a filesystem question.
+    assert source.path(TableRef(uri="train/../train.csv")) == (root / "train.csv").resolve()
 
 
 def test_a_dataset_that_is_not_a_directory_can_be_profiled() -> None:

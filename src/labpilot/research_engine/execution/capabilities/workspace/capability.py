@@ -40,8 +40,19 @@ def _cache_may_serve(kaggle: object, context: TaskContext) -> bool:
     return cached.is_dir() and any(cached.rglob("*"))
 
 
-def _profile_is_current(path: Path) -> bool:
-    """Whether an existing `profile.json` was written by today's profiler.
+def _profile_is_current(path: Path, root: Path) -> bool:
+    """Whether an existing `profile.json` can be served as it stands.
+
+    ``root`` is required, here and on :func:`_profile_state`: it is where the
+    answers are read from, and an optional one would let a caller skip that
+    check by omission — the profile would then read "current" while describing a
+    question a person has since settled.
+    """
+    return _profile_state(path, root) == "current"
+
+
+def _profile_state(path: Path, root: Path) -> str:
+    """``current``, ``stale``, or ``unusable`` for an existing ``profile.json``.
 
     Reuse is right — profiling samples every partition and costs real time — but
     reuse *forever* means a workspace keeps whatever description it was first
@@ -49,17 +60,8 @@ def _profile_is_current(path: Path) -> bool:
     since, so the partition warnings and the anchor column added later never
     reached the codegen that needed them.
 
-    An unreadable or unstamped profile re-derives: the cost is one profiling
-    pass, and the alternative is running on a description nothing can vouch for.
-    """
-    return _profile_state(path) == "current"
-
-
-def _profile_state(path: Path) -> str:
-    """``current``, ``stale``, or ``unusable`` for an existing ``profile.json``.
-
-    `_profile_is_current` only needs the first; the rebuild paths need the other
-    two kept apart. A profile we merely failed to *refresh* is worth keeping —
+    The rebuild paths need ``stale`` and ``unusable`` kept apart. A profile we
+    merely failed to *refresh* is worth keeping —
     an old description beats none. One nothing can parse is not: keeping it
     leaves `metadata["profile"]` pointing at bytes no reader can use, on a step
     that reported success, and skips the inventory write that would have put a
@@ -74,7 +76,17 @@ def _profile_state(path: Path) -> str:
         return "unusable"
     if not isinstance(stored, dict):
         return "unusable"
-    return "current" if stored.get("schema_version") == PROFILE_SCHEMA_VERSION else "stale"
+    if stored.get("schema_version") != PROFILE_SCHEMA_VERSION:
+        return "stale"
+    # Answered since this was built? Then it describes a question that is no
+    # longer open, and reusing it would make `research schema answer` change
+    # nothing — the escape being fiction is the defect this milestone is named
+    # after.
+    from labpilot.accessor.profiler.questions import answers_fingerprint, load_answers
+
+    if stored.get("answers_fingerprint", "") != answers_fingerprint(load_answers(root)):
+        return "stale"
+    return "current"
 
 
 def _has_credentials(kaggle: object) -> bool:
@@ -96,6 +108,7 @@ def _has_credentials(kaggle: object) -> bool:
     username = str(getattr(kaggle, "username", "") or "").strip()
     key = str(getattr(kaggle, "key", "") or "").strip()
     return bool(token or (username and key))
+
 
 #: Relative dirs under the competition workspace root (idempotent).
 _WORKSPACE_SUBDIRS = (
@@ -152,6 +165,12 @@ class WorkspaceCapability(BaseCapability):
 
         download_ok = self._ensure_data(context, root, metadata, errors, checks)
         profile_ok = self._ensure_profile(context, root, metadata, errors, checks)
+        # The stage after dataset understanding, and it runs here rather than in
+        # the CLI because that is what makes it a stage. `resolve_objective` has
+        # been correct since #145 and was reached from exactly one preflight, so
+        # its contradictions and its `unresolved` list — which name what to ask —
+        # died on a console line.
+        self._ensure_objective(context, root, metadata, checks)
 
         passed = (
             research_ok
@@ -397,10 +416,10 @@ class WorkspaceCapability(BaseCapability):
     ) -> bool | None:
         profile_path = root / "profile.json"
         # Parsed once. `_profile_is_current` is a wrapper over `_profile_state`,
-        # so asking both read and `json.loads` the same file twice — and for a
+        # so asking both would read and `json.loads` the same file twice — and for a
         # partitioned dataset that file carries every column profile and up to
         # 200 paths.
-        state = _profile_state(profile_path) if profile_path.is_file() else None
+        state = _profile_state(profile_path, root) if profile_path.is_file() else None
         if state == "current":
             metadata["profile_reused"] = True
             metadata["profile"] = str(profile_path)
@@ -442,7 +461,13 @@ class WorkspaceCapability(BaseCapability):
             return None
 
         try:
+            from labpilot.accessor.profiler.questions import (
+                load_answers,
+                pending_schema_questions,
+            )
             from labpilot.accessor.profiler.report import write_profile
+            from labpilot.accessor.profiler.schema import MetricRef
+            from labpilot.accessor.profiler.source import DeclaredFacts, LocalFileSource
             from labpilot.accessor.profiler.tabular import TabularProfiler
             from labpilot.config import ProfilerConfig
             from labpilot.research_engine.intelligence.competition.models import (
@@ -462,19 +487,61 @@ class WorkspaceCapability(BaseCapability):
                     comp_path.read_text(encoding="utf-8")
                 )
 
-            profile = TabularProfiler(config).profile_directory(
+            # Through a source rather than a directory, so what the competition
+            # *declares* — its evaluation metric — reaches the profiler as
+            # evidence instead of being re-derived there. Canonicalisation stays
+            # on this side of the boundary: `accessor` may not import the metric
+            # registry, so the caller hands over an already-resolved reference.
+            declared_metric = None
+            if competition.evaluation_metric is not None:
+                from labpilot.research_engine.intelligence.competition.metric_vocabulary import (
+                    target_kind_of,
+                )
+
+                spec = competition.evaluation_metric
+                declared_metric = MetricRef(
+                    name=spec.name,
+                    key=spec.key,
+                    direction=spec.direction
+                    if spec.direction in ("maximize", "minimize")
+                    else None,
+                    # The registry's own answer to "what must the truth look
+                    # like", carried across a boundary `accessor` cannot cross.
+                    target_kind=target_kind_of(spec.key),
+                )
+            source = LocalFileSource(
                 raw_dir,
+                DeclaredFacts(
+                    title=competition.title,
+                    description=competition.description,
+                    metric=declared_metric,
+                    # What a person has already settled about this dataset. Read
+                    # from `schema_answers.json`, which lives beside the profile
+                    # and outlives it: `profile.json` is rebuilt on every schema
+                    # bump, and an answer must survive a profiler upgrade.
+                    answers=load_answers(root),
+                ),
+            )
+            profile = TabularProfiler(config).profile_dataset(
+                source,
                 context.competition,
                 train_pattern=competition.train_file_pattern,
                 test_pattern=competition.test_file_pattern,
                 submission_pattern=competition.submission_file_pattern,
-                competition_title=competition.title,
-                competition_description=competition.description,
             )
             json_path, md_path = write_profile(root, profile)
             metadata["profile"] = str(json_path)
             metadata["profile_md"] = str(md_path)
             checks.append("profile_written")
+            # A description with an open question is not a failure — it is a
+            # description that must not be acted on yet. Recorded here so the
+            # campaign can stop for a human instead of picking for one.
+            questions = pending_schema_questions(profile, load_answers(root))
+            if questions:
+                metadata["schema_questions"] = [
+                    {"id": q.id, "field": q.field, "context": q.context} for q in questions
+                ]
+                checks.append("schema_question_open")
             return True
         except Exception as exc:
             logger.warning("Workspace tabular profile failed: %s", exc)
@@ -498,6 +565,52 @@ class WorkspaceCapability(BaseCapability):
             checks.append("profile_skipped")
             return None
 
+    def _ensure_objective(
+        self,
+        context: TaskContext,
+        root: Path,
+        metadata: dict[str, Any],
+        checks: list[str],
+    ) -> None:
+        """Resolve and persist `objective.json`. Never fails the step.
+
+        A blocked objective is a *finding*, not an error: the CLI preflight is
+        where a campaign is refused, and it refuses with the operator still at
+        the keyboard. Failing the workspace step here would refuse the same
+        campaign twice, and with the less actionable message of the two.
+
+        Recorded either way, because a workspace whose objective is
+        contradictory should say so on disk rather than only in whichever
+        console scrolled past.
+        """
+        try:
+            from labpilot.research_engine.intelligence.competition.objective_stage import (
+                OBJECTIVE_FILENAME,
+                ensure_objective,
+            )
+
+            stored, how = ensure_objective(root, context.competition)
+        except Exception as exc:  # noqa: BLE001 — an unresolved objective must not
+            # break workspace preparation; the preflight still gates the campaign.
+            logger.warning("Objective resolution failed: %s", exc)
+            metadata["objective_error"] = str(exc)
+            return
+
+        if how == "unpersisted":
+            # Resolved, and nowhere to put it. Naming the path anyway would point
+            # a later stage at a file that is not there.
+            metadata["objective_unpersisted"] = True
+            checks.append("objective_unpersisted")
+        else:
+            metadata["objective"] = str(root / OBJECTIVE_FILENAME)
+            checks.append("objective_reused" if how == "reused" else "objective_written")
+        if stored.spec.blocks_launch:
+            # `why_blocked` and not the raw fields: it is the line the preflight
+            # prints, and two renderings of one verdict drift.
+            metadata["objective_blocked"] = stored.spec.why_blocked()
+            metadata["objective_unresolved"] = list(stored.spec.unresolved)
+            checks.append("objective_unresolved")
+
     def _write_inventory_profile(
         self,
         context: TaskContext,
@@ -508,8 +621,11 @@ class WorkspaceCapability(BaseCapability):
         tabular_error: str,
     ) -> bool:
         try:
-            from labpilot.accessor.profiler.modality import IMAGE_EXTENSIONS, ModalityDetector
+            from labpilot.accessor.profiler.evidence import Note
+            from labpilot.accessor.profiler.modality import ModalityDetector
+            from labpilot.accessor.profiler.questions import answers_fingerprint, load_answers
             from labpilot.accessor.profiler.report import write_profile
+            from labpilot.accessor.profiler.schema import ModalityPresence
             from labpilot.accessor.profiler.tabular import DatasetProfile
             from labpilot.research_engine.intelligence.competition.infer_problem_type import (
                 infer_problem_type_from_metadata,
@@ -536,50 +652,77 @@ class WorkspaceCapability(BaseCapability):
             profile = DatasetProfile(
                 competition=context.competition,
                 files=files,
-                warnings=[
-                    f"tabular profiler unavailable: {tabular_error}",
-                    "using filesystem inventory profile",
+                # Stamped here as well, or a workspace with any answer on file
+                # reads `stale` forever: `""` never matches a real fingerprint,
+                # so every `prepare_workspace` would re-attempt the profile that
+                # already failed and land back here.
+                answers_fingerprint=answers_fingerprint(load_answers(root)),
+                notes=[
+                    Note(
+                        code="profiler_failed",
+                        text=f"tabular profiler unavailable: {tabular_error}",
+                        severity="caution",
+                    ),
+                    Note(
+                        code="inventory_profile",
+                        text="using filesystem inventory profile",
+                        severity="caution",
+                    ),
                 ],
             )
-            modality = ModalityDetector().detect(
+            detector = ModalityDetector()
+            modality = detector.detect(
                 raw_dir,
                 profile,
                 competition_title=competition.title,
                 competition_description=competition.description,
             )
-            if modality.modality == "tabular":
-                # Metadata may still say vision/tracking when files are exotic.
+            # The detector's own list is the answer, and it is the same list the
+            # tabular path produces — this used to be a *second* modality
+            # decision with its own rules, assigning a string that is now
+            # derived. Metadata only speaks where the files say nothing.
+            profile.modalities = detector.presences(raw_dir, profile)
+            if profile.modality == "tabular":
                 inferred = infer_problem_type_from_metadata(
                     title=competition.title,
                     description=competition.description,
                     tags=list(competition.tags),
                 )
-                if inferred is ProblemType.IMAGE_CLASSIFICATION:
-                    profile.modality = "image"
-                    profile.warnings.append("modality=image from competition metadata")
-                elif inferred is ProblemType.TEXT_CLASSIFICATION:
-                    profile.modality = "text"
-                    profile.warnings.append("modality=text from competition metadata")
-                else:
-                    # Presence of image-like files without CSV roles.
-                    has_images = any(
-                        Path(f).suffix.lower() in IMAGE_EXTENSIONS for f in files
+                declared = {
+                    ProblemType.IMAGE_CLASSIFICATION: "image",
+                    ProblemType.TEXT_CLASSIFICATION: "text",
+                }.get(inferred)
+                if declared is not None:
+                    # Replacing, not prepending: a workspace whose files already
+                    # show images and whose metadata says image classification
+                    # listed `image` twice, with two roles and two details, and
+                    # left every consumer to guess which was authoritative.
+                    profile.modalities = [
+                        ModalityPresence(
+                            modality=declared,
+                            role="primary",
+                            detail="from competition metadata, not from the files",
+                        ),
+                        *[
+                            presence.model_copy(update={"role": "auxiliary"})
+                            for presence in profile.modalities
+                            if presence.modality != declared
+                        ],
+                    ]
+                    profile.notes.append(
+                        Note(
+                            code="modality_from_metadata",
+                            text=f"modality={declared} from competition metadata",
+                            field="modality",
+                        )
                     )
-                    has_zarr = any(".zarr" in f for f in files) or any(
-                        p.is_dir() and p.name.endswith(".zarr") for p in raw_dir.rglob("*")
-                    )
-                    if has_images or has_zarr:
-                        profile.modality = "image"
-                        profile.warnings.append("modality=image from file extensions")
-                    else:
-                        profile.modality = modality.modality
-            else:
-                profile.modality = modality.modality
             profile.image_dir = modality.image_dir
             profile.image_column = modality.image_column
             profile.text_column = modality.text_column
-            if modality.signals:
-                profile.warnings.extend(modality.signals)
+            for signal_text in modality.signals:
+                profile.notes.append(
+                    Note(code="modality_signal", text=signal_text, field="modality")
+                )
 
             json_path, md_path = write_profile(root, profile)
             metadata["profile"] = str(json_path)
@@ -595,6 +738,5 @@ class WorkspaceCapability(BaseCapability):
 
 def default_workspace_dirs(root: Path) -> list[Path]:
     return [
-        root / name
-        for name in ("pipeline", "src", "configs", "data", "logs", "artifacts", "tests")
+        root / name for name in ("pipeline", "src", "configs", "data", "logs", "artifacts", "tests")
     ]

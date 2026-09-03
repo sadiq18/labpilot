@@ -117,20 +117,182 @@
     }
   ],
   "target_column": "Depth",
-  "id_column": "id",
+  "id_columns": [
+    "id"
+  ],
+  "excluded_columns": {
+    "id": "is_id",
+    "Depth_input": "equals_target",
+    "Depth": "is_target",
+    "Zone_Depth": "unavailable_at_scoring"
+  },
+  "train_test_relationship": "disjoint_units",
+  "metric": null,
+  "target_distribution": {
+    "class_counts": {},
+    "class_dtype": null,
+    "median": 303.5,
+    "zero_fraction": 0.014706,
+    "skew": 0.745223,
+    "null_count": 0
+  },
   "submission_columns": [
     "id",
     "depth"
   ],
-  "warnings": [
-    "partitioned dataset: 8 train / 8 test CSVs",
-    "primary kind='horizontal_well'; kinds={'horizontal_well': 5, 'typewell': 3}",
-    "row_count estimated from 5 sampled files",
-    "rows are NOT iid across partitions \u2014 validation must group by partition",
-    "train-only columns (unavailable at test): ['Depth', 'Zone_Depth']",
-    "'Depth_input' is the known prefix of 'Depth': equal to it wherever present, absent exactly on the scored rows. Carrying its last known value forward is the baseline to beat \u2014 predict the residual from it, not 'Depth' from the other columns. Note it is identical to the target in training, so using it as a plain feature learns 'copy' and then meets NaN on every scored row."
+  "notes": [
+    {
+      "code": "partitioned_layout",
+      "text": "partitioned dataset: 8 train / 8 test CSVs",
+      "field": null,
+      "severity": "info"
+    },
+    {
+      "code": "primary_kind",
+      "text": "primary kind='horizontal_well'; kinds={'horizontal_well': 5, 'typewell': 3}",
+      "field": null,
+      "severity": "info"
+    },
+    {
+      "code": "row_count_estimated",
+      "text": "row_count estimated from 5 sampled files",
+      "field": "row_count",
+      "severity": "info"
+    },
+    {
+      "code": "rows_not_iid",
+      "text": "rows are NOT iid across partitions \u2014 validation must group by partition",
+      "field": null,
+      "severity": "caution"
+    },
+    {
+      "code": "train_only_columns",
+      "text": "train-only columns (unavailable at test): ['Depth', 'Zone_Depth']",
+      "field": null,
+      "severity": "info"
+    },
+    {
+      "code": "anchor_column",
+      "text": "'Depth_input' is the known prefix of 'Depth': equal to it wherever present, absent exactly on the scored rows. Carrying its last known value forward is the baseline to beat \u2014 predict the residual from it, not 'Depth' from the other columns. Note it is identical to the target in training, so using it as a plain feature learns 'copy' and then meets NaN on every scored row.",
+      "field": "anchor_column",
+      "severity": "caution"
+    }
   ],
-  "modality": "tabular",
+  "answers_fingerprint": "",
+  "inferences": {
+    "target_column": {
+      "signals": [
+        {
+          "id": "named_in_prediction_template",
+          "detail": "submission header names 'Depth'"
+        },
+        {
+          "id": "present_across_train_units",
+          "detail": "in 5/5 horizontal_well tables"
+        },
+        {
+          "id": "non_null_in_train",
+          "detail": "Depth: no nulls in train"
+        },
+        {
+          "id": "is_numeric",
+          "detail": "Depth: float64"
+        }
+      ],
+      "confidence": 0.9184,
+      "band": "asserted",
+      "alternatives": [
+        {
+          "candidate": "Zone_Depth",
+          "confidence": 0.592,
+          "signals": [
+            {
+              "id": "present_across_train_units",
+              "detail": "in 5/5 horizontal_well tables"
+            },
+            {
+              "id": "non_null_in_train",
+              "detail": "Zone_Depth: no nulls in train"
+            },
+            {
+              "id": "is_numeric",
+              "detail": "Zone_Depth: float64"
+            }
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "id_columns": {
+      "signals": [
+        {
+          "id": "first_template_column",
+          "detail": "'id' is the template's first column"
+        },
+        {
+          "id": "present_in_train_and_scoring",
+          "detail": "'id' is on both sides"
+        },
+        {
+          "id": "unique_per_unit",
+          "detail": "68 distinct in 68"
+        }
+      ],
+      "confidence": 0.73,
+      "band": "probable",
+      "alternatives": [],
+      "rejected": []
+    },
+    "train_test_relationship": {
+      "signals": [
+        {
+          "id": "scoring_input_present",
+          "detail": "a scoring input exists; no split signal"
+        }
+      ],
+      "confidence": 0.5,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
+    },
+    "metric": {
+      "signals": [],
+      "confidence": 0.0,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
+    },
+    "modality": {
+      "signals": [
+        {
+          "id": "single_modality_present",
+          "detail": "only 'tabular' is present"
+        }
+      ],
+      "confidence": 0.7,
+      "band": "probable",
+      "alternatives": [],
+      "rejected": []
+    },
+    "prediction_unit": {
+      "signals": [],
+      "confidence": 0.0,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
+    }
+  },
+  "modalities": [
+    {
+      "modality": "tabular",
+      "role": "primary",
+      "detail": "17 table(s)",
+      "image_dir": null,
+      "image_column": null,
+      "text_column": null
+    }
+  ],
+  "prediction_unit": "unknown",
   "image_dir": null,
   "image_column": null,
   "text_column": null,
@@ -143,11 +305,29 @@
   "train_partition_count": 5,
   "test_partition_count": 5,
   "row_count_estimated": true,
+  "column_stats_rows": 68,
   "scored_is_partition_suffix": false,
   "scored_fraction": 0.0,
   "train_only_columns": [
     "Depth",
     "Zone_Depth"
   ],
-  "anchor_column": "Depth_input"
+  "anchor_column": "Depth_input",
+  "modality": "tabular",
+  "confidence": 0.0,
+  "target_type": "continuous",
+  "id_column": "id",
+  "feature_columns": [
+    "md",
+    "azimuth",
+    "formation"
+  ],
+  "warnings": [
+    "partitioned dataset: 8 train / 8 test CSVs",
+    "primary kind='horizontal_well'; kinds={'horizontal_well': 5, 'typewell': 3}",
+    "row_count estimated from 5 sampled files",
+    "rows are NOT iid across partitions \u2014 validation must group by partition",
+    "train-only columns (unavailable at test): ['Depth', 'Zone_Depth']",
+    "'Depth_input' is the known prefix of 'Depth': equal to it wherever present, absent exactly on the scored rows. Carrying its last known value forward is the baseline to beat \u2014 predict the residual from it, not 'Depth' from the other columns. Note it is identical to the target in training, so using it as a plain feature learns 'copy' and then meets NaN on every scored row."
+  ]
 }

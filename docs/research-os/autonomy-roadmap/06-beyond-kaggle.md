@@ -1,6 +1,6 @@
 # M12 — Beyond Kaggle
 
-**Status:** not started · **Blocked by:** M7, M8 (the loop must work once)
+**Status:** phases 0–3 shipped 2026-08-20 ([design](design/06-beyond-kaggle.md)) · all three exit criteria met
 
 ---
 

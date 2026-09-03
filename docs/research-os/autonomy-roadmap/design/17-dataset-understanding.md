@@ -32,9 +32,10 @@ symbol wherever this milestone's own step 1 moves the lines:
 | `workspace/capability.py:458-466` | The profiler is called **without** an LLM client, so that no-LLM path is the one production always takes |
 | `modality.py:104-117` | The zarr branch is unreachable: the CSV-preference return fires first, and every zarr competition ships a `sample_submission.csv` |
 | `tabular.py` — `profile_file`, and the profile built in `profile_dataset` | `row_count` is the length of a sample capped at `max_rows_sample`, and `row_count_estimated` stays `False`. On disk: `playground-series-s6e7/profile.json` says 100,000 rows, unstamped; the file has 690,088 |
-| `competition/metrics.py:38-49` | Substring mapping: `balanced_accuracy_score` → `accuracy`. On disk in that competition's `competition.json` |
+| `competition/metrics.py:38-49` | Substring mapping: `balanced_accuracy_score` → `accuracy`. On disk in that competition's `competition.json`. **Closed by #145**, which rewired identity and direction onto `metric_vocabulary` and deleted both hint tuples |
 | `workspace/capability.py:503-580` | A second modality decision. When the profiler raises, this writes a valid-looking profile with `target_column: null` and prose in `warnings` |
 | whole module | The profiler `rglob`s CSVs directly. No seam between *where data lives* and *what is inferred from it* |
+| `tabular.py` — `id_column` on the partitioned path | Set to the prediction template's first column, unverified. **Found by step 2's evidence plane on its first real run, 2026-08-20:** rogii's profile records `id_column: "id"` and no column of that name exists in any table — the template's `id` is a synthesised `<entity>_<row>` key. It scores 0.10, `uncertain`, on one positional signal |
 
 **Measured cost.** rogii trained against a horizon depth for eleven days because
 `profile.json` was written 2026-08-02 and never re-derived; a six-experiment
@@ -275,6 +276,16 @@ SplitRelationship = Literal["disjoint_units", "temporal_split", "partition_suffi
 absence of one. That is what makes a warehouse table and an RL environment
 describable by the same schema.
 
+**What step 3 shipped, and what waits.** `SplitRelationship` ships
+`partition_suffix`, `disjoint_units`, `no_test_provided` and `unknown`;
+`temporal_split`, `same_entities_new_period` and `environment` arrive with the
+detectors that can conclude them. `ExclusionReason` ships everything but
+`post_outcome` and `operator_excluded`, which need a timestamp comparison and an
+answer file. `target_type`, `target_distribution`, `datetime_columns` and
+`text_columns` are not in step 3 at all — they are measurements over a resolved
+target, and M23 is their first consumer. An enum member with no detector would
+be a declaration nothing reaches, which is what this milestone removes.
+
 ### 7.3 Evidence and `combine`
 
 ```python
@@ -322,11 +333,20 @@ reachable on structure alone. The positional cap is the plan's third trap made
 structural: `overlap[1]` is not improved, it is capped, so a rule that would
 pick `id` from a reversed header can never decide alone.
 
-**Uniqueness is not a signal.** "Only one column is withheld" adds no weight —
-being the sole candidate is already expressed by an empty `alternatives` list.
-Paying for it twice would make a one-candidate dataset look better-evidenced
-than a two-candidate one firing identical evidence, and the two-candidate case
-is exactly the one that must ask.
+**Being a candidate is the entry condition, not evidence.** Corrected in step 2,
+where the first draft's rule did not survive contact with rogii. There is no
+"withheld at scoring" signal: when eight columns are withheld, knowing that this
+one is says nothing about *which* is the label, and paying every candidate the
+same points lifts them over the ask threshold together — 0.694 each, `probable`,
+no question asked, which is the failure this milestone exists to remove.
+`sole_withheld_column` (0.70) fires only where withholding **identifies** the
+column, and identification is the whole of its value.
+
+**A tie broken by sorting is not a signal either.** Where the code takes
+`sorted(candidates)[-1]`, every candidate keeps the confidence its own evidence
+earns and a note records that position chose between them. Paying the winner
+0.10 for being alphabetically last put it at 0.6328 against its twin's 0.592 —
+one band apart, on identical evidence — until the signal was removed.
 
 Residual conclusions cap at **0.75**: `disjoint_units` ("IID") is what is
 concluded when nothing else fired, and an independence assumption that is wrong
@@ -357,12 +377,19 @@ The other four questions follow the same families: `id_columns` from
 and the capped residual above; `metric` from `exact_alias_match` (.90),
 `direction_declared` (.30) and `substring_match` (.15, **capped 0.55**).
 
-`exact_alias_match` reads `competition/metric_vocabulary.py`, now on `main` with
-one consumer. The substring map it replaces is **still live** in
-`competition/metrics.py:38-49` — the path that writes `competition.json` — so a
-metric can still reach a workspace by substring, land at 0.55, and ask. That is
-the honest reading of `{"name": "balanced_accuracy_score", "key": "accuracy"}`
-until the parser path is rewired too.
+`exact_alias_match` reads `competition/metric_vocabulary.py`. **#145 finished
+the rewire** while this milestone was in flight: `competition/metrics.py` now
+resolves identity and direction through the registry and both substring tuples
+are gone, so a metric that reaches a workspace has an exact alias behind it.
+`substring_match` is kept in the catalogue's design for the case that remains —
+a source supplying a name the registry cannot match — and ships only when
+something can produce it.
+
+**The resolution stays outside `accessor`**, which may not import
+`research_engine` where the registry lives. A source states an already-canonical
+`MetricRef`; `_ensure_profile` is what maps `CompetitionSpec.evaluation_metric`
+onto one, and the profiler records that the answer was *declared* rather than
+derived.
 
 ### 7.5 Features — the safety-critical answer
 
@@ -387,10 +414,19 @@ answer.
 
 | Case | Signals | Confidence |
 |---|---|---|
-| **A. house-prices** (all strong signals present) | template .80 + absent-from-scoring .70 + dtype↔RMSE .30 + non-null .20 + numeric .15 | **0.9714** `asserted` |
+| **A. house-prices** (all strong signals present) | template .80 + sole-withheld .70 + non-null .20 + numeric .15 | **0.9592** `asserted` |
 | **B. 1,546-table partitioned set**, template present | template .80 + across-units .40 + non-null .20 + numeric .15 | **0.9184** `asserted` |
 | **B′. same set, no template** | across-units .40 + non-null .20 + numeric .15 | **0.592** `uncertain` |
 | **C. warehouse table**: no test set, no template, no declared metric | declared .90 + non-null .20 + numeric .15 | **0.932** `asserted` |
+
+A is 0.9592 rather than the 0.9714 an earlier draft gave, because
+`dtype_matches_metric` (.30) needs a metric and the profile carries none — that
+signal arrives with the field. B, B′ and their tie are exact and are asserted as
+literals in `test_evidence_plane.py`, so a changed weight moves them: the worked
+examples are the catalogue's output, not a target it was tuned to hit. **B is
+measured on the real rogii dataset**, where `TVT` scores 0.9184 `asserted` and
+`EGFDU` — the horizon depth this workspace trained against for eleven days — is
+recorded as a 0.49 alternative with its evidence.
 
 A is the number in the milestone brief, derived from the catalogue rather than
 chosen. B is today's behaviour, which is *correct* — and nothing in today's
@@ -403,6 +439,48 @@ validate rather than produce the answer. With nothing declared, C lands
 `uncertain` on three fields and asks three questions once.
 
 ### 7.7 Questions: derived, asked or blocking
+
+**Not every uncertain field stops a campaign.** Step 4 splits one idea in two,
+because building it showed they are not the same:
+
+* `REQUIRED_FIELDS` — target, ids, split, metric — is what the schema-level
+  `confidence` takes the weakest of. It answers *how good is this description*.
+* `BLOCKING_FIELDS` — target and ids only — is what raises a question that stops
+  a run. It answers *may I proceed on it*.
+
+That is not a compromise. A capped `disjoint_units` is a documented assumption,
+actionable and never assertable, and it sits at 0.50 on every ordinary
+train/test dataset; asking about it each time would train an operator to dismiss
+the question that matters. A missing metric degrades optimisation without
+corrupting it — rogii's `confidence` is 0.0 for exactly that reason and its
+campaign still runs. A wrong target or key corrupts everything downstream and
+does it silently, which is the whole argument for stopping.
+
+**An answer has to invalidate the profile, or it changes nothing.**
+`_profile_state` matches on `schema_version` alone, so the profile built from the
+*old* answers would be served forever and `research schema answer` would be one
+more advertised escape that does not exist — this milestone's own defect, re-made
+inside its own mechanism. The profile stamps an `answers_fingerprint`, and a
+mismatch reads **stale**. Found by asking what happens *after* the operator
+answers, which the first draft of this section did not ask.
+
+**And the campaign has to stop when it is answered.** Invalidating is not
+enough: `prepare_workspace` is a *plan task*, not a tool the loop can dispatch,
+so a campaign that continued would spend the rest of its steps on the profile it
+was holding — the column the operator had just rejected — with the question now
+closed so nothing would ask again. Both outcomes therefore stop, with different
+rationales: *uncertain, answer it* and *answered, re-run to rebuild*. One re-run
+is the price of never running on a rejected answer.
+
+**An answer is checked before it is believed.** `operator_answer` is 1.00, the
+top of the scale, so a value naming no column would assert a target that is not
+in the dataset — and take the `equals_target` exclusion with it, because nothing
+equals a column that does not exist, putting the leak back among the features.
+The CLI refuses it with the column list; `_answered` refuses it again for every
+other route a `DeclaredFacts` can arrive by, and records it in
+`Inference.rejected` rather than dropping it. A field whose answer may name
+several columns (`id_columns`, for a composite key) parses comma-separated;
+`target_column` refuses more than one.
 
 ```python
 def pending_schema_questions(schema, answers) -> list[SchemaQuestion]:
@@ -420,7 +498,17 @@ never re-asked and a changed candidate set is genuinely a new question.
 It lives beside `profile.json`, **not inside it**: `profile.json` is rebuilt on
 every `PROFILE_SCHEMA_VERSION` bump, and an operator's answer must survive a
 profiler upgrade. An answer contributes `operator_answer` (1.00) and closes the
-question.
+question — through the same resolver as everything else, so the profile still
+shows what the *data* said about the column a person chose.
+
+**An answer has to invalidate the profile, or it changes nothing.**
+`_profile_is_current` matches on `schema_version`, so the profile built from the
+old answers would be served forever and `research schema answer` would be one
+more advertised escape that does not exist — this milestone's own defect, re-made
+inside its own mechanism. The profile therefore stamps an
+`answers_fingerprint`, and `_profile_state` calls a profile built from different
+answers **stale**. Found by asking what happens after the operator answers,
+which is a question the first draft of this section did not ask.
 
 `run_until_stop` already takes `approval_prompt` and `offline_fallback_prompt`
 as CLI-injected callables (`cli/conduct.py:337,341`), each `None` under `--yes`.
@@ -440,8 +528,12 @@ if pending and schema_prompt is None:
 `StopReason` gains `"schema_question"` — distinct, not folded into
 `policy_stop`. `evaluate_stops` is **not** extended: it takes config and state,
 and giving it a workspace would make a pure function read the disk.
-`prepare_workspace` writes `TaskStatus "blocked"`, declared at `models.py:14`
-and written by nothing today.
+`prepare_workspace` records the open questions in its metadata and adds a
+`schema_question_open` check, so the step that *found* the question says so. The
+**session** goes to `waiting` rather than to a new `blocked` status: `waiting` is
+already declared, `checkpoint.py` already counts it among the active sessions,
+and a campaign waiting for a person is resumable rather than finished. Nothing
+wrote it until now — the same shape as `TaskStatus "blocked"`, one layer up.
 
 ### 7.8 The proposer
 
@@ -452,11 +544,83 @@ rather than echo. Every claim faces a structural verifier (`column_exists`,
 
 - **confirmed** → one signal worth 0.10, however many claims agree.
 - **contradicted** → `Inference.rejected`, never near the value.
-- **nominated_and_verified** → only where the deterministic path produced
-  nothing and every verifier passes; capped **0.55**, below the ask threshold,
-  so a nomination always ends in a question.
+- **nominated_and_verified** → where the deterministic path produced nothing
+  and every verifier passes, the claim becomes an **alternative** worth 0.10.
+
+**Stronger than this section first specified.** The plan had a nomination *set*
+the value, capped at 0.55 so the field stayed uncertain and the question was
+asked anyway. Building it made a better contract obvious: the proposer never
+writes a value at all. A nomination is a candidate *in* the question — visible
+to whoever answers it, with its evidence beside the rest — and goal 2 becomes
+absolute rather than qualified: the value plane is byte-identical whether the
+proposer is absent, correct, or wrong about every field, on every shape rather
+than only the ones the deterministic path could resolve. Nothing is lost, since
+the suggestion still reaches the person, which was the point of allowing one.
+
+**`dtype_matches_metric` asks the registry, through the schema.** A list of
+metric keys in the profiler would be the third overlapping vocabulary — the
+defect #145 removed, and the test it left behind is what caught this.
+`MetricRef` carries `target_kind` instead, filled by the caller from
+`metric_vocabulary.target_kind_of`: a fact the registry already stored per
+metric and nothing had ever read.
 
 Off by default (`profiler.llm_proposals: false`).
+
+---
+
+### 7.9 Modality is a list, and four answers stop overstating themselves
+
+`modalities: list[ModalityPresence]`, primary first, with `modality` a computed
+mirror over the primary so the six modules that read a string are untouched.
+rogii is **1,553 tables and 773 well previews**; the detector counted the images,
+used the count to prefer tabular — correctly — and discarded them in the same
+expression, so no profile had ever mentioned them.
+
+**Found while building it: modality was never detected on the partitioned path
+at all.** `_try_profile_partitioned` returns before the block that does it, so
+every partitioned profile carried the field's *default*. rogii read
+`modality: tabular` because nothing looked.
+
+Three more answers that were stated more confidently than they were reached:
+
+- **A tie broken by a model is capped** at 0.30/0.50, and the *absence* of a
+  tie-breaker is no longer reported as an answer. `_ensure_profile` passes no
+  LLM client, so the `llm_unavailable` branch is the one production always
+  takes, and it used to stamp `confidence="high"`.
+- **A zarr store is found *and* decides.** The CSV preference returned before
+  the branch that looked for one, and every zarr competition ships a
+  `sample_submission.csv` — so no input could reach it. Making the store merely
+  *visible* would have left the outcome that produced (`modality: tabular` for a
+  volume competition) exactly as it was: the volume is the dataset and the CSV
+  beside it is the submission format, so the store wins the primary slot.
+- **A bound sample cap is not a row count.** `playground-series-s6e7` records
+  100,000 rows for a file of 690,088 and does not say it is a sample. Where the
+  cap binds, one pass over one column buys the truth — and `column_stats_rows`
+  records what the *per-column* statistics describe, because making `row_count`
+  honest put it out of step with them: on rogii the profile now reads
+  `row_count: 6,393,792` beside `column_stats_rows: 206,785`, and a reader
+  computing a null fraction against the wrong one is out by 31×.
+
+**An environment is a shape, not an error.** A dataset with no tables used to
+raise, which sent the workspace to `_write_inventory_profile` and its
+metadata-guessed modality with a null target. It is now
+`environment(primary)`, `train_test_relationship: environment`,
+`prediction_unit: episode`, files listed, target and key at 0.0 — so a campaign
+asks. **`action_space` is still not inferred**: no fixture, unfalsifiable output.
+
+**An empty `modalities` is an absence, not a legacy profile.** The adoption
+above keys on the *key* being missing, not on the list being falsy: a profile
+that recorded "nothing detected" — the no-root branch writes exactly that,
+beside its note — otherwise came back from disk claiming `tabular` had been
+detected, with a provenance line saying it came from an older profile. Both
+halves false, and the file then contradicted its own note.
+
+**`audio` is in the enum without a detector**, which contradicts §7.4's rule
+until you see its producer. Profiles on disk carry it — birdclef's says
+`modality: "audio"` — and `modality` is computed now, so a legacy string must be
+adopted into the list or every analyzer keying off the field would quietly start
+describing an audio competition as a tabular one. Adoption is the producer;
+detecting audio is separate work with its own fixture.
 
 ---
 
@@ -471,7 +635,7 @@ Off by default (`profiler.llm_proposals: false`).
 | Unattended ambiguity | Auto-answer with the best guess | Block, no `auto_answer` option | A campaign can stop for a human; the alternative freezes a coin flip into every later run |
 | Confidence scalar | Mean over fields | Weakest link | One number that cannot hide a guessed target; a single weak field drags the schema score down |
 | Source access | Base class with file assumptions | `Protocol`, one adapter | M12 becomes an adapter; one indirection today with no second implementation to validate it |
-| Metric mapping | Fix the substring map here | Record *how* it was matched; consume `metric_vocabulary.py` | Keeps this milestone's surface honest; a substring match caps at 0.55 and asks until the parser path is rewired to the vocabulary |
+| Metric mapping | Fix the substring map here | Record *how* it was matched; consume `metric_vocabulary.py` | Keeps this milestone's surface honest. #145 has since rewired the parser onto the registry, so the weak path this hedged against no longer exists |
 | Modality | Keep the scalar winner | List + computed mirror | Auxiliary modalities stop being discarded; two spellings of one fact, prevented by making one computed |
 
 ---
@@ -522,13 +686,13 @@ show` is Rich output, truncated at 40 columns.
 
 | Step | Content | Ships when |
 |---|---|---|
-| 0 | Fixtures for cases A, B, B′, C, a >`max_rows_sample` table, a CSV-less environment layout | They reproduce the defects |
-| 1 | `source.py` + `LocalFileSource`; the profiler reads through it | Schemas byte-identical |
-| 2 | `evidence.py`, catalogue, `combine`; `inferences` populated from today's decisions; `notes`/`warnings` view | Check 1 passes; **no values change** |
-| 3 | The five answers rewritten as scoring; `id_columns`, `excluded_columns`, `train_test_relationship`, `metric` | Checks 4, 5, 6 |
-| 4 | Questions, `schema_answers.json`, `schema_prompt`, block path, `research schema` | Check 7 |
-| 5 | Modality list, `prediction_unit`, zarr, tie-break confidence, `row_count`, metric recording; the fiction deleted | Check 8 |
-| 6 | Proposer + verifiers, off by default | Check 3 |
+| 0 ✅ | Fixtures for cases A, B, B′, C, a >`max_rows_sample` table, a CSV-less environment layout | They reproduce the defects |
+| 1 ✅ | `source.py` + `LocalFileSource`; `profile_dataset` takes a source | Schemas byte-identical, on fixtures and on rogii's 1,546 tables |
+| 2 ✅ | `evidence.py`, catalogue, `combine`; `inferences` populated from today's decisions; `notes`/`warnings` view | Check 1 passes; **no values change** — the golden diff is two added keys, nothing removed and nothing altered |
+| 3 ✅ | The five answers rewritten as scoring; `id_columns`, `excluded_columns`, `train_test_relationship`, `metric` | Checks 4, 5, 6 |
+| 4 ✅ | Questions, `schema_answers.json`, `schema_prompt`, block path, `research schema` | Check 7 |
+| 5 ✅ | Modality list, `prediction_unit`, zarr, tie-break confidence, `row_count`, environment; the fiction deleted | Check 8 |
+| 6 ✅ | Proposer + verifiers, off by default | Check 3 |
 
 **Migration.** `PROFILE_SCHEMA_VERSION` 2 → 3, so every existing profile is
 stale and `_ensure_profile` re-derives it. **The catalogue is part of the schema

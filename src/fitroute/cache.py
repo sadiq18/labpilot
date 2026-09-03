@@ -63,11 +63,39 @@ class PromptCache:
             ).fetchone()
         if row is None:
             return None
+        response = str(row[0])
+        if not response.strip():
+            # Refusing to *write* one only protects a cache that never had the
+            # problem. Every machine that hit the bug already holds the rows —
+            # six of them, in the run this was found on — and would go on being
+            # served an empty answer, at $0.00, with the fix merged. A blank
+            # body is a miss: the call goes to a provider that is healthy now.
+            logger.debug("ignoring a cached empty response for %s", key[:12])
+            return None
         logger.debug("LLM cache hit: %s", key[:12])
-        return str(row[0])
+        return response
 
     def set(self, key: str, response: str, *, model: str) -> None:
+        """Store a response, unless it is empty.
+
+        An empty body is what a refused upstream leaves behind — a 429 with no
+        choices, a provider returning `content: ''`. Caching that turns one
+        transient refusal into a permanent answer: every later call with the
+        same key is served the empty string, never reaches the provider, and
+        fails downstream on "Response did not contain a JSON object. Got: ''".
+
+        Measured on playground-series-s6e8 (2026-08-30): six empty rows, written
+        while the free tier was throttling, then served back across two later
+        campaigns. Both cost exactly $0.00 and failed identically — the $0 being
+        the tell, since a cache hit never bills. The provider was healthy by
+        then; the cache was not.
+
+        A cache is a record of answers. An empty body is the absence of one.
+        """
         if not self.enabled or self._conn is None:
+            return
+        if not response or not response.strip():
+            logger.debug("refusing to cache an empty response for %s", key[:12])
             return
         with self._lock:
             self._conn.execute(

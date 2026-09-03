@@ -1,0 +1,81 @@
+# M24 tier 2 — the truth the hermetic corpus is checked against.
+#
+# Nightly rather than per PR, because it needs the full competition datasets:
+# row counts, cardinality, undecimated rogii, and generic-beats-dummy. Tier 1 is
+# the gate and runs on every change; this is what keeps tier 1 honest about what
+# it stands in for.
+#
+# **It will skip on a runner with no datasets, and loudly.** Every skip names the
+# paths it looked in, so "0 failed" over an empty corpus reads as the absence it
+# is rather than as a pass — which is M24's exit criterion 7, and the bug
+# `capability.py:333` documents.
+name: tier2
+
+on:
+  schedule:
+    # 03:00 UTC. Nothing depends on the hour; it is out of the way.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  tier2:
+    name: tier2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Run tier 2
+        # `-rs` so the skip reasons are printed, and `--junitxml` so the next
+        # step can tell "everything passed" from "nothing ran".
+        run: uv run pytest -m tier2 -rs --junitxml=tier2.xml
+        env:
+          LABPILOT_CORPUS_FULL_DATA: ${{ vars.LABPILOT_CORPUS_FULL_DATA }}
+
+      # Exit criterion 7, enforced rather than described.
+      #
+      # `pytest` exits 0 when every test skips, so the previous version of this
+      # job went green on a runner with no datasets — which is precisely the
+      # failure mode the file claims to prevent: a nightly that quietly measures
+      # nothing looks identical to one that measures everything and finds no
+      # problem. `-rs` prints the reasons into a log nobody opens when the check
+      # is green, so the loudness that matters for a scheduled job is the job's
+      # own status.
+      #
+      # `if: always()` so a job whose tests failed still reports coverage rather
+      # than hiding it behind the earlier failure.
+      - name: Refuse a run that measured nothing
+        if: always()
+        run: |
+          python - <<'EOF'
+          import sys, xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path("tier2.xml")
+          if not report.is_file():
+              sys.exit("tier2 produced no report at all")
+          suite = ET.parse(report).getroot()
+          cases = list(suite.iter("testcase"))
+          skipped = [c for c in cases if c.find("skipped") is not None]
+          print(f"tier2: {len(cases) - len(skipped)} measured, {len(skipped)} skipped")
+          if not cases:
+              sys.exit("tier2 collected no tests at all")
+          # Any skip, not merely a total wipeout. A first draft of this gate
+          # asked for one non-skipped test and passed a dataset-less run, because
+          # `test_every_competition_is_accounted_for` needs no data — so "we
+          # checked the fixture list" satisfied a check meant to prove the
+          # datasets were read. A competition this job could not measure is a
+          # competition tonight did not cover, whichever one it was.
+          if skipped:
+              for case in skipped:
+                  print(f"  skipped: {case.get('name')}")
+              sys.exit(
+                  f"tier2 skipped {len(skipped)} test(s) for want of the full datasets. "
+                  "Set the LABPILOT_CORPUS_FULL_DATA repository variable to a directory "
+                  "holding <slug>/ per competition. A green run here would claim a "
+                  "nightly check that did not happen."
+              )
+          EOF

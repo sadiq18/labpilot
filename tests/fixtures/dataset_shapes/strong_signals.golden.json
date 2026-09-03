@@ -82,15 +82,140 @@
     }
   ],
   "target_column": "SalePrice",
-  "id_column": "Id",
+  "id_columns": [
+    "Id"
+  ],
+  "excluded_columns": {
+    "Id": "is_id",
+    "SalePrice": "is_target"
+  },
+  "train_test_relationship": "disjoint_units",
+  "metric": null,
+  "target_distribution": {
+    "class_counts": {},
+    "class_dtype": null,
+    "median": 190750.0,
+    "zero_fraction": 0.0,
+    "skew": 0.594247,
+    "null_count": 0
+  },
   "submission_columns": [
     "Id",
     "SalePrice"
   ],
-  "warnings": [
-    "default_tabular"
+  "notes": [
+    {
+      "code": "modality_signal",
+      "text": "default_tabular",
+      "field": "modality",
+      "severity": "info"
+    }
   ],
-  "modality": "tabular",
+  "answers_fingerprint": "",
+  "inferences": {
+    "target_column": {
+      "signals": [
+        {
+          "id": "named_in_prediction_template",
+          "detail": "submission header names 'SalePrice'"
+        },
+        {
+          "id": "sole_withheld_column",
+          "detail": "'SalePrice' is the only column train has and test does not"
+        },
+        {
+          "id": "non_null_in_train",
+          "detail": "SalePrice: no nulls in train"
+        },
+        {
+          "id": "is_numeric",
+          "detail": "SalePrice: float64"
+        }
+      ],
+      "confidence": 0.9592,
+      "band": "asserted",
+      "alternatives": [],
+      "rejected": []
+    },
+    "id_columns": {
+      "signals": [
+        {
+          "id": "named_in_prediction_template",
+          "detail": "template names 'Id'"
+        },
+        {
+          "id": "first_template_column",
+          "detail": "'Id' is the template's first column"
+        },
+        {
+          "id": "present_in_train_and_scoring",
+          "detail": "'Id' is on both sides"
+        },
+        {
+          "id": "unique_per_unit",
+          "detail": "12 distinct in 12"
+        }
+      ],
+      "confidence": 0.946,
+      "band": "asserted",
+      "alternatives": [],
+      "rejected": []
+    },
+    "train_test_relationship": {
+      "signals": [
+        {
+          "id": "scoring_input_present",
+          "detail": "a scoring input exists; no split signal"
+        }
+      ],
+      "confidence": 0.5,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
+    },
+    "metric": {
+      "signals": [],
+      "confidence": 0.0,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
+    },
+    "prediction_unit": {
+      "signals": [
+        {
+          "id": "submission_row_per_scoring_row",
+          "detail": "the template has one row per row of the scoring input"
+        }
+      ],
+      "confidence": 0.8,
+      "band": "probable",
+      "alternatives": [],
+      "rejected": []
+    },
+    "modality": {
+      "signals": [
+        {
+          "id": "single_modality_present",
+          "detail": "only 'tabular' is present"
+        }
+      ],
+      "confidence": 0.7,
+      "band": "probable",
+      "alternatives": [],
+      "rejected": []
+    }
+  },
+  "modalities": [
+    {
+      "modality": "tabular",
+      "role": "primary",
+      "detail": "3 table(s)",
+      "image_dir": null,
+      "image_column": null,
+      "text_column": null
+    }
+  ],
+  "prediction_unit": "row",
   "image_dir": null,
   "image_column": null,
   "text_column": null,
@@ -100,8 +225,23 @@
   "train_partition_count": 0,
   "test_partition_count": 0,
   "row_count_estimated": false,
+  "column_stats_rows": 12,
   "scored_is_partition_suffix": false,
   "scored_fraction": 0.0,
-  "train_only_columns": [],
-  "anchor_column": null
+  "train_only_columns": [
+    "SalePrice"
+  ],
+  "anchor_column": null,
+  "modality": "tabular",
+  "confidence": 0.0,
+  "target_type": "continuous",
+  "id_column": "Id",
+  "feature_columns": [
+    "LotArea",
+    "Neighborhood",
+    "YearBuilt"
+  ],
+  "warnings": [
+    "default_tabular"
+  ]
 }

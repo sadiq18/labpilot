@@ -28,11 +28,14 @@ declaration nothing reaches, which is the defect class this milestone removes.
 
 from __future__ import annotations
 
+import os.path
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from labpilot.accessor.profiler.schema import MetricRef
 
 __all__ = [
     "DatasetSource",
@@ -64,12 +67,20 @@ class DeclaredFacts(BaseModel):
     is evidence that something is wrong, not an instruction — which is why this
     is returned by the source rather than written onto the schema.
 
-    Only what a consumer reads today lives here. The target, metric and id
-    declarations that step 3 will weigh arrive with the code that weighs them.
+    Only what a consumer reads today lives here.
     """
 
     title: str = ""
     description: str = ""
+    #: Field name to value, from `schema_answers.json` — what a human has
+    #: already settled about this dataset. Carried by the source rather than
+    #: read by the profiler because the profiler has no workspace: a warehouse
+    #: adapter answers the same questions from wherever it keeps them.
+    answers: dict[str, str] = Field(default_factory=dict)
+    #: What the environment says it scores by. Already canonical: the caller
+    #: resolves the name through the metric registry, because `accessor` may not
+    #: import `research_engine`.
+    metric: MetricRef | None = None
 
 
 @runtime_checkable
@@ -135,9 +146,20 @@ class LocalFileSource:
         :meth:`tables`, which cannot produce one; from step 3 they will also
         come from operator answers and model proposals, and the check has to
         exist before the untrusted caller does, not after.
+
+        **The uri is normalised, not resolved.** `..` is collapsed lexically —
+        which settles both escapes above — while symlinks are left to the read
+        that follows. Resolving first rejected a link *the root itself
+        contains*: :meth:`tables` recurses into a symlinked ``train/`` and
+        lists what it finds there, so `path` was refusing uris `tables` had
+        just produced, and a dataset holding its partitions on another volume
+        stopped profiling entirely. What is being bounded is which file a uri
+        may *address*; a link inside the root was placed there by whoever laid
+        the dataset out, and following it is what reading a CSV has always
+        meant.
         """
         root = self.root.resolve()
-        resolved = (root / table.uri).resolve()
+        resolved = Path(os.path.normpath(root / table.uri))
         if resolved != root and root not in resolved.parents:
             raise ValueError(
                 f"table uri {table.uri!r} resolves outside the dataset root {self.root}"

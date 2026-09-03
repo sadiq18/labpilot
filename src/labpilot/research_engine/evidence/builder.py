@@ -30,6 +30,7 @@ from labpilot.research_engine.intelligence.paths import ResearchPaths
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import Experiment, Hypothesis
 from labpilot.research_engine.shared.labels import is_record_reference
+from labpilot.research_engine.validation.models import ValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,14 @@ _NOISE = 0.001
 #: `last_resort_scaffold` from the generated fallback script. Both write a
 #: plausible-looking number — 0.5 and 0.0 — which is why they fooled every
 #: downstream check that only asked whether a score was present.
-PLACEHOLDER_STATUSES = frozenset({"dry_run_stub", "last_resort_scaffold"})
+#:
+#: `smoke` is the third: a script run under `LABPILOT_SMOKE` trains on a slice
+#: with a couple of folds to prove the pipeline executes, and writes a score
+#: that looks like any other. The smoke gate restores `metrics.json` so this
+#: normally never reaches a reader — this entry is the second lock, for a file
+#: that arrives some other way (a run started by hand, a gate that crashed
+#: before restoring). A number produced to prove a script runs is not a result.
+PLACEHOLDER_STATUSES = frozenset({"dry_run_stub", "last_resort_scaffold", "smoke"})
 
 
 def is_placeholder_metrics(metrics: dict[str, Any] | None) -> bool:
@@ -95,6 +103,42 @@ def _primary_cv_keyed(metrics: dict[str, Any]) -> tuple[float, str] | None:
         if isinstance(metrics.get(key), (int, float)):
             return float(metrics[key]), key
     return None
+
+
+def _same_metric(left: str, right: str) -> bool:
+    """Whether two scores were measured on the same, *named*, metric.
+
+    Equal **and** named, in that order of importance. An unnamed metric is
+    unknown, not a name that happens to be empty, so two of them do not match: a
+    bare `left != right` let a pair of `metric=""` results through and 0.9 was
+    subtracted from 100.0 into a durable `rejected` verdict. That is the failure
+    this guard exists for — six rogii cards recorded a gain of -194.30 by
+    subtracting a stub's `cv_accuracy` from a real `cv_rmse` — reachable again
+    because validators build results by hand and `metric=""` is what forgetting
+    the field looks like.
+
+    Both operands earn their place: `left == right` alone accepts two unknowns,
+    and `bool(left)` alone accepts two different named metrics. Spelling it as
+    three or-ed clauses instead left one of them unreachable, which a mutation
+    sweep caught.
+
+    `_primary_cv_keyed` never returns an empty name, so this costs the Kaggle
+    path nothing; it is entirely a guard on the seam.
+    """
+    return left == right and bool(left)
+
+
+def _found(result: ValidationResult | None, metrics: dict[str, Any]) -> tuple[float, str] | None:
+    """The (score, key) pair, preferring one a validator already extracted.
+
+    Identical output either way — the Kaggle validator calls `_primary_cv_keyed`
+    on the same blob — so this is the no-op seam, not a second extraction path.
+    A result whose score is None means the validator found no primary metric,
+    which is what `_primary_cv_keyed` returning None already means.
+    """
+    if result is not None:
+        return None if result.score is None else (result.score, result.metric)
+    return _primary_cv_keyed(metrics)
 
 
 def _primary_cv(metrics: dict[str, Any]) -> float | None:
@@ -440,6 +484,8 @@ def build_evidence_card(
     overfitting: bool = False,
     belief_priors: dict[str, float] | None = None,
     persist: bool = True,
+    result: ValidationResult | None = None,
+    control_result: ValidationResult | None = None,
 ) -> EvidenceCard:
     """Build (and optionally persist) an Evidence Card for one treatment run.
 
@@ -450,14 +496,65 @@ def build_evidence_card(
     ``rejected`` and a regression as ``accepted``. A card is a signed, durable
     conclusion; writing one whose sign is a guess is worse than writing none.
     """
+    # A `ValidationResult` supplies the same three facts the loose arguments do —
+    # score, control, direction — but as one object that states its own
+    # direction. Accepted beside them rather than instead of them so this phase
+    # changes no behaviour: the wrapper reads the same sources in the same order,
+    # and a card built either way is identical field for field.
+    #
+    # Where the caller says nothing, the result does. A validator that measured
+    # its own direction outranks a competition file that never saw the number,
+    # which is the inversion M12 exists to make possible.
+    # `raw` is not treated like the three fields below it, and that asymmetry is
+    # deliberate. The blob is *where the score came from*, so it travels with the
+    # score as one unit: `_found` takes the primary metric off the result
+    # unconditionally, and every statistic the card reads around that number —
+    # `cv_std`, `train_time_s`, `peak_memory_mb` — has to come from the same
+    # measurement or the card describes two different runs at once.
+    #
+    # A round of review called this an inconsistency and made `raw` defer to an
+    # explicit argument like `maximize` does. That produced a card reporting a
+    # score of 1.0 beside a fold spread of 1.1 belonging to a run that scored
+    # 500.0, with `_stability` comparing a spread that never accompanied the
+    # score. `maximize` is an independent scalar a caller may legitimately know
+    # better than the validator; `raw` is not.
+    if result is not None:
+        treatment_metrics = result.raw
+        if maximize is None:
+            maximize = result.maximize
+        if lb_gain is None:
+            lb_gain = result.secondary
+    # `not control_metrics`, not `is None`: `resolve_control` returns `{}` when it
+    # finds nothing, so an `is None` test skipped the assignment for the most
+    # common empty case there is.
+    if control_result is not None and not control_metrics:
+        control_metrics = control_result.raw
+
     if maximize is None:
         maximize = _resolve_direction(knowledge_dir, competition, workspace_root)
     plan_meta = dict(plan_metadata or {})
     control_metrics = dict(control_metrics or {})
+
     missing_control = not control_metrics and not control_execution_id
 
-    parent_found = _primary_cv_keyed(control_metrics) if control_metrics else None
-    treatment_found = _primary_cv_keyed(treatment_metrics)
+    # A control_result *is* a control, whether or not it brought a metrics blob
+    # with it. This used to ask only the blob, so a validator that scores without
+    # writing Kaggle-shaped `cv_` keys — the whole point of the seam — had its
+    # control thrown away and every comparison came back `missing_control`. The
+    # treatment side never had the bug, which is why the suite stayed green:
+    # `_found(result, ...)` below is unguarded, and only the control was asked to
+    # prove itself twice.
+    #
+    # No `score is not None` refinement: `_found` already returns None for a
+    # scoreless result, and `missing_control` above is redundant with the
+    # `parent_cv is None` test at the `_decide` call — a second guard there was
+    # unreachable rather than defensive, and a mutation sweep said so.
+    parent_found = (
+        _found(control_result, control_metrics)
+        if (control_result is not None or control_metrics)
+        else None
+    )
+    treatment_found = _found(result, treatment_metrics)
     parent_cv = parent_found[0] if parent_found else None
     treatment_cv = treatment_found[0] if treatment_found else None
 
@@ -468,7 +565,7 @@ def build_evidence_card(
     mismatched_metric = (
         parent_found is not None
         and treatment_found is not None
-        and parent_found[1] != treatment_found[1]
+        and not _same_metric(parent_found[1], treatment_found[1])
     )
     # A run that never trained has nothing to compare. Refusing here is the
     # upstream fix that `ClaimPromoter._card_compared_something_real` could only
@@ -552,10 +649,22 @@ def build_evidence_card(
             sides.append(f"control reported {control_metrics.get('status')!r}")
         reason = f"placeholder_metrics: {', '.join(sides)}; no model was trained"
     elif mismatched_metric:
-        reason = (
-            f"metric_key_mismatch: control scored {parent_found[1]!r}, "
-            f"treatment scored {treatment_found[1]!r}"
-        )
+        # `_found` guarantees both are set whenever `mismatched_metric` is True,
+        # so the indexing below is safe; mypy cannot see that through the
+        # conjunction, hence the local names.
+        parent_metric = parent_found[1] if parent_found else ""
+        treatment_metric = treatment_found[1] if treatment_found else ""
+        if not parent_metric or not treatment_metric:
+            reason = (
+                "metric_key_unknown: a score arrived without the name of the "
+                f"metric it was measured on (control {parent_metric!r}, "
+                f"treatment {treatment_metric!r})"
+            )
+        else:
+            reason = (
+                f"metric_key_mismatch: control scored {parent_metric!r}, "
+                f"treatment scored {treatment_metric!r}"
+            )
     elif self_comparison:
         reason = f"self_comparison: {self_comparison}"
 

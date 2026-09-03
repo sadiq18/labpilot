@@ -76,15 +76,139 @@
     }
   ],
   "target_column": "Transported",
-  "id_column": "PassengerId",
+  "id_columns": [
+    "PassengerId"
+  ],
+  "excluded_columns": {
+    "PassengerId": "is_id",
+    "Transported": "is_target"
+  },
+  "train_test_relationship": "disjoint_units",
+  "metric": null,
+  "target_distribution": {
+    "class_counts": {
+      "True": 7,
+      "False": 5
+    },
+    "class_dtype": "bool",
+    "median": null,
+    "zero_fraction": null,
+    "skew": null,
+    "null_count": 0
+  },
   "submission_columns": [
     "PassengerId",
     "Transported"
   ],
-  "warnings": [
-    "default_tabular"
+  "notes": [
+    {
+      "code": "modality_signal",
+      "text": "default_tabular",
+      "field": "modality",
+      "severity": "info"
+    }
   ],
-  "modality": "tabular",
+  "answers_fingerprint": "",
+  "inferences": {
+    "target_column": {
+      "signals": [
+        {
+          "id": "named_in_prediction_template",
+          "detail": "submission header names 'Transported'"
+        },
+        {
+          "id": "sole_withheld_column",
+          "detail": "'Transported' is the only column train has and test does not"
+        },
+        {
+          "id": "non_null_in_train",
+          "detail": "Transported: no nulls in train"
+        }
+      ],
+      "confidence": 0.952,
+      "band": "asserted",
+      "alternatives": [],
+      "rejected": []
+    },
+    "id_columns": {
+      "signals": [
+        {
+          "id": "named_in_prediction_template",
+          "detail": "template names 'PassengerId'"
+        },
+        {
+          "id": "first_template_column",
+          "detail": "'PassengerId' is the template's first column"
+        },
+        {
+          "id": "present_in_train_and_scoring",
+          "detail": "'PassengerId' is on both sides"
+        },
+        {
+          "id": "unique_per_unit",
+          "detail": "12 distinct in 12"
+        }
+      ],
+      "confidence": 0.946,
+      "band": "asserted",
+      "alternatives": [],
+      "rejected": []
+    },
+    "train_test_relationship": {
+      "signals": [
+        {
+          "id": "scoring_input_present",
+          "detail": "a scoring input exists; no split signal"
+        }
+      ],
+      "confidence": 0.5,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
+    },
+    "metric": {
+      "signals": [],
+      "confidence": 0.0,
+      "band": "uncertain",
+      "alternatives": [],
+      "rejected": []
+    },
+    "prediction_unit": {
+      "signals": [
+        {
+          "id": "submission_row_per_scoring_row",
+          "detail": "the template has one row per row of the scoring input"
+        }
+      ],
+      "confidence": 0.8,
+      "band": "probable",
+      "alternatives": [],
+      "rejected": []
+    },
+    "modality": {
+      "signals": [
+        {
+          "id": "single_modality_present",
+          "detail": "only 'tabular' is present"
+        }
+      ],
+      "confidence": 0.7,
+      "band": "probable",
+      "alternatives": [],
+      "rejected": []
+    }
+  },
+  "modalities": [
+    {
+      "modality": "tabular",
+      "role": "primary",
+      "detail": "3 table(s)",
+      "image_dir": null,
+      "image_column": null,
+      "text_column": null
+    }
+  ],
+  "prediction_unit": "row",
   "image_dir": null,
   "image_column": null,
   "text_column": null,
@@ -94,8 +218,23 @@
   "train_partition_count": 0,
   "test_partition_count": 0,
   "row_count_estimated": false,
+  "column_stats_rows": 12,
   "scored_is_partition_suffix": false,
   "scored_fraction": 0.0,
-  "train_only_columns": [],
-  "anchor_column": null
+  "train_only_columns": [
+    "Transported"
+  ],
+  "anchor_column": null,
+  "modality": "tabular",
+  "confidence": 0.0,
+  "target_type": "binary",
+  "id_column": "PassengerId",
+  "feature_columns": [
+    "HomePlanet",
+    "Age",
+    "RoomService"
+  ],
+  "warnings": [
+    "default_tabular"
+  ]
 }

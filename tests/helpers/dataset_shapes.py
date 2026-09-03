@@ -33,11 +33,15 @@ import pandas as pd
 __all__ = [
     "build_bool_target",
     "build_environment",
+    "build_image_and_text",
+    "build_partition_suffix",
     "build_no_kaggle_inputs",
     "build_partitioned_with_template",
     "build_partitioned_without_template",
     "build_sampled_beyond_cap",
     "build_strong_signals",
+    "build_tables_with_previews",
+    "build_template_only",
 ]
 
 #: Entities per kind in the partitioned shapes. The primary kind needs at least
@@ -147,7 +151,7 @@ def _partition_frames(entity_index: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     return train, test
 
 
-def _write_partitioned(data_dir: Path) -> None:
+def _write_partitioned(data_dir: Path) -> Path:
     (data_dir / "train").mkdir(parents=True)
     (data_dir / "test").mkdir()
     for index, entity in enumerate(_PRIMARY_ENTITIES):
@@ -177,6 +181,7 @@ def _write_partitioned(data_dir: Path) -> None:
         )
         marker.to_csv(data_dir / "train" / f"{entity}__typewell.csv", index=False)
         marker.to_csv(data_dir / "test" / f"{entity}__typewell.csv", index=False)
+    return data_dir
 
 
 def build_partitioned_with_template(root: Path) -> Path:
@@ -303,6 +308,113 @@ def build_sampled_beyond_cap(root: Path) -> Path:
         data_dir / "test.csv", index=False
     )
     pd.DataFrame({"id": range(rows + 1, rows + 5), "label": [0.0] * 4}).to_csv(
+        data_dir / "sample_submission.csv", index=False
+    )
+    return data_dir
+
+
+def build_partition_suffix(root: Path) -> Path:
+    """A forecast: the scored rows are a contiguous tail of each partition.
+
+    The split that makes a random CV meaningless — at inference the model holds
+    the head of each partition and must predict forward, so validation has to
+    reproduce the gap rather than sampling rows uniformly.
+    """
+    data_dir = root / "partition-suffix"
+    (data_dir / "train").mkdir(parents=True)
+    (data_dir / "test").mkdir()
+    for entity in ("w0", "w1", "w2"):
+        pd.DataFrame(
+            {"MD": [1.0, 2.0, 3.0, 4.0], "GR": [1.0, 2.0, 3.0, 4.0], "TVT": [1.0, 2.0, 3.0, 4.0]}
+        ).to_csv(data_dir / "train" / f"{entity}__main.csv", index=False)
+        pd.DataFrame({"MD": [1.0, 2.0, 3.0, 4.0], "GR": [1.0, 2.0, 3.0, 4.0]}).to_csv(
+            data_dir / "test" / f"{entity}__main.csv", index=False
+        )
+    pd.DataFrame(
+        {"id": [f"{e}_{i}" for e in ("w0", "w1", "w2") for i in (2, 3)], "TVT": [0.0] * 6}
+    ).to_csv(data_dir / "sample_submission.csv", index=False)
+    return data_dir
+
+
+def build_template_only(root: Path) -> Path:
+    """Train and a template, and no column withheld between them.
+
+    The one shape where position is the only thing left to go on: nothing is
+    missing from the scoring input, so the label can only be guessed from where
+    it sits in the template. Capped at 0.50 by the catalogue, which is what
+    makes it ask instead of answer.
+    """
+    data_dir = root / "template-only"
+    data_dir.mkdir(parents=True)
+    frame = pd.DataFrame({"Id": [1, 2, 3, 4], "y": [0.5, 1.5, 2.5, 3.5]})
+    frame.to_csv(data_dir / "train.csv", index=False)
+    frame.to_csv(data_dir / "sample_submission.csv", index=False)
+    return data_dir
+
+
+def build_tables_with_previews(root: Path) -> Path:
+    """Per-entity tables *and* a directory of image previews.
+
+    rogii's shape: 1,546 well logs beside PNG previews of the same wells. The
+    tables carry the signal and the previews do not, which is why preferring
+    tabular is right — and why discarding them was not, since nothing
+    downstream could then know they existed.
+
+    Written as zero-byte `.png` files: the detector counts extensions and never
+    opens them, so a real encoder would cost a dependency for nothing.
+    """
+    data_dir = _write_partitioned(root / "tables-with-previews")
+    previews = data_dir / "previews"
+    previews.mkdir()
+    for entity in _PRIMARY_ENTITIES[:3]:
+        (previews / f"{entity}.png").write_bytes(b"")
+    pd.DataFrame({"id": ["e0_t0", "e0_t1"], "depth": [0.0, 0.0]}).to_csv(
+        data_dir / "sample_submission.csv", index=False
+    )
+    return data_dir
+
+
+def build_image_and_text(root: Path) -> Path:
+    """Images *and* a long free-text column, with neither outnumbering the other.
+
+    The one shape the rule-based detector cannot settle: it finds both and has
+    no rule that prefers either, so it asks a model. Whatever the model says is
+    capped, because a tie broken by a sentence is not a tie resolved by the data.
+    """
+    data_dir = root / "image-and-text"
+    images = data_dir / "images"
+    images.mkdir(parents=True)
+    for index in range(1, 21):
+        (images / f"{index}.png").write_bytes(b"")
+
+    def note(index: int) -> str:
+        # Long enough to pass the average-length threshold, and distinct enough
+        # to pass the cardinality one: a column of four repeated sentences reads
+        # as a category, which is the rule doing its job.
+        return (
+            "a long passage of prose about specimen number "
+            f"{index}, comfortably past the length at which the detector calls "
+            "a column text rather than a label"
+        )
+
+    train = pd.DataFrame(
+        {
+            "id": range(1, 13),
+            "file": [f"{i}.png" for i in range(1, 13)],
+            "notes": [note(i) for i in range(1, 13)],
+            "label": [0, 1] * 6,
+        }
+    )
+    test = pd.DataFrame(
+        {
+            "id": range(13, 17),
+            "file": [f"{i}.png" for i in range(13, 17)],
+            "notes": [note(i) for i in range(13, 17)],
+        }
+    )
+    train.to_csv(data_dir / "train.csv", index=False)
+    test.to_csv(data_dir / "test.csv", index=False)
+    pd.DataFrame({"id": test["id"], "label": [0] * 4}).to_csv(
         data_dir / "sample_submission.csv", index=False
     )
     return data_dir

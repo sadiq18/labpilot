@@ -265,6 +265,9 @@ class AnalyzeOrchestrator:
                 persist=True,
                 write_report=False,
                 progressive=True,
+                # M23 step 8. Without this the gate cannot see the campaign, and
+                # `_hypothesize_run` is the other place a belief is minted.
+                workspace_root=context.workspace_root,
             )
         except Exception as exc:  # soft-fail
             logger.warning("Hypothesis Assistant failed: %s", exc)

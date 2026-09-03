@@ -49,7 +49,12 @@ def record_suggestion(
     context: dict[str, Any] | None = None,
 ) -> Suggestion:
     ensure_metrics(store, session_id)
-    store.increment_metric(session_id, "no_capability")
+    if kind == "no_capability":
+        # Only a capability gap counts against the capability-gap metric. The
+        # increment used to be unconditional, so a suggestion recorded for any
+        # other reason — a campaign pausing for guidance, say — inflated a
+        # number an operator reads as "tools the system was missing".
+        store.increment_metric(session_id, "no_capability")
     suggestion = store.append_new_suggestion(
         session_id=session_id,
         kind=kind,

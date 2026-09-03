@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from labpilot.research_engine.intelligence.hypothesis.models import HypothesisRecommendation
 from labpilot.research_engine.shared.experiments.hypothesis import HypothesisStore
 from labpilot.research_engine.shared.experiments.models import (
     HypothesisCreatedBy,
@@ -13,7 +15,8 @@ from labpilot.research_engine.shared.experiments.models import (
     HypothesisOrigin,
     HypothesisStatus,
 )
-from labpilot.research_engine.intelligence.hypothesis.models import HypothesisRecommendation
+
+logger = logging.getLogger(__name__)
 
 
 def _mint_identity(hyp_or_card: Any) -> tuple[str, str, str, str]:
@@ -75,6 +78,7 @@ def persist_recommendations(
     *,
     knowledge_dir: Path,
     competition: str,
+    workspace_root: Path | None = None,
 ) -> list[HypothesisRecommendation]:
     """Create Suggested (proposed) M2 hypotheses; fill hypothesis_id on cards.
 
@@ -82,8 +86,24 @@ def persist_recommendations(
     in the meantime is dropped rather than returned with no hypothesis, because
     the caller reports `new_count = len(...)` of what comes back — counting a
     card that created nothing is how "23 new hypotheses" gets printed for a run
-    that added three.
+    that added three. A refusal below returns the same way, for the same reason.
+
+    M23 step 8 gates here because this is the **only durable write** — the point
+    past which a belief outlives the run. Blocking further upstream would stop a
+    campaign doing the very work that opens the gate; blocking at submission
+    would be far too late, since rogii wrote 19 child hypotheses and drove eight
+    techniques to 0.0 confidence without ever submitting anything.
+
+    `workspace_root=None` is not a refusal: a caller with no workspace is one
+    this gate cannot see, not one that skipped its baseline.
     """
+    from labpilot.research_engine.execution.baseline.gate import refuse_hypothesis_minting
+
+    refusal = refuse_hypothesis_minting(workspace_root)
+    if refusal:
+        logger.warning("Refusing to mint %d hypothesis(es): %s", len(recommendations), refusal)
+        return []
+
     store = HypothesisStore(knowledge_dir, competition)
     updated: list[HypothesisRecommendation] = []
     for card in recommendations:
@@ -239,14 +259,10 @@ def load_open_hypothesis_tags(knowledge_dir: Path, competition: str) -> set[str]
         if hyp.technique:
             open_tags.add(normalize_label(hyp.technique))
         if hyp.parent_hypothesis_id and hyp.technique:
-            open_tags.add(
-                normalize_label(f"{hyp.parent_hypothesis_id}+{hyp.technique}")
-            )
+            open_tags.add(normalize_label(f"{hyp.parent_hypothesis_id}+{hyp.technique}"))
         combo = [str(t).strip() for t in (hyp.combo_techniques or []) if str(t).strip()]
         if len(combo) >= 2:
             joined = "+".join(sorted(normalize_label(t) for t in combo))
             open_tags.add(joined)
-            open_tags.add(
-                normalize_label(f"{hyp.parent_hypothesis_id or 'root'}+{joined}")
-            )
+            open_tags.add(normalize_label(f"{hyp.parent_hypothesis_id or 'root'}+{joined}"))
     return open_tags
