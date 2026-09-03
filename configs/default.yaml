@@ -119,3 +119,17 @@ kaggle:
   kernel_poll_timeout: 3600
   kernel_poll_interval: 15
 
+# Automatic stops for `research conduct run`. Both are also `conduct run` flags,
+# which win over anything set here; this is the default for a workspace whose
+# models need more attempts than the shipped three.
+#
+# Omit a key to keep the shipped default. `0` means *no limit* — the breaker is
+# off — because `null` is already spent on "not configured".
+#
+# The failure breaker fires on the same failure repeating, not on three failures
+# of any kind: a repair loop that fixes one defect and surfaces the next is
+# progress, and it is `max_barren_steps` that bounds how long it may keep going
+# (issue #173).
+# campaign:
+#   max_consecutive_failures: 3
+#   max_barren_steps: 8

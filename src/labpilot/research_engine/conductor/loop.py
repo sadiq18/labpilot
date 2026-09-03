@@ -1557,10 +1557,25 @@ def _run_until_stop_inner(
                 # Say what broke. A bare `stop:failing` reproduces the original
                 # complaint — a campaign that ended and did not say why.
                 why = "; ".join(budget_state.recent_failures[-2:]) or "no successful experiment"
+                # And say *which* rule ended it. The two read identically in a
+                # transcript and mean opposite things: the same failure three
+                # times is a stall, while distinct failures that ran out of
+                # steps is a repair loop interrupted mid-convergence. An
+                # operator who cannot tell them apart concludes the model
+                # cannot write code, which was the wrong lesson from
+                # playground-series-s6e8.
+                if budget_state.failures_are_repeating():
+                    which = "the same failure is repeating"
+                else:
+                    which = (
+                        "the failures were distinct — the repair loop was still "
+                        "converging when the barren-step limit ended it; "
+                        "--max-barren-steps buys it more attempts"
+                    )
                 rationale = (
                     f"stop:{stop} — {budget_state.consecutive_failures} consecutive "
                     f"failed execution(s), {budget_state.steps_since_success} step(s) "
-                    f"since the last success. Last: {why}"
+                    f"since the last success ({which}). Last: {why}"
                 )
             _progress(f"Stop condition: {rationale}")
             decisions.append(
