@@ -185,6 +185,7 @@ class RoleBoundClient:
             base_url=provider.base_url,
             api_key=gateway._api_key(provider.api_key_env),
             timeout_seconds=provider.request_timeout_seconds,
+            json_via=provider.json_via,
         )
 
         started = time.monotonic()

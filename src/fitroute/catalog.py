@@ -68,6 +68,12 @@ class ProviderSpec(BaseModel):
     # the reply discarded downstream — observed as a 3-of-3 fallback rate before
     # constrained decoding was requested.
     caps: set[str] = Field(default_factory=set)
+    # *How* this endpoint delivers `structured_output`, not whether it does.
+    # Several of the strongest free models advertise `tools` but not
+    # `response_format`; a forced single-function call whose arguments are the
+    # payload gets the same guarantee from them. `response_format` stays the
+    # default — it is simpler and better tested.
+    json_via: str = "response_format"  # response_format | tools
     rpm: int | None = None
     rpd: int | None = None
     tpm: int | None = None

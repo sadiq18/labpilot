@@ -6,6 +6,8 @@ imagined one. The comment above each says which.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from fitroute.adapters import Completion, build_adapter
@@ -293,3 +295,190 @@ def test_build_adapter_rejects_unknown_kind():
 def test_completion_distinguishes_unmetered_from_zero():
     assert Completion("x").metered is False
     assert Completion("x", prompt_tokens=0, completion_tokens=0).metered is True
+
+
+# --- structured output via tool calling --------------------------------------
+#
+# Several of the strongest free models on OpenRouter advertise `tools` but not
+# `response_format` (nvidia/nemotron-3-ultra-550b-a55b:free, cohere/north-mini-
+# code:free, poolside/laguna-{s,xs}-2.1:free, checked 2026-08-07). With
+# structured_output a hard precondition, a response_format-only adapter rejects
+# exactly the models best suited to codegen.
+
+
+class _FakeResponse:
+    def __init__(self, body: dict):
+        self._body = json.dumps(body).encode("utf-8")
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _capture(monkeypatch, body: dict) -> list[dict]:
+    """Monkeypatch the transport; return the list request payloads land in."""
+    sent: list[dict] = []
+
+    def _fake_urlopen(request, timeout=None):
+        sent.append(json.loads(request.data.decode("utf-8")))
+        return _FakeResponse(body)
+
+    monkeypatch.setattr("fitroute.adapters.urllib.request.urlopen", _fake_urlopen)
+    return sent
+
+
+def _tool_call_body(arguments):
+    return {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [{"function": {"name": "emit_json", "arguments": arguments}}],
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 5},
+    }
+
+
+def _envelope(payload: str):
+    """What a provider sends back: the payload inside the schema's one property."""
+    return _tool_call_body(json.dumps({"json": payload}))
+
+
+def test_tools_route_forces_a_single_function_call(monkeypatch):
+    """`tools` alone only *offers* the function. Without tool_choice the model
+    is free to answer in prose, which is the failure the cap exists to prevent."""
+    sent = _capture(monkeypatch, _envelope('{"ok": true}'))
+    adapter = build_adapter("openai_compat", base_url="https://x/v1", api_key="k", json_via="tools")
+    adapter.complete("sys", "user", model="m", temperature=0.1, json_mode=True)
+
+    payload = sent[0]
+    assert payload["tool_choice"] == {"type": "function", "function": {"name": "emit_json"}}
+    assert [t["function"]["name"] for t in payload["tools"]] == ["emit_json"]
+    assert "response_format" not in payload, (
+        "sending both to a model that rejects response_format fails the whole call"
+    )
+
+
+def test_forced_tool_declares_a_property_to_carry_the_payload(monkeypatch):
+    """Measured 2026-08-07 on gemini-3.5-flash-lite: an open object schema
+    (`additionalProperties: true`, no `properties`) yields a forced call whose
+    arguments are `{}`. Providers validate arguments against the declared schema
+    and drop what it does not name — an empty answer that parses, which is worse
+    than a failure. The payload needs a declared property to travel in."""
+    sent = _capture(monkeypatch, _envelope("{}"))
+    adapter = build_adapter("openai_compat", base_url="https://x/v1", api_key="k", json_via="tools")
+    adapter.complete("s", "u", model="m", temperature=0.1, json_mode=True)
+
+    schema = sent[0]["tools"][0]["function"]["parameters"]
+    assert schema["required"] == ["json"]
+    assert schema["properties"]["json"]["type"] == "string"
+
+
+def test_tools_route_returns_the_payload_not_the_envelope(monkeypatch):
+    """Callers json.loads the result, so they must get what the prompt asked
+    for — not `{"json": "..."}` wrapped around it."""
+    _capture(monkeypatch, _envelope('{"technique": "target-encoding"}'))
+    adapter = build_adapter("openai_compat", base_url="https://x/v1", api_key="k", json_via="tools")
+    result = adapter.complete("s", "u", model="m", temperature=0.1, json_mode=True)
+    assert json.loads(result.text) == {"technique": "target-encoding"}
+    assert result.total_tokens == 17, "usage is read the same way on both routes"
+
+
+def test_tools_route_survives_a_payload_containing_code(monkeypatch):
+    """Codegen is the motivating role: the payload holds source with newlines and
+    quotes, which has to come back through the envelope byte-identical."""
+    source = 'def add(a, b):\n    """Add."""\n    return a + b\n'
+    _capture(monkeypatch, _envelope(json.dumps({"code": source})))
+    adapter = build_adapter("openai_compat", base_url="https://x/v1", api_key="k", json_via="tools")
+    result = adapter.complete("s", "u", model="m", temperature=0.1, json_mode=True)
+    assert json.loads(result.text)["code"] == source
+
+
+def test_tools_route_accepts_object_valued_arguments(monkeypatch):
+    """The OpenAI schema says `arguments` is a string; several compatible
+    endpoints send the object. Both mean the same thing."""
+    _capture(monkeypatch, _tool_call_body({"json": '{"ok": true}'}))
+    adapter = build_adapter("openai_compat", base_url="https://x/v1", api_key="k", json_via="tools")
+    result = adapter.complete("s", "u", model="m", temperature=0.1, json_mode=True)
+    assert json.loads(result.text) == {"ok": True}
+
+
+def test_tools_route_accepts_a_payload_nested_instead_of_serialised(monkeypatch):
+    """A model that ignores the envelope's `type: string` and nests the object
+    has still answered the question."""
+    _capture(monkeypatch, _tool_call_body(json.dumps({"json": {"ok": True}})))
+    adapter = build_adapter("openai_compat", base_url="https://x/v1", api_key="k", json_via="tools")
+    result = adapter.complete("s", "u", model="m", temperature=0.1, json_mode=True)
+    assert json.loads(result.text) == {"ok": True}
+
+
+def test_tools_route_raises_when_the_envelope_is_empty(monkeypatch):
+    """The `{}` failure above, reaching the caller: it parses as JSON but says
+    nothing, so it must be an error here rather than an empty result downstream."""
+    _capture(monkeypatch, _tool_call_body("{}"))
+    adapter = build_adapter("openai_compat", base_url="https://x/v1", api_key="k", json_via="tools")
+    with pytest.raises(RuntimeError, match="without 'json'"):
+        adapter.complete("s", "u", model="m", temperature=0.1, json_mode=True)
+
+
+def test_tools_route_raises_when_the_forced_call_is_ignored(monkeypatch):
+    """An endpoint that answers in content despite tool_choice does not have the
+    capability its catalog entry claims. Falling back to content would hide a
+    wrong entry and hand prose to a caller about to parse it as JSON."""
+    _capture(monkeypatch, {"choices": [{"message": {"content": "Sure! Here is the JSON:"}}]})
+    adapter = build_adapter("openai_compat", base_url="https://x/v1", api_key="k", json_via="tools")
+    with pytest.raises(RuntimeError, match="ignored the forced tool call"):
+        adapter.complete("s", "u", model="m", temperature=0.1, json_mode=True)
+
+
+def test_tools_route_sends_no_tools_when_json_is_not_asked_for(monkeypatch):
+    """A prose call on a tools-route provider is an ordinary call — paying for a
+    tool definition (and forcing a call) would change what the model returns."""
+    sent = _capture(monkeypatch, {"choices": [{"message": {"content": "hello"}}]})
+    adapter = build_adapter("openai_compat", base_url="https://x/v1", api_key="k", json_via="tools")
+    result = adapter.complete("s", "u", model="m", temperature=0.1)
+    assert "tools" not in sent[0] and "tool_choice" not in sent[0]
+    assert result.text == "hello"
+
+
+def test_response_format_stays_the_default_route(monkeypatch):
+    """The existing path is simpler and better tested; adding a second route
+    must not quietly migrate providers that never asked for it."""
+    sent = _capture(monkeypatch, {"choices": [{"message": {"content": "{}"}}]})
+    adapter = build_adapter("openai_compat", base_url="https://x/v1", api_key="k")
+    adapter.complete("s", "u", model="m", temperature=0.1, json_mode=True)
+    assert sent[0]["response_format"] == {"type": "json_object"}
+    assert "tools" not in sent[0]
+
+
+def test_provider_json_via_reaches_the_adapter(monkeypatch, ledger):
+    """The wiring this feature is worth nothing without: a catalog entry saying
+    `tools` must actually change the request the gateway makes."""
+    seen: dict = {}
+
+    def _spy(kind, **kwargs):
+        seen.update(kwargs)
+        return _FakeAdapter()
+
+    monkeypatch.setattr("fitroute.gateway.build_adapter", _spy)
+    routing = RoutingConfig(
+        plan="free",
+        providers=[_ollama(name="tools-provider", json_via="tools")],
+    )
+    gw = LLMGateway(routing, ledger, credential_resolver=lambda name: "key")
+    gw.for_role("default").complete("sys", "user", json_mode=True)
+    assert seen["json_via"] == "tools"
+
+
+def test_unknown_json_via_is_rejected():
+    """Same reasoning as an unknown name in routing.use: falling back to the
+    default would send response_format to an endpoint that ignores it."""
+    with pytest.raises(ValueError, match="json_via"):
+        build_adapter("openai_compat", base_url="https://x/v1", api_key="k", json_via="toolz")
